@@ -1,0 +1,266 @@
+:root {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  color: #1f2937;
+  background: #eef3f8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --sidebar-width: 236px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(234, 241, 248, 0.96), rgba(243, 246, 250, 0.96)),
+    repeating-linear-gradient(135deg, rgba(62, 79, 96, 0.08) 0 1px, transparent 1px 10px);
+}
+
+.app-sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 20;
+  width: var(--sidebar-width);
+  padding: 18px 14px;
+  color: #e5eefb;
+  background:
+    linear-gradient(180deg, rgba(15, 35, 63, 0.96), rgba(10, 24, 42, 0.98)),
+    radial-gradient(circle at 20% 18%, rgba(80, 112, 130, 0.45), transparent 30%);
+  border-right: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 64px;
+  padding: 8px 8px 18px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.14);
+
+  strong {
+    display: block;
+    font-size: 17px;
+    line-height: 1.4;
+  }
+
+  span {
+    display: block;
+    color: #9fb3c8;
+    font-size: 12px;
+  }
+}
+
+.brand-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  color: #f8fafc;
+  font-weight: 700;
+  background: linear-gradient(145deg, #d9472f, #8f1d16);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+}
+
+.side-nav {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.side-nav__group {
+  display: grid;
+  gap: 6px;
+}
+
+.side-nav__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px;
+  color: #bfd0e4;
+  text-decoration: none;
+  border-radius: 8px;
+
+  &:hover,
+  &.router-link-active {
+    color: #ffffff;
+    background: rgba(78, 113, 150, 0.42);
+  }
+}
+
+.side-nav__children {
+  display: grid;
+  gap: 4px;
+  padding-left: 28px;
+}
+
+.side-nav__child {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  color: #9fb3c8;
+  font-size: 13px;
+  text-decoration: none;
+  border-left: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0 6px 6px 0;
+
+  &:hover,
+  &.router-link-active {
+    color: #ffffff;
+    background: rgba(78, 113, 150, 0.3);
+    border-left-color: rgba(226, 232, 240, 0.7);
+  }
+}
+
+.side-nav__icon {
+  width: 18px;
+  height: 18px;
+}
+
+.app-main {
+  width: calc(100% - var(--sidebar-width));
+  min-width: 0;
+  margin-left: var(--sidebar-width);
+}
+
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 74px;
+  padding: 14px 24px;
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid #d8e1eb;
+  backdrop-filter: blur(10px);
+
+  h1 {
+    margin: 0;
+    font-size: 20px;
+    line-height: 1.35;
+  }
+
+  p {
+    margin: 4px 0 0;
+    color: #64748b;
+    font-size: 13px;
+  }
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-content {
+  min-width: 0;
+  padding: 18px 20px 28px;
+}
+
+.page-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e4ebf3;
+
+  h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+}
+
+.panel__body {
+  padding: 16px;
+}
+
+.muted {
+  color: #64748b;
+}
+
+.value-danger {
+  color: #c00000;
+}
+
+.empty-text {
+  color: #94a3b8;
+}
+
+@media (max-width: 900px) {
+  :root {
+    --sidebar-width: 76px;
+  }
+
+  .brand {
+    justify-content: center;
+    padding-inline: 0;
+
+    div:not(.brand-mark) {
+      display: none;
+    }
+  }
+
+  .side-nav__item {
+    justify-content: center;
+    padding: 0;
+
+    span {
+      display: none;
+    }
+  }
+
+  .app-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
