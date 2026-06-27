@@ -2,7 +2,7 @@ export interface AuthUser {
   id: string
   username: string
   account: string
-  role: 'admin' | 'staff'
+  role: 'ROOT_ADMIN' | 'SUB_ADMIN' | 'FRONTEND_USER' | 'admin' | 'staff'
 }
 
 export interface LoginPayload {

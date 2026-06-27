@@ -18,10 +18,20 @@ request.interceptors.response.use(
   (response) => response.data,
   (error) => {
     const status = error?.response?.status
-    const message = error?.response?.data?.message || error?.message || '请求失败'
+    const data = error?.response?.data
+    const rawMessage = data?.message
+    const message =
+      typeof rawMessage === 'string'
+        ? rawMessage
+        : typeof rawMessage?.message === 'string'
+          ? rawMessage.message
+          : typeof data?.error === 'string'
+            ? data.error
+            : error?.message || '请求失败'
     if (status === 401) {
       localStorage.removeItem('ys_token')
       localStorage.removeItem('ys_user')
+      ElMessage.error(message)
       window.location.href = '/login'
       return Promise.reject(error)
     }

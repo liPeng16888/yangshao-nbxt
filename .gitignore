@@ -1,9 +1,15 @@
 node_modules/
 .pnpm-store/
 dist/
+admin/dist/
+server/dist/
+server/generated/
+uploads/
 .DS_Store
 .env.local
 .env.production
+server/.env
+admin/.env.local
 *.log
 coverage/
 playwright-report/

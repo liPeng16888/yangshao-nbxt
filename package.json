@@ -5,9 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:admin": "pnpm --filter yangshao-admin dev",
+    "dev:server": "pnpm --filter yangshao-server dev",
     "build": "vue-tsc --noEmit && vite build",
+    "build:admin": "pnpm --filter yangshao-admin build",
+    "build:server": "pnpm --filter yangshao-server build",
+    "build:all": "pnpm build && pnpm build:admin && pnpm build:server",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
+    "test:server": "pnpm --filter yangshao-server test",
+    "test:all": "pnpm test && pnpm test:server",
     "test:watch": "vitest"
   },
   "dependencies": {

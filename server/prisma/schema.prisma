@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ROOT_ADMIN
+  SUB_ADMIN
+  FRONTEND_USER
+}
+
+enum PaymentMethod {
+  cash
+  online
+}
+
+enum SamplePaymentStatus {
+  PAID
+  UNPAID
+  MONTHLY
+  UNSELECTED
+}
+
+enum MonthlySettlementStatus {
+  PAID
+  UNPAID
+  PARTIAL
+}
+
+enum ReminderType {
+  UNSETTLED_PAYMENT
+  MONTHLY_PAYMENT
+}
+
+model User {
+  id                String    @id @default(uuid())
+  account           String    @unique
+  username          String
+  role              UserRole
+  passwordHash      String
+  passwordCipher    String?
+  disabled          Boolean   @default(false)
+  disabledReason    String?
+  deletedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  frontendSheets    LabSheet[]       @relation("FrontendSheets")
+  financeEntries    FinanceEntry[]   @relation("FrontendFinance")
+  monthlyCustomerRemarks MonthlyCustomerRemark[] @relation("FrontendMonthlyCustomerRemarks")
+  customers         Customer[]       @relation("FrontendCustomers")
+  blacklistUploads  BlacklistRecord[] @relation("BlacklistUploader")
+  reminders         Reminder[]       @relation("FrontendReminders")
+  createdReminders  Reminder[]       @relation("ReminderCreator")
+  inviteCodes       InviteCode[]     @relation("InviteCreator")
+  usedInviteCodes   InviteCode[]     @relation("InviteUser")
+  createdSubPerms   SubAdminFrontendPermission[] @relation("PermissionCreator")
+  subAdminPerms     SubAdminFrontendPermission[] @relation("SubAdminPermissions")
+  frontendPerms     SubAdminFrontendPermission[] @relation("FrontendPermissions")
+
+  @@index([role])
+  @@index([deletedAt])
+}
+
+model Customer {
+  id             String   @id @default(uuid())
+  frontendUserId String
+  name           String
+  phone          String?
+  wechat         String?
+  wechatNickname String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  frontendUser   User     @relation("FrontendCustomers", fields: [frontendUserId], references: [id])
+
+  @@unique([frontendUserId, name])
+  @@index([frontendUserId])
+}
+
+model InviteCode {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  note        String?
+  expiresAt   DateTime?
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+  createdById String
+  usedById    String?
+
+  createdBy   User      @relation("InviteCreator", fields: [createdById], references: [id])
+  usedBy      User?     @relation("InviteUser", fields: [usedById], references: [id])
+}
+
+model SubAdminFrontendPermission {
+  id             String   @id @default(uuid())
+  subAdminId     String
+  frontendUserId String
+  createdById    String
+  createdAt      DateTime @default(now())
+
+  subAdmin      User @relation("SubAdminPermissions", fields: [subAdminId], references: [id])
+  frontendUser  User @relation("FrontendPermissions", fields: [frontendUserId], references: [id])
+  createdBy     User @relation("PermissionCreator", fields: [createdById], references: [id])
+
+  @@unique([subAdminId, frontendUserId])
+  @@index([frontendUserId])
+}
+
+model LabSheet {
+  id             String   @id @default(uuid())
+  frontendUserId String
+  date           String
+  readonly       Boolean  @default(false)
+  parameters     Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  frontendUser   User          @relation("FrontendSheets", fields: [frontendUserId], references: [id])
+  sampleBlocks   SampleBlock[]
+  changeLogs     CellChangeLog[]
+  abnormalRecords AbnormalRecord[]
+
+  @@unique([frontendUserId, date])
+  @@index([date])
+}
+
+model SampleBlock {
+  id                String   @id @default(uuid())
+  sheetId           String
+  index             Int
+  readonly          Boolean  @default(false)
+  inputs            Json
+  results           Json
+  parameterSnapshot Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  sheet             LabSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  changeLogs        CellChangeLog[]
+  abnormalRecords   AbnormalRecord[]
+
+  @@unique([sheetId, index])
+  @@index([sheetId])
+}
+
+model CellChangeLog {
+  id             String   @id @default(uuid())
+  sheetId        String
+  blockId        String
+  frontendUserId String
+  field          String
+  oldValue       Json?
+  newValue       Json?
+  changedById    String
+  changedAt      DateTime @default(now())
+
+  sheet          LabSheet    @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  block          SampleBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+
+  @@index([frontendUserId, changedAt])
+  @@index([blockId, field])
+}
+
+model AbnormalRecord {
+  id             String   @id @default(uuid())
+  sheetId        String
+  blockId        String
+  frontendUserId String
+  date           String
+  field          String
+  changeCount    Int
+  remark         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  sheet          LabSheet    @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  block          SampleBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+
+  @@unique([blockId, field])
+  @@index([frontendUserId, date])
+}
+
+model FinanceEntry {
+  id             String        @id @default(uuid())
+  frontendUserId String
+  paymentDate    String
+  registeredAt   DateTime      @default(now())
+  item           String
+  amount         Decimal       @db.Decimal(12, 2)
+  paymentMethod  PaymentMethod
+  screenshotUrl  String?
+  remark         String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  frontendUser   User          @relation("FrontendFinance", fields: [frontendUserId], references: [id])
+
+  @@index([frontendUserId, paymentDate])
+}
+
+model MonthlySettlementRecord {
+  id             String                  @id @default(uuid())
+  month          String
+  frontendUserId String
+  customer       String
+  status         MonthlySettlementStatus @default(UNPAID)
+  paidAmount     Decimal?                @db.Decimal(12, 2)
+  remark         String?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@unique([month, frontendUserId, customer])
+  @@index([frontendUserId, month])
+}
+
+model MonthlyCustomerRemark {
+  id             String   @id @default(uuid())
+  frontendUserId String
+  customer       String
+  remark         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  frontendUser   User     @relation("FrontendMonthlyCustomerRemarks", fields: [frontendUserId], references: [id])
+
+  @@unique([frontendUserId, customer])
+  @@index([frontendUserId])
+}
+
+model BlacklistRecord {
+  id             String   @id @default(uuid())
+  uploadedAt     DateTime @default(now())
+  uploadedById   String
+  phone          String?
+  wechat         String?
+  wechatNickname String?
+  amount         Decimal? @db.Decimal(12, 2)
+  images         Json
+  other          String?
+  note           String?
+
+  uploadedBy     User     @relation("BlacklistUploader", fields: [uploadedById], references: [id])
+}
+
+model UploadedFile {
+  id          String   @id @default(uuid())
+  originalName String
+  mimeType    String
+  size        Int
+  path        String
+  url         String
+  createdAt   DateTime @default(now())
+}
+
+model Reminder {
+  id             String       @id @default(uuid())
+  frontendUserId String
+  createdById    String?
+  type           ReminderType
+  title          String
+  content        String
+  sourceType     String?
+  sourceId       String?
+  readAt         DateTime?
+  createdAt      DateTime     @default(now())
+
+  frontendUser   User         @relation("FrontendReminders", fields: [frontendUserId], references: [id])
+  createdBy      User?        @relation("ReminderCreator", fields: [createdById], references: [id])
+
+  @@index([frontendUserId, readAt])
+}
