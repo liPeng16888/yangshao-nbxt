@@ -4,7 +4,7 @@ dist/
 admin/dist/
 server/dist/
 server/generated/
-uploads/
+/uploads/
 .DS_Store
 .env.local
 .env.production
