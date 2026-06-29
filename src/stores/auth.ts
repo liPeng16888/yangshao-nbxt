@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { getMe, login, logout, register } from '@/api/auth'
-import type { AuthUser, LoginPayload, RegisterPayload } from '@/types/auth'
+import { getMe, login, logout, register, updatePassword } from '@/api/auth'
+import type { AuthUser, LoginPayload, RegisterPayload, UpdatePasswordPayload } from '@/types/auth'
 
 const tokenKey = 'ys_token'
 const userKey = 'ys_user'
@@ -67,6 +67,10 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem(userKey)
   }
 
+  async function updateCurrentPassword(payload: UpdatePasswordPayload) {
+    return updatePassword(payload)
+  }
+
   return {
     token,
     user,
@@ -75,6 +79,7 @@ export const useAuthStore = defineStore('auth', () => {
     loginWithPassword,
     registerWithInvite,
     refreshUser,
+    updateCurrentPassword,
     logoutCurrentUser
   }
 })

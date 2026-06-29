@@ -6,6 +6,14 @@ export const ADMIN_TOKEN_KEY = 'ys_admin_token'
 export const ADMIN_USER_KEY = 'ys_admin_user'
 export const useAdminMocks = import.meta.env.VITE_ADMIN_USE_MOCKS === 'true' || (import.meta.env.DEV && import.meta.env.VITE_ADMIN_USE_MOCKS !== 'false')
 
+export type AdminProfilePayload = {
+  account: string
+  username: string
+  currentPassword?: string
+  newPassword?: string
+  confirmPassword?: string
+}
+
 type AdminRequest = {
   get<T = any, R = any>(url: string, config?: any): Promise<R>
   post<T = any, R = any>(url: string, payload?: any, config?: any): Promise<R>
@@ -62,8 +70,28 @@ const mockFrontendOptions: FrontendOption[] = [
 
 const mockRows = {
   frontendUsers: [
-    { id: 'front-1', account: 'kaili001', username: '凯里化验室', password: '123456', disabled: false, createdAt: '2026-06-25 09:00:00' },
-    { id: 'front-2', account: 'yangshao002', username: '仰韶客户二', password: '123456', disabled: false, createdAt: '2026-06-25 10:00:00' }
+    {
+      id: 'front-1',
+      account: 'kaili001',
+      username: '凯里化验室',
+      displayRemark: '',
+      displayName: '凯里化验室',
+      password: '123456',
+      accessGuard: { enabled: true, password: '2580', ttlMinutes: 5, recoveryPrompt: '管理员提示', recoveryAnswer: '凯里' },
+      disabled: false,
+      createdAt: '2026-06-25 09:00:00'
+    },
+    {
+      id: 'front-2',
+      account: 'yangshao002',
+      username: '仰韶客户二',
+      displayRemark: '',
+      displayName: '仰韶客户二',
+      password: '123456',
+      accessGuard: { enabled: false, password: '', ttlMinutes: 5, recoveryPrompt: '', recoveryAnswer: '' },
+      disabled: false,
+      createdAt: '2026-06-25 10:00:00'
+    }
   ],
   subAdmins: [
     { id: 'sub-1', account: 'sub001', username: '子账号一', password: 'sub123456', permissions: [mockFrontendOptions[0]] }
@@ -166,23 +194,73 @@ const mockSheet = {
   ]
 }
 
+const labDetectionInputFields = [
+  'ironRaw',
+  'siliconRaw',
+  'siliconAdjust',
+  'aluminumRaw',
+  'aluminumAdjust',
+  'sulfur',
+  'densityRaw',
+  'whiteness',
+  'calciumRaw',
+  'magnesiumRaw',
+  'carbon',
+  'titaniumRaw',
+  'waterSample',
+  'bottleWater',
+  'bottleWaterSample',
+  'crucible',
+  'sampleWeight',
+  'burnedCrucibleSample'
+]
+
+function hasLabDetectionInput(inputs: Record<string, unknown>) {
+  return labDetectionInputFields.some((field) => hasDetectionInputValue(inputs[field]))
+}
+
+function hasDetectionInputValue(value: unknown) {
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  return trimmed !== '' && Number.isFinite(Number(trimmed))
+}
+
+function parseHistoryFields(value: unknown) {
+  const raw = Array.isArray(value) ? value.join(',') : String(value || '')
+  return Array.from(new Set(raw.split(',').map((field) => field.trim()).filter(Boolean)))
+}
+
 const mockRequest = {
   async get(url: string, config?: any) {
     if (url === '/admin/auth/me') return mockUser
-    if (url === '/admin/frontend-users/options') return mockFrontendOptions
-    if (url === '/admin/data-statistics/lab-sheets') return [{ ...mockSheet, date: config?.params?.date || mockSheet.date }]
+    if (url === '/admin/frontend-users/options') {
+      return mockRows.frontendUsers.map((row) => ({
+        id: row.id,
+        account: row.account,
+        name: row.displayRemark || row.username || row.account,
+        disabled: row.disabled
+      }))
+    }
+    if (url === '/admin/data-statistics/lab-sheets') {
+      const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasLabDetectionInput(block.inputs))
+      return sampleBlocks.length ? [{ ...mockSheet, date: config?.params?.date || mockSheet.date, sampleBlocks }] : []
+    }
     if (url === '/admin/data-statistics/cell-history') {
-      if (config?.params?.field === 'ironRaw') {
+      const fields = parseHistoryFields(config?.params?.fields || config?.params?.field || 'sampleNumber')
+      return fields.flatMap((field, index) => {
+        if (field === 'ironRaw') {
+          return [
+            { id: `h-${field}-1`, field, oldValue: '', newValue: '0.944', changedAt: '2026-06-25 10:10:00' },
+            { id: `h-${field}-2`, field, oldValue: '0.944', newValue: '0.950', changedAt: '2026-06-25 10:25:00' },
+            { id: `h-${field}-3`, field, oldValue: '0.950', newValue: '1.000', changedAt: '2026-06-25 14:20:00' }
+          ]
+        }
         return [
-          { id: 'h-1', field: 'ironRaw', oldValue: '', newValue: '0.944', changedAt: '2026-06-25 10:10:00' },
-          { id: 'h-2', field: 'ironRaw', oldValue: '0.944', newValue: '0.950', changedAt: '2026-06-25 10:25:00' },
-          { id: 'h-3', field: 'ironRaw', oldValue: '0.950', newValue: '1.000', changedAt: '2026-06-25 14:20:00' }
+          { id: `h-${field}-1`, field, oldValue: index ? '' : '王总', newValue: index ? '1.000' : '李总', changedAt: '2026-06-25 10:10:00' },
+          { id: `h-${field}-2`, field, oldValue: index ? '1.000' : '李总', newValue: index ? '1.250' : '张总', changedAt: '2026-06-25 10:25:00' }
         ]
-      }
-      return [
-        { id: 'h-1', field: config?.params?.field || 'sampleNumber', oldValue: '王总', newValue: '李总', changedAt: '2026-06-25 10:10:00' },
-        { id: 'h-2', field: config?.params?.field || 'sampleNumber', oldValue: '李总', newValue: '张总', changedAt: '2026-06-25 10:25:00' }
-      ]
+      })
     }
     if (url === '/admin/finance/income') {
       return {
@@ -210,13 +288,27 @@ const mockRequest = {
   },
   async post(url: string, payload?: any) {
     if (url === '/admin/auth/login') {
-      if (payload?.account !== 'admin' || payload?.password !== 'admin123456') throw new Error('账号或密码错误')
+      if (payload?.account !== mockUser.account || payload?.password !== 'admin123456') throw new Error('账号或密码错误')
       return { token: 'mock-admin-token', user: mockUser }
     }
     if (url === '/admin/accounts/invite-codes') return { code: `YS-${Date.now().toString().slice(-6)}` }
     return { ok: true }
   },
   async patch(url: string, payload?: any) {
+    if (url === '/admin/auth/profile') {
+      mockUser.account = payload?.account || mockUser.account
+      mockUser.username = payload?.username || mockUser.username
+      return mockUser
+    }
+    const remarkMatch = url.match(/^\/admin\/accounts\/frontend-users\/(.+)\/remark$/)
+    if (remarkMatch) {
+      const row = mockRows.frontendUsers.find((item) => item.id === remarkMatch[1])
+      if (row) {
+        row.displayRemark = payload?.displayRemark || ''
+        row.displayName = row.displayRemark || row.username || row.account
+      }
+      return row || { ok: true }
+    }
     if (url === '/admin/finance/monthly-customers/remark') {
       const row = mockRows.monthlyCustomers.find((item) => item.frontendUserId === payload?.frontendUserId && item.customer === payload?.customer)
       if (row) row.remark = payload?.remark || ''
@@ -248,6 +340,12 @@ export async function adminLogin(payload: { account: string; password: string })
 
 export async function adminMe() {
   const result = await request.get<any, AdminUser>('/admin/auth/me')
+  localStorage.setItem(ADMIN_USER_KEY, JSON.stringify(result))
+  return result
+}
+
+export async function updateAdminProfile(payload: AdminProfilePayload) {
+  const result = await request.patch<any, AdminUser>('/admin/auth/profile', payload)
   localStorage.setItem(ADMIN_USER_KEY, JSON.stringify(result))
   return result
 }

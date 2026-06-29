@@ -9,6 +9,7 @@ import FinanceMonthlySettlementPage from '@/views/dashboard/FinanceMonthlySettle
 import FinanceUnsettledPage from '@/views/dashboard/FinanceUnsettledPage.vue'
 import ReportPage from '@/views/dashboard/ReportPage.vue'
 import BlacklistPage from '@/views/dashboard/BlacklistPage.vue'
+import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { resolveAuthRedirect } from './guards'
 
@@ -54,14 +55,29 @@ const router = createRouter({
   ]
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore()
   const redirect = resolveAuthRedirect({
     isLoggedIn: authStore.isLoggedIn,
     toPath: to.path,
     requiresAuth: to.matched.some((record) => record.meta.requiresAuth)
   })
-  return redirect || true
+  if (redirect) return redirect
+
+  const accessGuard = useAccessGuardStore()
+  if (accessGuard.isProtectedPath(to.path)) await accessGuard.loadSettings()
+  if (accessGuard.requiresAccessForPath(to.path)) {
+    accessGuard.requestAccess({
+      title: to.path.startsWith('/finance') ? '财务访问验证' : '报表访问验证',
+      message: '请输入访问密码后进入该功能，验证通过后在设置的时间内可免输密码切换。',
+      onSuccess: () => {
+        void router.push(to.fullPath)
+      }
+    })
+    return false
+  }
+
+  return true
 })
 
 export default router

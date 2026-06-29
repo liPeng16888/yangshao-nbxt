@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service'
 import type { CurrentUser } from '../auth/current-user'
 import { todayInBeijing } from '../common/date'
+import { hasLabDetectionInput } from '../common/lab'
 import { toMoney } from '../common/money'
 import { AdminAccessService } from './admin-access.service'
 
@@ -17,12 +18,12 @@ export class AdminDataService {
     const users = await this.prisma.user.findMany({
       where: { id: { in: ids }, deletedAt: null },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, account: true, username: true, disabled: true }
+      select: { id: true, account: true, username: true, displayRemark: true, disabled: true }
     })
     return users.map((user) => ({
       id: user.id,
       account: user.account,
-      name: user.username || user.account,
+      name: this.displayName(user),
       disabled: user.disabled
     }))
   }
@@ -33,39 +34,53 @@ export class AdminDataService {
     const sheets = await this.prisma.labSheet.findMany({
       where: { frontendUserId: { in: ids }, date },
       include: {
-        frontendUser: { select: { account: true, username: true } },
+        frontendUser: { select: { account: true, username: true, displayRemark: true } },
         sampleBlocks: { orderBy: { index: 'asc' } }
       },
       orderBy: { updatedAt: 'desc' }
     })
-    return sheets.map((sheet) => ({
-      id: sheet.id,
-      frontendUserId: sheet.frontendUserId,
-      name: sheet.frontendUser.username || sheet.frontendUser.account,
-      date: sheet.date,
-      readonly: true,
-      parameters: sheet.parameters,
-      sampleBlocks: sheet.sampleBlocks.map((block) => ({
-        id: block.id,
-        index: block.index,
+    return sheets
+      .map((sheet) => ({
+        id: sheet.id,
+        frontendUserId: sheet.frontendUserId,
+        name: this.displayName(sheet.frontendUser),
+        date: sheet.date,
         readonly: true,
-        inputs: block.inputs,
-        results: block.results,
-        parameterSnapshot: block.parameterSnapshot
+        parameters: sheet.parameters,
+        sampleBlocks: sheet.sampleBlocks
+          .filter((block) => hasLabDetectionInput(block.inputs as Record<string, unknown>))
+          .map((block) => ({
+            id: block.id,
+            index: block.index,
+            readonly: true,
+            inputs: block.inputs,
+            results: block.results,
+            parameterSnapshot: block.parameterSnapshot
+          }))
       }))
-    }))
+      .filter((sheet) => sheet.sampleBlocks.length)
   }
 
-  async cellHistory(admin: CurrentUser, query: { blockId?: string; field?: string }) {
-    if (!query.blockId || !query.field) throw new ForbiddenException('缺少样品和字段')
+  async cellHistory(admin: CurrentUser, query: { blockId?: string; field?: string; fields?: string | string[] }) {
+    const fields = this.parseHistoryFields(query.fields ?? query.field)
+    if (!query.blockId || !fields.length) throw new ForbiddenException('缺少样品和字段')
     const block = await this.prisma.sampleBlock.findUnique({ where: { id: query.blockId }, include: { sheet: true } })
     if (!block) throw new NotFoundException('未找到样品')
     await this.access.getAllowedFrontendUserIds(admin, [block.sheet.frontendUserId])
     return this.prisma.cellChangeLog.findMany({
-      where: { blockId: block.id, field: query.field },
-      orderBy: { changedAt: 'asc' },
-      include: { sheet: { include: { frontendUser: { select: { username: true, account: true } } } } }
+      where: { blockId: block.id, field: { in: fields } },
+      orderBy: [{ changedAt: 'asc' }, { field: 'asc' }],
+      include: { sheet: { include: { frontendUser: { select: { username: true, account: true, displayRemark: true } } } } }
     })
+  }
+
+  private parseHistoryFields(value: string | string[] | undefined) {
+    const raw = Array.isArray(value) ? value.join(',') : value || ''
+    return Array.from(new Set(raw.split(',').map((field) => field.trim()).filter(Boolean)))
+  }
+
+  private displayName(user: { account: string; username: string; displayRemark?: string | null }) {
+    return user.displayRemark?.trim() || user.username || user.account
   }
 
   async abnormalRecords(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string }) {
@@ -77,7 +92,7 @@ export class AdminDataService {
       },
       orderBy: [{ date: 'desc' }, { updatedAt: 'desc' }],
       include: {
-        sheet: { include: { frontendUser: { select: { username: true, account: true } } } },
+        sheet: { include: { frontendUser: { select: { username: true, account: true, displayRemark: true } } } },
         block: true
       }
     })
@@ -85,7 +100,7 @@ export class AdminDataService {
       id: row.id,
       date: row.date,
       frontendUserId: row.frontendUserId,
-      name: row.sheet.frontendUser.username || row.sheet.frontendUser.account,
+      name: this.displayName(row.sheet.frontendUser),
       sheetId: row.sheetId,
       blockId: row.blockId,
       sequence: String(((row.block.inputs as Record<string, unknown>)?.sequence || row.block.index)).padStart(3, '0'),

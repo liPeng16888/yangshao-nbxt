@@ -40,9 +40,15 @@ model User {
   id                String    @id @default(uuid())
   account           String    @unique
   username          String
+  displayRemark     String?
   role              UserRole
   passwordHash      String
   passwordCipher    String?
+  accessGuardEnabled Boolean  @default(false)
+  accessGuardPassword String?
+  accessGuardTtlMinutes Int   @default(5)
+  accessGuardRecoveryPrompt String?
+  accessGuardRecoveryAnswer String?
   disabled          Boolean   @default(false)
   disabledReason    String?
   deletedAt         DateTime?

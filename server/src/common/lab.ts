@@ -43,6 +43,27 @@ export const editableInputFields = [
   'note'
 ]
 
+export const labDetectionInputFields = [
+  'ironRaw',
+  'siliconRaw',
+  'siliconAdjust',
+  'aluminumRaw',
+  'aluminumAdjust',
+  'sulfur',
+  'densityRaw',
+  'whiteness',
+  'calciumRaw',
+  'magnesiumRaw',
+  'carbon',
+  'titaniumRaw',
+  'waterSample',
+  'bottleWater',
+  'bottleWaterSample',
+  'crucible',
+  'sampleWeight',
+  'burnedCrucibleSample'
+]
+
 export function createEmptyInputs(index: number) {
   return {
     sequence: String(index).padStart(3, '0'),
@@ -53,6 +74,17 @@ export function createEmptyInputs(index: number) {
     price: null,
     paymentStatus: ''
   }
+}
+
+export function hasLabDetectionInput(inputs: Record<string, unknown>) {
+  return labDetectionInputFields.some((field) => hasDetectionInputValue(inputs[field]))
+}
+
+function hasDetectionInputValue(value: unknown) {
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  return trimmed !== '' && Number.isFinite(Number(trimmed))
 }
 
 export function calculateResults(inputs: Record<string, unknown>, parameters: typeof defaultLabParameters) {

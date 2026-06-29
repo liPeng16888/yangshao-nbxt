@@ -1,5 +1,5 @@
 import dayjs from 'dayjs'
-import type { AuthResponse, AuthUser, LoginPayload, RegisterPayload } from '@/types/auth'
+import type { AuthResponse, AuthUser, LoginPayload, RegisterPayload, UpdatePasswordPayload } from '@/types/auth'
 import type { BlacklistCheckResult, BlacklistPayload, BlacklistRecord } from '@/types/blacklist'
 import type { Customer, CustomerPayload } from '@/types/customer'
 import type { FinanceEntry, FinancePayload } from '@/types/finance'
@@ -161,6 +161,13 @@ export async function mockMe(): Promise<AuthResponse['user']> {
   return delay(currentUser)
 }
 
+export async function mockUpdatePassword(payload: UpdatePasswordPayload) {
+  if (!payload.currentPassword || !payload.newPassword || !payload.confirmPassword) throw new Error('请完整填写当前密码、新密码和确认密码')
+  if (payload.newPassword.length < 6) throw new Error('新密码至少 6 位')
+  if (payload.newPassword !== payload.confirmPassword) throw new Error('两次新密码不一致')
+  return delay({ ok: true })
+}
+
 export async function mockCurrentLabSheet() {
   return delay(ensureSheet())
 }
@@ -213,7 +220,16 @@ export async function mockSearchCustomers(keyword: string) {
 }
 
 export async function mockCreateCustomer(payload: CustomerPayload) {
-  const customer: Customer = { id: `c-${Date.now()}`, ...payload }
+  const customerName = payload.name?.trim() || payload.phone?.trim() || payload.wechat?.trim() || payload.wechatNickname?.trim()
+  if (!customerName) throw new Error('请至少填写一项客户信息')
+  const customer: Customer = {
+    id: `c-${Date.now()}`,
+    name: customerName,
+    phone: payload.phone?.trim() || undefined,
+    wechat: payload.wechat?.trim() || undefined,
+    wechatNickname: payload.wechatNickname?.trim() || undefined,
+    note: payload.note?.trim() || undefined
+  }
   customers.unshift(customer)
   return delay(customer)
 }

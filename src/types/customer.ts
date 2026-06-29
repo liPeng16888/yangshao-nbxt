@@ -8,7 +8,7 @@ export interface Customer {
 }
 
 export interface CustomerPayload {
-  name: string
+  name?: string
   phone?: string
   wechat?: string
   wechatNickname?: string

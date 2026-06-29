@@ -14,7 +14,7 @@ const emit = defineEmits<{
 }>()
 
 const options = [
-  { label: '化验样品检测数据统计', value: 'sample' },
-  { label: '财务数据统计', value: 'finance' }
+  { label: '收入数据统计', value: 'sample' },
+  { label: '开支数据统计', value: 'finance' }
 ]
 </script>

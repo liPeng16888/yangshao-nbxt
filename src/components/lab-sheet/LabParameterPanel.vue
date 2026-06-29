@@ -79,7 +79,7 @@ function submit() {
 
   span {
     margin-bottom: 6px;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 700;
   }
 }
@@ -90,6 +90,8 @@ function submit() {
 
 :deep(.parameter-input .el-input__inner) {
   color: #c00000;
+  font-size: 16px;
+  font-weight: 700;
   -webkit-text-fill-color: #c00000;
 }
 </style>

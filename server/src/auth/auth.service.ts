@@ -1,10 +1,11 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { UserRole } from '@prisma/client'
 import jwt from 'jsonwebtoken'
 import { PrismaService } from '../prisma/prisma.service'
 import { PasswordService } from './password.service'
-import { LoginDto, RegisterDto } from './dto'
+import { AccessGuardSettingsDto, LoginDto, RegisterDto, UpdateAdminProfileDto, UpdatePasswordDto } from './dto'
+import type { CurrentUser } from './current-user'
 
 @Injectable()
 export class AuthService {
@@ -74,6 +75,119 @@ export class AuthService {
         role: user.role
       }
     }
+  }
+
+  async updateAdminProfile(currentUser: CurrentUser, dto: UpdateAdminProfileDto) {
+    if (currentUser.role !== UserRole.ROOT_ADMIN && currentUser.role !== UserRole.SUB_ADMIN) throw new ForbiddenException('无权修改后台账号')
+
+    const user = await this.prisma.user.findUnique({ where: { id: currentUser.id } })
+    if (!user || user.deletedAt) throw new UnauthorizedException('账号不存在或已失效')
+
+    const account = dto.account?.trim()
+    if (!account) throw new BadRequestException('登录账号不能为空')
+
+    const username = dto.username?.trim()
+    if (!username) throw new BadRequestException('账号名称不能为空')
+
+    if (account !== user.account) {
+      const exists = await this.prisma.user.findUnique({ where: { account } })
+      if (exists && exists.id !== user.id) throw new BadRequestException('登录账号已存在')
+    }
+
+    const data: { account: string; username: string; passwordHash?: string; passwordCipher?: string } = { account, username }
+    const wantsPasswordChange = Boolean(dto.currentPassword || dto.newPassword || dto.confirmPassword)
+    if (wantsPasswordChange) {
+      Object.assign(data, await this.buildPasswordUpdate(user.passwordHash, dto as UpdatePasswordDto))
+    }
+
+    const updated = await this.prisma.user.update({ where: { id: user.id }, data })
+    return {
+      id: updated.id,
+      account: updated.account,
+      username: updated.username,
+      role: updated.role
+    }
+  }
+
+  async updateFrontendPassword(currentUser: CurrentUser, dto: UpdatePasswordDto) {
+    if (currentUser.role !== UserRole.FRONTEND_USER) throw new ForbiddenException('无权修改前台账号')
+    const user = await this.prisma.user.findUnique({ where: { id: currentUser.id } })
+    if (!user || user.deletedAt) throw new UnauthorizedException('账号不存在或已失效')
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: await this.buildPasswordUpdate(user.passwordHash, dto)
+    })
+    return { ok: true }
+  }
+
+  async getAccessGuardSettings(currentUser: CurrentUser) {
+    if (currentUser.role !== UserRole.FRONTEND_USER) throw new ForbiddenException('无权查看访问设置')
+    const user = await this.prisma.user.findUnique({ where: { id: currentUser.id } })
+    if (!user || user.deletedAt) throw new UnauthorizedException('账号不存在或已失效')
+    return this.accessGuardDto(user)
+  }
+
+  async updateAccessGuardSettings(currentUser: CurrentUser, dto: AccessGuardSettingsDto) {
+    if (currentUser.role !== UserRole.FRONTEND_USER) throw new ForbiddenException('无权修改访问设置')
+    const user = await this.prisma.user.findUnique({ where: { id: currentUser.id } })
+    if (!user || user.deletedAt) throw new UnauthorizedException('账号不存在或已失效')
+
+    const enabled = Boolean(dto.enabled)
+    const password = dto.password?.trim() || ''
+    const recoveryPrompt = dto.recoveryPrompt?.trim() || ''
+    const recoveryAnswer = dto.recoveryAnswer?.trim() || ''
+    const ttlMinutes = this.normalizeAccessGuardTtl(dto.ttlMinutes)
+    if (enabled) {
+      if (!password && !user.accessGuardPassword) throw new BadRequestException('开启访问密码时请先设置密码')
+      if (!recoveryPrompt && !user.accessGuardRecoveryPrompt) throw new BadRequestException('开启访问密码时请设置找回提示词')
+      if (!recoveryAnswer && !user.accessGuardRecoveryAnswer) throw new BadRequestException('开启访问密码时请设置找回答案')
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        accessGuardEnabled: enabled,
+        accessGuardTtlMinutes: ttlMinutes,
+        ...(password ? { accessGuardPassword: password } : {}),
+        ...(recoveryPrompt ? { accessGuardRecoveryPrompt: recoveryPrompt } : {}),
+        ...(recoveryAnswer ? { accessGuardRecoveryAnswer: recoveryAnswer } : {})
+      }
+    })
+    return this.accessGuardDto(updated)
+  }
+
+  private async buildPasswordUpdate(passwordHash: string, dto: UpdatePasswordDto) {
+    if (!dto.currentPassword || !dto.newPassword || !dto.confirmPassword) throw new BadRequestException('请完整填写当前密码、新密码和确认密码')
+    if (dto.newPassword !== dto.confirmPassword) throw new BadRequestException('两次新密码不一致')
+    if (dto.newPassword.length < 6) throw new BadRequestException('新密码至少 6 位')
+    const valid = await this.passwords.verify(dto.currentPassword, passwordHash)
+    if (!valid) throw new BadRequestException('当前密码不正确')
+    return {
+      passwordHash: await this.passwords.hash(dto.newPassword),
+      passwordCipher: this.passwords.encryptForDisplay(dto.newPassword)
+    }
+  }
+
+  private accessGuardDto(user: {
+    accessGuardEnabled: boolean
+    accessGuardPassword: string | null
+    accessGuardTtlMinutes: number
+    accessGuardRecoveryPrompt: string | null
+    accessGuardRecoveryAnswer: string | null
+  }) {
+    return {
+      enabled: user.accessGuardEnabled,
+      ttlMinutes: user.accessGuardTtlMinutes || 5,
+      password: user.accessGuardPassword || '',
+      recoveryPrompt: user.accessGuardRecoveryPrompt || '',
+      recoveryAnswer: user.accessGuardRecoveryAnswer || ''
+    }
+  }
+
+  private normalizeAccessGuardTtl(value: unknown) {
+    const numeric = Number(value || 5)
+    if (!Number.isFinite(numeric)) return 5
+    return Math.min(1440, Math.max(1, Math.round(numeric)))
   }
 
   sign(userId: string) {

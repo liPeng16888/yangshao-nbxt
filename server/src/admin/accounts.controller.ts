@@ -5,7 +5,7 @@ import { Roles } from '../auth/roles.decorator'
 import { RolesGuard } from '../auth/roles.guard'
 import { CurrentUserInfo } from '../auth/current-user.decorator'
 import type { CurrentUser } from '../auth/current-user'
-import { AdminAccountsService, CreateSubAdminPayload } from './accounts.service'
+import { AdminAccountsService, CreateSubAdminPayload, FrontendAccountRemarkPayload } from './accounts.service'
 
 @Controller('admin/accounts')
 @UseGuards(AuthGuard, RolesGuard)
@@ -26,6 +26,11 @@ export class AdminAccountsController {
   @Patch('frontend-users/:id/disabled')
   setFrontendDisabled(@Param('id') id: string, @Body() body: { disabled: boolean; disabledReason?: string }) {
     return this.accounts.setFrontendDisabled(id, Boolean(body.disabled), body.disabledReason)
+  }
+
+  @Patch('frontend-users/:id/remark')
+  updateFrontendRemark(@Param('id') id: string, @Body() body: FrontendAccountRemarkPayload) {
+    return this.accounts.updateFrontendRemark(id, body)
   }
 
   @Delete('frontend-users/:id')

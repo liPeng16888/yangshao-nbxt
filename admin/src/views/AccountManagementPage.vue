@@ -17,7 +17,31 @@
       <el-table :data="frontendUsers" border>
         <el-table-column prop="account" label="账号" width="160" />
         <el-table-column prop="username" label="名称" width="160" />
+        <el-table-column label="名称备注" min-width="240">
+          <template #default="{ row }">
+            <div class="remark-editor">
+              <el-input v-model.trim="row.remarkDraft" size="small" placeholder="不填则使用默认名称" />
+              <el-button size="small" type="primary" @click="saveFrontendRemark(row)">保存</el-button>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="displayName" label="统计显示名" width="160" />
         <el-table-column prop="password" label="密码" width="160" />
+        <el-table-column label="前端访问密码" min-width="320">
+          <template #default="{ row }">
+            <div class="access-info">
+              <div>
+                <el-tag size="small" :type="row.accessGuard?.enabled ? 'success' : 'info'">
+                  {{ row.accessGuard?.enabled ? '已启用' : '未启用' }}
+                </el-tag>
+                <span>免输 {{ row.accessGuard?.ttlMinutes || 5 }} 分钟</span>
+              </div>
+              <div>密码：{{ row.accessGuard?.password || '未设置' }}</div>
+              <div>提示词：{{ row.accessGuard?.recoveryPrompt || '未设置' }}</div>
+              <div>找回答案：{{ row.accessGuard?.recoveryAnswer || '未设置' }}</div>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="120">
           <template #default="{ row }"><el-tag :type="row.disabled ? 'danger' : 'success'">{{ row.disabled ? '已禁用' : '正常' }}</el-tag></template>
         </el-table-column>
@@ -111,7 +135,10 @@ onMounted(async () => {
 })
 
 async function loadActive() {
-  if (active.value === 'frontend') frontendUsers.value = await request.get('/admin/accounts/frontend-users')
+  if (active.value === 'frontend') {
+    const rows = await request.get<any, any[]>('/admin/accounts/frontend-users')
+    frontendUsers.value = rows.map((row) => ({ ...row, remarkDraft: row.displayRemark || '' }))
+  }
   else subAdmins.value = await request.get('/admin/accounts/sub-admins')
 }
 
@@ -131,6 +158,13 @@ async function deleteFrontend(row: any) {
   await ElMessageBox.confirm('删除账号不会删除已有数据，确认删除？', '删除确认', { type: 'warning' })
   await request.delete(`/admin/accounts/frontend-users/${row.id}`)
   ElMessage.success('账号已删除')
+  await loadActive()
+}
+
+async function saveFrontendRemark(row: any) {
+  await request.patch(`/admin/accounts/frontend-users/${row.id}/remark`, { displayRemark: row.remarkDraft || '' })
+  ElMessage.success('名称备注已保存')
+  frontendOptions.value = await getFrontendOptions()
   await loadActive()
 }
 
@@ -154,3 +188,25 @@ async function saveSubAdmin() {
   await loadActive()
 }
 </script>
+
+<style scoped>
+.remark-editor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.access-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #334155;
+  line-height: 1.4;
+}
+
+.access-info > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+</style>

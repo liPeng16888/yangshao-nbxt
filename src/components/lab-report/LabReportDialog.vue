@@ -264,9 +264,13 @@ function sanitizeFilename(value: string) {
   justify-content: space-between;
   gap: 12px;
 
+  strong {
+    font-size: 17px;
+  }
+
   span {
     color: #64748b;
-    font-size: 13px;
+    font-size: 16px;
   }
 }
 
@@ -278,6 +282,12 @@ function sanitizeFilename(value: string) {
 
 .element-checkboxes small {
   color: #64748b;
+  font-size: 15px;
+}
+
+.element-checkboxes :deep(.el-checkbox__label) {
+  font-size: 17px;
+  line-height: 1.5;
 }
 
 .preview-actions {

@@ -24,16 +24,37 @@
         </div>
       </el-popover>
       <el-tag type="info" effect="plain">{{ authStore.user?.username || '未登录' }}</el-tag>
+      <el-button :icon="Lock" @click="accessGuard.openSettings">访问设置</el-button>
+      <el-button :icon="Setting" @click="openSettings">账号设置</el-button>
       <el-button :icon="SwitchButton" @click="handleLogout">退出登录</el-button>
     </div>
   </header>
+  <el-dialog v-model="settingsVisible" title="账号设置" width="440px" append-to-body>
+    <el-form label-position="top">
+      <el-form-item label="当前密码">
+        <el-input v-model="passwordForm.currentPassword" type="password" show-password />
+      </el-form-item>
+      <el-form-item label="新密码">
+        <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="至少 6 位" />
+      </el-form-item>
+      <el-form-item label="确认新密码">
+        <el-input v-model="passwordForm.confirmPassword" type="password" show-password />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="settingsVisible = false">取消</el-button>
+      <el-button type="primary" :loading="settingsSaving" @click="savePassword">保存密码</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Bell, SwitchButton } from '@element-plus/icons-vue'
+import { Bell, Lock, Setting, SwitchButton } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
+import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { useReminderStore } from '@/stores/reminder'
 
@@ -41,7 +62,15 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const reminderStore = useReminderStore()
+const accessGuard = useAccessGuardStore()
 const beijingTime = ref(dayjs().format('YYYY-MM-DD HH:mm:ss'))
+const settingsVisible = ref(false)
+const settingsSaving = ref(false)
+const passwordForm = reactive({
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
 let timer: number | undefined
 
 const currentTitle = computed(() => String(route.meta.title || '工作台'))
@@ -60,6 +89,40 @@ onBeforeUnmount(() => {
 async function handleLogout() {
   await authStore.logoutCurrentUser()
   router.replace('/login')
+}
+
+function openSettings() {
+  passwordForm.currentPassword = ''
+  passwordForm.newPassword = ''
+  passwordForm.confirmPassword = ''
+  settingsVisible.value = true
+}
+
+async function savePassword() {
+  if (!passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+    ElMessage.warning('请完整填写当前密码、新密码和确认密码')
+    return
+  }
+  if (passwordForm.newPassword.length < 6) {
+    ElMessage.warning('新密码至少 6 位')
+    return
+  }
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    ElMessage.warning('两次新密码不一致')
+    return
+  }
+  settingsSaving.value = true
+  try {
+    await authStore.updateCurrentPassword({
+      currentPassword: passwordForm.currentPassword,
+      newPassword: passwordForm.newPassword,
+      confirmPassword: passwordForm.confirmPassword
+    })
+    settingsVisible.value = false
+    ElMessage.success('密码已修改')
+  } finally {
+    settingsSaving.value = false
+  }
 }
 </script>
 

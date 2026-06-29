@@ -12,6 +12,10 @@ export interface CreateSubAdminPayload {
   frontendUserIds?: string[]
 }
 
+export interface FrontendAccountRemarkPayload {
+  displayRemark?: string
+}
+
 @Injectable()
 export class AdminAccountsService {
   constructor(
@@ -35,13 +39,40 @@ export class AdminAccountsService {
       id: user.id,
       account: user.account,
       username: user.username,
+      displayRemark: user.displayRemark || '',
+      displayName: this.displayName(user),
       role: user.role,
       disabled: user.disabled,
       disabledReason: user.disabledReason || '',
       password: this.safeDecrypt(user.passwordCipher),
+      accessGuard: {
+        enabled: user.accessGuardEnabled,
+        password: user.accessGuardPassword || '',
+        ttlMinutes: user.accessGuardTtlMinutes || 5,
+        recoveryPrompt: user.accessGuardRecoveryPrompt || '',
+        recoveryAnswer: user.accessGuardRecoveryAnswer || ''
+      },
       createdAt: user.createdAt,
       lastDataUpdatedAt: user.frontendSheets[0]?.updatedAt || null
     }))
+  }
+
+  async updateFrontendRemark(id: string, payload: FrontendAccountRemarkPayload) {
+    const user = await this.prisma.user.findFirst({
+      where: { id, role: UserRole.FRONTEND_USER, deletedAt: null }
+    })
+    if (!user) throw new NotFoundException('前端账号不存在')
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: { displayRemark: payload.displayRemark?.trim() || null }
+    })
+    return {
+      id: updated.id,
+      account: updated.account,
+      username: updated.username,
+      displayRemark: updated.displayRemark || '',
+      displayName: this.displayName(updated)
+    }
   }
 
   async createInviteCode(currentUser: CurrentUser, payload: { note?: string; expiresAt?: string }) {
@@ -184,6 +215,10 @@ export class AdminAccountsService {
       createdAt: user.createdAt,
       permissions: user.subAdminPerms.map((permission) => permission.frontendUser)
     }
+  }
+
+  private displayName(user: { account: string; username: string; displayRemark?: string | null }) {
+    return user.displayRemark?.trim() || user.username || user.account
   }
 
   private safeDecrypt(value?: string | null) {

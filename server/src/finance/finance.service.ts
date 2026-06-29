@@ -141,7 +141,7 @@ export class FinanceService {
     const rows = await this.prisma.financeEntry.findMany({
       where: { frontendUserId: { in: frontendUserIds }, paymentDate: { gte: range.startDate, lte: range.endDate } },
       orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }],
-      include: { frontendUser: { select: { username: true, account: true } } }
+      include: { frontendUser: { select: { username: true, account: true, displayRemark: true } } }
     })
     return {
       range,
@@ -155,7 +155,7 @@ export class FinanceService {
         paymentDate: row.paymentDate,
         registeredAt: row.registeredAt,
         frontendUserId: row.frontendUserId,
-        name: row.frontendUser.username || row.frontendUser.account,
+        name: this.displayName(row.frontendUser),
         item: row.item,
         amount: toMoney(row.amount),
         paymentMethod: row.paymentMethod,
@@ -268,7 +268,7 @@ export class FinanceService {
       },
       orderBy: { date: 'desc' },
       include: {
-        frontendUser: { select: { id: true, username: true, account: true } },
+        frontendUser: { select: { id: true, username: true, account: true, displayRemark: true } },
         sampleBlocks: { orderBy: { index: 'asc' } }
       }
     })
@@ -330,7 +330,7 @@ export class FinanceService {
             sheetId: sheet.id,
             blockId: block.id,
             frontendUserId: sheet.frontendUserId,
-            name: sheet.frontendUser.username || sheet.frontendUser.account,
+            name: this.displayName(sheet.frontendUser),
             sequence: String(inputs.sequence || block.index).padStart(3, '0'),
             sampleNumber: this.getSampleNumber(inputs),
             customer: this.getCustomerName(inputs),
@@ -355,7 +355,7 @@ export class FinanceService {
             id: key,
             date: sheet.date,
             frontendUserId: sheet.frontendUserId,
-            name: sheet.frontendUser.username || sheet.frontendUser.account,
+            name: this.displayName(sheet.frontendUser),
             customer,
             sampleCount: 0,
             amount: 0
@@ -419,6 +419,10 @@ export class FinanceService {
       screenshotUrl: row.screenshotUrl || '',
       remark: row.remark || ''
     }
+  }
+
+  private displayName(user: { account: string; username: string; displayRemark?: string | null }) {
+    return user.displayRemark?.trim() || user.username || user.account
   }
 
   private blockDto(block: { id: string; index: number; readonly: boolean; inputs: unknown; results: unknown; parameterSnapshot: unknown }) {

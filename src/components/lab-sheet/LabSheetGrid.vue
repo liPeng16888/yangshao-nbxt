@@ -97,8 +97,7 @@
           </div>
           <div class="cell cell--label cell--remark">化验元素</div>
           <div class="cell cell--input cell--span-5 cell--remark">
-            <el-input
-              size="small"
+            <LabElementSelector
               :disabled="isDisabled(block)"
               :model-value="block.inputs.elementNote"
               @update:model-value="(value) => updateText(block.id, 'elementNote', value)"
@@ -123,6 +122,7 @@
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch, type PropType } from 'vue'
 import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 import CustomerCellEditor from './CustomerCellEditor.vue'
+import LabElementSelector from './LabElementSelector.vue'
 import type { BlacklistRecord } from '@/types/blacklist'
 import type { LabSampleInput, SampleBlock, SamplePaymentStatus } from '@/types/labSheet'
 import { labSheetColumns } from '@/constants/labSheetTemplate'
@@ -339,7 +339,14 @@ const NumberInputCell = defineComponent({
       h(
         'div',
         {
-          class: ['cell', 'cell--input', cellProps.blocked && 'cell--blocked', cellProps.required && 'cell--required', attrs.class]
+          class: [
+            'cell',
+            'cell--input',
+            'cell--number-input',
+            cellProps.blocked && 'cell--blocked',
+            cellProps.required && 'cell--required',
+            attrs.class
+          ]
         },
         [
           h(ElInput, {
@@ -436,7 +443,7 @@ const FormulaCell = defineComponent({
   min-width: 0;
   min-height: 36px;
   padding: 2px;
-  font-size: 13px;
+  font-size: 15px;
   text-align: center;
   border: 1px solid #111827;
   border-right: 0;
@@ -521,6 +528,20 @@ const FormulaCell = defineComponent({
 
 .sample-number-editor {
   border-bottom: 1px solid #111827;
+
+  :deep(.el-input__inner) {
+    color: #111827;
+    font-size: 15px;
+    font-weight: 500;
+    -webkit-text-fill-color: #111827;
+  }
+
+  :deep(.el-input__inner::placeholder) {
+    color: rgba(31, 41, 55, 0.42);
+    font-size: 15px;
+    font-weight: 400;
+    -webkit-text-fill-color: rgba(31, 41, 55, 0.42);
+  }
 }
 
 .customer-editor-wrap {
@@ -532,7 +553,8 @@ const FormulaCell = defineComponent({
 .cell--formula {
   color: #111827;
   background: #fff;
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .cell--green {
@@ -619,21 +641,31 @@ const FormulaCell = defineComponent({
 
 :deep(.el-input__inner) {
   color: #c00000;
+  font-size: 15px;
   text-align: center;
   -webkit-text-fill-color: #c00000;
 }
 
+.cell--number-input :deep(.el-input__inner),
+.sequence-editor :deep(.el-input__inner) {
+  font-weight: 700;
+}
+
 .cell--green :deep(.el-input__inner),
 .cell--customer :deep(.el-input__inner),
-.cell--customer :deep(.el-select__placeholder),
 .cell--customer :deep(.el-select__input) {
   color: #1f2937;
+  font-size: 15px;
+  font-weight: 500;
   -webkit-text-fill-color: #1f2937;
 }
 
 .cell--customer :deep(.el-input__inner::placeholder),
+.cell--customer :deep(.el-select__placeholder),
 .cell--customer :deep(.el-select__input::placeholder) {
-  color: #1f2937;
-  -webkit-text-fill-color: #1f2937;
+  color: rgba(31, 41, 55, 0.42);
+  font-size: 15px;
+  font-weight: 400;
+  -webkit-text-fill-color: rgba(31, 41, 55, 0.42);
 }
 </style>

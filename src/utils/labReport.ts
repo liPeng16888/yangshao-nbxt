@@ -744,7 +744,7 @@ function getReportElementValue(block: SampleBlock, element: LabReportElement) {
   return formatReportNumber(source[element.field as keyof typeof source])
 }
 
-function getSmsElementLabel(key: LabReportElementKey) {
+export function getSmsElementLabel(key: LabReportElementKey) {
   const labels: Record<LabReportElementKey, string> = {
     aluminum: '铝',
     silicon: '硅',

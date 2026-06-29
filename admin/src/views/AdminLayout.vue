@@ -23,7 +23,9 @@
           <span>北京时间 {{ nowText }}</span>
         </div>
         <div class="topbar-actions">
+          <span class="account-name">{{ user?.username || user?.account }}</span>
           <el-tag>{{ user?.role === 'ROOT_ADMIN' ? '主账号' : '子账号' }}</el-tag>
+          <el-button @click="openSettings">账号设置</el-button>
           <el-button @click="logout">退出登录</el-button>
         </div>
       </header>
@@ -31,20 +33,55 @@
         <router-view />
       </main>
     </section>
+
+    <el-dialog v-model="settingsVisible" title="账号设置" width="460px">
+      <el-form label-position="top">
+        <el-form-item label="登录账号">
+          <el-input v-model.trim="settingsForm.account" placeholder="请输入登录账号" />
+        </el-form-item>
+        <el-form-item label="账号名称">
+          <el-input v-model.trim="settingsForm.username" placeholder="请输入账号名称" />
+        </el-form-item>
+        <el-divider content-position="left">修改密码</el-divider>
+        <el-form-item label="当前密码">
+          <el-input v-model="settingsForm.currentPassword" type="password" show-password placeholder="不修改密码可留空" />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="settingsForm.newPassword" type="password" show-password placeholder="至少 6 位" />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="settingsForm.confirmPassword" type="password" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="settingsVisible = false">取消</el-button>
+        <el-button type="primary" :loading="settingsSaving" @click="saveSettings">保存设置</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import dayjs from 'dayjs'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { adminMe, currentAdminUser, logoutAdmin } from '../api'
+import { ElMessage } from 'element-plus'
+import { adminMe, currentAdminUser, logoutAdmin, updateAdminProfile } from '../api'
 import type { AdminUser } from '../types'
 
 const route = useRoute()
 const router = useRouter()
 const user = ref<AdminUser | null>(currentAdminUser())
 const now = ref(dayjs())
+const settingsVisible = ref(false)
+const settingsSaving = ref(false)
+const settingsForm = reactive({
+  account: '',
+  username: '',
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
 let timer = 0
 
 const title = computed(() => String(route.meta.title || '后台管理'))
@@ -66,6 +103,56 @@ onBeforeUnmount(() => window.clearInterval(timer))
 function logout() {
   logoutAdmin()
   void router.push('/login')
+}
+
+function openSettings() {
+  settingsForm.account = user.value?.account || ''
+  settingsForm.username = user.value?.username || ''
+  settingsForm.currentPassword = ''
+  settingsForm.newPassword = ''
+  settingsForm.confirmPassword = ''
+  settingsVisible.value = true
+}
+
+async function saveSettings() {
+  if (!settingsForm.account.trim()) {
+    ElMessage.warning('请输入登录账号')
+    return
+  }
+  if (!settingsForm.username.trim()) {
+    ElMessage.warning('请输入账号名称')
+    return
+  }
+  const wantsPasswordChange = Boolean(settingsForm.currentPassword || settingsForm.newPassword || settingsForm.confirmPassword)
+  if (wantsPasswordChange) {
+    if (!settingsForm.currentPassword || !settingsForm.newPassword || !settingsForm.confirmPassword) {
+      ElMessage.warning('请完整填写当前密码、新密码和确认密码')
+      return
+    }
+    if (settingsForm.newPassword.length < 6) {
+      ElMessage.warning('新密码至少 6 位')
+      return
+    }
+    if (settingsForm.newPassword !== settingsForm.confirmPassword) {
+      ElMessage.warning('两次新密码不一致')
+      return
+    }
+  }
+
+  settingsSaving.value = true
+  try {
+    user.value = await updateAdminProfile({
+      account: settingsForm.account.trim(),
+      username: settingsForm.username.trim(),
+      currentPassword: wantsPasswordChange ? settingsForm.currentPassword : undefined,
+      newPassword: wantsPasswordChange ? settingsForm.newPassword : undefined,
+      confirmPassword: wantsPasswordChange ? settingsForm.confirmPassword : undefined
+    })
+    settingsVisible.value = false
+    ElMessage.success('账号设置已保存')
+  } finally {
+    settingsSaving.value = false
+  }
 }
 </script>
 
@@ -161,6 +248,15 @@ h2 {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.topbar-actions .account-name {
+  max-width: 140px;
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-content {

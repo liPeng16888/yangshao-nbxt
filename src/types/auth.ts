@@ -22,3 +22,9 @@ export interface AuthResponse {
   token: string
   user: AuthUser
 }
+
+export interface UpdatePasswordPayload {
+  currentPassword: string
+  newPassword: string
+  confirmPassword: string
+}

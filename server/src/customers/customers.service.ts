@@ -26,22 +26,30 @@ export class CustomersService {
     })
   }
 
-  async create(frontendUserId: string, payload: { name: string; phone?: string; wechat?: string; wechatNickname?: string }) {
-    if (!payload.name?.trim()) throw new BadRequestException('客户名称不能为空')
+  async create(frontendUserId: string, payload: { name?: string; phone?: string; wechat?: string; wechatNickname?: string }) {
+    const name = this.resolveCustomerName(payload)
+    if (!name) throw new BadRequestException('请至少填写一项客户信息')
+    const phone = payload.phone?.trim() || null
+    const wechat = payload.wechat?.trim() || null
+    const wechatNickname = payload.wechatNickname?.trim() || null
     return this.prisma.customer.upsert({
-      where: { frontendUserId_name: { frontendUserId, name: payload.name.trim() } },
+      where: { frontendUserId_name: { frontendUserId, name } },
       create: {
         frontendUserId,
-        name: payload.name.trim(),
-        phone: payload.phone || null,
-        wechat: payload.wechat || null,
-        wechatNickname: payload.wechatNickname || null
+        name,
+        phone,
+        wechat,
+        wechatNickname
       },
       update: {
-        phone: payload.phone || null,
-        wechat: payload.wechat || null,
-        wechatNickname: payload.wechatNickname || null
+        phone,
+        wechat,
+        wechatNickname
       }
     })
+  }
+
+  private resolveCustomerName(payload: { name?: string; phone?: string; wechat?: string; wechatNickname?: string }) {
+    return payload.name?.trim() || payload.phone?.trim() || payload.wechat?.trim() || payload.wechatNickname?.trim() || ''
   }
 }

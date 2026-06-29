@@ -78,6 +78,7 @@ import LabParameterPanel from '@/components/lab-sheet/LabParameterPanel.vue'
 import LabSheetGrid from '@/components/lab-sheet/LabSheetGrid.vue'
 import LabReportDialog from '@/components/lab-report/LabReportDialog.vue'
 import LabSmsDialog from '@/components/lab-report/LabSmsDialog.vue'
+import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useLabSheetStore } from '@/stores/labSheet'
 import { todayInBeijing } from '@/utils/date'
 import { loadLabReportSmsTemplate, loadLabReportTemplate } from '@/utils/labReport'
@@ -87,6 +88,7 @@ type GenerationMode = 'report' | 'sms' | null
 const route = useRoute()
 const router = useRouter()
 const labStore = useLabSheetStore()
+const accessGuard = useAccessGuardStore()
 const selectedDate = ref(todayInBeijing())
 const appendCount = ref('1')
 const hitDialogVisible = ref(false)
@@ -144,8 +146,13 @@ async function loadSheetFromRoute() {
   const queryDate = typeof route.query.date === 'string' ? route.query.date : ''
   const queryBlock = typeof route.query.block === 'string' ? route.query.block : ''
   if (queryDate) {
-    selectedDate.value = queryDate
-    if (labStore.sheet?.date !== queryDate || queryBlock) await labStore.loadSheetByDate(queryDate)
+    const allowed = await requestHistoricalDateAccess(queryDate, () => loadRouteSheetFromQuery(queryDate, queryBlock))
+    if (!allowed) {
+      selectedDate.value = labStore.sheet?.date || todayInBeijing()
+      highlightBlockId.value = ''
+      return
+    }
+    await loadRouteSheet(queryDate, queryBlock)
   } else if (!labStore.sheet) {
     await labStore.loadCurrentSheet()
     selectedDate.value = todayInBeijing()
@@ -155,9 +162,40 @@ async function loadSheetFromRoute() {
 }
 
 async function handleDateChange(value: string) {
+  if (!value) return
+  const allowed = await requestHistoricalDateAccess(value, () => loadSelectedDate(value))
+  if (!allowed) {
+    selectedDate.value = labStore.sheet?.date || todayInBeijing()
+    return
+  }
+  await loadSelectedDate(value)
+}
+
+async function loadRouteSheet(queryDate: string, queryBlock: string) {
+  selectedDate.value = queryDate
+  if (labStore.sheet?.date !== queryDate || queryBlock) await labStore.loadSheetByDate(queryDate)
+}
+
+async function loadRouteSheetFromQuery(queryDate: string, queryBlock: string) {
+  await loadRouteSheet(queryDate, queryBlock)
+  highlightBlockId.value = queryBlock
+  if (queryBlock) await scrollToHighlightedBlock(queryBlock)
+}
+
+async function loadSelectedDate(value: string) {
   selectedDate.value = value
   highlightBlockId.value = ''
   await labStore.loadSheetByDate(value)
+}
+
+async function requestHistoricalDateAccess(date: string, onSuccess: () => void | Promise<void>) {
+  if (date === todayInBeijing()) return true
+  await accessGuard.loadSettings()
+  return accessGuard.requestAccess({
+    title: '历史日期访问验证',
+    message: '默认只能查看当日数据。请输入访问密码后查看过往日期数据。',
+    onSuccess
+  })
 }
 
 function showBlacklistHit(records: BlacklistRecord[]) {

@@ -1,6 +1,6 @@
 import request, { useMocks } from '@/utils/request'
-import type { AuthResponse, AuthUser, LoginPayload, RegisterPayload } from '@/types/auth'
-import { mockLogin, mockMe, mockRegister } from '@/mocks/db'
+import type { AuthResponse, AuthUser, LoginPayload, RegisterPayload, UpdatePasswordPayload } from '@/types/auth'
+import { mockLogin, mockMe, mockRegister, mockUpdatePassword } from '@/mocks/db'
 
 export async function login(payload: LoginPayload): Promise<AuthResponse> {
   if (useMocks) return mockLogin(payload)
@@ -20,4 +20,9 @@ export async function getMe(): Promise<AuthUser> {
 export async function logout() {
   if (useMocks) return Promise.resolve()
   return request.post('/auth/logout')
+}
+
+export async function updatePassword(payload: UpdatePasswordPayload) {
+  if (useMocks) return mockUpdatePassword(payload)
+  return request.patch('/auth/profile', payload)
 }

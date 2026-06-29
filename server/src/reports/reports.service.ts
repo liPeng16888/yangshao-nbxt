@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common'
 import dayjs from 'dayjs'
 import { PrismaService } from '../prisma/prisma.service'
 import { datesBetween, todayInBeijing } from '../common/date'
+import { hasLabDetectionInput } from '../common/lab'
 import { toMoney } from '../common/money'
 
 const financeCategoryRules = [
@@ -27,7 +28,7 @@ export class ReportsService {
       const validBlocks =
         sheet?.sampleBlocks.filter((block) => {
           const inputs = block.inputs as Record<string, unknown>
-          return this.hasSampleIdentity(inputs) && typeof inputs.price === 'number' && Number.isFinite(inputs.price)
+          return this.hasSampleIdentity(inputs) && typeof inputs.price === 'number' && Number.isFinite(inputs.price) && hasLabDetectionInput(inputs)
         }) || []
       return {
         date,
