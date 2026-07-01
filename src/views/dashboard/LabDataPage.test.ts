@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { defineComponent, h, nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import LabDataPage from './LabDataPage.vue'
@@ -35,6 +36,13 @@ vi.mock('@/stores/labSheet', () => ({
   useLabSheetStore: () => mocks.labStore
 }))
 
+vi.mock('@/stores/accessGuard', () => ({
+  useAccessGuardStore: () => ({
+    loadSettings: vi.fn(),
+    requestAccess: vi.fn(() => true)
+  })
+}))
+
 function mountPage() {
   const LabSheetGridStub = defineComponent({
     setup() {
@@ -44,6 +52,7 @@ function mountPage() {
 
   return mount(LabDataPage, {
     global: {
+      plugins: [createPinia()],
       directives: {
         loading: {}
       },
