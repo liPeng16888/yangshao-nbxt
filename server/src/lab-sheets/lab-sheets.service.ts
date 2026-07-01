@@ -108,9 +108,23 @@ export class LabSheetsService {
     const sheets = await this.prisma.labSheet.findMany({
       where: { frontendUserId },
       orderBy: { date: 'desc' },
-      select: { id: true, date: true, readonly: true }
+      select: {
+        id: true,
+        date: true,
+        readonly: true,
+        sampleBlocks: {
+          orderBy: { index: 'asc' },
+          select: { inputs: true }
+        }
+      }
     })
-    return sheets
+    return sheets.map((sheet) => ({
+      id: sheet.id,
+      date: sheet.date,
+      readonly: sheet.readonly,
+      sampleBlockCount: sheet.sampleBlocks.length,
+      filledBlockCount: sheet.sampleBlocks.filter((block) => this.hasVisibleSampleBlockInput(block.inputs)).length
+    }))
   }
 
   async ensureSheet(frontendUserId: string, date: string) {
@@ -254,6 +268,17 @@ export class LabSheetsService {
       results: block.results,
       parameterSnapshot: block.parameterSnapshot
     }
+  }
+
+  private hasVisibleSampleBlockInput(inputs: unknown) {
+    const row = (inputs || {}) as Record<string, unknown>
+    if (hasLabDetectionInput(row)) return true
+    return ['sampleNumber', 'customerText', 'price', 'paymentStatus', 'elementNote', 'note'].some((field) => {
+      const value = row[field]
+      if (typeof value === 'number') return Number.isFinite(value)
+      if (typeof value === 'string') return value.trim() !== ''
+      return Array.isArray(value) ? value.length > 0 : Boolean(value)
+    })
   }
 
   private toJsonValue(value: unknown) {

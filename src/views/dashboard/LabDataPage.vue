@@ -3,6 +3,17 @@
     <div class="toolbar">
       <div class="toolbar-left">
         <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" @change="handleDateChange" />
+        <el-select
+          v-model="historyDate"
+          class="history-select"
+          placeholder="样品历史数据"
+          filterable
+          clearable
+          :loading="historyLoading"
+          @change="handleHistoryDateChange"
+        >
+          <el-option v-for="item in historyRows" :key="item.id" :label="historyOptionLabel(item)" :value="item.date" />
+        </el-select>
         <el-tag v-if="labStore.sheet?.readonly" type="warning" effect="plain">历史副表只读</el-tag>
         <el-tag v-else type="success" effect="plain">当前表可编辑</el-tag>
         <el-tag v-if="!labStore.sheet?.readonly" :type="autoSaveTagType" effect="plain">{{ autoSaveText }}</el-tag>
@@ -72,6 +83,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ChatLineSquare, DocumentChecked, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
+import { getLabSheetHistory, type LabSheetHistoryItem } from '@/api/labSheet'
 import type { BlacklistRecord } from '@/types/blacklist'
 import type { LabReportSmsTemplate, LabReportTemplate } from '@/types/labReport'
 import BlacklistHitDialog from '@/components/lab-sheet/BlacklistHitDialog.vue'
@@ -91,6 +103,9 @@ const router = useRouter()
 const labStore = useLabSheetStore()
 const accessGuard = useAccessGuardStore()
 const selectedDate = ref(todayInBeijing())
+const historyDate = ref(todayInBeijing())
+const historyRows = ref<LabSheetHistoryItem[]>([])
+const historyLoading = ref(false)
 const appendCount = ref('1')
 const hitDialogVisible = ref(false)
 const hitRecords = ref<BlacklistRecord[]>([])
@@ -134,6 +149,7 @@ const selectionMode = computed(() => generationMode.value !== null)
 
 onMounted(async () => {
   await loadSheetFromRoute()
+  await loadHistoryRows()
 })
 
 onBeforeUnmount(() => {
@@ -171,13 +187,20 @@ async function handleDateChange(value: string) {
   const allowed = await requestHistoricalDateAccess(value, () => loadSelectedDate(value))
   if (!allowed) {
     selectedDate.value = labStore.sheet?.date || todayInBeijing()
+    historyDate.value = selectedDate.value
     return
   }
   await loadSelectedDate(value)
 }
 
+async function handleHistoryDateChange(value: string) {
+  if (!value) return
+  await handleDateChange(value)
+}
+
 async function loadRouteSheet(queryDate: string, queryBlock: string) {
   selectedDate.value = queryDate
+  historyDate.value = queryDate
   if (labStore.sheet?.date !== queryDate || queryBlock) await labStore.loadSheetByDate(queryDate)
 }
 
@@ -189,8 +212,26 @@ async function loadRouteSheetFromQuery(queryDate: string, queryBlock: string) {
 
 async function loadSelectedDate(value: string) {
   selectedDate.value = value
+  historyDate.value = value
   highlightBlockId.value = ''
   await labStore.loadSheetByDate(value)
+}
+
+async function loadHistoryRows() {
+  historyLoading.value = true
+  try {
+    historyRows.value = await getLabSheetHistory()
+    historyDate.value = selectedDate.value
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+function historyOptionLabel(item: LabSheetHistoryItem) {
+  const filled = item.filledBlockCount ?? 0
+  const total = item.sampleBlockCount ?? 0
+  if (total) return `${item.date}（已填 ${filled}/${total} 格）`
+  return item.date
 }
 
 async function requestHistoricalDateAccess(date: string, onSuccess: () => void | Promise<void>) {
@@ -257,6 +298,7 @@ async function appendBlocks() {
   try {
     await labStore.appendSampleBlocks(appendCount.value)
     appendCount.value = '1'
+    await loadHistoryRows()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '新增数量无效')
   }
@@ -312,6 +354,10 @@ async function scrollToHighlightedBlock(blockId: string) {
 
 .append-input {
   width: 140px;
+}
+
+.history-select {
+  width: 230px;
 }
 
 :deep(.lab-grid-panel) {
