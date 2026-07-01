@@ -66,14 +66,6 @@ export function createLabSheetEventSource(date: string) {
   return new EventSource(url.toString())
 }
 
-export type LabSheetHistoryItem = {
-  id: string
-  date: string
-  readonly: boolean
-  sampleBlockCount?: number
-  filledBlockCount?: number
-}
-
 function clientHeaders() {
   return { headers: { 'X-YS-Client-Id': getLabSheetClientId() } }
 }
@@ -108,7 +100,7 @@ export async function saveSampleBlock(sheetId: string, block: SampleBlockSavePay
   return request.put(`/lab-sheets/${sheetId}/cells`, block, clientHeaders())
 }
 
-export async function getLabSheetHistory(): Promise<LabSheetHistoryItem[]> {
+export async function getLabSheetHistory(): Promise<Array<{ id: string; date: string; readonly: boolean }>> {
   if (useMocks) return mockLabHistory()
   return request.get('/lab-sheets/history')
 }

@@ -15,7 +15,7 @@ export class LabSheetsController {
 
   @Get('current')
   getCurrent(@CurrentUserInfo() user: CurrentUser) {
-    return this.sheets.getSheetForFrontendUser(user.id)
+    return this.sheets.getDefaultSheetForFrontendUser(user.id)
   }
 
   @Get()

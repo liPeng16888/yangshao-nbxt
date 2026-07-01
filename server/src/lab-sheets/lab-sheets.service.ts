@@ -19,6 +19,25 @@ export class LabSheetsService {
     return this.toSheetDto(sheet)
   }
 
+  async getDefaultSheetForFrontendUser(frontendUserId: string) {
+    const today = todayInBeijing()
+    const todaySheet = await this.prisma.labSheet.findUnique({
+      where: { frontendUserId_date: { frontendUserId, date: today } },
+      include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+    })
+    if (todaySheet && this.hasSheetContent(todaySheet.sampleBlocks)) return this.toSheetDto(todaySheet)
+
+    const sheets = await this.prisma.labSheet.findMany({
+      where: { frontendUserId },
+      orderBy: { date: 'desc' },
+      include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+    })
+    const latestFilledSheet = sheets.find((sheet) => sheet.date !== today && this.hasSheetContent(sheet.sampleBlocks))
+    if (latestFilledSheet) return this.toSheetDto(latestFilledSheet)
+
+    return this.toSheetDto(todaySheet || (await this.ensureSheet(frontendUserId, today)))
+  }
+
   async updateCurrentParameters(frontendUserId: string, parameters: Record<string, number>, sourceClientId?: string) {
     const sheet = await this.ensureSheet(frontendUserId, todayInBeijing())
     const nextParameters = { ...defaultLabParameters, ...parameters, savedAt: new Date().toISOString() }
@@ -108,23 +127,9 @@ export class LabSheetsService {
     const sheets = await this.prisma.labSheet.findMany({
       where: { frontendUserId },
       orderBy: { date: 'desc' },
-      select: {
-        id: true,
-        date: true,
-        readonly: true,
-        sampleBlocks: {
-          orderBy: { index: 'asc' },
-          select: { inputs: true }
-        }
-      }
+      select: { id: true, date: true, readonly: true }
     })
-    return sheets.map((sheet) => ({
-      id: sheet.id,
-      date: sheet.date,
-      readonly: sheet.readonly,
-      sampleBlockCount: sheet.sampleBlocks.length,
-      filledBlockCount: sheet.sampleBlocks.filter((block) => this.hasVisibleSampleBlockInput(block.inputs)).length
-    }))
+    return sheets
   }
 
   async ensureSheet(frontendUserId: string, date: string) {
@@ -268,6 +273,10 @@ export class LabSheetsService {
       results: block.results,
       parameterSnapshot: block.parameterSnapshot
     }
+  }
+
+  private hasSheetContent(blocks: Array<{ inputs: unknown }>) {
+    return blocks.some((block) => this.hasVisibleSampleBlockInput(block.inputs))
   }
 
   private hasVisibleSampleBlockInput(inputs: unknown) {
