@@ -27,7 +27,14 @@
           </RouterLink>
         </el-tooltip>
         <div v-if="!collapsed && item.children?.length && isActive(item)" class="side-nav__children">
-          <RouterLink v-for="child in item.children" :key="child.path" :to="child.path" class="side-nav__child">
+          <RouterLink
+            v-for="child in item.children"
+            :key="child.path"
+            :to="child.path"
+            class="side-nav__child"
+            active-class="side-nav__child--auto-active"
+            :class="{ 'router-link-active': isChildActive(child) }"
+          >
             {{ child.label }}
           </RouterLink>
         </div>
@@ -54,7 +61,16 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { path: '/data', label: '数据计算', icon: DataAnalysis },
+  {
+    path: '/data',
+    label: '数据计算',
+    icon: DataAnalysis,
+    children: [
+      { path: '/data', label: '数据计算' },
+      { path: '/data/standard-sample', label: '标样计算' },
+      { path: '/data/coefficient', label: '系数计算' }
+    ]
+  },
   {
     path: '/lab-report',
     label: '化验报告',
@@ -72,7 +88,8 @@ const navItems: NavItem[] = [
       { path: '/finance/expenses', label: '支出账单' },
       { path: '/finance/income', label: '收入账单' },
       { path: '/finance/unsettled', label: '未结款' },
-      { path: '/finance/monthly-settlement', label: '月结款' }
+      { path: '/finance/monthly-settlement', label: '月结款' },
+      { path: '/finance/prepaid', label: '预存款' }
     ]
   },
   { path: '/reports', label: '报表', icon: DocumentChecked },
@@ -90,5 +107,10 @@ const emit = defineEmits<{
 
 function isActive(item: NavItem) {
   return route.path === item.path || route.path.startsWith(`${item.path}/`) || Boolean(item.children?.some((child) => child.path === route.path))
+}
+
+function isChildActive(child: NavChild) {
+  if (child.path === '/data') return route.path === child.path
+  return route.path === child.path || route.path.startsWith(`${child.path}/`)
 }
 </script>

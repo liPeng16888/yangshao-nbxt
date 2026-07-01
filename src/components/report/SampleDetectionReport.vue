@@ -3,7 +3,21 @@
     <ReportSummaryCards :items="summaryItems" />
     <section class="panel">
       <div class="panel__header">
-        <h2>样品数量与总价格趋势</h2>
+        <h2>收入分类汇总</h2>
+      </div>
+      <div class="panel__body">
+        <div class="status-grid">
+          <div v-for="summary in statusSummaries" :key="summary.status" class="status-card">
+            <span class="status-card__name">{{ summary.status }}</span>
+            <strong>{{ summary.count }} 个</strong>
+            <span class="status-card__amount">¥{{ summary.amount.toFixed(2) }}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel__header">
+        <h2>每日收入分类统计</h2>
       </div>
       <div class="panel__body">
         <el-empty v-if="!report.rows.length" description="当前周期暂无统计数据" />
@@ -16,9 +30,17 @@
       </div>
       <el-table :data="report.rows" border>
         <el-table-column prop="date" label="日期" />
-        <el-table-column prop="sampleCount" label="样品数量" />
-        <el-table-column prop="totalPrice" label="样品总价格">
+        <el-table-column prop="sampleCount" label="收入数量" width="100" />
+        <el-table-column prop="totalPrice" label="收入金额" width="120">
           <template #default="{ row }">¥{{ row.totalPrice.toFixed(2) }}</template>
+        </el-table-column>
+        <el-table-column v-for="status in visibleStatuses" :key="status" :label="status" min-width="130">
+          <template #default="{ row }">
+            <div class="status-cell">
+              <strong>{{ getRowStatusSummary(row, status).count }} 个</strong>
+              <span>¥{{ getRowStatusSummary(row, status).amount.toFixed(2) }}</span>
+            </div>
+          </template>
         </el-table-column>
       </el-table>
     </section>
@@ -28,7 +50,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { EChartsOption } from 'echarts'
-import type { SampleDetectionReport } from '@/types/report'
+import type { IncomePaymentStatus } from '@/types/financeBills'
+import type { SampleDetectionDailyRow, SampleDetectionReport } from '@/types/report'
+import { incomePaymentStatuses } from '@/utils/financeBills'
 import ReportSummaryCards from './ReportSummaryCards.vue'
 import ReportChart from './ReportChart.vue'
 
@@ -37,21 +61,99 @@ const props = defineProps<{
 }>()
 
 const summaryItems = computed(() => [
-  { label: '样品总数', value: props.report.summary.totalSamples },
-  { label: '样品总价格', value: `¥${props.report.summary.totalPrice.toFixed(2)}` },
-  { label: '日均样品数', value: props.report.summary.averageSamples },
-  { label: '日均价格', value: `¥${props.report.summary.averagePrice.toFixed(2)}` }
+  { label: '收入总数', value: props.report.summary.totalSamples },
+  { label: '收入总金额', value: `¥${props.report.summary.totalPrice.toFixed(2)}` },
+  { label: '日均收入数量', value: props.report.summary.averageSamples },
+  { label: '日均收入金额', value: `¥${props.report.summary.averagePrice.toFixed(2)}` }
 ])
+
+const visibleStatuses = computed(() => incomePaymentStatuses)
+
+const statusSummaries = computed(() =>
+  visibleStatuses.value.map((status) => props.report.summary.statusSummaries.find((item) => item.status === status) || { status, count: 0, amount: 0 })
+)
 
 const chartOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'axis' },
-  legend: { data: ['样品数量', '样品总价格'] },
-  grid: { left: 48, right: 54, top: 48, bottom: 38 },
+  legend: { data: visibleStatuses.value },
+  grid: { left: 56, right: 32, top: 52, bottom: 38 },
   xAxis: { type: 'category', data: props.report.rows.map((row) => row.date) },
-  yAxis: [{ type: 'value', name: '数量' }, { type: 'value', name: '价格' }],
-  series: [
-    { name: '样品数量', type: 'bar', data: props.report.rows.map((row) => row.sampleCount), itemStyle: { color: '#2563eb' } },
-    { name: '样品总价格', type: 'line', yAxisIndex: 1, data: props.report.rows.map((row) => row.totalPrice), itemStyle: { color: '#d9472f' } }
-  ]
+  yAxis: { type: 'value', name: '金额' },
+  series: visibleStatuses.value.map((status) => ({
+    name: status,
+    type: 'bar',
+    stack: 'income',
+    data: props.report.rows.map((row) => getRowStatusSummary(row, status).amount),
+    itemStyle: { color: statusColors[status] }
+  }))
 }))
+
+const statusColors: Record<IncomePaymentStatus, string> = {
+  已结款: '#16a34a',
+  未结款: '#d9472f',
+  月结款: '#2563eb',
+  预存款: '#7c3aed',
+  未选择: '#64748b'
+}
+
+function getRowStatusSummary(row: SampleDetectionDailyRow, status: IncomePaymentStatus) {
+  return row.statusSummaries.find((item) => item.status === status) || { status, count: 0, amount: 0 }
+}
 </script>
+
+<style scoped lang="scss">
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.status-card {
+  padding: 14px;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #ffffff;
+
+  &__name,
+  &__amount {
+    display: block;
+    color: #64748b;
+    font-size: 13px;
+  }
+
+  strong {
+    display: block;
+    margin: 8px 0 4px;
+    color: #10233f;
+    font-size: 22px;
+  }
+}
+
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  strong {
+    color: #10233f;
+    font-weight: 700;
+  }
+
+  span {
+    color: #64748b;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .status-grid {
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .status-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+</style>

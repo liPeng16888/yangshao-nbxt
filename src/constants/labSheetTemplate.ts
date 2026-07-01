@@ -31,7 +31,7 @@ export const labParameterLabels: Array<{ key: LabParameterKey; label: string; ex
 
 export const labSheetColumns = [
   { key: 'A', label: '编号', width: 78 },
-  { key: 'B', label: '来样单位/样品编号', width: 240 },
+  { key: 'B', label: '来样单位/样品名称', width: 240 },
   { key: 'C', label: '铁', width: 82 },
   { key: 'D', label: '硅', width: 82 },
   { key: 'E', label: '调整数', width: 82 },

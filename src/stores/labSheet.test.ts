@@ -7,8 +7,10 @@ import { useLabSheetStore } from './labSheet'
 
 const apiMocks = vi.hoisted(() => ({
   addSampleBlocks: vi.fn(),
+  createLabSheetEventSource: vi.fn(),
   getCurrentLabSheet: vi.fn(),
   getLabSheetByDate: vi.fn(),
+  getLabSheetClientId: vi.fn(),
   saveSampleBlock: vi.fn(),
   updateCurrentParameters: vi.fn()
 }))
@@ -17,6 +19,13 @@ const messageMocks = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn()
 }))
+
+type FakeEventSource = {
+  close: ReturnType<typeof vi.fn>
+  onerror: ((event: Event) => unknown) | null
+  onmessage: ((event: MessageEvent) => unknown) | null
+  onopen: ((event: Event) => unknown) | null
+}
 
 vi.mock('@/api/labSheet', () => apiMocks)
 vi.mock('element-plus', () => ({
@@ -58,6 +67,8 @@ describe('labSheet store auto save', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     setActivePinia(createPinia())
+    apiMocks.createLabSheetEventSource.mockReturnValue(null)
+    apiMocks.getLabSheetClientId.mockReturnValue('client-1')
     apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheet())
     apiMocks.getLabSheetByDate.mockResolvedValue(makeSheet())
     apiMocks.updateCurrentParameters.mockResolvedValue(defaultLabParameters)
@@ -121,4 +132,117 @@ describe('labSheet store auto save', () => {
       })
     )
   })
+
+  it('applies a remote saved block event when the local block is clean', async () => {
+    const source = makeEventSource()
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'block-saved',
+        date: '2026-06-25',
+        sheetId: 'sheet-1',
+        sourceClientId: 'client-2',
+        updatedAt: new Date().toISOString(),
+        block: makeBlock({ sampleNumber: 'REMOTE-001' })
+      })
+    } as MessageEvent)
+
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('REMOTE-001')
+  })
+
+  it('keeps local edits when a remote saved block arrives during pending auto save', async () => {
+    const source = makeEventSource()
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    store.patchBlock('block-1', { sampleNumber: 'LOCAL-001' })
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'block-saved',
+        date: '2026-06-25',
+        sheetId: 'sheet-1',
+        sourceClientId: 'client-2',
+        updatedAt: new Date().toISOString(),
+        block: makeBlock({ sampleNumber: 'REMOTE-001' })
+      })
+    } as MessageEvent)
+
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
+  })
+
+  it('keeps old parameter snapshots for filled blocks and applies new parameters to newly filled blocks', async () => {
+    const oldParameters = { ...defaultLabParameters, ironFactor: 10 }
+    const newParameters = { ...defaultLabParameters, ironFactor: 20 }
+    const filledBlock = makeBlock({ ironRaw: 1 })
+    filledBlock.parameterSnapshot = oldParameters
+    filledBlock.results = calculateSampleResults(filledBlock.inputs, oldParameters)
+    const emptyBlock = makeBlock()
+    emptyBlock.id = 'block-2'
+    emptyBlock.index = 2
+    emptyBlock.inputs.sequence = '002'
+    emptyBlock.parameterSnapshot = oldParameters
+    emptyBlock.results = calculateSampleResults(emptyBlock.inputs, oldParameters)
+    apiMocks.getCurrentLabSheet.mockResolvedValue({
+      ...makeSheet(),
+      parameters: oldParameters,
+      sampleBlocks: [filledBlock, emptyBlock]
+    })
+    apiMocks.updateCurrentParameters.mockResolvedValue(newParameters)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    await store.saveParameters(newParameters)
+    store.patchBlock('block-1', { ironRaw: 2 })
+    store.patchBlock('block-2', { ironRaw: 2 })
+
+    expect(store.sampleBlocks[0].parameterSnapshot.ironFactor).toBe(10)
+    expect(store.sampleBlocks[0].results.iron).toBe(19.6)
+    expect(store.sampleBlocks[1].parameterSnapshot.ironFactor).toBe(20)
+    expect(store.sampleBlocks[1].results.iron).toBe(39.2)
+  })
+
+  it('does not recalculate existing blocks when remote parameters are updated', async () => {
+    const source = makeEventSource()
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    const oldParameters = { ...defaultLabParameters, ironFactor: 10 }
+    const newParameters = { ...defaultLabParameters, ironFactor: 20 }
+    const filledBlock = makeBlock({ ironRaw: 1 })
+    filledBlock.parameterSnapshot = oldParameters
+    filledBlock.results = calculateSampleResults(filledBlock.inputs, oldParameters)
+    apiMocks.getCurrentLabSheet.mockResolvedValue({
+      ...makeSheet(),
+      parameters: oldParameters,
+      sampleBlocks: [filledBlock]
+    })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'parameters-updated',
+        date: '2026-06-25',
+        sheetId: 'sheet-1',
+        sourceClientId: 'client-2',
+        updatedAt: new Date().toISOString(),
+        parameters: newParameters
+      })
+    } as MessageEvent)
+
+    expect(store.currentParameters?.ironFactor).toBe(20)
+    expect(store.sampleBlocks[0].parameterSnapshot.ironFactor).toBe(10)
+    expect(store.sampleBlocks[0].results.iron).toBe(9.6)
+  })
 })
+
+function makeEventSource(): FakeEventSource {
+  return {
+    close: vi.fn(),
+    onerror: null,
+    onmessage: null,
+    onopen: null
+  }
+}

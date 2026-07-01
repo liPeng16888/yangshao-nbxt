@@ -1,7 +1,26 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getIncomeBillReport, getMonthlySettlementReport, getUnsettledSamples, markSampleAsPaid, updateMonthlySettlementSummary } from '@/api/financeBills'
-import type { IncomeBillReport, MonthlySettlementReport, MonthlySettlementSummaryRow, UnsettledSampleRow } from '@/types/financeBills'
+import {
+  createPrepaidRecharge,
+  getIncomeBillReport,
+  getMonthlySettlementReport,
+  getPrepaidRecharges,
+  getPrepaidReport,
+  getUnsettledSamples,
+  markSampleAsPaid,
+  updateMonthlySettlementSummary,
+  updatePrepaidCustomerRemark,
+  updatePrepaidUsageRemark
+} from '@/api/financeBills'
+import type {
+  IncomeBillReport,
+  MonthlySettlementReport,
+  MonthlySettlementSummaryRow,
+  PrepaidRechargePayload,
+  PrepaidRechargeRow,
+  PrepaidReport,
+  UnsettledSampleRow
+} from '@/types/financeBills'
 import type { SampleBlock } from '@/types/labSheet'
 import { currentMonth } from '@/utils/date'
 import { useLabSheetStore } from './labSheet'
@@ -12,9 +31,13 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   const incomeReport = ref<IncomeBillReport | null>(null)
   const unsettledRows = ref<UnsettledSampleRow[]>([])
   const monthlySettlementReport = ref<MonthlySettlementReport | null>(null)
+  const prepaidRecharges = ref<PrepaidRechargeRow[]>([])
+  const prepaidReport = ref<PrepaidReport | null>(null)
   const loading = ref(false)
   const settlingId = ref('')
   const monthlySavingId = ref('')
+  const prepaidSaving = ref(false)
+  const prepaidRemarkSavingId = ref('')
 
   async function loadIncomeReport(nextMonth = month.value) {
     loading.value = true
@@ -74,19 +97,76 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     }
   }
 
+  async function loadPrepaidRecharges() {
+    loading.value = true
+    try {
+      prepaidRecharges.value = await getPrepaidRecharges()
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function addPrepaidRecharge(payload: PrepaidRechargePayload) {
+    prepaidSaving.value = true
+    try {
+      const row = await createPrepaidRecharge(payload)
+      prepaidRecharges.value = [row, ...prepaidRecharges.value.filter((item) => item.id !== row.id)]
+      prepaidReport.value = await getPrepaidReport()
+      return row
+    } finally {
+      prepaidSaving.value = false
+    }
+  }
+
+  async function loadPrepaidReport() {
+    loading.value = true
+    try {
+      prepaidReport.value = await getPrepaidReport()
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function savePrepaidCustomerRemark(customer: string, remark: string) {
+    prepaidRemarkSavingId.value = `customer__${customer}`
+    try {
+      await updatePrepaidCustomerRemark(customer, remark)
+    } finally {
+      prepaidRemarkSavingId.value = ''
+    }
+  }
+
+  async function savePrepaidUsageRemark(id: string, remark: string) {
+    prepaidRemarkSavingId.value = id
+    try {
+      await updatePrepaidUsageRemark(id, remark)
+    } finally {
+      prepaidRemarkSavingId.value = ''
+    }
+  }
+
   return {
     month,
     monthlySettlementMonth,
     incomeReport,
     unsettledRows,
     monthlySettlementReport,
+    prepaidRecharges,
+    prepaidReport,
     loading,
     settlingId,
     monthlySavingId,
+    prepaidSaving,
+    prepaidRemarkSavingId,
     loadIncomeReport,
     loadUnsettledRows,
     loadMonthlySettlementReport,
     settleRow,
-    saveMonthlySettlementRow
+    saveMonthlySettlementRow,
+    loadPrepaidRecharges,
+    addPrepaidRecharge,
+    loadPrepaidReport,
+    savePrepaidCustomerRemark,
+    savePrepaidUsageRemark
   }
 })

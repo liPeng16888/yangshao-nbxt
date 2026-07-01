@@ -41,18 +41,28 @@
       <el-table-column prop="note" label="备注" min-width="180">
         <template #default="{ row }">{{ emptyText(row.note) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="110" fixed="right">
+      <el-table-column label="操作" width="180" fixed="right">
         <template #default="{ row }">
-          <el-button
-            v-if="canDelete(row)"
-            type="danger"
-            text
-            :icon="Delete"
-            :loading="deletingId === row.id"
-            @click="emit('delete', row.id)"
-          >
-            删除
-          </el-button>
+          <div v-if="canManage(row)" class="table-actions">
+            <el-button
+              type="primary"
+              text
+              :icon="EditPen"
+              :loading="updatingId === row.id"
+              @click="emit('supplement', row)"
+            >
+              补充信息
+            </el-button>
+            <el-button
+              type="danger"
+              text
+              :icon="Delete"
+              :loading="deletingId === row.id"
+              @click="emit('delete', row.id)"
+            >
+              删除
+            </el-button>
+          </div>
           <span v-else class="readonly-action">仅查看</span>
         </template>
       </el-table-column>
@@ -62,7 +72,7 @@
 
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
-import { Delete, Search } from '@element-plus/icons-vue'
+import { Delete, EditPen, Search } from '@element-plus/icons-vue'
 import type { BlacklistRecord } from '@/types/blacklist'
 import { formatDateTime } from '@/utils/date'
 import BlacklistImagePreview from './BlacklistImagePreview.vue'
@@ -74,11 +84,13 @@ const props = defineProps<{
   highlightId?: string
   currentUsername: string
   deletingId?: string
+  updatingId?: string
 }>()
 
 const emit = defineEmits<{
   search: [keyword: string]
   delete: [id: string]
+  supplement: [row: BlacklistRecord]
 }>()
 
 const tableRef = ref()
@@ -102,7 +114,7 @@ function emptyText(value?: string) {
   return value?.trim() || '无信息'
 }
 
-function canDelete(row: BlacklistRecord) {
+function canManage(row: BlacklistRecord) {
   return Boolean(props.currentUsername && row.uploadedBy === props.currentUsername)
 }
 </script>
@@ -116,6 +128,12 @@ function canDelete(row: BlacklistRecord) {
 
 :deep(.blacklist-row--highlight td) {
   background: #ffe9e8 !important;
+}
+
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .readonly-action {

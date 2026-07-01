@@ -73,8 +73,18 @@
               class="statement-input"
               :style="{ minHeight: statementInputHeight(draft.statements[index]) }"
             />
-            <div class="address-line">地址： <input v-model="draft.address" /></div>
-            <div class="phone-line">联系电话： <input v-model="draft.phone" /></div>
+            <div class="address-line">
+              <div class="contact-line__content">
+                <span>地址：</span>
+                <input v-model="draft.address" :style="{ width: contactInputWidth(draft.address, 12) }" />
+              </div>
+            </div>
+            <div class="phone-line">
+              <div class="contact-line__content">
+                <span>联系电话：</span>
+                <input v-model="draft.phone" :style="{ width: contactInputWidth(draft.phone, 14) }" />
+              </div>
+            </div>
           </div>
           <div class="report-bottom__seal">
             <img v-if="draft.sealImage" :src="draft.sealImage" alt="电子公章" />
@@ -229,6 +239,11 @@ function updateRowDisplayValue(row: LabReportDraftRow, element: DisplayElement, 
 function statementInputHeight(statement: string) {
   const lineCount = Math.max(1, Math.ceil(statement.length / 64))
   return `${Math.max(28, 10 + lineCount * 18)}px`
+}
+
+function contactInputWidth(value: string, minChars: number) {
+  const length = Math.max(minChars, Array.from(value || '').length)
+  return `${length + 1}em`
 }
 
 function sanitizeFilename(value: string) {
@@ -411,14 +426,24 @@ function sanitizeFilename(value: string) {
   justify-content: center;
   height: 51px;
   font-size: 24px;
+  text-align: center;
   border-bottom: 1px solid #111827;
 
   input {
-    width: 70%;
+    flex: 0 0 auto;
+    max-width: 520px;
     border: 0;
     outline: none;
     font-size: inherit;
+    text-align: left;
   }
+}
+
+.contact-line__content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: calc(100% - 24px);
 }
 
 .phone-line {

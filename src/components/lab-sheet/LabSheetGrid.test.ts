@@ -182,6 +182,34 @@ describe('LabSheetGrid', () => {
     expect(wrapper.emitted('scrollStateChange')).toContainEqual([{ left: 420, max: 600, width: 300, scrollWidth: 900 }])
   })
 
+  it('clamps table zoom so the scaled grid does not shrink past the viewport edge', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock()]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: {
+            template: '<div class="customer-editor-stub" />'
+          }
+        }
+      }
+    })
+    const scrollElement = wrapper.find('.lab-grid-scroll').element as HTMLElement
+    const gridElement = wrapper.find('.lab-grid').element as HTMLElement
+    Object.defineProperty(scrollElement, 'clientWidth', { value: 600, configurable: true })
+    Object.defineProperty(gridElement, 'offsetWidth', { value: 1000, configurable: true })
+    Object.defineProperty(gridElement, 'offsetHeight', { value: 400, configurable: true })
+
+    await (wrapper.vm as unknown as { refreshScrollState: () => Promise<void> }).refreshScrollState()
+    ;(wrapper.vm as unknown as { setZoomPercent: (value: number) => void }).setZoomPercent(30)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.lab-grid-zoom-stage').attributes('style')).toContain('width: 600px')
+    expect(wrapper.find('.lab-grid').attributes('style')).toContain('transform: scale(0.6)')
+  })
+
   it('warns when a locked calculation input is clicked before sample amount and payment status are filled', async () => {
     const warningSpy = vi.spyOn(ElMessage, 'warning').mockReturnValue({ close: vi.fn() } as any)
     const wrapper = mount(LabSheetGrid, {
@@ -271,6 +299,29 @@ describe('LabSheetGrid', () => {
     await amountInput.setValue('12.345')
 
     expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: 12.34 }])
+  })
+
+  it('uses deduction times without decimals for prepaid samples', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({ sampleNumber: 'A-001', price: null, paymentStatus: '预存款' })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: {
+            template: '<div class="customer-editor-stub" />'
+          }
+        }
+      }
+    })
+
+    const amountInput = wrapper.find('.cell--required input')
+    await amountInput.setValue('3.9')
+
+    expect(wrapper.text()).toContain('扣除次数')
+    expect(wrapper.text()).not.toContain('样品金额')
+    expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: 3 }])
   })
 
   it('supports negative sample amount input and keeps two decimal places', async () => {

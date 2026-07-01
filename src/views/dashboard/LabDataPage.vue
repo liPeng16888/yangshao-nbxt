@@ -27,6 +27,7 @@
       :selected-block-ids="selectedReportBlockIds"
       :highlight-block-id="highlightBlockId"
       @update="labStore.patchBlock"
+      @field-commit="labStore.commitBlockFieldChange"
       @blacklist-hit="showBlacklistHit"
       @selection-change="toggleReportBlockSelection"
     />
@@ -66,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ChatLineSquare, DocumentChecked, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -133,6 +134,10 @@ const selectionMode = computed(() => generationMode.value !== null)
 
 onMounted(async () => {
   await loadSheetFromRoute()
+})
+
+onBeforeUnmount(() => {
+  labStore.disconnectRealtime()
 })
 
 watch(

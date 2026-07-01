@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import type { LabSheet, SampleBlock } from '@/types/labSheet'
-import { getMonthlySettlementDailyRowsFromSheet, getUnsettledRowsFromSheet, summarizeIncomeSheet, summarizeMonthlySettlementReport } from './financeBills'
+import {
+  createPaidSettlementRemark,
+  getMonthlySettlementDailyRowsFromSheet,
+  getPrepaidDailyRowsFromSheet,
+  getUnsettledRowsFromSheet,
+  summarizeIncomeSheet,
+  summarizeIncomeRows,
+  summarizeMonthlySettlementReport,
+  summarizePrepaidReport
+} from './financeBills'
 
 function makeBlock(id: string, price: number | null, paymentStatus = ''): SampleBlock {
   return {
@@ -58,6 +67,29 @@ describe('finance bill aggregation', () => {
     expect(row.statusSummaries.find((item) => item.status === '月结款')).toMatchObject({ count: 1, amount: 30 })
   })
 
+  it('counts prepaid income by recharge date and usable times instead of prepaid sample rows', () => {
+    const sheet: LabSheet = {
+      ...makeSheet(),
+      sampleBlocks: [
+        makeBlock('001', 10, '预存款'),
+        makeBlock('002', 20, '已结款')
+      ]
+    }
+
+    const row = summarizeIncomeSheet(sheet)
+    const report = summarizeIncomeRows('2026-06', [row], [
+      { id: 'p-1', rechargeDate: '2026-06-30', customer: '客户甲', amount: 1000, usableTimes: 10, remark: '' },
+      { id: 'p-2', rechargeDate: '2026-06-30', customer: '客户乙', amount: 500, usableTimes: 4, remark: '' }
+    ])
+
+    expect(row.statusSummaries.find((item) => item.status === '预存款')).toMatchObject({ count: 0, amount: 0 })
+    expect(report.statusSummaries.find((item) => item.status === '预存款')).toMatchObject({ count: 14, amount: 1500 })
+    expect(report.rows.find((item) => item.date === '2026-06-30')).toMatchObject({
+      sampleCount: 14,
+      totalAmount: 1500
+    })
+  })
+
   it('lists only unpaid samples that have a numeric amount', () => {
     const rows = getUnsettledRowsFromSheet(makeSheet())
 
@@ -107,5 +139,66 @@ describe('finance bill aggregation', () => {
       paidAmount: 12,
       remark: '已收 12'
     })
+  })
+
+  it('uses a fixed settled remark when monthly settlement status is paid', () => {
+    const sheet: LabSheet = {
+      ...makeSheet(),
+      sampleBlocks: [makeBlock('001', 100, '月结款')]
+    }
+
+    const dailyRows = getMonthlySettlementDailyRowsFromSheet(sheet)
+    const report = summarizeMonthlySettlementReport('2026-06', dailyRows, [
+      {
+        id: '2026-06__客户001',
+        month: '2026-06',
+        customer: '客户001',
+        sampleCount: 0,
+        amount: 0,
+        settlementStatus: '已结款',
+        paidAmount: 100,
+        remark: '未结款差额 ¥50.00'
+      }
+    ])
+
+    expect(report.summaryRows[0]).toMatchObject({
+      settlementStatus: '已结款',
+      paidAmount: 100,
+      remark: createPaidSettlementRemark()
+    })
+  })
+
+  it('merges prepaid recharges and deducts daily prepaid sample usage by customer', () => {
+    const sheet: LabSheet = {
+      ...makeSheet(),
+      sampleBlocks: [
+        makeBlock('001', 1, '预存款'),
+        makeBlock('002', 2, '预存款'),
+        makeBlock('003', 30, '月结款')
+      ]
+    }
+    sheet.sampleBlocks[1].inputs.customerText = '客户001'
+
+    const dailyRows = getPrepaidDailyRowsFromSheet(sheet)
+    const report = summarizePrepaidReport(
+      [
+        { id: 'p-1', rechargeDate: '2026-06-20', customer: '客户001', amount: 300, usableTimes: 3, remark: '首次预存' },
+        { id: 'p-2', rechargeDate: '2026-06-25', customer: '客户001', amount: 500, usableTimes: 5, remark: '' }
+      ],
+      dailyRows,
+      { 客户001: '重点客户' },
+      { '2026-06-25__客户001': '当天消耗' }
+    )
+
+    expect(dailyRows).toMatchObject([{ date: '2026-06-25', customer: '客户001', sampleCount: 3 }])
+    expect(report.customerRows[0]).toMatchObject({
+      customer: '客户001',
+      totalAmount: 800,
+      totalUsableTimes: 8,
+      usedTimes: 3,
+      availableTimes: 5,
+      remark: '重点客户'
+    })
+    expect(report.dailyRows[0]).toMatchObject({ id: '2026-06-25__客户001', remark: '当天消耗' })
   })
 })

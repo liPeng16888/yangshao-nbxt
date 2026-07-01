@@ -1,118 +1,178 @@
 <template>
   <section class="lab-grid-panel panel">
-    <div ref="scrollRef" class="lab-grid-scroll" @scroll="emitScrollState">
-      <div class="lab-grid" :style="{ gridTemplateColumns: gridColumns }">
-        <template v-for="block in blocks" :key="block.id">
-          <div v-for="column in labSheetColumns" :key="`${block.id}-h-${column.key}`" class="cell cell--header">
-            {{ column.label }}
-          </div>
+    <div class="lab-grid-toolbar">
+      <div class="lab-grid-zoom-controls" aria-label="样品计算表格缩放">
+        <el-tooltip content="缩小表格" placement="top">
+          <el-button
+            circle
+            size="small"
+            :disabled="isAtMinZoom"
+            :icon="ZoomOut"
+            aria-label="缩小表格"
+            @click="adjustZoom(-ZOOM_STEP_PERCENT)"
+          />
+        </el-tooltip>
+        <el-slider
+          class="lab-grid-zoom-slider"
+          :model-value="zoomPercent"
+          :min="minZoomPercent"
+          :max="MAX_ZOOM_PERCENT"
+          :step="ZOOM_STEP_PERCENT"
+          :show-tooltip="false"
+          @update:model-value="setZoomPercent"
+        />
+        <span class="lab-grid-zoom-value">{{ zoomPercent }}%</span>
+        <el-tooltip content="放大表格" placement="top">
+          <el-button
+            circle
+            size="small"
+            :disabled="isAtMaxZoom"
+            :icon="ZoomIn"
+            aria-label="放大表格"
+            @click="adjustZoom(ZOOM_STEP_PERCENT)"
+          />
+        </el-tooltip>
+        <el-tooltip content="恢复原始大小" placement="top">
+          <el-button
+            circle
+            size="small"
+            :disabled="zoomPercent === DEFAULT_ZOOM_PERCENT"
+            :icon="ScaleToOriginal"
+            aria-label="恢复原始大小"
+            @click="resetZoom"
+          />
+        </el-tooltip>
+      </div>
+    </div>
+    <div ref="scrollRef" class="lab-grid-scroll" @focusin="handleFieldFocusIn" @focusout="handleFieldFocusOut" @scroll="emitScrollState">
+      <div class="lab-grid-zoom-stage" :style="zoomStageStyle">
+        <div ref="gridRef" class="lab-grid" :style="{ gridTemplateColumns: gridColumns, transform: `scale(${zoomScale})` }">
+          <template v-for="block in blocks" :key="block.id">
+            <div v-for="column in labSheetColumns" :key="`${block.id}-h-${column.key}`" class="cell cell--header">
+              {{ column.label }}
+            </div>
 
-          <div
-            class="cell cell--input cell--rowspan-3 cell--green"
-            :class="{ 'cell--highlight': block.id === highlightBlockId }"
-            :data-block-id="block.id"
-          >
-            <div class="sequence-editor">
-              <el-checkbox
-                v-if="selectionMode"
-                :model-value="selectedBlockIds.includes(block.id)"
-                @change="(checked: string | number | boolean) => handleSelectionChange(block.id, checked)"
+            <div
+              class="cell cell--input cell--rowspan-3 cell--green"
+              :class="{ 'cell--highlight': block.id === highlightBlockId }"
+              :data-block-id="block.id"
+            >
+              <div class="sequence-editor" :data-block-id="block.id" data-field="sequence">
+                <el-checkbox
+                  v-if="selectionMode"
+                  :model-value="selectedBlockIds.includes(block.id)"
+                  @change="(checked: string | number | boolean) => handleSelectionChange(block.id, checked)"
+                />
+                <el-input
+                  size="small"
+                  :disabled="isDisabled(block)"
+                  :model-value="block.inputs.sequence"
+                  @update:model-value="(value) => updateText(block.id, 'sequence', value)"
+                />
+              </div>
+            </div>
+            <div class="cell cell--input cell--rowspan-3 cell--customer cell--split">
+              <div class="sample-customer-stack">
+                <div class="sample-number-editor" :data-block-id="block.id" data-field="sampleNumber">
+                  <el-input
+                    size="small"
+                    placeholder="样品名称"
+                    :disabled="isDisabled(block)"
+                    :model-value="block.inputs.sampleNumber"
+                    @update:model-value="(value) => updateText(block.id, 'sampleNumber', value)"
+                  />
+                </div>
+                <div class="customer-editor-wrap" :data-block-id="block.id" data-field="customerText">
+                  <CustomerCellEditor
+                    :model-value="block.inputs.customerText"
+                    :selected-customers="block.inputs.customers"
+                    :disabled="isDisabled(block)"
+                    placeholder="客户"
+                    @update="(patch) => emitUpdate(block.id, patch)"
+                    @blacklist-hit="(records) => emit('blacklistHit', records)"
+                  />
+                </div>
+              </div>
+            </div>
+            <NumberInputCell :block-id="block.id" field="ironRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.ironRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'ironRaw', value)" />
+            <NumberInputCell :block-id="block.id" field="siliconRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.siliconRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'siliconRaw', value)" />
+            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="siliconAdjust" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.siliconAdjust" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'siliconAdjust', value)" />
+            <NumberInputCell :block-id="block.id" field="aluminumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumRaw', value)" />
+            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="aluminumAdjust" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumAdjust" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumAdjust', value)" />
+            <FormulaCell class="cell--rowspan-2" :value="block.results.aluminumSiliconRatio" />
+            <FormulaCell class="cell--rowspan-2" :value="block.results.total" />
+            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="sulfur" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sulfur" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sulfur', value)" />
+            <NumberInputCell :block-id="block.id" field="densityRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.densityRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'densityRaw', value)" />
+            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="whiteness" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.whiteness" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'whiteness', value)" />
+            <NumberInputCell :block-id="block.id" field="calciumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.calciumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'calciumRaw', value)" />
+            <NumberInputCell :block-id="block.id" field="magnesiumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.magnesiumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'magnesiumRaw', value)" />
+            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="carbon" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.carbon" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'carbon', value)" />
+            <NumberInputCell :block-id="block.id" field="titaniumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.titaniumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'titaniumRaw', value)" />
+            <NumberInputCell :block-id="block.id" field="waterSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.waterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'waterSample', value)" />
+            <NumberInputCell :block-id="block.id" field="bottleWater" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWater" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWater', value)" />
+            <NumberInputCell :block-id="block.id" field="bottleWaterSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWaterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWaterSample', value)" />
+            <FormulaCell class="cell--rowspan-2 cell--water" :value="block.results.moisture" />
+            <NumberInputCell :block-id="block.id" field="crucible" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.crucible" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'crucible', value)" />
+            <NumberInputCell :block-id="block.id" field="sampleWeight" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sampleWeight" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sampleWeight', value)" />
+            <NumberInputCell :block-id="block.id" field="burnedCrucibleSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.burnedCrucibleSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'burnedCrucibleSample', value)" />
+
+            <FormulaCell :value="block.results.iron" />
+            <FormulaCell :value="block.results.silicon" />
+            <FormulaCell :value="block.results.aluminum" />
+            <FormulaCell :value="block.results.density" />
+            <FormulaCell :value="block.results.calcium" />
+            <FormulaCell :value="block.results.magnesium" />
+            <FormulaCell :value="block.results.titanium" />
+            <FormulaCell class="cell--span-3" :value="block.results.moisture" />
+            <FormulaCell class="cell--span-3" :value="block.results.burnLoss" />
+
+            <div class="cell cell--label cell--remark cell--required-label">{{ getAmountLabel(block) }}</div>
+            <NumberInputCell
+              class="cell--remark"
+              :block-id="block.id"
+              field="price"
+              :disabled="isDisabled(block)"
+              :precision="getAmountPrecision(block)"
+              :required="isAmountRequired(block)"
+              :value="block.inputs.price"
+              @update="(value) => updateNumber(block.id, 'price', value)"
+            />
+            <div
+              class="cell cell--input cell--remark cell--payment-status"
+              :class="{ 'cell--required': isPaymentStatusRequired(block) }"
+              :data-block-id="block.id"
+              data-field="paymentStatus"
+            >
+              <el-select
+                clearable
+                size="small"
+                placeholder="费用状态"
+                :disabled="isDisabled(block)"
+                :model-value="block.inputs.paymentStatus || ''"
+                @update:model-value="updatePaymentStatus(block.id, $event)"
+              >
+                <el-option v-for="status in paymentStatusOptions" :key="status" :label="status" :value="status" />
+              </el-select>
+            </div>
+            <div class="cell cell--label cell--remark">化验元素</div>
+            <div class="cell cell--input cell--span-5 cell--remark" :data-block-id="block.id" data-field="elementNote">
+              <LabElementSelector
+                :disabled="isDisabled(block)"
+                :model-value="block.inputs.elementNote"
+                @update:model-value="(value) => updateText(block.id, 'elementNote', value)"
               />
+            </div>
+            <div class="cell cell--label cell--remark">备注</div>
+            <div class="cell cell--input cell--span-11 cell--remark" :data-block-id="block.id" data-field="note">
               <el-input
                 size="small"
                 :disabled="isDisabled(block)"
-                :model-value="block.inputs.sequence"
-                @update:model-value="(value) => updateText(block.id, 'sequence', value)"
+                :model-value="block.inputs.note"
+                @update:model-value="(value) => updateText(block.id, 'note', value)"
               />
             </div>
-          </div>
-          <div class="cell cell--input cell--rowspan-3 cell--customer cell--split">
-            <div class="sample-customer-stack">
-              <div class="sample-number-editor">
-                <el-input
-                  size="small"
-                  placeholder="样品编号"
-                  :disabled="isDisabled(block)"
-                  :model-value="block.inputs.sampleNumber"
-                  @update:model-value="(value) => updateText(block.id, 'sampleNumber', value)"
-                />
-              </div>
-              <div class="customer-editor-wrap">
-                <CustomerCellEditor
-                  :model-value="block.inputs.customerText"
-                  :selected-customers="block.inputs.customers"
-                  :disabled="isDisabled(block)"
-                  placeholder="客户"
-                  @update="(patch) => emitUpdate(block.id, patch)"
-                  @blacklist-hit="(records) => emit('blacklistHit', records)"
-                />
-              </div>
-            </div>
-          </div>
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.ironRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'ironRaw', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.siliconRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'siliconRaw', value)" />
-          <NumberInputCell class="cell--rowspan-2" :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.siliconAdjust" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'siliconAdjust', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumRaw', value)" />
-          <NumberInputCell class="cell--rowspan-2" :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumAdjust" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumAdjust', value)" />
-          <FormulaCell class="cell--rowspan-2" :value="block.results.aluminumSiliconRatio" />
-          <FormulaCell class="cell--rowspan-2" :value="block.results.total" />
-          <NumberInputCell class="cell--rowspan-2" :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sulfur" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sulfur', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.densityRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'densityRaw', value)" />
-          <NumberInputCell class="cell--rowspan-2" :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.whiteness" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'whiteness', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.calciumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'calciumRaw', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.magnesiumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'magnesiumRaw', value)" />
-          <NumberInputCell class="cell--rowspan-2" :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.carbon" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'carbon', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.titaniumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'titaniumRaw', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.waterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'waterSample', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWater" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWater', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWaterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWaterSample', value)" />
-          <FormulaCell class="cell--rowspan-2 cell--water" :value="block.results.moisture" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.crucible" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'crucible', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sampleWeight" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sampleWeight', value)" />
-          <NumberInputCell :block-id="block.id" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.burnedCrucibleSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'burnedCrucibleSample', value)" />
-
-          <FormulaCell :value="block.results.iron" />
-          <FormulaCell :value="block.results.silicon" />
-          <FormulaCell :value="block.results.aluminum" />
-          <FormulaCell :value="block.results.density" />
-          <FormulaCell :value="block.results.calcium" />
-          <FormulaCell :value="block.results.magnesium" />
-          <FormulaCell :value="block.results.titanium" />
-          <FormulaCell class="cell--span-3" :value="block.results.moisture" />
-          <FormulaCell class="cell--span-3" :value="block.results.burnLoss" />
-
-          <div class="cell cell--label cell--remark cell--required-label">样品金额</div>
-          <NumberInputCell class="cell--remark" :block-id="block.id" :disabled="isDisabled(block)" :precision="2" :required="isAmountRequired(block)" :value="block.inputs.price" @update="(value) => updateNumber(block.id, 'price', value)" />
-          <div class="cell cell--input cell--remark cell--payment-status" :class="{ 'cell--required': isPaymentStatusRequired(block) }">
-            <el-select
-              clearable
-              size="small"
-              placeholder="费用状态"
-              :disabled="isDisabled(block)"
-              :model-value="block.inputs.paymentStatus || ''"
-              @update:model-value="updatePaymentStatus(block.id, $event)"
-            >
-              <el-option v-for="status in paymentStatusOptions" :key="status" :label="status" :value="status" />
-            </el-select>
-          </div>
-          <div class="cell cell--label cell--remark">化验元素</div>
-          <div class="cell cell--input cell--span-5 cell--remark">
-            <LabElementSelector
-              :disabled="isDisabled(block)"
-              :model-value="block.inputs.elementNote"
-              @update:model-value="(value) => updateText(block.id, 'elementNote', value)"
-            />
-          </div>
-          <div class="cell cell--label cell--remark">备注</div>
-          <div class="cell cell--input cell--span-11 cell--remark">
-            <el-input
-              size="small"
-              :disabled="isDisabled(block)"
-              :model-value="block.inputs.note"
-              @update:model-value="(value) => updateText(block.id, 'note', value)"
-            />
-          </div>
-        </template>
+          </template>
+        </div>
       </div>
     </div>
   </section>
@@ -121,6 +181,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch, type PropType } from 'vue'
 import { ElInput, ElMessage, ElTooltip } from 'element-plus'
+import { ScaleToOriginal, ZoomIn, ZoomOut } from '@element-plus/icons-vue'
 import CustomerCellEditor from './CustomerCellEditor.vue'
 import LabElementSelector from './LabElementSelector.vue'
 import type { BlacklistRecord } from '@/types/blacklist'
@@ -138,6 +199,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   update: [blockId: string, patch: Partial<LabSampleInput>]
+  fieldCommit: [blockId: string, field: keyof LabSampleInput, oldValue: unknown, newValue: unknown]
   blacklistHit: [records: BlacklistRecord[]]
   scrollStateChange: [state: LabGridScrollState]
   selectionChange: [blockId: string, checked: boolean]
@@ -155,8 +217,34 @@ const selectionMode = computed(() => Boolean(props.selectionMode))
 const selectedBlockIds = computed(() => props.selectedBlockIds || [])
 const highlightBlockId = computed(() => props.highlightBlockId || '')
 const scrollRef = ref<HTMLElement | null>(null)
-const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款']
+const gridRef = ref<HTMLElement | null>(null)
+const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款']
 let resizeObserver: ResizeObserver | null = null
+const focusedFieldValues = new Map<string, unknown>()
+
+const DEFAULT_ZOOM_PERCENT = 100
+const MAX_ZOOM_PERCENT = 130
+const MIN_ZOOM_PERCENT_FLOOR = 50
+const ZOOM_STEP_PERCENT = 5
+const zoomPercent = ref(DEFAULT_ZOOM_PERCENT)
+const containerWidth = ref(0)
+const naturalGridSize = ref({ width: 0, height: 0 })
+const zoomScale = computed(() => zoomPercent.value / 100)
+const minZoomPercent = computed(() => {
+  if (!containerWidth.value || !naturalGridSize.value.width) return MIN_ZOOM_PERCENT_FLOOR
+  const fitPercent = Math.ceil((containerWidth.value / naturalGridSize.value.width) * 100)
+  return Math.min(DEFAULT_ZOOM_PERCENT, Math.max(MIN_ZOOM_PERCENT_FLOOR, fitPercent))
+})
+const isAtMinZoom = computed(() => zoomPercent.value <= minZoomPercent.value)
+const isAtMaxZoom = computed(() => zoomPercent.value >= MAX_ZOOM_PERCENT)
+const zoomStageStyle = computed(() => {
+  const width = naturalGridSize.value.width ? Math.ceil(naturalGridSize.value.width * zoomScale.value) : undefined
+  const height = naturalGridSize.value.height ? Math.ceil(naturalGridSize.value.height * zoomScale.value) : undefined
+  return {
+    width: width ? `${width}px` : undefined,
+    height: height ? `${height}px` : undefined
+  }
+})
 
 function getScrollState(): LabGridScrollState {
   const element = scrollRef.value
@@ -174,6 +262,41 @@ function emitScrollState() {
   emit('scrollStateChange', getScrollState())
 }
 
+function measureGridLayout() {
+  if (scrollRef.value) containerWidth.value = scrollRef.value.clientWidth
+  if (!gridRef.value) return
+  const width = gridRef.value.offsetWidth
+  const height = gridRef.value.offsetHeight
+  if (width && height) {
+    naturalGridSize.value = { width, height }
+  }
+  clampCurrentZoom()
+}
+
+function clampZoomPercent(value: number) {
+  return Math.min(MAX_ZOOM_PERCENT, Math.max(minZoomPercent.value, Math.round(value / ZOOM_STEP_PERCENT) * ZOOM_STEP_PERCENT))
+}
+
+function clampCurrentZoom() {
+  const nextZoom = clampZoomPercent(zoomPercent.value)
+  if (nextZoom !== zoomPercent.value) zoomPercent.value = nextZoom
+}
+
+function setZoomPercent(value: number | number[]) {
+  const nextValue = Array.isArray(value) ? Number(value[0]) : Number(value)
+  if (!Number.isFinite(nextValue)) return
+  zoomPercent.value = clampZoomPercent(nextValue)
+  void refreshScrollState()
+}
+
+function adjustZoom(delta: number) {
+  setZoomPercent(zoomPercent.value + delta)
+}
+
+function resetZoom() {
+  setZoomPercent(DEFAULT_ZOOM_PERCENT)
+}
+
 function setHorizontalScroll(value: number) {
   const element = scrollRef.value
   if (!element) return
@@ -188,6 +311,7 @@ function scrollHorizontalBy(delta: number) {
 
 async function refreshScrollState() {
   await nextTick()
+  measureGridLayout()
   emitScrollState()
 }
 
@@ -198,6 +322,7 @@ onMounted(() => {
     void refreshScrollState()
   })
   resizeObserver.observe(scrollRef.value)
+  if (gridRef.value) resizeObserver.observe(gridRef.value)
 })
 
 onBeforeUnmount(() => {
@@ -212,10 +337,15 @@ watch(
   }
 )
 
+watch(minZoomPercent, () => {
+  clampCurrentZoom()
+})
+
 defineExpose({
   refreshScrollState,
   scrollHorizontalBy,
-  setHorizontalScroll
+  setHorizontalScroll,
+  setZoomPercent
 })
 
 function isDisabled(block: SampleBlock) {
@@ -229,6 +359,18 @@ function isAmountRequired(block: SampleBlock) {
       block.inputs.customerIds?.length ||
       block.inputs.customers?.length
   )
+}
+
+function isPrepaidBlock(block: SampleBlock) {
+  return block.inputs.paymentStatus === '预存款'
+}
+
+function getAmountLabel(block: SampleBlock) {
+  return isPrepaidBlock(block) ? '扣除次数' : '样品金额'
+}
+
+function getAmountPrecision(block: SampleBlock) {
+  return isPrepaidBlock(block) ? 0 : 2
 }
 
 function hasSampleAmount(block: SampleBlock) {
@@ -251,7 +393,7 @@ function getCalculationBlockMessage(block: SampleBlock) {
   const amountMissing = !hasSampleAmount(block)
   const statusMissing = !hasPaymentStatus(block)
   if (amountMissing && statusMissing) return '请先输入样品金额并选择费用状态'
-  if (amountMissing) return '请先输入样品金额'
+  if (amountMissing) return isPrepaidBlock(block) ? '请先输入扣除次数' : '请先输入样品金额'
   if (statusMissing) return '请先选择费用状态'
   return '请先完善样品金额和费用状态'
 }
@@ -280,6 +422,43 @@ function updatePaymentStatus(blockId: string, value: string | number | boolean |
   emitUpdate(blockId, { paymentStatus: String(value || '') as SamplePaymentStatus | '' })
 }
 
+function handleFieldFocusIn(event: FocusEvent) {
+  const target = event.target instanceof Element ? event.target : null
+  const fieldElement = target?.closest<HTMLElement>('[data-block-id][data-field]')
+  if (!fieldElement) return
+  const blockId = fieldElement.dataset.blockId || ''
+  const field = fieldElement.dataset.field as keyof LabSampleInput | undefined
+  if (!blockId || !field) return
+  focusedFieldValues.set(fieldFocusKey(blockId, field), getBlockFieldValue(blockId, field))
+}
+
+function handleFieldFocusOut(event: FocusEvent) {
+  const target = event.target instanceof Element ? event.target : null
+  const fieldElement = target?.closest<HTMLElement>('[data-block-id][data-field]')
+  if (!fieldElement) return
+  const blockId = fieldElement.dataset.blockId || ''
+  const field = fieldElement.dataset.field as keyof LabSampleInput | undefined
+  if (!blockId || !field) return
+  const key = fieldFocusKey(blockId, field)
+  const oldValue = focusedFieldValues.get(key)
+  focusedFieldValues.delete(key)
+  void nextTick(() => {
+    const newValue = getBlockFieldValue(blockId, field)
+    if (JSON.stringify(oldValue ?? null) !== JSON.stringify(newValue ?? null)) {
+      emit('fieldCommit', blockId, field, oldValue ?? null, newValue ?? null)
+    }
+  })
+}
+
+function getBlockFieldValue(blockId: string, field: keyof LabSampleInput) {
+  const block = props.blocks.find((item) => item.id === blockId)
+  return block?.inputs[field] ?? null
+}
+
+function fieldFocusKey(blockId: string, field: keyof LabSampleInput) {
+  return `${blockId}__${String(field)}`
+}
+
 const DEFAULT_SAMPLE_INPUT_PRECISION = 3
 
 const NumberInputCell = defineComponent({
@@ -291,7 +470,8 @@ const NumberInputCell = defineComponent({
     blockedMessage: { type: String, default: '请先输入样品金额' },
     required: { type: Boolean, default: false },
     precision: { type: Number as PropType<number>, default: DEFAULT_SAMPLE_INPUT_PRECISION },
-    blockId: { type: String, required: true }
+    blockId: { type: String, required: true },
+    field: { type: String as PropType<keyof LabSampleInput>, required: true }
   },
   emits: ['update', 'blocked'],
   setup(cellProps, { emit: cellEmit, attrs }) {
@@ -299,9 +479,9 @@ const NumberInputCell = defineComponent({
     const focused = ref(false)
 
     watch(
-      () => cellProps.value,
-      (value) => {
-        if (!focused.value) localValue.value = formatInputValue(value, cellProps.precision)
+      () => [cellProps.value, cellProps.precision] as const,
+      ([value, precision]) => {
+        if (!focused.value) localValue.value = formatInputValue(value, precision)
       }
     )
 
@@ -346,7 +526,9 @@ const NumberInputCell = defineComponent({
             cellProps.blocked && 'cell--blocked',
             cellProps.required && 'cell--required',
             attrs.class
-          ]
+          ],
+          'data-block-id': cellProps.blockId,
+          'data-field': cellProps.field
         },
         [
           h(ElInput, {
@@ -399,6 +581,7 @@ function sanitizeDecimalInput(value: string, precision: number) {
   const [integerPart = '', ...decimalParts] = cleaned.split('.')
   const integer = integerPart || ''
   const prefix = isNegative ? '-' : ''
+  if (precision <= 0) return `${prefix}${integer}`
   if (!decimalParts.length) return `${prefix}${integer}`
   return `${prefix}${integer}.${decimalParts.join('').slice(0, precision)}`
 }
@@ -420,6 +603,32 @@ const FormulaCell = defineComponent({
   overflow: hidden;
 }
 
+.lab-grid-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px 0;
+  background: #ffffff;
+}
+
+.lab-grid-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 280px;
+}
+
+.lab-grid-zoom-slider {
+  width: 150px;
+}
+
+.lab-grid-zoom-value {
+  width: 42px;
+  color: #475569;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 .lab-grid-scroll {
   width: 100%;
   max-width: 100%;
@@ -428,12 +637,18 @@ const FormulaCell = defineComponent({
   scrollbar-gutter: stable;
 }
 
+.lab-grid-zoom-stage {
+  min-width: 100%;
+  overflow: hidden;
+}
+
 .lab-grid {
   display: grid;
   width: max-content;
   min-width: max-content;
   padding: 12px;
   background: #ffffff;
+  transform-origin: top left;
 }
 
 .cell {

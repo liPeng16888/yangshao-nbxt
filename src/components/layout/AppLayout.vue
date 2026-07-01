@@ -7,15 +7,11 @@
         <router-view />
       </main>
     </div>
-    <AccessGuardDialog />
-    <AccessGuardSettingsDialog />
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import AccessGuardDialog from '@/components/access/AccessGuardDialog.vue'
-import AccessGuardSettingsDialog from '@/components/access/AccessGuardSettingsDialog.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import AppSidebar from './AppSidebar.vue'
 import AppTopbar from './AppTopbar.vue'

@@ -64,7 +64,7 @@ function mountTable() {
           template: '<input />'
         },
         ElButton: {
-          template: '<button type="button" :class="type === \'danger\' ? \'el-button--danger\' : \'\'" @click="$emit(\'click\')"><slot /></button>',
+          template: '<button type="button" :class="`el-button--${type}`" @click="$emit(\'click\')"><slot /></button>',
           props: ['type', 'text', 'icon', 'loading']
         }
       }
@@ -82,5 +82,15 @@ describe('BlacklistTable', () => {
     await wrapper.find('button.el-button--danger').trigger('click')
 
     expect(wrapper.emitted('delete')).toContainEqual(['b-own'])
+  })
+
+  it('opens supplement for records uploaded by the current user', async () => {
+    const wrapper = mountTable()
+
+    expect(wrapper.text()).toContain('补充信息')
+
+    await wrapper.find('button.el-button--primary').trigger('click')
+
+    expect(wrapper.emitted('supplement')).toContainEqual([records[0]])
   })
 })

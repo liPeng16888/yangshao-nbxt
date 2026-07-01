@@ -61,3 +61,39 @@ export interface MonthlySettlementReport {
   dailyRows: MonthlySettlementDailyRow[]
   summaryRows: MonthlySettlementSummaryRow[]
 }
+
+export interface PrepaidRechargePayload {
+  rechargeDate: string
+  customer: string
+  amount: number
+  usableTimes: number
+  remark?: string
+}
+
+export interface PrepaidRechargeRow extends PrepaidRechargePayload {
+  id: string
+  createdAt?: string
+}
+
+export interface PrepaidCustomerRow {
+  id: string
+  customer: string
+  totalAmount: number
+  totalUsableTimes: number
+  usedTimes: number
+  availableTimes: number
+  remark?: string
+}
+
+export interface PrepaidDailyUsageRow {
+  id: string
+  date: string
+  customer: string
+  sampleCount: number
+  remark?: string
+}
+
+export interface PrepaidReport {
+  customerRows: PrepaidCustomerRow[]
+  dailyRows: PrepaidDailyUsageRow[]
+}

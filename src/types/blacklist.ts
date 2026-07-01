@@ -21,6 +21,8 @@ export interface BlacklistPayload {
   note?: string
 }
 
+export type BlacklistUpdatePayload = BlacklistPayload
+
 export interface BlacklistCheckResult {
   hit: boolean
   records: BlacklistRecord[]

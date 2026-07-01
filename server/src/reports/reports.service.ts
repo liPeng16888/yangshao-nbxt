@@ -2,8 +2,10 @@ import { Injectable } from '@nestjs/common'
 import dayjs from 'dayjs'
 import { PrismaService } from '../prisma/prisma.service'
 import { datesBetween, todayInBeijing } from '../common/date'
-import { hasLabDetectionInput } from '../common/lab'
 import { toMoney } from '../common/money'
+
+const incomeStatuses = ['已结款', '未结款', '月结款', '预存款', '未选择'] as const
+type IncomeStatus = (typeof incomeStatuses)[number]
 
 const financeCategoryRules = [
   { name: '耗材', color: '#3b82f6', keywords: ['耗材', '试剂', '标签', '纸'] },
@@ -18,24 +20,47 @@ export class ReportsService {
 
   async sampleDetection(frontendUserId: string, query: any) {
     const range = this.resolveRange(query)
+    const dates = datesBetween(range.startDate, range.endDate)
     const sheets = await this.prisma.labSheet.findMany({
       where: { frontendUserId, date: { gte: range.startDate, lte: range.endDate } },
       include: { sampleBlocks: true }
     })
     const sheetMap = new Map(sheets.map((sheet) => [sheet.date, sheet]))
-    const rows = datesBetween(range.startDate, range.endDate).map((date) => {
-      const sheet = sheetMap.get(date)
-      const validBlocks =
-        sheet?.sampleBlocks.filter((block) => {
-          const inputs = block.inputs as Record<string, unknown>
-          return this.hasSampleIdentity(inputs) && typeof inputs.price === 'number' && Number.isFinite(inputs.price) && hasLabDetectionInput(inputs)
-        }) || []
-      return {
-        date,
-        sampleCount: validBlocks.length,
-        totalPrice: toMoney(validBlocks.reduce((sum, block) => sum + Number((block.inputs as Record<string, unknown>).price || 0), 0))
-      }
+    const prepaidRecharges = await this.prisma.prepaidRechargeRecord.findMany({
+      where: { frontendUserId, rechargeDate: { gte: range.startDate, lte: range.endDate } }
     })
+    const rowMap = new Map<string, ReturnType<ReportsService['emptyIncomeRow']>>()
+    dates.forEach((date) => {
+      const sheet = sheetMap.get(date)
+      const row = this.emptyIncomeRow(date)
+      sheet?.sampleBlocks.forEach((block) => {
+        const inputs = block.inputs as Record<string, unknown>
+        const amount = this.getSampleAmount(inputs)
+        if (!Number.isFinite(amount) || inputs.paymentStatus === '预存款') return
+        const status = this.getIncomeStatus(inputs)
+        row.sampleCount += 1
+        row.totalPrice = toMoney(row.totalPrice + amount)
+        const summary = row.statusSummaries.find((item) => item.status === status)
+        if (summary) {
+          summary.count += 1
+          summary.amount = toMoney(summary.amount + amount)
+        }
+      })
+      rowMap.set(date, row)
+    })
+    prepaidRecharges.forEach((recharge) => {
+      const row = rowMap.get(recharge.rechargeDate) || this.emptyIncomeRow(recharge.rechargeDate)
+      const amount = toMoney(recharge.amount)
+      const summary = row.statusSummaries.find((item) => item.status === '预存款')
+      if (summary) {
+        summary.count += recharge.usableTimes
+        summary.amount = toMoney(summary.amount + amount)
+      }
+      row.sampleCount += recharge.usableTimes
+      row.totalPrice = toMoney(row.totalPrice + amount)
+      rowMap.set(recharge.rechargeDate, row)
+    })
+    const rows = Array.from(rowMap.values()).sort((a, b) => a.date.localeCompare(b.date))
     const totalSamples = rows.reduce((sum, row) => sum + row.sampleCount, 0)
     const totalPrice = toMoney(rows.reduce((sum, row) => sum + row.totalPrice, 0))
     return {
@@ -43,7 +68,12 @@ export class ReportsService {
         totalSamples,
         totalPrice,
         averageSamples: rows.length ? toMoney(totalSamples / rows.length) : 0,
-        averagePrice: rows.length ? toMoney(totalPrice / rows.length) : 0
+        averagePrice: rows.length ? toMoney(totalPrice / rows.length) : 0,
+        statusSummaries: incomeStatuses.map((status) => ({
+          status,
+          count: rows.reduce((sum, row) => sum + (row.statusSummaries.find((item) => item.status === status)?.count || 0), 0),
+          amount: toMoney(rows.reduce((sum, row) => sum + (row.statusSummaries.find((item) => item.status === status)?.amount || 0), 0))
+        }))
       },
       rows
     }
@@ -102,13 +132,21 @@ export class ReportsService {
     return { startDate: base.format('YYYY-MM-DD'), endDate: base.format('YYYY-MM-DD') }
   }
 
-  private hasSampleIdentity(inputs: Record<string, unknown>) {
-    return Boolean(
-      (typeof inputs.sampleNumber === 'string' && inputs.sampleNumber.trim()) ||
-        (typeof inputs.customerText === 'string' && inputs.customerText.trim()) ||
-        (Array.isArray(inputs.customerIds) && inputs.customerIds.length) ||
-        (Array.isArray(inputs.customers) && inputs.customers.length)
-    )
+  private emptyIncomeRow(date: string) {
+    return {
+      date,
+      sampleCount: 0,
+      totalPrice: 0,
+      statusSummaries: incomeStatuses.map((status) => ({ status, count: 0, amount: 0 }))
+    }
+  }
+
+  private getSampleAmount(inputs: Record<string, unknown>) {
+    return typeof inputs.price === 'number' && Number.isFinite(inputs.price) ? toMoney(inputs.price) : Number.NaN
+  }
+
+  private getIncomeStatus(inputs: Record<string, unknown>): IncomeStatus {
+    return incomeStatuses.includes(inputs.paymentStatus as IncomeStatus) ? (inputs.paymentStatus as IncomeStatus) : '未选择'
   }
 
   private classifyFinanceItem(item: string) {

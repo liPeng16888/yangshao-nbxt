@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
 
 @Injectable()
@@ -47,6 +47,14 @@ export class CustomersService {
         wechatNickname
       }
     })
+  }
+
+  async remove(frontendUserId: string, id: string) {
+    const result = await this.prisma.customer.deleteMany({
+      where: { id, frontendUserId }
+    })
+    if (!result.count) throw new NotFoundException('客户信息不存在')
+    return { id }
   }
 
   private resolveCustomerName(payload: { name?: string; phone?: string; wechat?: string; wechatNickname?: string }) {

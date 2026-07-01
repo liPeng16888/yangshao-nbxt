@@ -1,3 +1,5 @@
+import type { IncomeStatusSummary } from './financeBills'
+
 export type ReportMode = 'daily' | 'weekly' | 'monthly' | 'custom'
 
 export interface DateRange {
@@ -11,6 +13,7 @@ export interface SampleDetectionDailyRow {
   date: string
   sampleCount: number
   totalPrice: number
+  statusSummaries: IncomeStatusSummary[]
 }
 
 export interface SampleDetectionReport {
@@ -19,6 +22,7 @@ export interface SampleDetectionReport {
     totalPrice: number
     averageSamples: number
     averagePrice: number
+    statusSummaries: IncomeStatusSummary[]
   }
   rows: SampleDetectionDailyRow[]
 }

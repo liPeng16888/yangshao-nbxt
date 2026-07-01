@@ -19,6 +19,9 @@
           <el-tab-pane label="月结款每日明细" name="monthlyDaily" />
           <el-tab-pane label="月结款账单明细" name="monthlyBills" />
           <el-tab-pane label="月结客户信息收录" name="monthlyCustomers" />
+          <el-tab-pane label="预存款添加记录" name="prepaidRecharges" />
+          <el-tab-pane label="预存款客户" name="prepaidCustomers" />
+          <el-tab-pane label="预存款每日明细" name="prepaidDaily" />
         </el-tabs>
       </div>
     </section>
@@ -36,6 +39,7 @@
         <el-table-column label="已结款"><template #default="{ row }">{{ statusText(row, '已结款') }}</template></el-table-column>
         <el-table-column label="未结款"><template #default="{ row }">{{ statusText(row, '未结款') }}</template></el-table-column>
         <el-table-column label="月结款"><template #default="{ row }">{{ statusText(row, '月结款') }}</template></el-table-column>
+        <el-table-column label="预存款"><template #default="{ row }">{{ statusText(row, '预存款') }}</template></el-table-column>
       </el-table>
     </section>
 
@@ -100,7 +104,7 @@
       </el-table>
     </section>
 
-    <section v-else class="panel">
+    <section v-else-if="active === 'monthlyCustomers'" class="panel">
       <el-table :data="rows" border>
         <el-table-column prop="firstDate" label="首次检测日期" width="130" />
         <el-table-column prop="lastDate" label="最后检测日期" width="130" />
@@ -113,6 +117,40 @@
             <el-input v-model="row.remark" size="small" @change="saveMonthlyCustomerRemark(row)" />
           </template>
         </el-table-column>
+      </el-table>
+    </section>
+
+    <section v-else-if="active === 'prepaidRecharges'" class="panel">
+      <el-table :data="rows" border>
+        <el-table-column prop="rechargeDate" label="充值日期" width="120" />
+        <el-table-column prop="name" label="名称" width="150" />
+        <el-table-column prop="customer" label="客户名称" min-width="180" />
+        <el-table-column label="预存金额" width="130"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+        <el-table-column prop="usableTimes" label="可使用次数" width="120" />
+        <el-table-column prop="remark" label="备注" min-width="220" />
+        <el-table-column prop="createdAt" label="添加时间" width="180" />
+      </el-table>
+    </section>
+
+    <section v-else-if="active === 'prepaidCustomers'" class="panel">
+      <el-table :data="report.customerRows || []" border>
+        <el-table-column prop="name" label="名称" width="150" />
+        <el-table-column prop="customer" label="客户名称" min-width="180" />
+        <el-table-column label="累计充值金额" width="140"><template #default="{ row }">¥{{ money(row.totalAmount) }}</template></el-table-column>
+        <el-table-column prop="totalUsableTimes" label="累计可用次数" width="130" />
+        <el-table-column prop="usedTimes" label="已使用次数" width="120" />
+        <el-table-column prop="availableTimes" label="可使用次数" width="120" />
+        <el-table-column prop="remark" label="备注" min-width="220" />
+      </el-table>
+    </section>
+
+    <section v-else class="panel">
+      <el-table :data="report.dailyRows || []" border>
+        <el-table-column prop="date" label="日期" width="120" />
+        <el-table-column prop="name" label="名称" width="150" />
+        <el-table-column prop="customer" label="客户名称" min-width="180" />
+        <el-table-column prop="sampleCount" label="样品数量" width="120" />
+        <el-table-column prop="remark" label="备注" min-width="220" />
       </el-table>
     </section>
   </div>
@@ -150,7 +188,9 @@ async function loadActive() {
     else if (active.value === 'unsettled') rows.value = await request.get('/admin/finance/unsettled', { params })
     else if (active.value === 'monthlyDaily') rows.value = await request.get('/admin/finance/monthly-daily', { params })
     else if (active.value === 'monthlyBills') report.value = await request.get('/admin/finance/monthly-bills', { params })
-    else rows.value = await request.get('/admin/finance/monthly-customers', { params })
+    else if (active.value === 'monthlyCustomers') rows.value = await request.get('/admin/finance/monthly-customers', { params })
+    else if (active.value === 'prepaidRecharges') rows.value = await request.get('/admin/finance/prepaid-recharges', { params })
+    else report.value = await request.get('/admin/finance/prepaid-report', { params })
   } finally {
     loading.value = false
   }

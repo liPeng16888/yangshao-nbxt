@@ -1,13 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { createBlacklist, deleteBlacklist, searchBlacklist } from '@/api/blacklist'
-import type { BlacklistPayload, BlacklistRecord } from '@/types/blacklist'
+import { createBlacklist, deleteBlacklist, searchBlacklist, updateBlacklist } from '@/api/blacklist'
+import type { BlacklistPayload, BlacklistRecord, BlacklistUpdatePayload } from '@/types/blacklist'
 
 export const useBlacklistStore = defineStore('blacklist', () => {
   const keyword = ref('')
   const records = ref<BlacklistRecord[]>([])
   const loading = ref(false)
   const deletingId = ref('')
+  const updatingId = ref('')
 
   async function loadRecords(nextKeyword = keyword.value) {
     loading.value = true
@@ -35,5 +36,17 @@ export const useBlacklistStore = defineStore('blacklist', () => {
     }
   }
 
-  return { keyword, records, loading, deletingId, loadRecords, addRecord, deleteRecord }
+  async function updateRecord(id: string, payload: BlacklistUpdatePayload) {
+    updatingId.value = id
+    try {
+      const record = await updateBlacklist(id, payload)
+      const index = records.value.findIndex((item) => item.id === id)
+      if (index >= 0) records.value[index] = record
+      return record
+    } finally {
+      updatingId.value = ''
+    }
+  }
+
+  return { keyword, records, loading, deletingId, updatingId, loadRecords, addRecord, deleteRecord, updateRecord }
 })

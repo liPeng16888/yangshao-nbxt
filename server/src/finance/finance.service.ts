@@ -9,7 +9,8 @@ import { currentMonthInBeijing, datesBetween, todayInBeijing } from '../common/d
 import { toMoney } from '../common/money'
 import { calculateResults, defaultLabParameters } from '../common/lab'
 
-const incomeStatuses = ['已结款', '未结款', '月结款', '未选择'] as const
+const incomeStatuses = ['已结款', '未结款', '月结款', '预存款', '未选择'] as const
+const paidMonthlySettlementRemark = '此款项已结清'
 type IncomeStatus = (typeof incomeStatuses)[number]
 
 @Injectable()
@@ -56,8 +57,13 @@ export class FinanceService {
   }
 
   async getFrontendIncomeReport(frontendUserId: string, month = currentMonthInBeijing()) {
-    const sheets = await this.loadSheets([frontendUserId], `${month}-01`, dayjs(`${month}-01`).endOf('month').format('YYYY-MM-DD'))
-    return this.buildIncomeReport(month, sheets)
+    const startDate = `${month}-01`
+    const endDate = dayjs(startDate).endOf('month').format('YYYY-MM-DD')
+    const sheets = await this.loadSheets([frontendUserId], startDate, endDate)
+    const prepaidRecharges = await this.prisma.prepaidRechargeRecord.findMany({
+      where: { frontendUserId, rechargeDate: { gte: startDate, lte: endDate } }
+    })
+    return this.buildIncomeReport(month, sheets, prepaidRecharges)
   }
 
   async getFrontendUnsettledSamples(frontendUserId: string) {
@@ -101,6 +107,7 @@ export class FinanceService {
   async updateFrontendMonthlySettlement(frontendUserId: string, payload: { month: string; customer: string; settlementStatus: string; paidAmount?: number | null; remark?: string }) {
     if (!payload.month || !payload.customer) throw new BadRequestException('月份和客户不能为空')
     const status = this.monthlyStatusFromChinese(payload.settlementStatus)
+    const remark = status === MonthlySettlementStatus.PAID ? paidMonthlySettlementRemark : payload.remark || null
     const row = await this.prisma.monthlySettlementRecord.upsert({
       where: { month_frontendUserId_customer: { month: payload.month, frontendUserId, customer: payload.customer } },
       create: {
@@ -109,28 +116,90 @@ export class FinanceService {
         customer: payload.customer,
         status,
         paidAmount: status === MonthlySettlementStatus.PARTIAL ? toMoney(payload.paidAmount) : status === MonthlySettlementStatus.PAID ? toMoney(payload.paidAmount) : null,
-        remark: payload.remark || null
+        remark
       },
       update: {
         status,
         paidAmount: status === MonthlySettlementStatus.PARTIAL ? toMoney(payload.paidAmount) : status === MonthlySettlementStatus.PAID ? toMoney(payload.paidAmount) : null,
-        remark: payload.remark || null
+        remark
       }
     })
     return this.monthlyRecordDto(row, payload.customer, payload.month)
+  }
+
+  async getFrontendPrepaidRecharges(frontendUserId: string) {
+    const rows = await this.prisma.prepaidRechargeRecord.findMany({
+      where: { frontendUserId },
+      orderBy: [{ rechargeDate: 'desc' }, { createdAt: 'desc' }]
+    })
+    return rows.map((row) => this.prepaidRechargeDto(row))
+  }
+
+  async createFrontendPrepaidRecharge(frontendUserId: string, payload: { rechargeDate?: string; customer?: string; amount?: number; usableTimes?: number; remark?: string }) {
+    const rechargeDate = String(payload.rechargeDate || '').trim()
+    const customer = String(payload.customer || '').trim()
+    const amount = Number(payload.amount)
+    const usableTimes = Math.trunc(Number(payload.usableTimes))
+    if (!rechargeDate || !customer) throw new BadRequestException('充值日期和客户名称不能为空')
+    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('预存金额必须大于 0')
+    if (!Number.isFinite(usableTimes) || usableTimes <= 0) throw new BadRequestException('可使用次数必须大于 0')
+    const row = await this.prisma.prepaidRechargeRecord.create({
+      data: {
+        frontendUserId,
+        rechargeDate,
+        customer,
+        amount: toMoney(amount),
+        usableTimes,
+        remark: payload.remark || null
+      }
+    })
+    return this.prepaidRechargeDto(row)
+  }
+
+  async getFrontendPrepaidReport(frontendUserId: string) {
+    const sheets = await this.loadSheets([frontendUserId])
+    const dailyRows = this.getPrepaidDailyRows(sheets)
+    const recharges = await this.prisma.prepaidRechargeRecord.findMany({ where: { frontendUserId }, orderBy: [{ rechargeDate: 'desc' }, { createdAt: 'desc' }] })
+    const customerRemarks = await this.prisma.prepaidCustomerRemark.findMany({ where: { frontendUserId } })
+    const usageRemarks = await this.prisma.prepaidUsageRemark.findMany({ where: { frontendUserId } })
+    return this.buildPrepaidReport(recharges, dailyRows, customerRemarks, usageRemarks)
+  }
+
+  async updateFrontendPrepaidCustomerRemark(frontendUserId: string, payload: { customer?: string; remark?: string }) {
+    const customer = String(payload.customer || '').trim()
+    if (!customer) throw new BadRequestException('客户名称不能为空')
+    const row = await this.prisma.prepaidCustomerRemark.upsert({
+      where: { frontendUserId_customer: { frontendUserId, customer } },
+      update: { remark: payload.remark || null },
+      create: { frontendUserId, customer, remark: payload.remark || null }
+    })
+    return { customer: row.customer, remark: row.remark || '' }
+  }
+
+  async updateFrontendPrepaidUsageRemark(frontendUserId: string, payload: { id?: string; remark?: string }) {
+    const { usageDate, customer } = this.parsePrepaidUsageId(payload.id)
+    const row = await this.prisma.prepaidUsageRemark.upsert({
+      where: { frontendUserId_usageDate_customer: { frontendUserId, usageDate, customer } },
+      update: { remark: payload.remark || null },
+      create: { frontendUserId, usageDate, customer, remark: payload.remark || null }
+    })
+    return { id: `${row.usageDate}__${row.customer}`, remark: row.remark || '' }
   }
 
   async getAdminIncomeReport(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string; month?: string }) {
     const range = this.resolveRange(query)
     const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, this.adminAccess.parseFrontendUserIds(query.frontendUserIds))
     const sheets = await this.loadSheets(frontendUserIds, range.startDate, range.endDate)
+    const prepaidRecharges = await this.prisma.prepaidRechargeRecord.findMany({
+      where: { frontendUserId: { in: frontendUserIds }, rechargeDate: { gte: range.startDate, lte: range.endDate } }
+    })
     return {
-      ...this.buildIncomeReport(query.month || range.startDate.slice(0, 7), sheets),
+      ...this.buildIncomeReport(query.month || range.startDate.slice(0, 7), sheets, prepaidRecharges),
       range,
       totals: {
-        today: this.sumIncomeByRange(sheets, todayInBeijing(), todayInBeijing()),
-        week: this.sumIncomeByRange(sheets, dayjs().startOf('week').format('YYYY-MM-DD'), todayInBeijing()),
-        month: this.sumIncomeByRange(sheets, dayjs().startOf('month').format('YYYY-MM-DD'), todayInBeijing())
+        today: this.sumIncomeByRange(sheets, todayInBeijing(), todayInBeijing(), prepaidRecharges),
+        week: this.sumIncomeByRange(sheets, dayjs().startOf('week').format('YYYY-MM-DD'), todayInBeijing(), prepaidRecharges),
+        month: this.sumIncomeByRange(sheets, dayjs().startOf('month').format('YYYY-MM-DD'), todayInBeijing(), prepaidRecharges)
       }
     }
   }
@@ -260,6 +329,45 @@ export class FinanceService {
     })
   }
 
+  async getAdminPrepaidRecharges(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string; month?: string }) {
+    const range = this.resolveRange(query)
+    const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, this.adminAccess.parseFrontendUserIds(query.frontendUserIds))
+    const rows = await this.prisma.prepaidRechargeRecord.findMany({
+      where: { frontendUserId: { in: frontendUserIds }, rechargeDate: { gte: range.startDate, lte: range.endDate } },
+      orderBy: [{ rechargeDate: 'desc' }, { createdAt: 'desc' }],
+      include: { frontendUser: { select: { username: true, account: true, displayRemark: true } } }
+    })
+    return rows.map((row) => ({
+      ...this.prepaidRechargeDto(row),
+      frontendUserId: row.frontendUserId,
+      name: this.displayName(row.frontendUser)
+    }))
+  }
+
+  async getAdminPrepaidReport(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string; month?: string }) {
+    const range = this.resolveRange(query)
+    const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, this.adminAccess.parseFrontendUserIds(query.frontendUserIds))
+    const allSheets = await this.loadSheets(frontendUserIds)
+    const allDailyRows = this.getPrepaidDailyRows(allSheets)
+    const recharges = await this.prisma.prepaidRechargeRecord.findMany({
+      where: { frontendUserId: { in: frontendUserIds } },
+      include: { frontendUser: { select: { username: true, account: true, displayRemark: true } } }
+    })
+    const customerRemarks = await this.prisma.prepaidCustomerRemark.findMany({ where: { frontendUserId: { in: frontendUserIds } } })
+    const usageRemarks = await this.prisma.prepaidUsageRemark.findMany({ where: { frontendUserId: { in: frontendUserIds } } })
+    const report = this.buildPrepaidReport(
+      recharges.map((row) => ({ ...row, name: this.displayName(row.frontendUser) })),
+      allDailyRows,
+      customerRemarks,
+      usageRemarks
+    )
+    return {
+      range,
+      customerRows: report.customerRows,
+      dailyRows: report.dailyRows.filter((row) => row.date >= range.startDate && row.date <= range.endDate)
+    }
+  }
+
   private loadSheets(frontendUserIds: string[], startDate?: string, endDate?: string) {
     return this.prisma.labSheet.findMany({
       where: {
@@ -274,14 +382,18 @@ export class FinanceService {
     })
   }
 
-  private buildIncomeReport(month: string, sheets: Awaited<ReturnType<FinanceService['loadSheets']>>) {
+  private buildIncomeReport(
+    month: string,
+    sheets: Awaited<ReturnType<FinanceService['loadSheets']>>,
+    prepaidRecharges: Array<{ rechargeDate: string; amount: unknown; usableTimes: number }> = []
+  ) {
     const rowMap = new Map<string, ReturnType<FinanceService['emptyIncomeRow']>>()
     sheets.forEach((sheet) => {
       const row = rowMap.get(sheet.date) || this.emptyIncomeRow(sheet.date)
       sheet.sampleBlocks.forEach((block) => {
         const inputs = block.inputs as Record<string, unknown>
         const amount = this.getSampleAmount(inputs)
-        if (!Number.isFinite(amount)) return
+        if (!Number.isFinite(amount) || inputs.paymentStatus === '预存款') return
         const status = this.getIncomeStatus(inputs)
         row.sampleCount += 1
         row.totalAmount = toMoney(row.totalAmount + amount)
@@ -292,6 +404,18 @@ export class FinanceService {
         }
       })
       rowMap.set(sheet.date, row)
+    })
+    prepaidRecharges.forEach((recharge) => {
+      const row = rowMap.get(recharge.rechargeDate) || this.emptyIncomeRow(recharge.rechargeDate)
+      const summary = row.statusSummaries.find((item) => item.status === '预存款')
+      const amount = toMoney(recharge.amount)
+      if (summary) {
+        summary.count += recharge.usableTimes
+        summary.amount = toMoney(summary.amount + amount)
+      }
+      row.sampleCount += recharge.usableTimes
+      row.totalAmount = toMoney(row.totalAmount + amount)
+      rowMap.set(recharge.rechargeDate, row)
     })
     const rows = Array.from(rowMap.values()).sort((a, b) => b.date.localeCompare(a.date))
     return {
@@ -368,6 +492,33 @@ export class FinanceService {
     return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date) || a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
   }
 
+  private getPrepaidDailyRows(sheets: Awaited<ReturnType<FinanceService['loadSheets']>>) {
+    const map = new Map<string, { id: string; date: string; frontendUserId: string; name: string; customer: string; sampleCount: number; remark: string }>()
+    sheets.forEach((sheet) => {
+      sheet.sampleBlocks.forEach((block) => {
+        const inputs = block.inputs as Record<string, unknown>
+        const amount = this.getSampleAmount(inputs)
+        if (!Number.isFinite(amount) || inputs.paymentStatus !== '预存款') return
+        const customer = this.getCustomerName(inputs)
+        const key = `${sheet.date}__${sheet.frontendUserId}__${customer}`
+        const current =
+          map.get(key) ||
+          {
+            id: `${sheet.date}__${customer}`,
+            date: sheet.date,
+            frontendUserId: sheet.frontendUserId,
+            name: this.displayName(sheet.frontendUser),
+            customer,
+            sampleCount: 0,
+            remark: ''
+          }
+        current.sampleCount += this.getPrepaidDeductionTimes(inputs)
+        map.set(key, current)
+      })
+    })
+    return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date) || a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
+  }
+
   private buildMonthlyReport(month: string, dailyRows: ReturnType<FinanceService['getMonthlyDailyRows']>, savedRows: Awaited<ReturnType<PrismaService['monthlySettlementRecord']['findMany']>>) {
     const savedMap = new Map(savedRows.map((row) => [`${row.frontendUserId}__${row.customer}`, row]))
     const summaryMap = new Map<string, { id: string; month: string; frontendUserId: string; name: string; customer: string; sampleCount: number; amount: number }>()
@@ -397,7 +548,10 @@ export class FinanceService {
         recordId: saved?.id || '',
         settlementStatus: this.monthlyStatusToChinese(status),
         paidAmount,
-        remark: saved?.remark || (status === MonthlySettlementStatus.PARTIAL ? `未结款差额 ¥${toMoney(row.amount - (paidAmount || 0)).toFixed(2)}` : '')
+        remark:
+          status === MonthlySettlementStatus.PAID
+            ? paidMonthlySettlementRemark
+            : saved?.remark || (status === MonthlySettlementStatus.PARTIAL ? `未结款差额 ¥${toMoney(row.amount - (paidAmount || 0)).toFixed(2)}` : '')
       }
     })
     return {
@@ -418,6 +572,78 @@ export class FinanceService {
       paymentMethod: row.paymentMethod,
       screenshotUrl: row.screenshotUrl || '',
       remark: row.remark || ''
+    }
+  }
+
+  private prepaidRechargeDto(row: { id: string; rechargeDate: string; customer: string; amount: unknown; usableTimes: number; remark: string | null; createdAt: Date }) {
+    return {
+      id: row.id,
+      rechargeDate: row.rechargeDate,
+      customer: row.customer,
+      amount: toMoney(row.amount),
+      usableTimes: row.usableTimes,
+      remark: row.remark || '',
+      createdAt: row.createdAt.toISOString()
+    }
+  }
+
+  private buildPrepaidReport(
+    recharges: Array<{ frontendUserId?: string; name?: string; customer: string; amount: unknown; usableTimes: number; remark: string | null }>,
+    dailyRows: ReturnType<FinanceService['getPrepaidDailyRows']>,
+    customerRemarks: Array<{ frontendUserId?: string; customer: string; remark: string | null }>,
+    usageRemarks: Array<{ frontendUserId?: string; usageDate: string; customer: string; remark: string | null }>
+  ) {
+    const customerRemarkMap = new Map(customerRemarks.map((row) => [this.prepaidCustomerKey(row.frontendUserId, row.customer), row.remark || '']))
+    const usageRemarkMap = new Map(usageRemarks.map((row) => [this.prepaidUsageKey(row.frontendUserId, row.usageDate, row.customer), row.remark || '']))
+    const map = new Map<string, { id: string; frontendUserId: string; name: string; customer: string; totalAmount: number; totalUsableTimes: number; usedTimes: number; availableTimes: number; remark: string }>()
+    recharges.forEach((row) => {
+      const key = this.prepaidCustomerKey(row.frontendUserId, row.customer)
+      const current =
+        map.get(key) ||
+        {
+          id: key || row.customer,
+          frontendUserId: row.frontendUserId || '',
+          name: row.name || '',
+          customer: row.customer,
+          totalAmount: 0,
+          totalUsableTimes: 0,
+          usedTimes: 0,
+          availableTimes: 0,
+          remark: ''
+        }
+      current.totalAmount = toMoney(current.totalAmount + toMoney(row.amount))
+      current.totalUsableTimes += row.usableTimes
+      if (!current.remark && row.remark) current.remark = row.remark
+      map.set(key, current)
+    })
+    dailyRows.forEach((row) => {
+      const key = this.prepaidCustomerKey(row.frontendUserId, row.customer)
+      const current =
+        map.get(key) ||
+        {
+          id: key || row.customer,
+          frontendUserId: row.frontendUserId || '',
+          name: row.name || '',
+          customer: row.customer,
+          totalAmount: 0,
+          totalUsableTimes: 0,
+          usedTimes: 0,
+          availableTimes: 0,
+          remark: ''
+        }
+      current.usedTimes += row.sampleCount
+      map.set(key, current)
+    })
+    const customerRows = Array.from(map.values())
+      .map((row) => ({
+        ...row,
+        availableTimes: Math.max(0, row.totalUsableTimes - row.usedTimes),
+        remark: customerRemarkMap.get(this.prepaidCustomerKey(row.frontendUserId, row.customer)) ?? row.remark
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN') || a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
+    return {
+      customerRows,
+      dailyRows: dailyRows.map((row) => ({ ...row, remark: usageRemarkMap.get(this.prepaidUsageKey(row.frontendUserId, row.date, row.customer)) || '' }))
     }
   }
 
@@ -444,7 +670,7 @@ export class FinanceService {
       customer: row.customer,
       settlementStatus: this.monthlyStatusToChinese(row.status),
       paidAmount: row.paidAmount === null ? null : toMoney(row.paidAmount),
-      remark: row.remark || ''
+      remark: row.status === MonthlySettlementStatus.PAID ? paidMonthlySettlementRemark : row.remark || ''
     }
   }
 
@@ -459,18 +685,30 @@ export class FinanceService {
     return { startDate: query.startDate || today, endDate: query.endDate || query.startDate || today }
   }
 
-  private sumIncomeByRange(sheets: Awaited<ReturnType<FinanceService['loadSheets']>>, startDate: string, endDate: string) {
+  private sumIncomeByRange(
+    sheets: Awaited<ReturnType<FinanceService['loadSheets']>>,
+    startDate: string,
+    endDate: string,
+    prepaidRecharges: Array<{ rechargeDate: string; amount: unknown; usableTimes: number }> = []
+  ) {
     const allowedDates = new Set(datesBetween(startDate, endDate))
     let sampleCount = 0
     let amount = 0
     sheets.forEach((sheet) => {
       if (!allowedDates.has(sheet.date)) return
       sheet.sampleBlocks.forEach((block) => {
-        const value = this.getSampleAmount(block.inputs as Record<string, unknown>)
+        const inputs = block.inputs as Record<string, unknown>
+        if (inputs.paymentStatus === '预存款') return
+        const value = this.getSampleAmount(inputs)
         if (!Number.isFinite(value)) return
         sampleCount += 1
         amount += value
       })
+    })
+    prepaidRecharges.forEach((row) => {
+      if (!allowedDates.has(row.rechargeDate)) return
+      sampleCount += row.usableTimes
+      amount += toMoney(row.amount)
     })
     return { sampleCount, amount: toMoney(amount) }
   }
@@ -482,6 +720,11 @@ export class FinanceService {
 
   private getSampleAmount(inputs: Record<string, unknown>) {
     return typeof inputs.price === 'number' && Number.isFinite(inputs.price) ? toMoney(inputs.price) : Number.NaN
+  }
+
+  private getPrepaidDeductionTimes(inputs: Record<string, unknown>) {
+    const amount = this.getSampleAmount(inputs)
+    return Number.isFinite(amount) ? Math.max(0, Math.trunc(amount)) : 0
   }
 
   private getIncomeStatus(inputs: Record<string, unknown>): IncomeStatus {
@@ -513,6 +756,23 @@ export class FinanceService {
     if (value === MonthlySettlementStatus.PAID) return '已结款'
     if (value === MonthlySettlementStatus.PARTIAL) return '部分结款'
     return '未结款'
+  }
+
+  private parsePrepaidUsageId(id?: string) {
+    const raw = String(id || '')
+    const separatorIndex = raw.indexOf('__')
+    const usageDate = separatorIndex >= 0 ? raw.slice(0, separatorIndex) : ''
+    const customer = separatorIndex >= 0 ? raw.slice(separatorIndex + 2).trim() : ''
+    if (!usageDate || !customer) throw new BadRequestException('预存款每日明细标识无效')
+    return { usageDate, customer }
+  }
+
+  private prepaidCustomerKey(frontendUserId: string | undefined, customer: string) {
+    return frontendUserId ? `${frontendUserId}__${customer}` : customer
+  }
+
+  private prepaidUsageKey(frontendUserId: string | undefined, usageDate: string, customer: string) {
+    return frontendUserId ? `${frontendUserId}__${usageDate}__${customer}` : `${usageDate}__${customer}`
   }
 
   private jsonValue(value: unknown) {

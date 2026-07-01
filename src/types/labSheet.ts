@@ -11,7 +11,7 @@ export type LabParameterKey =
   | 'magnesiumFactor'
   | 'titaniumFactor'
 
-export type SamplePaymentStatus = '已结款' | '未结款' | '月结款'
+export type SamplePaymentStatus = '已结款' | '未结款' | '月结款' | '预存款'
 
 export interface LabParameter {
   ironBlank: number
@@ -78,6 +78,16 @@ export interface SampleBlock {
   inputs: LabSampleInput
   results: LabFormulaResult
   parameterSnapshot: LabParameter
+}
+
+export interface LabChangeLogField {
+  field: keyof LabSampleInput
+  oldValue: unknown
+  newValue: unknown
+}
+
+export type SampleBlockSavePayload = SampleBlock & {
+  changeLogFields?: LabChangeLogField[]
 }
 
 export interface LabSheet {

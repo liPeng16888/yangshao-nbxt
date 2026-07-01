@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Headers, Param, Post, Put, Query, UseGuards } from '@nestjs/common'
 import { UserRole } from '@prisma/client'
 import { AuthGuard } from '../auth/auth.guard'
 import { CurrentUserInfo } from '../auth/current-user.decorator'
@@ -29,18 +29,18 @@ export class LabSheetsController {
   }
 
   @Put('parameters/current')
-  updateCurrentParameters(@CurrentUserInfo() user: CurrentUser, @Body() parameters: Record<string, number>) {
-    return this.sheets.updateCurrentParameters(user.id, parameters)
+  updateCurrentParameters(@CurrentUserInfo() user: CurrentUser, @Body() parameters: Record<string, number>, @Headers('x-ys-client-id') sourceClientId?: string) {
+    return this.sheets.updateCurrentParameters(user.id, parameters, sourceClientId)
   }
 
   @Post(':sheetId/sample-blocks')
-  addBlocks(@CurrentUserInfo() user: CurrentUser, @Param('sheetId') sheetId: string, @Body('count') count: number) {
-    return this.sheets.addSampleBlocks(user.id, sheetId, Number(count || 0))
+  addBlocks(@CurrentUserInfo() user: CurrentUser, @Param('sheetId') sheetId: string, @Body('count') count: number, @Headers('x-ys-client-id') sourceClientId?: string) {
+    return this.sheets.addSampleBlocks(user.id, sheetId, Number(count || 0), sourceClientId)
   }
 
   @Put(':sheetId/cells')
-  saveBlock(@CurrentUserInfo() user: CurrentUser, @Param('sheetId') sheetId: string, @Body() block: Record<string, unknown>) {
-    return this.sheets.saveSampleBlock(user, sheetId, block)
+  saveBlock(@CurrentUserInfo() user: CurrentUser, @Param('sheetId') sheetId: string, @Body() block: Record<string, unknown>, @Headers('x-ys-client-id') sourceClientId?: string) {
+    return this.sheets.saveSampleBlock(user, sheetId, block, sourceClientId)
   }
 
   @Get('history')

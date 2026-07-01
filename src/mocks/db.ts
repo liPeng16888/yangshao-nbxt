@@ -4,12 +4,15 @@ import type { BlacklistCheckResult, BlacklistPayload, BlacklistRecord } from '@/
 import type { Customer, CustomerPayload } from '@/types/customer'
 import type { FinanceEntry, FinancePayload } from '@/types/finance'
 import type { DateRange, FinanceReport, SampleDetectionReport } from '@/types/report'
+import type { PrepaidRechargeRow } from '@/types/financeBills'
 import type { LabParameter, LabSheet, LabSampleInput, SampleBlock } from '@/types/labSheet'
 import { defaultLabParameters, DEFAULT_SAMPLE_BLOCK_COUNT } from '@/constants/labSheetTemplate'
 import { financeCategoryRules } from '@/constants/reportCategories'
 import { calculateSampleResults } from '@/utils/formulaEngine'
+import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
 import { getReportRange, todayInBeijing } from '@/utils/date'
-import { isReportableSample } from '@/utils/sampleReport'
+
+const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
 
 let currentUser: AuthUser = {
   id: 'u-admin',
@@ -23,7 +26,7 @@ let labParameters: LabParameter = {
   savedAt: dayjs().toISOString()
 }
 
-const customers: Customer[] = [
+let customers: Customer[] = [
   { id: 'c-1', name: '洛阳矿业样品 001', phone: '13800000001', wechat: 'luoyang001', wechatNickname: '洛阳矿业' },
   { id: 'c-2', name: '三门峡选矿厂', phone: '13800000002', wechat: 'smx-ore', wechatNickname: '三门峡客户' },
   { id: 'c-3', name: '渑池送样客户', phone: '13800000003', wechat: 'mianchi-lab', wechatNickname: '渑池样品' }
@@ -234,6 +237,13 @@ export async function mockCreateCustomer(payload: CustomerPayload) {
   return delay(customer)
 }
 
+export async function mockDeleteCustomer(id: string) {
+  const customer = customers.find((item) => item.id === id)
+  if (!customer) throw new Error('客户信息不存在')
+  customers = customers.filter((item) => item.id !== id)
+  return delay({ id })
+}
+
 export async function mockSearchBlacklist(keyword = '') {
   const query = keyword.trim().toLowerCase()
   const data = query
@@ -283,6 +293,26 @@ export async function mockDeleteBlacklist(id: string) {
   return delay(record)
 }
 
+export async function mockUpdateBlacklist(id: string, payload: BlacklistPayload) {
+  const index = blacklist.findIndex((item) => item.id === id)
+  if (index < 0) throw new Error('黑名单记录不存在')
+  if (blacklist[index].uploadedBy !== currentUser.username) {
+    throw new Error('只能补充自己上传的黑名单')
+  }
+  const record: BlacklistRecord = {
+    ...blacklist[index],
+    phone: payload.phone?.trim() || undefined,
+    wechat: payload.wechat?.trim() || undefined,
+    wechatNickname: payload.wechatNickname?.trim() || undefined,
+    amount: payload.amount ?? undefined,
+    images: payload.images || [],
+    other: payload.other?.trim() || undefined,
+    note: payload.note?.trim() || undefined
+  }
+  blacklist[index] = record
+  return delay(record)
+}
+
 export async function mockFinanceByMonth(month: string) {
   return delay(financeEntries.filter((item) => item.paymentDate.startsWith(month)))
 }
@@ -311,26 +341,45 @@ function datesBetween(startDate: string, endDate: string) {
 
 export async function mockSampleDetectionReport(range: DateRange): Promise<SampleDetectionReport> {
   const { startDate, endDate } = getReportRange(range.mode, range.date || todayInBeijing(), range.startDate, range.endDate)
-  const rows = datesBetween(startDate, endDate).map((date) => {
-    const sheet = ensureSheet(date)
-    const validBlocks = sheet.sampleBlocks.filter((block) => isReportableSample(block.inputs))
-    return {
-      date,
-      sampleCount: validBlocks.length,
-      totalPrice: validBlocks.reduce((sum, block) => sum + (block.inputs.price || 0), 0)
-    }
-  })
-  const totalSamples = rows.reduce((sum, row) => sum + row.sampleCount, 0)
-  const totalPrice = rows.reduce((sum, row) => sum + row.totalPrice, 0)
+  const dates = datesBetween(startDate, endDate)
+  const incomeReport = summarizeIncomeRows(
+    startDate.slice(0, 7),
+    dates.map((date) => summarizeIncomeSheet(ensureSheet(date))),
+    loadPrepaidRecharges().filter((row) => row.rechargeDate >= startDate && row.rechargeDate <= endDate),
+    new Set(dates)
+  )
+  const rows = incomeReport.rows
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((row) => ({
+      date: row.date,
+      sampleCount: row.sampleCount,
+      totalPrice: row.totalAmount,
+      statusSummaries: row.statusSummaries
+    }))
+  const totalSamples = incomeReport.totalSamples
+  const totalPrice = incomeReport.totalAmount
   return delay({
     summary: {
       totalSamples,
       totalPrice,
       averageSamples: rows.length ? Number((totalSamples / rows.length).toFixed(2)) : 0,
-      averagePrice: rows.length ? Number((totalPrice / rows.length).toFixed(2)) : 0
+      averagePrice: rows.length ? Number((totalPrice / rows.length).toFixed(2)) : 0,
+      statusSummaries: incomeReport.statusSummaries
     },
     rows
   })
+}
+
+function loadPrepaidRecharges(): PrepaidRechargeRow[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(PREPAID_RECHARGE_STORAGE_KEY)
+    if (!raw) return []
+    return JSON.parse(raw) as PrepaidRechargeRow[]
+  } catch {
+    return []
+  }
 }
 
 function classifyFinanceItem(item: string) {

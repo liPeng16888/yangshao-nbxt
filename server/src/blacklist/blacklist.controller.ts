@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common'
 import { UserRole } from '@prisma/client'
 import { AuthGuard } from '../auth/auth.guard'
 import { CurrentUserInfo } from '../auth/current-user.decorator'
@@ -26,6 +26,11 @@ export class BlacklistController {
   @Post()
   create(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
     return this.blacklist.create(user.id, body)
+  }
+
+  @Patch(':id')
+  update(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: any) {
+    return this.blacklist.update(user.id, id, body)
   }
 
   @Delete(':id')

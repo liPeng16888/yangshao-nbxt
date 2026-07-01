@@ -60,6 +60,36 @@ export class FinanceController {
     return this.finance.updateFrontendMonthlySettlement(user.id, body)
   }
 
+  @Get('finance/prepaid-recharges')
+  @Roles(UserRole.FRONTEND_USER)
+  prepaidRecharges(@CurrentUserInfo() user: CurrentUser) {
+    return this.finance.getFrontendPrepaidRecharges(user.id)
+  }
+
+  @Post('finance/prepaid-recharges')
+  @Roles(UserRole.FRONTEND_USER)
+  createPrepaidRecharge(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
+    return this.finance.createFrontendPrepaidRecharge(user.id, body)
+  }
+
+  @Get('finance/prepaid-report')
+  @Roles(UserRole.FRONTEND_USER)
+  prepaidReport(@CurrentUserInfo() user: CurrentUser) {
+    return this.finance.getFrontendPrepaidReport(user.id)
+  }
+
+  @Patch('finance/prepaid-customers/remark')
+  @Roles(UserRole.FRONTEND_USER)
+  updatePrepaidCustomerRemark(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
+    return this.finance.updateFrontendPrepaidCustomerRemark(user.id, body)
+  }
+
+  @Patch('finance/prepaid-usage-remarks')
+  @Roles(UserRole.FRONTEND_USER)
+  updatePrepaidUsageRemark(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
+    return this.finance.updateFrontendPrepaidUsageRemark(user.id, body)
+  }
+
   @Get('admin/finance/income')
   @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
   adminIncome(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
@@ -106,6 +136,18 @@ export class FinanceController {
   @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
   adminMonthlyCustomers(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
     return this.finance.getAdminMonthlyCustomers(user, query)
+  }
+
+  @Get('admin/finance/prepaid-recharges')
+  @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
+  adminPrepaidRecharges(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
+    return this.finance.getAdminPrepaidRecharges(user, query)
+  }
+
+  @Get('admin/finance/prepaid-report')
+  @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
+  adminPrepaidReport(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
+    return this.finance.getAdminPrepaidReport(user, query)
   }
 
   @Patch('admin/finance/monthly-customers/remark')

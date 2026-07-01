@@ -2,7 +2,7 @@
   <el-dialog v-model="settingsVisible" title="访问密码设置" width="520px" append-to-body @open="syncForm">
     <el-form label-position="top" class="access-settings-form">
       <el-alert
-        title="财务、报表和历史日期查看共用这套访问密码。关闭后会直接进入。"
+        title="财务、报表、黑名单和历史日期查看共用这套访问密码。关闭后会直接进入。"
         type="info"
         show-icon
         :closable="false"

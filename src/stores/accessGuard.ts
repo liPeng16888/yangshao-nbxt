@@ -136,7 +136,7 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
   }
 
   function isProtectedPath(path: string) {
-    return path.startsWith('/finance') || path.startsWith('/reports')
+    return path.startsWith('/finance') || path.startsWith('/reports') || path.startsWith('/blacklist')
   }
 
   function hasValidSession() {

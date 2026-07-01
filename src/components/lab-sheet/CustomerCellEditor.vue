@@ -1,6 +1,7 @@
 <template>
   <div class="customer-editor">
     <el-select
+      ref="customerSelectRef"
       v-model="selectedNames"
       multiple
       filterable
@@ -10,20 +11,32 @@
       :disabled="disabled"
       :loading="searching"
       :placeholder="placeholder || '输入或搜索客户'"
+      popper-class="customer-select-popper"
       :remote-method="querySearch"
       size="small"
+      @change="handleSelectionChange"
       @blur="handleCommit"
       @keyup.enter="handleCommit"
     >
       <el-option
         v-for="customer in customerOptions"
         :key="customer.id"
-        :label="customer.name"
+        :label="formatCustomerDisplay(customer)"
         :value="customer.name"
       >
         <div class="customer-suggestion">
-          <strong>{{ customer.name }}</strong>
-          <span>{{ customer.phone || customer.wechat || '无联系方式' }}</span>
+          <strong>{{ formatCustomerDisplay(customer) }}</strong>
+          <el-tooltip content="删除客户" placement="top">
+            <el-button
+              class="customer-suggestion__delete"
+              :disabled="disabled || deletingCustomerId === customer.id"
+              :icon="Delete"
+              text
+              size="small"
+              aria-label="删除客户"
+              @click.stop.prevent="deleteSavedCustomer(customer)"
+            />
+          </el-tooltip>
         </div>
       </el-option>
     </el-select>
@@ -34,6 +47,9 @@
       </el-tooltip>
       <el-tooltip content="复制客户信息" placement="top">
         <el-button :disabled="!copyText" size="small" :icon="CopyDocument" aria-label="复制客户信息" @click="copyCustomerInfo" />
+      </el-tooltip>
+      <el-tooltip content="删除已选客户" placement="top">
+        <el-button :disabled="disabled || !selectedNames.length" size="small" :icon="Delete" aria-label="删除已选客户" @click="clearSelectedCustomers" />
       </el-tooltip>
     </div>
 
@@ -61,11 +77,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
-import { CopyDocument, Plus } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { CopyDocument, Delete, Plus } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { checkBlacklist } from '@/api/blacklist'
-import { createCustomer, searchCustomers } from '@/api/customer'
+import { createCustomer, deleteCustomer, searchCustomers } from '@/api/customer'
 import type { BlacklistRecord } from '@/types/blacklist'
 import type { Customer } from '@/types/customer'
 import type { LabSampleInput } from '@/types/labSheet'
@@ -84,9 +100,11 @@ const emit = defineEmits<{
 
 const selectedNames = ref<string[]>(splitCustomerText(props.modelValue))
 const customerOptions = ref<Customer[]>(props.selectedCustomers || [])
+const customerSelectRef = ref<{ blur: () => void } | null>(null)
 const searching = ref(false)
 const showCreate = ref(false)
 const creating = ref(false)
+const deletingCustomerId = ref('')
 const createForm = reactive({
   name: '',
   phone: '',
@@ -130,14 +148,7 @@ const copyText = computed(() => {
   const lines = selectedNames.value.map((name) => {
     const customer = findCustomerByName(name)
     if (!customer) return name
-    return [
-      customer.name,
-      customer.phone ? `电话：${customer.phone}` : '',
-      customer.wechat ? `微信号：${customer.wechat}` : '',
-      customer.wechatNickname ? `微信昵称：${customer.wechatNickname}` : ''
-    ]
-      .filter(Boolean)
-      .join('，')
+    return formatCustomerDisplay(customer)
   })
   return lines.join('\n')
 })
@@ -161,6 +172,18 @@ function findCustomerByName(name: string) {
   return customerOptions.value.find((customer) => customer.name === name)
 }
 
+function formatCustomerDisplay(customer: Customer) {
+  return [
+    customer.name,
+    customer.phone || '',
+    customer.wechat || '',
+    customer.wechatNickname || '',
+    customer.note || ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
 function emitSelectedCustomers() {
   const customers = selectedExistingCustomers.value
   emit('update', {
@@ -169,6 +192,57 @@ function emitSelectedCustomers() {
     customers,
     customerText: selectedNames.value.join('、')
   })
+}
+
+function handleSelectionChange() {
+  if (!selectedNames.value.length) return
+  closeCustomerDropdown()
+}
+
+function closeCustomerDropdown() {
+  void nextTick(() => {
+    window.setTimeout(() => {
+      customerSelectRef.value?.blur()
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur()
+      }
+    }, 0)
+  })
+}
+
+function clearSelectedCustomers() {
+  if (props.disabled || !selectedNames.value.length) return
+  selectedNames.value = []
+  emitSelectedCustomers()
+  ElMessage.success('已删除当前格客户信息')
+}
+
+async function deleteSavedCustomer(customer: Customer) {
+  if (props.disabled || deletingCustomerId.value) return
+  try {
+    await ElMessageBox.confirm(`确认删除客户 ${formatCustomerDisplay(customer)} 吗？`, '删除客户', {
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      appendTo: document.body
+    })
+  } catch {
+    return
+  }
+  deletingCustomerId.value = customer.id
+  try {
+    await deleteCustomer(customer.id)
+    customerOptions.value = customerOptions.value.filter((item) => item.id !== customer.id)
+    if (selectedNames.value.includes(customer.name)) {
+      selectedNames.value = selectedNames.value.filter((name) => name !== customer.name)
+      emitSelectedCustomers()
+    }
+    ElMessage.success('客户信息已删除')
+  } catch {
+    ElMessage.error('客户信息删除失败，请稍后重试')
+  } finally {
+    deletingCustomerId.value = ''
+  }
 }
 
 async function querySearch(query: string) {
@@ -182,6 +256,7 @@ async function querySearch(query: string) {
 }
 
 async function handleCommit() {
+  if (selectedNames.value.length) closeCustomerDropdown()
   await checkBlacklistAfterCommit(copyText.value || selectedNames.value.join(' '))
 }
 
@@ -263,14 +338,50 @@ function resetCreateForm() {
 }
 
 .customer-suggestion {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  align-items: start;
+  gap: 6px;
+  padding: 5px 0;
+  line-height: 1.35;
 
-  span {
-    color: #64748b;
-    font-size: 12px;
+  strong {
+    color: #10233f;
+    font-size: 13px;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
+
+  &__delete {
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+    color: #94a3b8;
+
+    &:hover {
+      color: #dc2626;
+      background: #fee2e2;
+    }
+  }
+}
+
+:global(.customer-select-popper .el-select-dropdown__list) {
+  padding: 6px;
+}
+
+:global(.customer-select-popper .el-select-dropdown__item) {
+  display: block;
+  height: auto;
+  min-height: 34px;
+  padding: 5px 10px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+:global(.customer-select-popper .el-select-dropdown__item.is-hovering),
+:global(.customer-select-popper .el-select-dropdown__item:hover) {
+  background: #eef5ff;
 }
 
 :deep(.el-select) {
@@ -299,9 +410,15 @@ function resetCreateForm() {
   align-items: center;
   height: auto;
   min-height: 22px;
+  width: 100%;
   max-width: 100%;
   color: #1f2937;
   font-size: 15px;
+  white-space: normal;
+}
+
+:deep(.el-select__selected-item .el-tag__content) {
+  min-width: 0;
   white-space: normal;
 }
 
@@ -309,7 +426,8 @@ function resetCreateForm() {
   overflow: visible;
   white-space: normal;
   text-overflow: clip;
-  line-height: 16px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 :deep(.el-select__input-wrapper) {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common'
 import { UserRole } from '@prisma/client'
 import { AuthGuard } from '../auth/auth.guard'
 import { CurrentUserInfo } from '../auth/current-user.decorator'
@@ -21,5 +21,10 @@ export class CustomersController {
   @Post()
   create(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
     return this.customers.create(user.id, body)
+  }
+
+  @Delete(':id')
+  remove(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string) {
+    return this.customers.remove(user.id, id)
   }
 }

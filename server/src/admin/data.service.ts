@@ -5,6 +5,7 @@ import { todayInBeijing } from '../common/date'
 import { hasLabDetectionInput } from '../common/lab'
 import { toMoney } from '../common/money'
 import { AdminAccessService } from './admin-access.service'
+import { collapseConsecutiveFieldChanges } from '../common/change-log'
 
 @Injectable()
 export class AdminDataService {
@@ -67,11 +68,12 @@ export class AdminDataService {
     const block = await this.prisma.sampleBlock.findUnique({ where: { id: query.blockId }, include: { sheet: true } })
     if (!block) throw new NotFoundException('未找到样品')
     await this.access.getAllowedFrontendUserIds(admin, [block.sheet.frontendUserId])
-    return this.prisma.cellChangeLog.findMany({
-      where: { blockId: block.id, field: { in: fields } },
+    const rows = await this.prisma.cellChangeLog.findMany({
+      where: { blockId: block.id },
       orderBy: [{ changedAt: 'asc' }, { field: 'asc' }],
       include: { sheet: { include: { frontendUser: { select: { username: true, account: true, displayRemark: true } } } } }
     })
+    return collapseConsecutiveFieldChanges(rows, { windowMs: 2000 }).filter((row) => fields.includes(row.field))
   }
 
   private parseHistoryFields(value: string | string[] | undefined) {
@@ -96,19 +98,31 @@ export class AdminDataService {
         block: true
       }
     })
-    return rows.map((row) => ({
-      id: row.id,
-      date: row.date,
-      frontendUserId: row.frontendUserId,
-      name: this.displayName(row.sheet.frontendUser),
-      sheetId: row.sheetId,
-      blockId: row.blockId,
-      sequence: String(((row.block.inputs as Record<string, unknown>)?.sequence || row.block.index)).padStart(3, '0'),
-      field: row.field,
-      changeCount: row.changeCount,
-      remark: row.remark || '',
-      updatedAt: row.updatedAt
-    }))
+    const collapsedCache = new Map<string, Awaited<ReturnType<AdminDataService['collapsedBlockLogs']>>>()
+    const result = []
+    for (const row of rows) {
+      let collapsed = collapsedCache.get(row.blockId)
+      if (!collapsed) {
+        collapsed = await this.collapsedBlockLogs(row.blockId)
+        collapsedCache.set(row.blockId, collapsed)
+      }
+      const changeCount = collapsed.filter((log) => log.field === row.field).length
+      if (changeCount < 3) continue
+      result.push({
+        id: row.id,
+        date: row.date,
+        frontendUserId: row.frontendUserId,
+        name: this.displayName(row.sheet.frontendUser),
+        sheetId: row.sheetId,
+        blockId: row.blockId,
+        sequence: String(((row.block.inputs as Record<string, unknown>)?.sequence || row.block.index)).padStart(3, '0'),
+        field: row.field,
+        changeCount,
+        remark: row.remark || '',
+        updatedAt: row.updatedAt
+      })
+    }
+    return result
   }
 
   async updateAbnormalRemark(admin: CurrentUser, id: string, remark = '') {
@@ -116,6 +130,14 @@ export class AdminDataService {
     if (!row) throw new NotFoundException('异常记录不存在')
     await this.access.getAllowedFrontendUserIds(admin, [row.frontendUserId])
     return this.prisma.abnormalRecord.update({ where: { id }, data: { remark } })
+  }
+
+  private async collapsedBlockLogs(blockId: string) {
+    const rows = await this.prisma.cellChangeLog.findMany({
+      where: { blockId },
+      orderBy: [{ changedAt: 'asc' }, { field: 'asc' }]
+    })
+    return collapseConsecutiveFieldChanges(rows, { windowMs: 2000 })
   }
 
   async blacklist(admin: CurrentUser, keyword = '') {

@@ -1,9 +1,19 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { addSampleBlocks, getCurrentLabSheet, getLabSheetByDate, saveSampleBlock, updateCurrentParameters } from '@/api/labSheet'
-import type { LabParameter, LabSampleInput, LabSheet, SampleBlock } from '@/types/labSheet'
+import {
+  addSampleBlocks,
+  createLabSheetEventSource,
+  getCurrentLabSheet,
+  getLabSheetByDate,
+  getLabSheetClientId,
+  saveSampleBlock,
+  updateCurrentParameters
+} from '@/api/labSheet'
+import type { LabSheetRealtimeEvent } from '@/api/labSheet'
+import type { LabChangeLogField, LabParameter, LabSampleInput, LabSheet, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
 import { calculateSampleResults } from '@/utils/formulaEngine'
+import { hasLabDetectionInput } from '@/utils/sampleReport'
 import { isPositiveInteger } from '@/utils/validators'
 
 type AutoSaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
@@ -20,21 +30,31 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   const lastAutoSavedAt = ref('')
   const autoSaveError = ref('')
   const pendingAutoSaveCount = ref(0)
+  const realtimeConnected = ref(false)
+  const realtimeError = ref('')
 
   const autoSaveTimers = new Map<string, number>()
   const pendingBlockIds = new Set<string>()
   const blockVersions = new Map<string, number>()
+  const pendingChangeLogFields = new Map<string, Map<keyof LabSampleInput, LabChangeLogField>>()
   const activeAutoSavePromises = new Set<Promise<void>>()
+  const activeSavingBlockIds = new Set<string>()
   let activeAutoSaveCount = 0
+  let realtimeSource: EventSource | null = null
+  let realtimeDate = ''
+  let realtimeReconnectTimer: number | undefined
+  const clientId = getLabSheetClientId()
 
   const currentParameters = computed(() => sheet.value?.parameters || null)
   const sampleBlocks = computed(() => sheet.value?.sampleBlocks || [])
 
   async function loadCurrentSheet() {
     await persistBeforeSheetChange()
+    disconnectRealtime()
     loading.value = true
     try {
       sheet.value = await getCurrentLabSheet()
+      syncRealtimeForLoadedSheet()
     } finally {
       loading.value = false
     }
@@ -42,9 +62,11 @@ export const useLabSheetStore = defineStore('labSheet', () => {
 
   async function loadSheetByDate(date: string) {
     await persistBeforeSheetChange()
+    disconnectRealtime()
     loading.value = true
     try {
       sheet.value = await getLabSheetByDate(date)
+      syncRealtimeForLoadedSheet()
     } finally {
       loading.value = false
     }
@@ -66,9 +88,25 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (!sheet.value) return
     const block = sheet.value.sampleBlocks.find((item) => item.id === blockId)
     if (!block || block.readonly || sheet.value.readonly) return
+    const hadDetectionInput = hasLabDetectionInput(block.inputs)
     block.inputs = { ...block.inputs, ...patch }
-    block.parameterSnapshot = sheet.value.parameters
+    if (!hadDetectionInput && hasLabDetectionInput(block.inputs)) {
+      block.parameterSnapshot = sheet.value.parameters
+    }
     block.results = calculateSampleResults(block.inputs, block.parameterSnapshot)
+    const nextVersion = (blockVersions.get(blockId) || 0) + 1
+    blockVersions.set(blockId, nextVersion)
+    scheduleBlockAutoSave(blockId, nextVersion)
+  }
+
+  function commitBlockFieldChange(blockId: string, field: keyof LabSampleInput, oldValue: unknown, newValue: unknown) {
+    if (!sheet.value || sheet.value.readonly) return
+    const block = sheet.value.sampleBlocks.find((item) => item.id === blockId)
+    if (!block || block.readonly) return
+    if (JSON.stringify(oldValue ?? null) === JSON.stringify(newValue ?? null)) return
+    const fields = pendingChangeLogFields.get(blockId) || new Map<keyof LabSampleInput, LabChangeLogField>()
+    fields.set(field, { field, oldValue: oldValue ?? null, newValue: newValue ?? null })
+    pendingChangeLogFields.set(blockId, fields)
     const nextVersion = (blockVersions.get(blockId) || 0) + 1
     blockVersions.set(blockId, nextVersion)
     scheduleBlockAutoSave(blockId, nextVersion)
@@ -77,11 +115,14 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   async function persistBlock(block: SampleBlock) {
     if (!sheet.value) return
     saving.value = true
+    activeSavingBlockIds.add(block.id)
     try {
-      const saved = await saveSampleBlock(sheet.value.id, block)
+      const saved = await saveSampleBlock(sheet.value.id, blockWithPendingChangeLogs(block))
       const index = sheet.value.sampleBlocks.findIndex((item) => item.id === saved.id)
       if (index >= 0) sheet.value.sampleBlocks[index] = saved
+      pendingChangeLogFields.delete(block.id)
     } finally {
+      activeSavingBlockIds.delete(block.id)
       saving.value = false
     }
   }
@@ -98,7 +139,13 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       const currentSheet = sheet.value
       const savedBlocks: SampleBlock[] = []
       for (const block of currentSheet.sampleBlocks) {
-        savedBlocks.push(await saveSampleBlock(currentSheet.id, cloneBlock(block)))
+        activeSavingBlockIds.add(block.id)
+        try {
+          savedBlocks.push(await saveSampleBlock(currentSheet.id, blockWithPendingChangeLogs(block)))
+          pendingChangeLogFields.delete(block.id)
+        } finally {
+          activeSavingBlockIds.delete(block.id)
+        }
       }
       if (sheet.value?.id === currentSheet.id) {
         savedBlocks.forEach((saved) => {
@@ -174,9 +221,10 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     }
 
     const sheetId = currentSheet.id
-    const snapshot = cloneBlock(block)
+    const snapshot = blockWithPendingChangeLogs(block)
     let succeeded = false
     activeAutoSaveCount += 1
+    activeSavingBlockIds.add(blockId)
     syncAutoSaveStatus()
 
     try {
@@ -185,6 +233,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       if (sheet.value?.id === sheetId && blockVersions.get(blockId) === version) {
         const index = sheet.value.sampleBlocks.findIndex((item) => item.id === saved.id)
         if (index >= 0) sheet.value.sampleBlocks[index] = saved
+        pendingChangeLogFields.delete(blockId)
       }
       lastAutoSavedAt.value = new Date().toISOString()
       autoSaveError.value = ''
@@ -193,6 +242,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       autoSaveError.value = error instanceof Error ? error.message : '自动保存失败'
       ElMessage.error('自动保存失败，请点击保存当前表格重试')
     } finally {
+      activeSavingBlockIds.delete(blockId)
       activeAutoSaveCount = Math.max(0, activeAutoSaveCount - 1)
       if (!succeeded && autoSaveStatus.value === 'error') {
         pendingAutoSaveCount.value = pendingBlockIds.size
@@ -250,6 +300,130 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return JSON.parse(JSON.stringify(block)) as SampleBlock
   }
 
+  function blockWithPendingChangeLogs(block: SampleBlock): SampleBlockSavePayload {
+    const snapshot = cloneBlock(block) as SampleBlockSavePayload
+    snapshot.changeLogFields = Array.from(pendingChangeLogFields.get(block.id)?.values() || [])
+    return snapshot
+  }
+
+  function cloneSheet(value: LabSheet): LabSheet {
+    return JSON.parse(JSON.stringify(value)) as LabSheet
+  }
+
+  function isBlockLocallyDirty(blockId: string) {
+    return pendingBlockIds.has(blockId) || activeSavingBlockIds.has(blockId)
+  }
+
+  function syncRealtimeForLoadedSheet() {
+    if (!sheet.value || sheet.value.readonly) {
+      disconnectRealtime()
+      return
+    }
+    connectRealtime(sheet.value.date)
+  }
+
+  function connectRealtime(date: string) {
+    if (realtimeSource && realtimeDate === date) return
+    disconnectRealtime()
+    realtimeDate = date
+    const source = createLabSheetEventSource(date)
+    if (!source) {
+      realtimeConnected.value = false
+      return
+    }
+    realtimeSource = source
+    source.onopen = () => {
+      realtimeConnected.value = true
+      realtimeError.value = ''
+    }
+    source.onmessage = (event) => {
+      handleRealtimeMessage(event.data)
+    }
+    source.onerror = () => {
+      realtimeConnected.value = false
+      realtimeError.value = '实时同步连接中断，正在重连'
+      source.close()
+      if (realtimeSource === source) realtimeSource = null
+      scheduleRealtimeReconnect(date)
+    }
+  }
+
+  function scheduleRealtimeReconnect(date: string) {
+    if (realtimeReconnectTimer) window.clearTimeout(realtimeReconnectTimer)
+    realtimeReconnectTimer = window.setTimeout(() => {
+      realtimeReconnectTimer = undefined
+      if (sheet.value?.date === date && !sheet.value.readonly) connectRealtime(date)
+    }, 3000)
+  }
+
+  function disconnectRealtime() {
+    if (realtimeReconnectTimer) {
+      window.clearTimeout(realtimeReconnectTimer)
+      realtimeReconnectTimer = undefined
+    }
+    if (realtimeSource) {
+      realtimeSource.close()
+      realtimeSource = null
+    }
+    realtimeDate = ''
+    realtimeConnected.value = false
+    realtimeError.value = ''
+  }
+
+  function handleRealtimeMessage(rawData: string) {
+    let payload: LabSheetRealtimeEvent
+    try {
+      payload = JSON.parse(rawData) as LabSheetRealtimeEvent
+    } catch {
+      return
+    }
+    if (payload.type === 'heartbeat') return
+    if (payload.sourceClientId === clientId) return
+    if (!sheet.value || payload.sheetId !== sheet.value.id || payload.date !== sheet.value.date) return
+
+    if (payload.type === 'block-saved') {
+      applyRemoteBlock(payload.block)
+      return
+    }
+    if (payload.type === 'parameters-updated') {
+      applyRemoteParameters(payload.parameters)
+      return
+    }
+    if (payload.type === 'sheet-reloaded') {
+      applyRemoteSheet(payload.sheet)
+    }
+  }
+
+  function applyRemoteBlock(block: SampleBlock) {
+    if (!sheet.value || isBlockLocallyDirty(block.id)) return
+    const nextBlock = cloneBlock(block)
+    const index = sheet.value.sampleBlocks.findIndex((item) => item.id === nextBlock.id)
+    if (index >= 0) {
+      sheet.value.sampleBlocks[index] = nextBlock
+    } else {
+      sheet.value.sampleBlocks.push(nextBlock)
+      sheet.value.sampleBlocks.sort((a, b) => a.index - b.index)
+    }
+  }
+
+  function applyRemoteParameters(parameters: LabParameter) {
+    if (!sheet.value) return
+    sheet.value.parameters = parameters
+  }
+
+  function applyRemoteSheet(remoteSheet: LabSheet) {
+    if (!sheet.value) return
+    const dirtyBlocks = new Map(sheet.value.sampleBlocks.filter((block) => isBlockLocallyDirty(block.id)).map((block) => [block.id, cloneBlock(block)]))
+    const nextSheet = cloneSheet(remoteSheet)
+    dirtyBlocks.forEach((localBlock, blockId) => {
+      const index = nextSheet.sampleBlocks.findIndex((block) => block.id === blockId)
+      if (index >= 0) nextSheet.sampleBlocks[index] = localBlock
+      else nextSheet.sampleBlocks.push(localBlock)
+    })
+    nextSheet.sampleBlocks.sort((a, b) => a.index - b.index)
+    sheet.value = nextSheet
+  }
+
   return {
     sheet,
     loading,
@@ -260,14 +434,18 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     lastAutoSavedAt,
     autoSaveError,
     pendingAutoSaveCount,
+    realtimeConnected,
+    realtimeError,
     currentParameters,
     sampleBlocks,
     loadCurrentSheet,
     loadSheetByDate,
     saveParameters,
     patchBlock,
+    commitBlockFieldChange,
     persistBlock,
     persistAllBlocks,
-    appendSampleBlocks
+    appendSampleBlocks,
+    disconnectRealtime
   }
 })

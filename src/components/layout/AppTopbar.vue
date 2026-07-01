@@ -56,11 +56,13 @@ import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
+import { useLabSheetStore } from '@/stores/labSheet'
 import { useReminderStore } from '@/stores/reminder'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const labSheetStore = useLabSheetStore()
 const reminderStore = useReminderStore()
 const accessGuard = useAccessGuardStore()
 const beijingTime = ref(dayjs().format('YYYY-MM-DD HH:mm:ss'))
@@ -87,6 +89,7 @@ onBeforeUnmount(() => {
 })
 
 async function handleLogout() {
+  labSheetStore.disconnectRealtime()
   await authStore.logoutCurrentUser()
   router.replace('/login')
 }

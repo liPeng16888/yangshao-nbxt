@@ -99,7 +99,7 @@ import { computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { MonthlySettlementStatus, MonthlySettlementSummaryRow } from '@/types/financeBills'
 import { useFinanceBillsStore } from '@/stores/financeBills'
-import { createPartialSettlementRemark, roundMoney } from '@/utils/financeBills'
+import { createPaidSettlementRemark, createPartialSettlementRemark, roundMoney } from '@/utils/financeBills'
 
 const store = useFinanceBillsStore()
 const report = computed(() => store.monthlySettlementReport)
@@ -119,6 +119,9 @@ async function handleStatusChange(row: MonthlySettlementSummaryRow, settlementSt
     settlementStatus,
     paidAmount: settlementStatus === '已结款' ? row.amount : settlementStatus === '部分结款' ? row.paidAmount || 0 : null,
     remark: row.remark || ''
+  }
+  if (settlementStatus === '已结款') {
+    next.remark = createPaidSettlementRemark()
   }
   if (settlementStatus === '部分结款') {
     next.remark = createPartialSettlementRemark(row.amount, next.paidAmount || 0)

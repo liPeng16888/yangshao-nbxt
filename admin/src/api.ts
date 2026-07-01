@@ -110,6 +110,15 @@ const mockRows = {
   ],
   monthlyCustomers: [
     { frontendUserId: 'front-1', name: '凯里化验室', customer: '李四', firstDate: '2026-06-01', lastDate: '2026-06-25', amount: 1280, sampleCount: 16, remark: '示例月结客户' }
+  ],
+  prepaidRecharges: [
+    { id: 'p-1', rechargeDate: '2026-06-25', createdAt: '2026-06-25 10:30:00', frontendUserId: 'front-1', name: '凯里化验室', customer: '王总', amount: 1000, usableTimes: 10, remark: '预存款示例' }
+  ],
+  prepaidCustomers: [
+    { id: 'front-1__王总', frontendUserId: 'front-1', name: '凯里化验室', customer: '王总', totalAmount: 1000, totalUsableTimes: 10, usedTimes: 2, availableTimes: 8, remark: '预存款示例' }
+  ],
+  prepaidDaily: [
+    { id: '2026-06-25__王总', date: '2026-06-25', frontendUserId: 'front-1', name: '凯里化验室', customer: '王总', sampleCount: 2, remark: '当天扣除 2 次' }
   ]
 }
 
@@ -265,7 +274,19 @@ const mockRequest = {
     if (url === '/admin/finance/income') {
       return {
         totals: { today: { amount: 180 }, week: { amount: 1260 }, month: { amount: 5200 } },
-        rows: [{ date: '2026-06-25', sampleCount: 2, totalAmount: 180, statusSummaries: [{ status: '已结款', count: 0, amount: 0 }, { status: '未结款', count: 1, amount: 80 }, { status: '月结款', count: 1, amount: 100 }] }]
+        rows: [
+          {
+            date: '2026-06-25',
+            sampleCount: 12,
+            totalAmount: 1180,
+            statusSummaries: [
+              { status: '已结款', count: 0, amount: 0 },
+              { status: '未结款', count: 1, amount: 80 },
+              { status: '月结款', count: 1, amount: 100 },
+              { status: '预存款', count: 10, amount: 1000 }
+            ]
+          }
+        ]
       }
     }
     if (url === '/admin/finance/expenses') {
@@ -280,6 +301,10 @@ const mockRequest = {
       return { summaryRows: [{ id: '2026-06__front-1__李四', recordId: 'mrs-1', month: '2026-06', frontendUserId: 'front-1', name: '凯里化验室', customer: '李四', amount: 1280, sampleCount: 16, settlementStatus: '未结款', paidAmount: null, remark: '' }] }
     }
     if (url === '/admin/finance/monthly-customers') return mockRows.monthlyCustomers
+    if (url === '/admin/finance/prepaid-recharges') return mockRows.prepaidRecharges
+    if (url === '/admin/finance/prepaid-report') {
+      return { customerRows: mockRows.prepaidCustomers, dailyRows: mockRows.prepaidDaily }
+    }
     if (url === '/admin/abnormal-records') return mockRows.abnormal
     if (url === '/admin/blacklist') return mockRows.blacklist
     if (url === '/admin/accounts/frontend-users') return mockRows.frontendUsers
