@@ -7,6 +7,7 @@ import type {
   LabReportTemplate
 } from '@/types/labReport'
 import type { SampleBlock } from '@/types/labSheet'
+import type { Customer } from '@/types/customer'
 
 export const LAB_REPORT_TEMPLATE_STORAGE_KEY = 'yangshao-lab-report-template'
 export const LAB_REPORT_SMS_TEMPLATE_STORAGE_KEY = 'yangshao-lab-report-sms-template'
@@ -113,6 +114,15 @@ export function getBlockDisplayName(block: SampleBlock) {
 export function getBlockCustomerName(block: SampleBlock) {
   const selectedCustomers = block.inputs.customers?.map((customer) => customer.name).filter(Boolean).join('、')
   return block.inputs.customerText?.trim() || selectedCustomers || ''
+}
+
+export function getBlockCustomerDisplayText(block: SampleBlock) {
+  const selectedCustomers = block.inputs.customers?.map(formatCustomerDisplayText).filter(Boolean).join('、')
+  return selectedCustomers || block.inputs.customerText?.trim() || ''
+}
+
+function formatCustomerDisplayText(customer: Customer) {
+  return [customer.name, customer.phone, customer.wechat, customer.wechatNickname, customer.note].map((value) => value?.trim()).filter(Boolean).join(' ')
 }
 
 export function detectReportElementKeys(block: SampleBlock): LabReportElementKey[] {
@@ -761,6 +771,44 @@ export function getSmsElementLabel(key: LabReportElementKey) {
     burnLoss: '灼减'
   }
   return labels[key]
+}
+
+export function parseLabElementKeys(value: string): LabReportElementKey[] {
+  const text = value.trim()
+  if (!text) return []
+  const tokens = text
+    .split(/[、,，\s/]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+  const matchedKeys = labReportElements.filter((element) => {
+    const aliases = labElementAliases[element.key]
+    return aliases.some((alias) => isElementAliasMatched(text, tokens, alias))
+  })
+  return uniqueKeys(matchedKeys.map((element) => element.key))
+}
+
+const labElementAliases: Record<LabReportElementKey, string[]> = {
+  aluminum: ['三氧化二铝', '氧化铝', '铝', 'Al₂O₃', 'Al2O3'],
+  silicon: ['二氧化硅', '氧化硅', '硅', 'SiO₂', 'SiO2'],
+  iron: ['三氧化二铁', '氧化铁', '铁', 'Fe₂O₃', 'Fe2O3'],
+  aluminumSiliconRatio: ['铝硅比', 'A/S'],
+  sulfur: ['全硫', '硫', 'S'],
+  carbon: ['碳', 'C'],
+  moisture: ['水分', '水份', 'H₂O', 'H2O'],
+  calcium: ['氧化钙', '钙', 'CaO'],
+  magnesium: ['氧化镁', '镁', 'MgO'],
+  whiteness: ['白度'],
+  density: ['比重'],
+  titanium: ['钛', 'Ti'],
+  burnLoss: ['灼减', '烧失', 'LOI']
+}
+
+function isElementAliasMatched(text: string, tokens: string[], alias: string) {
+  const hasAsciiSymbol = /^[A-Za-z]+$/.test(alias)
+  if (alias.length <= 2 && hasAsciiSymbol) {
+    return tokens.includes(alias)
+  }
+  return text.includes(alias) || tokens.includes(alias)
 }
 
 function normalizeSmsTemplatePart(value: string) {

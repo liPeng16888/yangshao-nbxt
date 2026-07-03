@@ -11,7 +11,47 @@ import { calculateResults, defaultLabParameters } from '../common/lab'
 
 const incomeStatuses = ['已结款', '未结款', '月结款', '预存款', '未选择'] as const
 const paidMonthlySettlementRemark = '此款项已结清'
+const monthlyElementDefinitions = [
+  { key: 'aluminum', label: '铝' },
+  { key: 'silicon', label: '硅' },
+  { key: 'iron', label: '铁' },
+  { key: 'aluminumSiliconRatio', label: '铝硅比' },
+  { key: 'sulfur', label: '硫' },
+  { key: 'carbon', label: '碳' },
+  { key: 'moisture', label: '水分' },
+  { key: 'calcium', label: '钙' },
+  { key: 'magnesium', label: '镁' },
+  { key: 'whiteness', label: '白度' },
+  { key: 'density', label: '比重' },
+  { key: 'titanium', label: '钛' },
+  { key: 'burnLoss', label: '灼减' }
+] as const
+const monthlyElementAliases: Record<(typeof monthlyElementDefinitions)[number]['key'], string[]> = {
+  aluminum: ['三氧化二铝', '氧化铝', '铝', 'Al₂O₃', 'Al2O3'],
+  silicon: ['二氧化硅', '氧化硅', '硅', 'SiO₂', 'SiO2'],
+  iron: ['三氧化二铁', '氧化铁', '铁', 'Fe₂O₃', 'Fe2O3'],
+  aluminumSiliconRatio: ['铝硅比', 'A/S'],
+  sulfur: ['全硫', '硫', 'S'],
+  carbon: ['碳', 'C'],
+  moisture: ['水分', '水份', 'H₂O', 'H2O'],
+  calcium: ['氧化钙', '钙', 'CaO'],
+  magnesium: ['氧化镁', '镁', 'MgO'],
+  whiteness: ['白度'],
+  density: ['比重'],
+  titanium: ['钛', 'Ti'],
+  burnLoss: ['灼减', '烧失', 'LOI']
+}
 type IncomeStatus = (typeof incomeStatuses)[number]
+type MonthlyElementCount = { key: string; label: string; count: number }
+type FrontendExpensePayload = {
+  paymentDate: string
+  item: string
+  amount: number
+  paymentMethod: PaymentMethod
+  screenshotUrl?: string
+  screenshotUrls?: string[]
+  remark?: string
+}
 
 @Injectable()
 export class FinanceService {
@@ -30,9 +70,9 @@ export class FinanceService {
       .then((rows) => rows.map((row) => this.expenseDto(row)))
   }
 
-  async createFrontendExpense(frontendUserId: string, payload: { paymentDate: string; item: string; amount: number; paymentMethod: PaymentMethod; screenshotUrl?: string; remark?: string }) {
-    if (!payload.paymentDate || !payload.item || !payload.paymentMethod) throw new BadRequestException('支付日期、开支项目和支付方式不能为空')
-    if (!Number.isFinite(Number(payload.amount)) || Number(payload.amount) <= 0) throw new BadRequestException('开支金额必须大于 0')
+  async createFrontendExpense(frontendUserId: string, payload: FrontendExpensePayload) {
+    this.assertValidExpensePayload(payload)
+    const screenshotUrls = this.normalizeScreenshotUrls(payload.screenshotUrls, payload.screenshotUrl)
     const row = await this.prisma.financeEntry.create({
       data: {
         frontendUserId,
@@ -40,11 +80,21 @@ export class FinanceService {
         item: payload.item,
         amount: toMoney(payload.amount),
         paymentMethod: payload.paymentMethod,
-        screenshotUrl: payload.screenshotUrl || null,
+        screenshotUrl: this.serializeScreenshotUrls(screenshotUrls),
         remark: payload.remark || null
       }
     })
     return this.expenseDto(row)
+  }
+
+  async createFrontendExpenses(frontendUserId: string, payloads: FrontendExpensePayload[]) {
+    if (!Array.isArray(payloads) || !payloads.length) throw new BadRequestException('请至少填写一条支出账单')
+    payloads.forEach((payload) => this.assertValidExpensePayload(payload))
+    const rows = []
+    for (const payload of payloads) {
+      rows.push(await this.createFrontendExpense(frontendUserId, payload))
+    }
+    return rows
   }
 
   async listFrontendExpenseMonths(frontendUserId: string) {
@@ -228,7 +278,8 @@ export class FinanceService {
         item: row.item,
         amount: toMoney(row.amount),
         paymentMethod: row.paymentMethod,
-        screenshotUrl: row.screenshotUrl || '',
+        screenshotUrl: this.formatScreenshotText(row.screenshotUrl),
+        screenshotUrls: this.parseScreenshotUrls(row.screenshotUrl),
         remark: row.remark || '无信息'
       }))
     }
@@ -465,13 +516,17 @@ export class FinanceService {
   }
 
   private getMonthlyDailyRows(sheets: Awaited<ReturnType<FinanceService['loadSheets']>>) {
-    const map = new Map<string, { id: string; date: string; frontendUserId: string; name: string; customer: string; sampleCount: number; amount: number }>()
+    const map = new Map<
+      string,
+      { id: string; date: string; frontendUserId: string; name: string; customer: string; customerDisplay: string; sampleCount: number; amount: number; elementCounts: MonthlyElementCount[] }
+    >()
     sheets.forEach((sheet) => {
       sheet.sampleBlocks.forEach((block) => {
         const inputs = block.inputs as Record<string, unknown>
         const amount = this.getSampleAmount(inputs)
         if (!Number.isFinite(amount) || inputs.paymentStatus !== '月结款') return
         const customer = this.getCustomerName(inputs)
+        const customerDisplay = this.getCustomerDisplayName(inputs)
         const key = `${sheet.date}__${sheet.frontendUserId}__${customer}`
         const current =
           map.get(key) ||
@@ -481,11 +536,15 @@ export class FinanceService {
             frontendUserId: sheet.frontendUserId,
             name: this.displayName(sheet.frontendUser),
             customer,
+            customerDisplay,
             sampleCount: 0,
-            amount: 0
+            amount: 0,
+            elementCounts: []
           }
+        if (!current.customerDisplay || current.customerDisplay === current.customer) current.customerDisplay = customerDisplay
         current.sampleCount += 1
         current.amount = toMoney(current.amount + amount)
+        current.elementCounts = this.mergeMonthlyElementCounts(current.elementCounts, this.getMonthlyElementCounts(inputs))
         map.set(key, current)
       })
     })
@@ -521,7 +580,7 @@ export class FinanceService {
 
   private buildMonthlyReport(month: string, dailyRows: ReturnType<FinanceService['getMonthlyDailyRows']>, savedRows: Awaited<ReturnType<PrismaService['monthlySettlementRecord']['findMany']>>) {
     const savedMap = new Map(savedRows.map((row) => [`${row.frontendUserId}__${row.customer}`, row]))
-    const summaryMap = new Map<string, { id: string; month: string; frontendUserId: string; name: string; customer: string; sampleCount: number; amount: number }>()
+    const summaryMap = new Map<string, { id: string; month: string; frontendUserId: string; name: string; customer: string; customerDisplay: string; sampleCount: number; amount: number }>()
     dailyRows.forEach((row) => {
       const key = `${row.frontendUserId}__${row.customer}`
       const current =
@@ -532,11 +591,13 @@ export class FinanceService {
           frontendUserId: row.frontendUserId,
           name: row.name,
           customer: row.customer,
+          customerDisplay: row.customerDisplay || row.customer,
           sampleCount: 0,
           amount: 0
         }
       current.sampleCount += row.sampleCount
       current.amount = toMoney(current.amount + row.amount)
+      if (!current.customerDisplay || current.customerDisplay === current.customer) current.customerDisplay = row.customerDisplay || row.customer
       summaryMap.set(key, current)
     })
     const summaryRows = Array.from(summaryMap.values()).map((row) => {
@@ -563,16 +624,88 @@ export class FinanceService {
     }
   }
 
+  private getMonthlyElementCounts(inputs: Record<string, unknown>): MonthlyElementCount[] {
+    const selectedKeys = new Set(this.parseMonthlyElementKeys(typeof inputs.elementNote === 'string' ? inputs.elementNote : ''))
+    return monthlyElementDefinitions
+      .filter((definition) => selectedKeys.has(definition.key))
+      .map((definition) => ({ key: definition.key, label: definition.label, count: 1 }))
+  }
+
+  private parseMonthlyElementKeys(value: string) {
+    const text = value.trim()
+    if (!text) return []
+    const tokens = text
+      .split(/[、,，\s/]+/)
+      .map((token) => token.trim())
+      .filter(Boolean)
+    return monthlyElementDefinitions
+      .filter((definition) => monthlyElementAliases[definition.key].some((alias) => this.isMonthlyElementAliasMatched(text, tokens, alias)))
+      .map((definition) => definition.key)
+  }
+
+  private isMonthlyElementAliasMatched(text: string, tokens: string[], alias: string) {
+    const hasAsciiSymbol = /^[A-Za-z]+$/.test(alias)
+    if (alias.length <= 2 && hasAsciiSymbol) {
+      return tokens.includes(alias)
+    }
+    return text.includes(alias) || tokens.includes(alias)
+  }
+
+  private mergeMonthlyElementCounts(current: MonthlyElementCount[], next: MonthlyElementCount[]) {
+    const map = new Map(current.map((item) => [item.key, { ...item }]))
+    next.forEach((item) => {
+      const target = map.get(item.key)
+      if (target) target.count += item.count
+      else map.set(item.key, { ...item })
+    })
+    return monthlyElementDefinitions.map((definition) => map.get(definition.key)).filter(Boolean) as MonthlyElementCount[]
+  }
+
   private expenseDto(row: { id: string; paymentDate: string; item: string; amount: unknown; paymentMethod: PaymentMethod; screenshotUrl: string | null; remark: string | null }) {
+    const screenshotUrls = this.parseScreenshotUrls(row.screenshotUrl)
     return {
       id: row.id,
       paymentDate: row.paymentDate,
       item: row.item,
       amount: toMoney(row.amount),
       paymentMethod: row.paymentMethod,
-      screenshotUrl: row.screenshotUrl || '',
+      screenshotUrl: screenshotUrls[0] || '',
+      screenshotUrls,
       remark: row.remark || ''
     }
+  }
+
+  private normalizeScreenshotUrls(urls?: string[], fallbackUrl?: string) {
+    const rows = Array.isArray(urls) ? urls : []
+    const values = [...rows, fallbackUrl || ''].map((url) => String(url || '').trim()).filter(Boolean)
+    return Array.from(new Set(values))
+  }
+
+  private assertValidExpensePayload(payload: FrontendExpensePayload) {
+    if (!payload.paymentDate || !payload.item || !payload.paymentMethod) throw new BadRequestException('支付日期、开支项目和支付方式不能为空')
+    if (!Number.isFinite(Number(payload.amount)) || Number(payload.amount) <= 0) throw new BadRequestException('开支金额必须大于 0')
+  }
+
+  private serializeScreenshotUrls(urls: string[]) {
+    if (!urls.length) return null
+    if (urls.length === 1) return urls[0]
+    return JSON.stringify(urls)
+  }
+
+  private parseScreenshotUrls(value: string | null) {
+    if (!value) return []
+    try {
+      const parsed = JSON.parse(value) as unknown
+      if (Array.isArray(parsed)) return parsed.map((url) => String(url || '').trim()).filter(Boolean)
+    } catch {
+      // Older rows store a single image URL directly in screenshotUrl.
+    }
+    return [value]
+  }
+
+  private formatScreenshotText(value: string | null) {
+    const urls = this.parseScreenshotUrls(value)
+    return urls.length ? urls.join('，') : '无信息'
   }
 
   private prepaidRechargeDto(row: { id: string; rechargeDate: string; customer: string; amount: unknown; usableTimes: number; remark: string | null; createdAt: Date }) {
@@ -744,6 +877,23 @@ export class FinanceService {
       if (names.length) return names.join('、')
     }
     return '无信息'
+  }
+
+  private getCustomerDisplayName(inputs: Record<string, unknown>) {
+    if (Array.isArray(inputs.customers)) {
+      const names = inputs.customers.map((item) => this.formatCustomerDisplay(item)).filter(Boolean)
+      if (names.length) return names.join('、')
+    }
+    return this.getCustomerName(inputs)
+  }
+
+  private formatCustomerDisplay(value: unknown) {
+    if (!value || typeof value !== 'object') return ''
+    const customer = value as { name?: unknown; phone?: unknown; wechat?: unknown; wechatNickname?: unknown; note?: unknown }
+    return [customer.name, customer.phone, customer.wechat, customer.wechatNickname, customer.note]
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter(Boolean)
+      .join(' ')
   }
 
   private monthlyStatusFromChinese(value: string) {

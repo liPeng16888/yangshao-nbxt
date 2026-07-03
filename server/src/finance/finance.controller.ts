@@ -21,6 +21,7 @@ export class FinanceController {
   @Post('finance')
   @Roles(UserRole.FRONTEND_USER)
   createEntry(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
+    if (Array.isArray(body)) return this.finance.createFrontendExpenses(user.id, body)
     return this.finance.createFrontendExpense(user.id, body)
   }
 

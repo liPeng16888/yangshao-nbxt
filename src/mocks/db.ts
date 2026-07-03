@@ -5,7 +5,7 @@ import type { Customer, CustomerPayload } from '@/types/customer'
 import type { FinanceEntry, FinancePayload } from '@/types/finance'
 import type { DateRange, FinanceReport, SampleDetectionReport } from '@/types/report'
 import type { PrepaidRechargeRow } from '@/types/financeBills'
-import type { LabParameter, LabSheet, LabSampleInput, SampleBlock } from '@/types/labSheet'
+import type { LabParameter, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
 import { defaultLabParameters, DEFAULT_SAMPLE_BLOCK_COUNT } from '@/constants/labSheetTemplate'
 import { financeCategoryRules } from '@/constants/reportCategories'
 import { calculateSampleResults } from '@/utils/formulaEngine'
@@ -67,6 +67,7 @@ let financeEntries: FinanceEntry[] = [
     amount: 368,
     paymentMethod: 'online',
     screenshotUrl: '',
+    screenshotUrls: [],
     remark: '铁硅铝日常检测耗材'
   },
   {
@@ -76,6 +77,7 @@ let financeEntries: FinanceEntry[] = [
     amount: 126,
     paymentMethod: 'cash',
     screenshotUrl: '',
+    screenshotUrls: [],
     remark: ''
   },
   {
@@ -85,6 +87,7 @@ let financeEntries: FinanceEntry[] = [
     amount: 780,
     paymentMethod: 'online',
     screenshotUrl: '',
+    screenshotUrls: [],
     remark: '光谱仪校准'
   }
 ]
@@ -116,6 +119,7 @@ function createEmptyBlock(index: number, parameters: LabParameter, date: string)
     id: `${date}-${index}`,
     index,
     readonly: false,
+    updatedAt: dayjs().toISOString(),
     inputs,
     results: calculateSampleResults(inputs, parameters),
     parameterSnapshot: clone(parameters)
@@ -184,14 +188,16 @@ export async function mockCurrentParameters() {
 }
 
 export async function mockUpdateParameters(parameters: LabParameter) {
-  labParameters = { ...parameters, savedAt: dayjs().toISOString() }
   const sheet = ensureSheet()
+  if (sheet.readonly) throw new Error('历史日期表格仅支持查看，不能修改')
+  labParameters = { ...parameters, savedAt: dayjs().toISOString() }
   sheet.parameters = clone(labParameters)
   return delay(labParameters)
 }
 
 export async function mockAddSampleBlocks(sheetId: string, count: number) {
   const sheet = Array.from(labSheets.values()).find((item) => item.id === sheetId) || ensureSheet()
+  if (sheet.readonly) throw new Error('历史日期表格仅支持查看，不能修改')
   const start = sheet.sampleBlocks.length + 1
   for (let i = 0; i < count; i += 1) {
     sheet.sampleBlocks.push(createEmptyBlock(start + i, sheet.parameters, sheet.date))
@@ -199,14 +205,23 @@ export async function mockAddSampleBlocks(sheetId: string, count: number) {
   return delay(sheet)
 }
 
-export async function mockSaveSampleBlock(sheetId: string, block: SampleBlock) {
+export async function mockSaveSampleBlock(sheetId: string, block: SampleBlockSavePayload) {
   const sheet = Array.from(labSheets.values()).find((item) => item.id === sheetId) || ensureSheet()
+  if (sheet.readonly) throw new Error('历史日期表格仅支持查看，不能修改')
   const index = sheet.sampleBlocks.findIndex((item) => item.id === block.id)
+  const currentBlock = index >= 0 ? sheet.sampleBlocks[index] : createEmptyBlock(sheet.sampleBlocks.length + 1, sheet.parameters, sheet.date)
+  const inputs = {
+    ...currentBlock.inputs,
+    ...(block.changedFields || block.inputs || {})
+  }
   const nextBlock = {
-    ...block,
-    results: calculateSampleResults(block.inputs, block.parameterSnapshot)
+    ...currentBlock,
+    inputs,
+    updatedAt: dayjs().toISOString(),
+    results: calculateSampleResults(inputs, currentBlock.parameterSnapshot)
   }
   if (index >= 0) sheet.sampleBlocks[index] = nextBlock
+  else sheet.sampleBlocks.push(nextBlock)
   return delay(nextBlock)
 }
 
@@ -318,7 +333,13 @@ export async function mockFinanceByMonth(month: string) {
 }
 
 export async function mockCreateFinance(payload: FinancePayload) {
-  const entry: FinanceEntry = { id: `f-${Date.now()}`, ...payload }
+  const screenshotUrls = payload.screenshotUrls?.length ? payload.screenshotUrls : payload.screenshotUrl ? [payload.screenshotUrl] : []
+  const entry: FinanceEntry = {
+    id: `f-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    ...payload,
+    screenshotUrl: screenshotUrls[0] || '',
+    screenshotUrls
+  }
   financeEntries = [entry, ...financeEntries]
   return delay(entry)
 }

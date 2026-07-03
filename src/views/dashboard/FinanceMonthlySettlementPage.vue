@@ -37,7 +37,11 @@
       </div>
       <el-table :data="report?.summaryRows || []" border v-loading="store.loading" empty-text="暂无月结款信息">
         <el-table-column prop="month" label="日期" width="120" />
-        <el-table-column prop="customer" label="客户" min-width="200" />
+        <el-table-column label="客户" min-width="240">
+          <template #default="{ row }">
+            <span class="customer-info">{{ getCustomerDisplay(row) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="金额" width="130">
           <template #default="{ row }">¥{{ money(row.amount) }}</template>
         </el-table-column>
@@ -81,11 +85,33 @@
     <section class="panel">
       <div class="panel__header">
         <h2>月结款每日客户明细</h2>
+        <el-select
+          v-model="selectedDailyCustomer"
+          class="customer-filter"
+          clearable
+          filterable
+          placeholder="选择客户"
+          size="small"
+        >
+          <el-option
+            v-for="customer in dailyCustomerOptions"
+            :key="customer.value"
+            :label="customer.label"
+            :value="customer.value"
+          />
+        </el-select>
       </div>
-      <el-table :data="report?.dailyRows || []" border v-loading="store.loading" empty-text="暂无月结款样品">
+      <el-table :data="filteredDailyRows" border v-loading="store.loading" empty-text="暂无月结款样品">
         <el-table-column prop="date" label="日期" width="130" />
-        <el-table-column prop="customer" label="客户" min-width="220" />
+        <el-table-column label="客户" min-width="260">
+          <template #default="{ row }">
+            <span class="customer-info">{{ getCustomerDisplay(row) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="sampleCount" label="样品数量" width="110" />
+        <el-table-column label="检测元素统计" min-width="260">
+          <template #default="{ row }">{{ formatElementCounts(row.elementCounts) }}</template>
+        </el-table-column>
         <el-table-column label="金额" width="140">
           <template #default="{ row }">¥{{ money(row.amount) }}</template>
         </el-table-column>
@@ -95,21 +121,39 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { MonthlySettlementStatus, MonthlySettlementSummaryRow } from '@/types/financeBills'
+import type { MonthlySettlementDailyRow, MonthlySettlementElementCount, MonthlySettlementStatus, MonthlySettlementSummaryRow } from '@/types/financeBills'
 import { useFinanceBillsStore } from '@/stores/financeBills'
 import { createPaidSettlementRemark, createPartialSettlementRemark, roundMoney } from '@/utils/financeBills'
 
 const store = useFinanceBillsStore()
 const report = computed(() => store.monthlySettlementReport)
+const selectedDailyCustomer = ref('')
 const settlementStatusOptions: MonthlySettlementStatus[] = ['已结款', '未结款', '部分结款']
+
+const dailyCustomerOptions = computed(() => {
+  const map = new Map<string, string>()
+  ;(report.value?.dailyRows || []).forEach((row) => {
+    if (!map.has(row.customer)) map.set(row.customer, getCustomerDisplay(row))
+  })
+  return Array.from(map.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'))
+})
+
+const filteredDailyRows = computed(() => {
+  const rows = report.value?.dailyRows || []
+  if (!selectedDailyCustomer.value) return rows
+  return rows.filter((row) => row.customer === selectedDailyCustomer.value)
+})
 
 onMounted(() => {
   store.loadMonthlySettlementReport()
 })
 
 function handleMonthChange(value: string) {
+  selectedDailyCustomer.value = ''
   store.loadMonthlySettlementReport(value)
 }
 
@@ -150,6 +194,15 @@ async function handleRemarkBlur(row: MonthlySettlementSummaryRow) {
 function money(value: number) {
   return value.toFixed(2)
 }
+
+function formatElementCounts(rows?: MonthlySettlementElementCount[]) {
+  const text = rows?.filter((row) => row.count > 0).map((row) => `${row.label}${row.count}个`).join('、')
+  return text || '无信息'
+}
+
+function getCustomerDisplay(row: MonthlySettlementDailyRow | MonthlySettlementSummaryRow) {
+  return row.customerDisplay || row.customer || '无信息'
+}
 </script>
 
 <style scoped lang="scss">
@@ -182,6 +235,23 @@ function money(value: number) {
   strong {
     color: #0f172a;
     font-size: 22px;
+  }
+}
+
+.customer-info {
+  display: inline-block;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.customer-filter {
+  width: min(360px, 42vw);
+}
+
+@media (max-width: 760px) {
+  .customer-filter {
+    width: 100%;
   }
 }
 </style>

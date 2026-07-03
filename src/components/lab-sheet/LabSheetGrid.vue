@@ -163,7 +163,7 @@
               />
             </div>
             <div class="cell cell--label cell--remark">备注</div>
-            <div class="cell cell--input cell--span-11 cell--remark" :data-block-id="block.id" data-field="note">
+            <div class="cell cell--input cell--span-11 cell--remark cell--note-input" :data-block-id="block.id" data-field="note">
               <el-input
                 size="small"
                 :disabled="isDisabled(block)"
@@ -808,6 +808,14 @@ const FormulaCell = defineComponent({
 
   :deep(.el-select) {
     width: 100%;
+  }
+}
+
+.cell--note-input {
+  justify-content: flex-start;
+
+  :deep(.el-input__inner) {
+    text-align: left;
   }
 }
 

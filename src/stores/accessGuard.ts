@@ -19,6 +19,7 @@ interface SaveSettingsPayload {
   ttlMinutes: number
   password: string
   confirmPassword: string
+  disablePassword?: string
   recoveryPrompt: string
   recoveryAnswer: string
 }
@@ -214,6 +215,11 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
 
     const password = normalizeSecret(payload.password)
     const confirmPassword = normalizeSecret(payload.confirmPassword)
+    const disablePassword = normalizeSecret(payload.disablePassword || '')
+    if (settings.value.enabled && !payload.enabled && settings.value.password) {
+      if (!disablePassword) return { ok: false, message: '请输入访问密码后关闭访问密码' }
+      if (disablePassword !== settings.value.password) return { ok: false, message: '访问密码不正确，无法关闭' }
+    }
     if (payload.enabled) {
       if (password || confirmPassword) {
         if (password.length < 4) return { ok: false, message: '访问密码至少 4 位' }
@@ -236,6 +242,7 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
         enabled: nextSettings.enabled,
         ttlMinutes: nextSettings.ttlMinutes,
         ...(password ? { password } : {}),
+        ...(!nextSettings.enabled && disablePassword ? { disablePassword } : {}),
         recoveryPrompt: nextSettings.recoveryPrompt,
         ...(normalizeSecret(payload.recoveryAnswer) ? { recoveryAnswer: nextSettings.recoveryAnswer } : {})
       })

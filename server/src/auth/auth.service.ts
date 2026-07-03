@@ -134,9 +134,14 @@ export class AuthService {
 
     const enabled = Boolean(dto.enabled)
     const password = dto.password?.trim() || ''
+    const disablePassword = dto.disablePassword?.trim() || ''
     const recoveryPrompt = dto.recoveryPrompt?.trim() || ''
     const recoveryAnswer = dto.recoveryAnswer?.trim() || ''
     const ttlMinutes = this.normalizeAccessGuardTtl(dto.ttlMinutes)
+    if (user.accessGuardEnabled && !enabled && user.accessGuardPassword) {
+      if (!disablePassword) throw new BadRequestException('请输入访问密码后关闭访问密码')
+      if (disablePassword !== user.accessGuardPassword) throw new BadRequestException('访问密码不正确，无法关闭')
+    }
     if (enabled) {
       if (!password && !user.accessGuardPassword) throw new BadRequestException('开启访问密码时请先设置密码')
       if (!recoveryPrompt && !user.accessGuardRecoveryPrompt) throw new BadRequestException('开启访问密码时请设置找回提示词')

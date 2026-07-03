@@ -75,6 +75,7 @@ export interface SampleBlock {
   id: string
   index: number
   readonly: boolean
+  updatedAt?: string
   inputs: LabSampleInput
   results: LabFormulaResult
   parameterSnapshot: LabParameter
@@ -86,7 +87,12 @@ export interface LabChangeLogField {
   newValue: unknown
 }
 
-export type SampleBlockSavePayload = SampleBlock & {
+export interface SampleBlockSavePayload {
+  id: string
+  baseUpdatedAt?: string
+  baseInputs?: Partial<LabSampleInput>
+  changedFields?: Partial<LabSampleInput>
+  inputs?: LabSampleInput
   changeLogFields?: LabChangeLogField[]
 }
 

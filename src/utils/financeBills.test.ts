@@ -112,6 +112,20 @@ describe('finance bill aggregation', () => {
       ]
     }
     sheet.sampleBlocks[1].inputs.customerText = '客户001'
+    sheet.sampleBlocks[1].inputs.customers = [
+      {
+        id: 'customer-001',
+        name: '客户001',
+        phone: '13800000001',
+        wechat: 'wechat001',
+        wechatNickname: '客户昵称',
+        note: '重点客户'
+      }
+    ]
+    Object.assign(sheet.sampleBlocks[0].inputs, { aluminumRaw: 1, siliconRaw: 1, sulfur: 0.5, whiteness: 80, elementNote: '铝、硅、铝硅比、硫、白度' })
+    Object.assign(sheet.sampleBlocks[0].results, { aluminum: 10, silicon: 5, aluminumSiliconRatio: 2 })
+    Object.assign(sheet.sampleBlocks[1].inputs, { aluminumRaw: 1, siliconRaw: 1, elementNote: '铝、硅、铝硅比' })
+    Object.assign(sheet.sampleBlocks[1].results, { aluminum: 12, silicon: 6, aluminumSiliconRatio: 2 })
 
     const dailyRows = getMonthlySettlementDailyRowsFromSheet(sheet)
     const report = summarizeMonthlySettlementReport('2026-06', dailyRows, [
@@ -127,12 +141,28 @@ describe('finance bill aggregation', () => {
       }
     ])
 
-    expect(dailyRows).toMatchObject([{ date: '2026-06-25', customer: '客户001', sampleCount: 2, amount: 30 }])
+    expect(dailyRows).toMatchObject([
+      {
+        date: '2026-06-25',
+        customer: '客户001',
+        customerDisplay: '客户001 13800000001 wechat001 客户昵称 重点客户',
+        sampleCount: 2,
+        amount: 30,
+        elementCounts: [
+          { label: '铝', count: 2 },
+          { label: '硅', count: 2 },
+          { label: '铝硅比', count: 2 },
+          { label: '硫', count: 1 },
+          { label: '白度', count: 1 }
+        ]
+      }
+    ])
     expect(report.totalSamples).toBe(2)
     expect(report.totalAmount).toBe(30)
     expect(report.summaryRows[0]).toMatchObject({
       month: '2026-06',
       customer: '客户001',
+      customerDisplay: '客户001 13800000001 wechat001 客户昵称 重点客户',
       sampleCount: 2,
       amount: 30,
       settlementStatus: '部分结款',

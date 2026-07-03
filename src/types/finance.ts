@@ -7,6 +7,7 @@ export interface FinanceEntry {
   amount: number
   paymentMethod: PaymentMethod
   screenshotUrl?: string
+  screenshotUrls?: string[]
   remark?: string
 }
 
@@ -16,5 +17,6 @@ export interface FinancePayload {
   amount: number
   paymentMethod: PaymentMethod
   screenshotUrl?: string
+  screenshotUrls?: string[]
   remark?: string
 }

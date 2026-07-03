@@ -24,8 +24,8 @@ onMounted(() => {
   financeStore.loadEntries()
 })
 
-async function handleCreate(payload: FinancePayload) {
-  await financeStore.addEntry(payload)
-  ElMessage.success('支出账单已提交')
+async function handleCreate(payloads: FinancePayload[]) {
+  await financeStore.addEntries(payloads)
+  ElMessage.success(`已提交 ${payloads.length} 条支出账单`)
 }
 </script>

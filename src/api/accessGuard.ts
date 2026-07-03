@@ -12,6 +12,7 @@ export interface AccessGuardSettingsPayload {
   enabled: boolean
   ttlMinutes: number
   password?: string
+  disablePassword?: string
   recoveryPrompt?: string
   recoveryAnswer?: string
 }
@@ -47,6 +48,11 @@ export async function getAccessGuardSettings() {
 export async function updateAccessGuardSettings(payload: AccessGuardSettingsPayload) {
   if (useMocks) {
     const current = readMockSettings()
+    if (current.enabled && !payload.enabled && current.password) {
+      const disablePassword = payload.disablePassword?.trim() || ''
+      if (!disablePassword) throw new Error('请输入访问密码后关闭访问密码')
+      if (disablePassword !== current.password) throw new Error('访问密码不正确，无法关闭')
+    }
     const next = {
       enabled: payload.enabled,
       ttlMinutes: payload.ttlMinutes,

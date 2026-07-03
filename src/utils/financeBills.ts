@@ -2,6 +2,7 @@ import type {
   IncomeDailyRow,
   IncomePaymentStatus,
   IncomeStatusSummary,
+  MonthlySettlementElementCount,
   MonthlySettlementDailyRow,
   MonthlySettlementReport,
   MonthlySettlementSummaryRow,
@@ -12,7 +13,7 @@ import type {
   UnsettledSampleRow
 } from '@/types/financeBills'
 import type { LabSheet, SampleBlock } from '@/types/labSheet'
-import { getBlockCustomerName } from './labReport'
+import { getBlockCustomerDisplayText, getBlockCustomerName, getSmsElementLabel, labReportElements, parseLabElementKeys } from './labReport'
 
 export const incomePaymentStatuses: IncomePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款', '未选择']
 
@@ -112,16 +113,21 @@ export function getMonthlySettlementDailyRowsFromSheet(sheet: LabSheet): Monthly
     .filter((block) => isIncomeSample(block) && block.inputs.paymentStatus === '月结款')
     .forEach((block) => {
       const customer = getBlockCustomerName(block) || '无信息'
+      const customerDisplay = getBlockCustomerDisplayText(block) || customer
       const id = `${sheet.date}__${customer}`
       const current = rowMap.get(id) || {
         id,
         date: sheet.date,
         customer,
+        customerDisplay,
         sampleCount: 0,
-        amount: 0
+        amount: 0,
+        elementCounts: []
       }
+      if (!current.customerDisplay || current.customerDisplay === current.customer) current.customerDisplay = customerDisplay
       current.sampleCount += 1
       current.amount += block.inputs.price || 0
+      current.elementCounts = mergeMonthlyElementCounts(current.elementCounts, getMonthlyElementCounts(block))
       rowMap.set(id, current)
     })
 
@@ -144,6 +150,7 @@ export function summarizeMonthlySettlementReport(
       id,
       month,
       customer: row.customer,
+      customerDisplay: row.customerDisplay || row.customer,
       sampleCount: 0,
       amount: 0,
       settlementStatus: '未结款' as const,
@@ -152,6 +159,7 @@ export function summarizeMonthlySettlementReport(
     }
     current.sampleCount += row.sampleCount
     current.amount += row.amount
+    if (!current.customerDisplay || current.customerDisplay === current.customer) current.customerDisplay = row.customerDisplay || row.customer
     summaryMap.set(id, current)
   })
 
@@ -272,6 +280,23 @@ function getPrepaidDeductionTimes(block: SampleBlock) {
 
 function sortMonthlySettlementDailyRows(rows: MonthlySettlementDailyRow[]) {
   return [...rows].sort((a, b) => b.date.localeCompare(a.date) || a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
+}
+
+function getMonthlyElementCounts(block: SampleBlock): MonthlySettlementElementCount[] {
+  const selectedKeys = new Set(parseLabElementKeys(block.inputs.elementNote || ''))
+  return labReportElements
+    .filter((element) => selectedKeys.has(element.key))
+    .map((element) => ({ key: element.key, label: getSmsElementLabel(element.key), count: 1 }))
+}
+
+function mergeMonthlyElementCounts(current: MonthlySettlementElementCount[], next: MonthlySettlementElementCount[]) {
+  const map = new Map(current.map((item) => [item.key, { ...item }]))
+  next.forEach((item) => {
+    const target = map.get(item.key)
+    if (target) target.count += item.count
+    else map.set(item.key, { ...item })
+  })
+  return labReportElements.map((element) => map.get(element.key)).filter(Boolean) as MonthlySettlementElementCount[]
 }
 
 function sortPrepaidDailyRows(rows: PrepaidDailyUsageRow[]) {

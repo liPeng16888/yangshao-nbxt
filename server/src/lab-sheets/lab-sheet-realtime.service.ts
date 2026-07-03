@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common'
-import { interval, map, merge, Observable, Subject } from 'rxjs'
+import { interval, map, merge, Observable, of, Subject } from 'rxjs'
 import { defaultLabParameters } from '../common/lab'
 
 export interface ServerSentEvent {
@@ -7,10 +7,10 @@ export interface ServerSentEvent {
 }
 
 export interface LabSheetRealtimeEvent {
-  type: 'block-saved' | 'parameters-updated' | 'sheet-reloaded'
+  type: 'connected' | 'block-saved' | 'parameters-updated' | 'sheet-reloaded'
   frontendUserId: string
   date: string
-  sheetId: string
+  sheetId?: string
   sourceClientId?: string
   updatedAt: string
   block?: unknown
@@ -24,12 +24,15 @@ export class LabSheetRealtimeService {
 
   stream(frontendUserId: string, date: string): Observable<ServerSentEvent> {
     const channel = this.getChannel(frontendUserId, date)
+    const connected = of({
+      data: { type: 'connected', frontendUserId, date, updatedAt: new Date().toISOString() }
+    })
     const heartbeat = interval(25000).pipe(
       map(() => ({
         data: { type: 'heartbeat', updatedAt: new Date().toISOString() }
       }))
     )
-    return merge(channel.asObservable(), heartbeat)
+    return merge(connected, channel.asObservable(), heartbeat)
   }
 
   publish(event: LabSheetRealtimeEvent) {

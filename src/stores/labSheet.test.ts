@@ -17,7 +17,8 @@ const apiMocks = vi.hoisted(() => ({
 
 const messageMocks = vi.hoisted(() => ({
   success: vi.fn(),
-  error: vi.fn()
+  error: vi.fn(),
+  warning: vi.fn()
 }))
 
 type FakeEventSource = {
@@ -47,6 +48,7 @@ function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock 
     id: 'block-1',
     index: 1,
     readonly: false,
+    updatedAt: '2026-06-25T00:00:00.000Z',
     inputs,
     results: calculateSampleResults(inputs, defaultLabParameters),
     parameterSnapshot: defaultLabParameters
@@ -79,12 +81,20 @@ describe('labSheet store auto save', () => {
       }
       return sheet
     })
-    apiMocks.saveSampleBlock.mockImplementation(async (_sheetId: string, block: SampleBlock) => ({
-      ...block,
-      results: calculateSampleResults(block.inputs, block.parameterSnapshot)
-    }))
+    apiMocks.saveSampleBlock.mockImplementation(async (_sheetId: string, payload: { id: string; changedFields?: Partial<SampleBlock['inputs']> }) => {
+      const sheet = makeSheet()
+      const block = sheet.sampleBlocks.find((item) => item.id === payload.id) || sheet.sampleBlocks[0]
+      const inputs = { ...block.inputs, ...(payload.changedFields || {}) }
+      return {
+        ...block,
+        updatedAt: '2026-06-25T00:00:01.000Z',
+        inputs,
+        results: calculateSampleResults(inputs, block.parameterSnapshot)
+      }
+    })
     messageMocks.success.mockReset()
     messageMocks.error.mockReset()
+    messageMocks.warning.mockReset()
   })
 
   afterEach(() => {
@@ -108,7 +118,9 @@ describe('labSheet store auto save', () => {
       'sheet-1',
       expect.objectContaining({
         id: 'block-1',
-        inputs: expect.objectContaining({ sampleNumber: 'A-001' })
+        baseUpdatedAt: '2026-06-25T00:00:00.000Z',
+        baseInputs: expect.objectContaining({ sampleNumber: '' }),
+        changedFields: expect.objectContaining({ sampleNumber: 'A-001' })
       })
     )
     expect(store.autoSaveStatus).toBe('saved')
@@ -128,9 +140,18 @@ describe('labSheet store auto save', () => {
     expect(apiMocks.saveSampleBlock).toHaveBeenCalledWith(
       'sheet-1',
       expect.objectContaining({
-        inputs: expect.objectContaining({ sampleNumber: 'A-002' })
+        changedFields: expect.objectContaining({ sampleNumber: 'A-002' })
       })
     )
+  })
+
+  it('does not persist clean blocks when flushing the current sheet', async () => {
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    await store.persistAllBlocks({ silent: true })
+
+    expect(apiMocks.saveSampleBlock).not.toHaveBeenCalled()
   })
 
   it('applies a remote saved block event when the local block is clean', async () => {
@@ -151,6 +172,31 @@ describe('labSheet store auto save', () => {
     } as MessageEvent)
 
     expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('REMOTE-001')
+  })
+
+  it('refreshes the loaded sheet when realtime connection is established', async () => {
+    const source = makeEventSource()
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getLabSheetByDate.mockResolvedValue({
+      ...makeSheet(),
+      sampleBlocks: [makeBlock({ sampleNumber: 'PULLED-001' })]
+    })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'connected',
+        frontendUserId: 'front-1',
+        date: '2026-06-25',
+        updatedAt: new Date().toISOString()
+      })
+    } as MessageEvent)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(apiMocks.getLabSheetByDate).toHaveBeenCalledWith('2026-06-25')
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('PULLED-001')
   })
 
   it('keeps local edits when a remote saved block arrives during pending auto save', async () => {

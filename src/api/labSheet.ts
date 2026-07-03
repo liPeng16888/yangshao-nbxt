@@ -14,6 +14,12 @@ const CLIENT_ID_KEY = 'ys_lab_sheet_client_id'
 
 export type LabSheetRealtimeEvent =
   | {
+      type: 'connected'
+      frontendUserId: string
+      date: string
+      updatedAt: string
+    }
+  | {
       type: 'block-saved'
       frontendUserId: string
       date: string

@@ -65,7 +65,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type { LabReportElementKey } from '@/types/labReport'
-import { getSmsElementLabel, labReportElements } from '@/utils/labReport'
+import { getSmsElementLabel, labReportElements, parseLabElementKeys } from '@/utils/labReport'
 
 interface ElementGroup {
   id: string
@@ -89,21 +89,6 @@ const groups = ref<ElementGroup[]>([])
 const groupName = ref('')
 
 const knownKeys = new Set(labReportElements.map((element) => element.key))
-const elementAliases: Record<LabReportElementKey, string[]> = {
-  aluminum: ['三氧化二铝', '氧化铝', '铝', 'Al₂O₃', 'Al2O3'],
-  silicon: ['二氧化硅', '氧化硅', '硅', 'SiO₂', 'SiO2'],
-  iron: ['三氧化二铁', '氧化铁', '铁', 'Fe₂O₃', 'Fe2O3'],
-  aluminumSiliconRatio: ['铝硅比', 'A/S'],
-  sulfur: ['全硫', '硫', 'S'],
-  carbon: ['碳', 'C'],
-  moisture: ['水分', '水份', 'H₂O', 'H2O'],
-  calcium: ['氧化钙', '钙', 'CaO'],
-  magnesium: ['氧化镁', '镁', 'MgO'],
-  whiteness: ['白度'],
-  density: ['比重'],
-  titanium: ['钛', 'Ti'],
-  burnLoss: ['灼减', '烧失', 'LOI']
-}
 
 const displayText = computed(() => {
   const text = formatElementKeys(selectedKeys.value)
@@ -181,25 +166,7 @@ function sortKeys(keys: LabReportElementKey[]) {
 }
 
 function parseElementKeys(value: string) {
-  const text = value.trim()
-  if (!text) return []
-  const tokens = text
-    .split(/[、,，\s/]+/)
-    .map((token) => token.trim())
-    .filter(Boolean)
-  const matchedKeys = labReportElements.filter((element) => {
-    const aliases = elementAliases[element.key]
-    return aliases.some((alias) => isAliasMatched(text, tokens, alias))
-  })
-  return sortKeys(matchedKeys.map((element) => element.key))
-}
-
-function isAliasMatched(text: string, tokens: string[], alias: string) {
-  const hasAsciiSymbol = /^[A-Za-z]+$/.test(alias)
-  if (alias.length <= 2 && hasAsciiSymbol) {
-    return tokens.includes(alias)
-  }
-  return text.includes(alias) || tokens.includes(alias)
+  return parseLabElementKeys(value)
 }
 
 function loadGroups(): ElementGroup[] {

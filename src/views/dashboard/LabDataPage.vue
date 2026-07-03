@@ -18,7 +18,7 @@
       </div>
     </div>
 
-    <LabParameterPanel :parameters="labStore.currentParameters" :saving="labStore.saving" @save="labStore.saveParameters" />
+    <LabParameterPanel :parameters="labStore.currentParameters" :saving="labStore.saving" :readonly="labStore.sheet?.readonly" @save="labStore.saveParameters" />
 
     <LabSheetGrid
       :blocks="labStore.sampleBlocks"

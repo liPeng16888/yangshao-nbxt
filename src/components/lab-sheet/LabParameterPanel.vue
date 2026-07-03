@@ -9,6 +9,7 @@
           :step="0.01"
           controls-position="right"
           class="parameter-input"
+          :disabled="props.readonly"
           @change="submit"
         />
       </label>
@@ -24,6 +25,7 @@ import { defaultLabParameters, labParameterLabels } from '@/constants/labSheetTe
 const props = defineProps<{
   parameters: LabParameter | null
   saving?: boolean
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -41,6 +43,7 @@ watch(
 )
 
 function submit() {
+  if (props.readonly) return
   emit('save', { ...draft })
 }
 </script>

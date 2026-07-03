@@ -35,18 +35,27 @@ export interface UnsettledSampleRow {
 
 export type MonthlySettlementStatus = '已结款' | '未结款' | '部分结款'
 
+export interface MonthlySettlementElementCount {
+  key: string
+  label: string
+  count: number
+}
+
 export interface MonthlySettlementDailyRow {
   id: string
   date: string
   customer: string
+  customerDisplay?: string
   sampleCount: number
   amount: number
+  elementCounts: MonthlySettlementElementCount[]
 }
 
 export interface MonthlySettlementSummaryRow {
   id: string
   month: string
   customer: string
+  customerDisplay?: string
   sampleCount: number
   amount: number
   settlementStatus: MonthlySettlementStatus

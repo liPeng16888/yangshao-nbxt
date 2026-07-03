@@ -12,6 +12,11 @@ export async function createFinanceEntry(payload: FinancePayload): Promise<Finan
   return request.post('/finance', payload)
 }
 
+export async function createFinanceEntries(payloads: FinancePayload[]): Promise<FinanceEntry[]> {
+  if (useMocks) return Promise.all(payloads.map((payload) => mockCreateFinance(payload)))
+  return request.post('/finance', payloads)
+}
+
 export async function getFinanceMonths(): Promise<string[]> {
   if (useMocks) return mockFinanceMonths()
   return request.get('/finance/months')

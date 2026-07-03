@@ -50,4 +50,26 @@ describe('LabParameterPanel', () => {
 
     expect(wrapper.emitted('save')).toContainEqual([{ ...defaultLabParameters }])
   })
+
+  it('does not save parameter changes when readonly', async () => {
+    const wrapper = mount(LabParameterPanel, {
+      props: {
+        parameters: defaultLabParameters,
+        saving: false,
+        readonly: true
+      },
+      global: {
+        stubs: {
+          ElInputNumber: {
+            props: ['modelValue', 'precision'],
+            template: '<input class="input-number-stub" :data-precision="precision" :value="Number(modelValue).toFixed(precision)" @change="$emit(\'change\')" />'
+          }
+        }
+      }
+    })
+
+    await wrapper.find('.input-number-stub').trigger('change')
+
+    expect(wrapper.emitted('save')).toBeUndefined()
+  })
 })

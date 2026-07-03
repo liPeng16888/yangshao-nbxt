@@ -91,7 +91,12 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     try {
       const savedRow = await updateMonthlySettlementSummary(row)
       const index = monthlySettlementReport.value?.summaryRows.findIndex((item) => item.id === savedRow.id) ?? -1
-      if (index >= 0 && monthlySettlementReport.value) monthlySettlementReport.value.summaryRows[index] = savedRow
+      if (index >= 0 && monthlySettlementReport.value) {
+        monthlySettlementReport.value.summaryRows[index] = {
+          ...monthlySettlementReport.value.summaryRows[index],
+          ...savedRow
+        }
+      }
     } finally {
       monthlySavingId.value = ''
     }

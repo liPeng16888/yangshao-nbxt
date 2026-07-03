@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CurrentUser } from '../auth/current-user'
@@ -20,22 +20,7 @@ export class LabSheetsService {
   }
 
   async getDefaultSheetForFrontendUser(frontendUserId: string) {
-    const today = todayInBeijing()
-    const todaySheet = await this.prisma.labSheet.findUnique({
-      where: { frontendUserId_date: { frontendUserId, date: today } },
-      include: { sampleBlocks: { orderBy: { index: 'asc' } } }
-    })
-    if (todaySheet && this.hasSheetContent(todaySheet.sampleBlocks)) return this.toSheetDto(todaySheet)
-
-    const sheets = await this.prisma.labSheet.findMany({
-      where: { frontendUserId },
-      orderBy: { date: 'desc' },
-      include: { sampleBlocks: { orderBy: { index: 'asc' } } }
-    })
-    const latestFilledSheet = sheets.find((sheet) => sheet.date !== today && this.hasSheetContent(sheet.sampleBlocks))
-    if (latestFilledSheet) return this.toSheetDto(latestFilledSheet)
-
-    return this.toSheetDto(todaySheet || (await this.ensureSheet(frontendUserId, today)))
+    return this.toSheetDto(await this.ensureSheet(frontendUserId, todayInBeijing()))
   }
 
   async updateCurrentParameters(frontendUserId: string, parameters: Record<string, number>, sourceClientId?: string) {
@@ -58,6 +43,7 @@ export class LabSheetsService {
     if (!Number.isInteger(count) || count <= 0) throw new ForbiddenException('新增数量必须是正整数')
     const sheet = await this.prisma.labSheet.findUnique({ where: { id: sheetId }, include: { sampleBlocks: true } })
     if (!sheet || sheet.frontendUserId !== frontendUserId) throw new NotFoundException('未找到表格')
+    this.assertSheetEditable(sheet)
     const parameters = sheet.parameters as typeof defaultLabParameters
     const start = sheet.sampleBlocks.length + 1
     await this.prisma.sampleBlock.createMany({
@@ -90,12 +76,15 @@ export class LabSheetsService {
   async saveSampleBlock(user: CurrentUser, sheetId: string, blockPayload: Record<string, unknown>, sourceClientId?: string) {
     const sheet = await this.prisma.labSheet.findUnique({ where: { id: sheetId } })
     if (!sheet || sheet.frontendUserId !== user.id) throw new NotFoundException('未找到表格')
-    if (sheet.readonly) throw new ForbiddenException('历史表格只读')
+    this.assertSheetEditable(sheet)
     const blockId = String(blockPayload.id || '')
     const block = await this.prisma.sampleBlock.findUnique({ where: { id: blockId } })
     if (!block || block.sheetId !== sheet.id) throw new NotFoundException('未找到样品')
     const oldInputs = (block.inputs || {}) as Record<string, unknown>
-    const nextInputs = (blockPayload.inputs || {}) as Record<string, unknown>
+    const changedFields = this.normalizeChangedFields(blockPayload)
+    if (!Object.keys(changedFields).length) return this.toBlockDto(block)
+    this.assertNoInputConflict(block, blockPayload, changedFields)
+    const nextInputs = { ...oldInputs, ...changedFields }
     const sheetParameters = (sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
     const existingSnapshot = (block.parameterSnapshot || sheetParameters) as typeof defaultLabParameters
     const parameters = !hasLabDetectionInput(oldInputs) && hasLabDetectionInput(nextInputs) ? sheetParameters : existingSnapshot
@@ -103,7 +92,7 @@ export class LabSheetsService {
     const saved = await this.prisma.sampleBlock.update({
       where: { id: block.id },
       data: {
-        readonly: Boolean(blockPayload.readonly),
+        readonly: typeof blockPayload.readonly === 'boolean' ? blockPayload.readonly : block.readonly,
         inputs: nextInputs as Prisma.InputJsonValue,
         results: results as Prisma.InputJsonValue,
         parameterSnapshot: parameters as Prisma.InputJsonValue
@@ -129,7 +118,7 @@ export class LabSheetsService {
       orderBy: { date: 'desc' },
       select: { id: true, date: true, readonly: true }
     })
-    return sheets
+    return sheets.map((sheet) => ({ ...sheet, readonly: this.isReadonlySheet(sheet) }))
   }
 
   async ensureSheet(frontendUserId: string, date: string) {
@@ -160,6 +149,41 @@ export class LabSheetsService {
         }
       },
       include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+    })
+  }
+
+  private normalizeChangedFields(blockPayload: Record<string, unknown>) {
+    const source =
+      this.isPlainObject(blockPayload.changedFields)
+        ? (blockPayload.changedFields as Record<string, unknown>)
+        : this.isPlainObject(blockPayload.inputs)
+          ? (blockPayload.inputs as Record<string, unknown>)
+          : {}
+    return Object.entries(source).reduce<Record<string, unknown>>((fields, [field, value]) => {
+      if (!editableInputFields.includes(field)) return fields
+      fields[field] = value ?? null
+      return fields
+    }, {})
+  }
+
+  private assertNoInputConflict(
+    block: { updatedAt: Date; inputs: unknown; id: string; index: number; readonly: boolean; results: unknown; parameterSnapshot: unknown },
+    blockPayload: Record<string, unknown>,
+    changedFields: Record<string, unknown>
+  ) {
+    const baseUpdatedAt = typeof blockPayload.baseUpdatedAt === 'string' ? Date.parse(blockPayload.baseUpdatedAt) : NaN
+    if (!Number.isFinite(baseUpdatedAt) || block.updatedAt.getTime() <= baseUpdatedAt) return
+    const currentInputs = (block.inputs || {}) as Record<string, unknown>
+    const baseInputs = this.isPlainObject(blockPayload.baseInputs) ? (blockPayload.baseInputs as Record<string, unknown>) : {}
+    const conflicts = Object.keys(changedFields).filter((field) => {
+      if (!Object.prototype.hasOwnProperty.call(baseInputs, field)) return true
+      return !this.isJsonEqual(currentInputs[field] ?? null, baseInputs[field] ?? null)
+    })
+    if (!conflicts.length) return
+    throw new ConflictException({
+      message: '该样品格已被另一台设备修改，请确认后再保存',
+      fields: conflicts,
+      block: this.toBlockDto(block)
     })
   }
 
@@ -255,24 +279,34 @@ export class LabSheetsService {
   }
 
   private toSheetDto(sheet: Awaited<ReturnType<LabSheetsService['ensureSheet']>>) {
+    const readonly = this.isReadonlySheet(sheet)
     return {
       id: sheet.id,
       date: sheet.date,
-      readonly: sheet.readonly,
+      readonly,
       parameters: sheet.parameters,
-      sampleBlocks: sheet.sampleBlocks.map((block) => this.toBlockDto(block))
+      sampleBlocks: sheet.sampleBlocks.map((block) => this.toBlockDto(block, readonly))
     }
   }
 
-  private toBlockDto(block: { id: string; index: number; readonly: boolean; inputs: unknown; results: unknown; parameterSnapshot: unknown }) {
+  private toBlockDto(block: { id: string; index: number; readonly: boolean; updatedAt?: Date; inputs: unknown; results: unknown; parameterSnapshot: unknown }, sheetReadonly = false) {
     return {
       id: block.id,
       index: block.index,
-      readonly: block.readonly,
+      readonly: sheetReadonly || block.readonly,
+      updatedAt: block.updatedAt?.toISOString(),
       inputs: block.inputs,
       results: block.results,
       parameterSnapshot: block.parameterSnapshot
     }
+  }
+
+  private assertSheetEditable(sheet: { date: string; readonly: boolean }) {
+    if (this.isReadonlySheet(sheet)) throw new ForbiddenException('历史日期表格仅支持查看，不能修改')
+  }
+
+  private isReadonlySheet(sheet: { date: string; readonly: boolean }) {
+    return sheet.readonly || sheet.date !== todayInBeijing()
   }
 
   private hasSheetContent(blocks: Array<{ inputs: unknown }>) {
@@ -292,5 +326,13 @@ export class LabSheetsService {
 
   private toJsonValue(value: unknown) {
     return value === null || value === undefined ? Prisma.JsonNull : (value as Prisma.InputJsonValue)
+  }
+
+  private isPlainObject(value: unknown): value is Record<string, unknown> {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+  }
+
+  private isJsonEqual(left: unknown, right: unknown) {
+    return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
   }
 }

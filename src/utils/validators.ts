@@ -17,7 +17,7 @@ export function validateFinancePayload(payload: FinancePayload) {
   const errors: string[] = []
   if (!payload.paymentDate) errors.push('支付日期必填')
   if (!payload.item?.trim()) errors.push('开支项目必填')
-  if (!Number.isFinite(payload.amount)) errors.push('开支金额必须是有效数字')
+  if (!Number.isFinite(payload.amount) || payload.amount <= 0) errors.push('开支金额必须大于 0')
   if (!payload.paymentMethod) errors.push('支付方式必填')
   return errors
 }

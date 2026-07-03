@@ -47,11 +47,10 @@ export async function markSampleAsPaid(row: UnsettledSampleRow): Promise<SampleB
   const block = sheet.sampleBlocks.find((item) => item.id === row.blockId)
   if (!block) throw new Error('未找到对应样品')
   return saveSampleBlock(sheet.id, {
-    ...block,
-    inputs: {
-      ...block.inputs,
-      paymentStatus: '已结款'
-    }
+    id: block.id,
+    baseUpdatedAt: block.updatedAt,
+    baseInputs: { paymentStatus: block.inputs.paymentStatus || '' },
+    changedFields: { paymentStatus: '已结款' }
   })
 }
 

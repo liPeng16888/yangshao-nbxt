@@ -74,6 +74,10 @@ export class AccessGuardSettingsDto {
 
   @IsOptional()
   @IsString()
+  disablePassword?: string
+
+  @IsOptional()
+  @IsString()
   recoveryPrompt?: string
 
   @IsOptional()
