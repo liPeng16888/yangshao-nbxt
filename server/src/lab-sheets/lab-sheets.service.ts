@@ -53,7 +53,7 @@ export class LabSheetsService {
         return {
           sheetId: sheet.id,
           index,
-          readonly: sheet.readonly,
+          readonly: false,
           inputs: inputs as Prisma.InputJsonValue,
           results: calculateResults(inputs, parameters) as Prisma.InputJsonValue,
           parameterSnapshot: parameters as Prisma.InputJsonValue
@@ -92,7 +92,6 @@ export class LabSheetsService {
     const saved = await this.prisma.sampleBlock.update({
       where: { id: block.id },
       data: {
-        readonly: typeof blockPayload.readonly === 'boolean' ? blockPayload.readonly : block.readonly,
         inputs: nextInputs as Prisma.InputJsonValue,
         results: results as Prisma.InputJsonValue,
         parameterSnapshot: parameters as Prisma.InputJsonValue
@@ -127,12 +126,11 @@ export class LabSheetsService {
       include: { sampleBlocks: { orderBy: { index: 'asc' } } }
     })
     if (existing) return existing
-    const readonly = date !== todayInBeijing()
     return this.prisma.labSheet.create({
       data: {
         frontendUserId,
         date,
-        readonly,
+        readonly: false,
         parameters: defaultLabParameters,
         sampleBlocks: {
           create: Array.from({ length: defaultSampleBlockCount }, (_, idx) => {
@@ -140,7 +138,7 @@ export class LabSheetsService {
             const inputs = createEmptyInputs(index)
             return {
               index,
-              readonly,
+              readonly: false,
               inputs,
               results: calculateResults(inputs, defaultLabParameters),
               parameterSnapshot: defaultLabParameters
@@ -293,7 +291,7 @@ export class LabSheetsService {
     return {
       id: block.id,
       index: block.index,
-      readonly: sheetReadonly || block.readonly,
+      readonly: sheetReadonly,
       updatedAt: block.updatedAt?.toISOString(),
       inputs: block.inputs,
       results: block.results,
@@ -306,7 +304,7 @@ export class LabSheetsService {
   }
 
   private isReadonlySheet(sheet: { date: string; readonly: boolean }) {
-    return sheet.readonly || sheet.date !== todayInBeijing()
+    return sheet.date !== todayInBeijing()
   }
 
   private hasSheetContent(blocks: Array<{ inputs: unknown }>) {

@@ -128,20 +128,25 @@ function createEmptyBlock(index: number, parameters: LabParameter, date: string)
 
 function ensureSheet(date = todayInBeijing()) {
   if (!labSheets.has(date)) {
-    const readonly = date !== todayInBeijing()
     const sampleBlocks = Array.from({ length: DEFAULT_SAMPLE_BLOCK_COUNT }, (_, idx) => ({
       ...createEmptyBlock(idx + 1, labParameters, date),
-      readonly
+      readonly: false
     }))
     labSheets.set(date, {
       id: `sheet-${date}`,
       date,
-      readonly,
+      readonly: date !== todayInBeijing(),
       parameters: clone(labParameters),
       sampleBlocks
     })
   }
-  return labSheets.get(date)!
+  const sheet = labSheets.get(date)!
+  const readonly = date !== todayInBeijing()
+  sheet.readonly = readonly
+  sheet.sampleBlocks.forEach((block) => {
+    block.readonly = readonly
+  })
+  return sheet
 }
 
 export async function mockLogin(payload: LoginPayload): Promise<AuthResponse> {

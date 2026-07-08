@@ -35,7 +35,8 @@ describe('LabSheetsService default sheet selection', () => {
     },
     sampleBlock: {
       findUnique: vi.fn(),
-      update: vi.fn()
+      update: vi.fn(),
+      createMany: vi.fn()
     },
     cellChangeLog: {
       findFirst: vi.fn(),
@@ -114,10 +115,69 @@ describe('LabSheetsService default sheet selection', () => {
     expect(result.sampleBlocks[0].readonly).toBe(true)
   })
 
+  it('keeps today sheet editable even when it was stored readonly before today', async () => {
+    const today = todayInBeijing()
+    const storedReadonlySheet = {
+      ...makeSheet(today, [{ ...makeBlock(1, { sampleNumber: 'TODAY-001' }), readonly: true }]),
+      readonly: true
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(storedReadonlySheet)
+
+    const result = await service.getSheetForFrontendUser('front-1', today)
+
+    expect(result.readonly).toBe(false)
+    expect(result.sampleBlocks[0].readonly).toBe(false)
+  })
+
+  it('stores newly created sheets editable and computes historical readonly at response time', async () => {
+    const historicalDate = '2026-06-30'
+    const createdSheet = {
+      ...makeSheet(historicalDate, [{ ...makeBlock(1), readonly: false }]),
+      readonly: false
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(null)
+    prisma.labSheet.create.mockResolvedValue(createdSheet)
+
+    const result = await service.getSheetForFrontendUser('front-1', historicalDate)
+
+    expect(result.readonly).toBe(true)
+    expect(result.sampleBlocks[0].readonly).toBe(true)
+    expect(prisma.labSheet.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        readonly: false,
+        sampleBlocks: expect.objectContaining({
+          create: expect.arrayContaining([
+            expect.objectContaining({ readonly: false })
+          ])
+        })
+      })
+    }))
+  })
+
   it('rejects adding sample blocks to historical sheets', async () => {
     prisma.labSheet.findUnique.mockResolvedValue(makeSheet('2026-06-30', [makeBlock(1)]))
 
     await expect(service.addSampleBlocks('front-1', 'sheet-2026-06-30', 1)).rejects.toThrow('历史日期表格仅支持查看，不能修改')
+  })
+
+  it('adds sample blocks to today sheet even when it was stored readonly before today', async () => {
+    const today = todayInBeijing()
+    const storedReadonlyToday = {
+      ...makeSheet(today, [makeBlock(1)]),
+      readonly: true
+    }
+    prisma.labSheet.findUnique
+      .mockResolvedValueOnce(storedReadonlyToday)
+      .mockResolvedValueOnce(makeSheet(today, [makeBlock(1), makeBlock(2)]))
+    prisma.sampleBlock.createMany.mockResolvedValue({})
+
+    await service.addSampleBlocks('front-1', `sheet-${today}`, 1)
+
+    expect(prisma.sampleBlock.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.arrayContaining([
+        expect.objectContaining({ readonly: false })
+      ])
+    }))
   })
 
   it('merges only changed fields when saving a sample block', async () => {
