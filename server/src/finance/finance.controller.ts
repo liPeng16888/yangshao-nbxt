@@ -73,6 +73,12 @@ export class FinanceController {
     return this.finance.createFrontendPrepaidRecharge(user.id, body)
   }
 
+  @Post('finance/delete-requests')
+  @Roles(UserRole.FRONTEND_USER)
+  createDeletionRequest(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
+    return this.finance.createFrontendDeletionRequest(user.id, body)
+  }
+
   @Get('finance/prepaid-report')
   @Roles(UserRole.FRONTEND_USER)
   prepaidReport(@CurrentUserInfo() user: CurrentUser) {
@@ -149,6 +155,24 @@ export class FinanceController {
   @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
   adminPrepaidReport(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
     return this.finance.getAdminPrepaidReport(user, query)
+  }
+
+  @Get('admin/finance/delete-requests')
+  @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
+  adminDeletionRequests(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
+    return this.finance.getAdminDeletionRequests(user, query)
+  }
+
+  @Post('admin/finance/delete-requests/:id/approve')
+  @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
+  approveDeletionRequest(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string) {
+    return this.finance.approveDeletionRequest(user, id)
+  }
+
+  @Post('admin/finance/delete-requests/:id/reject')
+  @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
+  rejectDeletionRequest(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: any) {
+    return this.finance.rejectDeletionRequest(user, id, body)
   }
 
   @Patch('admin/finance/monthly-customers/remark')

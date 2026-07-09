@@ -36,10 +36,10 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="客户" min-width="180">
+        <el-table-column label="客户" min-width="260">
           <template #default="{ row }">
-            <div class="history-cell">
-              <span>{{ customerName(row.inputs) }}</span>
+            <div class="history-cell history-cell--customer">
+              <span :title="customerName(row.inputs)">{{ customerName(row.inputs) }}</span>
               <el-button v-if="historyLookupEnabled" link type="primary" @click="openHistory(row.id, ['customerText', 'customerId', 'customerIds', 'customers'], '客户')">历史</el-button>
             </div>
           </template>
@@ -276,9 +276,20 @@ function getRowClassName({ row }: { row: any }) {
 }
 
 function customerName(inputs: any) {
+  if (Array.isArray(inputs.customers) && inputs.customers.length) {
+    const customerText = inputs.customers.map(formatCustomerDisplay).filter(Boolean).join('、')
+    if (customerText) return customerText
+  }
   if (inputs.customerText) return inputs.customerText
-  if (Array.isArray(inputs.customers) && inputs.customers.length) return inputs.customers.map((item: any) => item.name).join('、')
   return '无信息'
+}
+
+function formatCustomerDisplay(customer: any) {
+  if (!customer || typeof customer !== 'object') return ''
+  return [customer.name, customer.phone, customer.wechat, customer.wechatNickname, customer.note]
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean)
+    .join(' ')
 }
 
 function elementDisplay(row: any, column: ElementColumn) {
@@ -340,6 +351,18 @@ function queryValue(value: unknown) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.history-cell--customer {
+  align-items: flex-start;
+  width: 100%;
+}
+
+.history-cell--customer > span {
+  overflow: visible;
+  text-overflow: initial;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .history-cell :deep(.el-button) {

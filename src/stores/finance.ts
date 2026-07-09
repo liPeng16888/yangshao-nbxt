@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { createFinanceEntries, createFinanceEntry, getFinanceEntries, getFinanceMonths } from '@/api/finance'
+import { createFinanceEntries, createFinanceEntry, getFinanceEntries, getFinanceMonths, requestFinanceEntryDeletion } from '@/api/finance'
 import type { FinanceEntry, FinancePayload } from '@/types/finance'
 import { currentMonth } from '@/utils/date'
 
@@ -9,6 +9,7 @@ export const useFinanceStore = defineStore('finance', () => {
   const entries = ref<FinanceEntry[]>([])
   const months = ref<string[]>([])
   const loading = ref(false)
+  const deletingId = ref('')
 
   async function loadEntries(nextMonth = month.value) {
     loading.value = true
@@ -36,7 +37,20 @@ export const useFinanceStore = defineStore('finance', () => {
     return savedEntries
   }
 
-  return { month, entries, months, loading, loadEntries, addEntry, addEntries }
+  async function requestEntryDeletion(row: FinanceEntry, reason: string) {
+    deletingId.value = row.id
+    try {
+      const requestRow = await requestFinanceEntryDeletion(row.id, reason)
+      entries.value = entries.value.map((entry) =>
+        entry.id === row.id ? { ...entry, deleteRequestId: requestRow.id, deleteRequestStatus: requestRow.status } : entry
+      )
+      return requestRow
+    } finally {
+      deletingId.value = ''
+    }
+  }
+
+  return { month, entries, months, loading, deletingId, loadEntries, addEntry, addEntries, requestEntryDeletion }
 })
 
 function sortEntriesByPaymentDate(rows: FinanceEntry[]) {

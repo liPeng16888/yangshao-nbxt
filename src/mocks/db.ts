@@ -126,17 +126,25 @@ function createEmptyBlock(index: number, parameters: LabParameter, date: string)
   }
 }
 
+function getInitialParametersForSheet(date: string) {
+  const previousSheet = Array.from(labSheets.values())
+    .filter((sheet) => sheet.date < date)
+    .sort((left, right) => right.date.localeCompare(left.date))[0]
+  return clone(previousSheet?.parameters || labParameters)
+}
+
 function ensureSheet(date = todayInBeijing()) {
   if (!labSheets.has(date)) {
+    const initialParameters = getInitialParametersForSheet(date)
     const sampleBlocks = Array.from({ length: DEFAULT_SAMPLE_BLOCK_COUNT }, (_, idx) => ({
-      ...createEmptyBlock(idx + 1, labParameters, date),
+      ...createEmptyBlock(idx + 1, initialParameters, date),
       readonly: false
     }))
     labSheets.set(date, {
       id: `sheet-${date}`,
       date,
       readonly: date !== todayInBeijing(),
-      parameters: clone(labParameters),
+      parameters: clone(initialParameters),
       sampleBlocks
     })
   }

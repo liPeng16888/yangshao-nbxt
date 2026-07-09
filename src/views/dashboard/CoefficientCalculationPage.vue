@@ -96,9 +96,10 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { LabFormulaResult, LabParameter } from '@/types/labSheet'
+import type { AuthUser } from '@/types/auth'
 import { defaultLabParameters, labParameterLabels } from '@/constants/labSheetTemplate'
 import { useLabSheetStore } from '@/stores/labSheet'
 import { calculateSampleResults, formatFormulaValue } from '@/utils/formulaEngine'
@@ -106,6 +107,7 @@ import { calculateSampleResults, formatFormulaValue } from '@/utils/formulaEngin
 type ContentElementKey = 'aluminum' | 'silicon' | 'iron' | 'calcium' | 'magnesium' | 'titanium'
 type CalculationInputKey = 'ironRaw' | 'siliconRaw' | 'aluminumRaw' | 'calciumRaw' | 'magnesiumRaw' | 'titaniumRaw'
 type CalculationResultKey = 'iron' | 'silicon' | 'aluminum' | 'calcium' | 'magnesium' | 'titanium'
+type NumericLabParameterKey = Exclude<keyof LabParameter, 'savedAt'>
 
 type StandardContentRow = Record<ContentElementKey, number | null> & {
   id: string
@@ -118,7 +120,20 @@ interface CalculationRow {
   inputs: Record<CalculationInputKey, number | null>
 }
 
+interface CoefficientCalculationStorage {
+  parameters?: Partial<LabParameter>
+  addCount?: number
+  standardRows?: Array<Partial<Record<ContentElementKey, number | null>> & { id?: string; code?: string }>
+  calculationRows?: Array<{
+    id?: string
+    code?: string
+    inputs?: Partial<Record<CalculationInputKey, number | null>>
+  }>
+}
+type StoredCalculationRow = NonNullable<CoefficientCalculationStorage['calculationRows']>[number]
+
 const labStore = useLabSheetStore()
+const STORAGE_KEY_PREFIX = 'ys_coefficient_calculation_inputs'
 
 const contentElements: Array<{ key: ContentElementKey; label: string }> = [
   { key: 'aluminum', label: '铝' },
@@ -142,10 +157,11 @@ const calculationElements: Array<{
   { label: '钛', inputField: 'titaniumRaw', resultField: 'titanium' }
 ]
 
-const parameters = reactive<LabParameter>({ ...defaultLabParameters })
-const addCount = ref(1)
-const standardRows = reactive<StandardContentRow[]>([createStandardRow(1), createStandardRow(2), createStandardRow(3)])
-const calculationRows = reactive<CalculationRow[]>([createCalculationRow(1), createCalculationRow(2), createCalculationRow(3)])
+const savedState = readSavedState()
+const parameters = reactive<LabParameter>({ ...defaultLabParameters, ...savedState.parameters })
+const addCount = ref(savedState.addCount || 1)
+const standardRows = reactive<StandardContentRow[]>(normalizeStandardRows(savedState.standardRows))
+const calculationRows = reactive<CalculationRow[]>(normalizeCalculationRows(savedState.calculationRows, standardRows.length))
 
 function createStandardRow(index: number): StandardContentRow {
   return {
@@ -158,6 +174,19 @@ function createStandardRow(index: number): StandardContentRow {
     magnesium: null,
     titanium: null
   }
+}
+
+function normalizeStandardRows(rows: CoefficientCalculationStorage['standardRows']) {
+  const source = rows?.length ? rows : [{}, {}, {}]
+  return source.map((row, index) => {
+    const next = createStandardRow(index + 1)
+    next.id = typeof row.id === 'string' && row.id.trim() ? row.id : next.id
+    next.code = typeof row.code === 'string' ? row.code : next.code
+    contentElements.forEach((element) => {
+      next[element.key] = normalizeNullableNumber(row[element.key])
+    })
+    return next
+  })
 }
 
 function createCalculationRow(index: number): CalculationRow {
@@ -175,6 +204,26 @@ function createCalculationRow(index: number): CalculationRow {
   }
 }
 
+function normalizeCalculationRows(rows: CoefficientCalculationStorage['calculationRows'], minCount: number) {
+  const source: StoredCalculationRow[] = rows?.length ? rows : Array.from({ length: minCount || 3 }, () => ({}))
+  const normalized = source.map((row, index) => {
+    const next = createCalculationRow(index + 1)
+    next.id = typeof row.id === 'string' && row.id.trim() ? row.id : next.id
+    next.code = typeof row.code === 'string' ? row.code : next.code
+    calculationElements.forEach((element) => {
+      next.inputs[element.inputField] = normalizeNullableNumber(row.inputs?.[element.inputField])
+    })
+    return next
+  })
+  while (normalized.length < minCount) normalized.push(createCalculationRow(normalized.length + 1))
+  return normalized
+}
+
+function normalizeNullableNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  return null
+}
+
 function addStandards() {
   const count = Number(addCount.value) || 1
   for (let index = 0; index < count; index += 1) {
@@ -183,6 +232,67 @@ function addStandards() {
     calculationRows.push(createCalculationRow(nextIndex))
   }
 }
+
+function currentStorageKey() {
+  if (typeof window === 'undefined') return STORAGE_KEY_PREFIX
+  const rawUser = window.localStorage.getItem('ys_user')
+  if (!rawUser) return `${STORAGE_KEY_PREFIX}:guest`
+  try {
+    const user = JSON.parse(rawUser) as Partial<AuthUser>
+    return `${STORAGE_KEY_PREFIX}:${user.id || user.account || 'guest'}`
+  } catch {
+    return `${STORAGE_KEY_PREFIX}:guest`
+  }
+}
+
+function readSavedState(): CoefficientCalculationStorage {
+  if (typeof window === 'undefined') return {}
+  const raw = window.localStorage.getItem(currentStorageKey())
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as CoefficientCalculationStorage
+    return {
+      parameters: normalizeParameters(parsed.parameters),
+      addCount: normalizePositiveInteger(parsed.addCount),
+      standardRows: parsed.standardRows,
+      calculationRows: parsed.calculationRows
+    }
+  } catch {
+    return {}
+  }
+}
+
+function normalizeParameters(source: unknown) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {}
+  return (Object.keys(defaultLabParameters) as NumericLabParameterKey[]).reduce<Partial<Record<NumericLabParameterKey, number>>>((picked, key) => {
+    const value = (source as Record<string, unknown>)[key]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      picked[key] = value
+    }
+    return picked
+  }, {})
+}
+
+function normalizePositiveInteger(value: unknown) {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+function saveState() {
+  if (typeof window === 'undefined') return
+  const payload: CoefficientCalculationStorage = {
+    parameters: { ...parameters },
+    addCount: addCount.value,
+    standardRows: standardRows.map((row) => ({ ...row })),
+    calculationRows: calculationRows.map((row) => ({
+      id: row.id,
+      code: row.code,
+      inputs: { ...row.inputs }
+    }))
+  }
+  window.localStorage.setItem(currentStorageKey(), JSON.stringify(payload))
+}
+
+watch([parameters, standardRows, calculationRows, addCount], saveState, { deep: true })
 
 function getCalculatedResult(row: CalculationRow, key: CalculationResultKey) {
   const result: LabFormulaResult = calculateSampleResults(row.inputs, parameters)

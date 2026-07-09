@@ -31,6 +31,12 @@
       <el-table-column prop="remark" label="备注" min-width="180">
         <template #default="{ row }">{{ row.remark || '无信息' }}</template>
       </el-table-column>
+      <el-table-column label="操作" width="130" fixed="right">
+        <template #default="{ row }">
+          <el-tag v-if="row.deleteRequestStatus === 'PENDING'" type="warning" effect="plain">删除待审核</el-tag>
+          <el-button v-else type="danger" link :loading="deletingId === row.id" @click="emit('deleteRequest', row)">删除</el-button>
+        </template>
+      </el-table-column>
     </el-table>
   </section>
 </template>
@@ -43,10 +49,12 @@ const props = defineProps<{
   month: string
   entries: FinanceEntry[]
   loading?: boolean
+  deletingId?: string
 }>()
 
 const emit = defineEmits<{
   monthChange: [month: string]
+  deleteRequest: [row: FinanceEntry]
 }>()
 
 const sortedEntries = computed(() => [...props.entries].sort((a, b) => b.paymentDate.localeCompare(a.paymentDate)))

@@ -22,6 +22,7 @@
           <el-tab-pane label="预存款添加记录" name="prepaidRecharges" />
           <el-tab-pane label="预存款客户" name="prepaidCustomers" />
           <el-tab-pane label="预存款每日明细" name="prepaidDaily" />
+          <el-tab-pane label="删除申请" name="deletionRequests" />
         </el-tabs>
       </div>
     </section>
@@ -132,6 +133,44 @@
       </el-table>
     </section>
 
+    <section v-else-if="active === 'deletionRequests'" class="panel">
+      <div class="panel__header">
+        <strong>删除申请记录</strong>
+        <div class="filters">
+          <el-select v-model="deletionStatus" clearable placeholder="全部状态" style="width: 140px" @change="loadActive">
+            <el-option label="待审核" value="PENDING" />
+            <el-option label="已同意" value="APPROVED" />
+            <el-option label="已拒绝" value="REJECTED" />
+          </el-select>
+        </div>
+      </div>
+      <el-table :data="rows" border>
+        <el-table-column prop="createdAt" label="申请时间" width="190" />
+        <el-table-column prop="name" label="名称" width="150" />
+        <el-table-column prop="sourceLabel" label="类型" width="140" />
+        <el-table-column prop="sourceSummary" label="删除内容" min-width="260" />
+        <el-table-column prop="reason" label="删除理由" min-width="220" />
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <el-tag :type="deletionStatusType(row.status)" effect="plain">{{ row.statusLabel }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="reviewRemark" label="审核备注" min-width="180">
+          <template #default="{ row }">{{ row.reviewRemark || '无信息' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="230" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" @click="openDeletionDetail(row)">详情</el-button>
+            <template v-if="row.status === 'PENDING'">
+              <el-button size="small" type="primary" @click="approveDeletion(row)">同意</el-button>
+              <el-button size="small" type="danger" @click="rejectDeletion(row)">拒绝</el-button>
+            </template>
+            <span v-else class="muted">已处理</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </section>
+
     <section v-else-if="active === 'prepaidCustomers'" class="panel">
       <el-table :data="report.customerRows || []" border>
         <el-table-column prop="name" label="名称" width="150" />
@@ -153,6 +192,21 @@
         <el-table-column prop="remark" label="备注" min-width="220" />
       </el-table>
     </section>
+
+    <el-dialog v-model="deletionDetailVisible" title="删除申请详情" width="680px">
+      <el-descriptions v-if="deletionDetailRow" :column="1" border>
+        <el-descriptions-item label="名称">{{ deletionDetailRow.name || '无信息' }}</el-descriptions-item>
+        <el-descriptions-item label="类型">{{ deletionDetailRow.sourceLabel || '无信息' }}</el-descriptions-item>
+        <el-descriptions-item label="状态">{{ deletionDetailRow.statusLabel || '无信息' }}</el-descriptions-item>
+        <el-descriptions-item label="申请时间">{{ deletionDetailRow.createdAt || '无信息' }}</el-descriptions-item>
+        <el-descriptions-item label="删除理由">{{ deletionDetailRow.reason || '无信息' }}</el-descriptions-item>
+        <el-descriptions-item v-for="item in deletionSnapshotEntries(deletionDetailRow)" :key="item.key" :label="item.label">
+          {{ item.value }}
+        </el-descriptions-item>
+        <el-descriptions-item label="审核备注">{{ deletionDetailRow.reviewRemark || '无信息' }}</el-descriptions-item>
+        <el-descriptions-item label="审核时间">{{ deletionDetailRow.reviewedAt || '无信息' }}</el-descriptions-item>
+      </el-descriptions>
+    </el-dialog>
   </div>
 </template>
 
@@ -172,6 +226,9 @@ const active = ref('income')
 const loading = ref(false)
 const report = ref<any>({})
 const rows = ref<any[]>([])
+const deletionStatus = ref('')
+const deletionDetailVisible = ref(false)
+const deletionDetailRow = ref<any | null>(null)
 
 onMounted(async () => {
   frontendOptions.value = await getFrontendOptions()
@@ -182,7 +239,8 @@ onMounted(async () => {
 async function loadActive() {
   loading.value = true
   try {
-    const params = { month: month.value, frontendUserIds: buildFrontendIds(selectedFrontendIds.value) }
+    const params: Record<string, string> = { month: month.value, frontendUserIds: buildFrontendIds(selectedFrontendIds.value) }
+    if (active.value === 'deletionRequests' && deletionStatus.value) params.status = deletionStatus.value
     if (active.value === 'income') report.value = await request.get('/admin/finance/income', { params })
     else if (active.value === 'expenses') report.value = await request.get('/admin/finance/expenses', { params })
     else if (active.value === 'unsettled') rows.value = await request.get('/admin/finance/unsettled', { params })
@@ -190,6 +248,7 @@ async function loadActive() {
     else if (active.value === 'monthlyBills') report.value = await request.get('/admin/finance/monthly-bills', { params })
     else if (active.value === 'monthlyCustomers') rows.value = await request.get('/admin/finance/monthly-customers', { params })
     else if (active.value === 'prepaidRecharges') rows.value = await request.get('/admin/finance/prepaid-recharges', { params })
+    else if (active.value === 'deletionRequests') rows.value = await request.get('/admin/finance/delete-requests', { params })
     else report.value = await request.get('/admin/finance/prepaid-report', { params })
   } finally {
     loading.value = false
@@ -229,5 +288,72 @@ async function saveMonthlyCustomerRemark(row: any) {
     remark: row.remark || ''
   })
   ElMessage.success('备注已保存')
+}
+
+function deletionStatusType(status: string) {
+  if (status === 'APPROVED') return 'success'
+  if (status === 'REJECTED') return 'danger'
+  return 'warning'
+}
+
+function openDeletionDetail(row: any) {
+  deletionDetailRow.value = row
+  deletionDetailVisible.value = true
+}
+
+function deletionSnapshotEntries(row: any) {
+  const snapshot = row?.sourceSnapshot && typeof row.sourceSnapshot === 'object' ? row.sourceSnapshot : {}
+  return Object.entries(snapshot).map(([key, value]) => ({
+    key,
+    label: deletionSnapshotLabel(key),
+    value: deletionSnapshotValue(key, value)
+  }))
+}
+
+function deletionSnapshotLabel(key: string) {
+  const labels: Record<string, string> = {
+    paymentDate: '支付日期',
+    item: '开支项目',
+    amount: '金额',
+    paymentMethod: '支付方式',
+    screenshotUrls: '支付截图',
+    remark: '备注',
+    rechargeDate: '充值日期',
+    customer: '客户名称',
+    usableTimes: '可使用次数'
+  }
+  return labels[key] || key
+}
+
+function deletionSnapshotValue(key: string, value: unknown) {
+  if (key === 'amount') return `¥${money(value)}`
+  if (key === 'paymentMethod') return value === 'cash' ? '现金支付' : value === 'online' ? '线上支付' : '无信息'
+  if (Array.isArray(value)) return value.length ? value.join('，') : '无信息'
+  if (value === null || value === undefined || value === '') return '无信息'
+  return String(value)
+}
+
+async function approveDeletion(row: any) {
+  await ElMessageBox.confirm(`确认同意删除「${row.sourceSummary}」？同意后原记录会被删除，并通知前端账号。`, '同意删除申请', {
+    confirmButtonText: '同意删除',
+    cancelButtonText: '取消',
+    type: 'warning'
+  })
+  await request.post(`/admin/finance/delete-requests/${row.id}/approve`)
+  ElMessage.success('已同意删除申请，并发送前端提醒')
+  await loadActive()
+}
+
+async function rejectDeletion(row: any) {
+  const result = await ElMessageBox.prompt(`确认拒绝「${row.sourceSummary}」的删除申请？可填写拒绝原因。`, '拒绝删除申请', {
+    confirmButtonText: '确认拒绝',
+    cancelButtonText: '取消',
+    inputType: 'textarea',
+    inputPlaceholder: '可填写拒绝原因',
+    type: 'warning'
+  })
+  await request.post(`/admin/finance/delete-requests/${row.id}/reject`, { reviewRemark: String(result.value || '').trim() })
+  ElMessage.success('已拒绝删除申请，并发送前端提醒')
+  await loadActive()
 }
 </script>

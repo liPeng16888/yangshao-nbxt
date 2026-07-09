@@ -40,6 +40,7 @@ export class AdminDataService {
       },
       orderBy: { updatedAt: 'desc' }
     })
+    const customersById = await this.loadCustomersById(ids, sheets)
     return sheets
       .map((sheet) => ({
         id: sheet.id,
@@ -54,7 +55,7 @@ export class AdminDataService {
             id: block.id,
             index: block.index,
             readonly: true,
-            inputs: block.inputs,
+            inputs: this.enrichCustomerInputs(block.inputs as Record<string, unknown>, customersById),
             results: block.results,
             parameterSnapshot: block.parameterSnapshot
           }))
@@ -83,6 +84,54 @@ export class AdminDataService {
 
   private displayName(user: { account: string; username: string; displayRemark?: string | null }) {
     return user.displayRemark?.trim() || user.username || user.account
+  }
+
+  private async loadCustomersById(frontendUserIds: string[], sheets: Array<{ sampleBlocks: Array<{ inputs: unknown }> }>) {
+    const customerIds = Array.from(
+      new Set(
+        sheets.flatMap((sheet) =>
+          sheet.sampleBlocks.flatMap((block) => {
+            const inputs = (block.inputs || {}) as Record<string, unknown>
+            const ids = Array.isArray(inputs.customerIds) ? inputs.customerIds : []
+            return [...ids, inputs.customerId].filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+          })
+        )
+      )
+    )
+    if (!customerIds.length) return new Map<string, { id: string; name: string; phone: string | null; wechat: string | null; wechatNickname: string | null }>()
+    const customers = await this.prisma.customer.findMany({
+      where: { id: { in: customerIds }, frontendUserId: { in: frontendUserIds } },
+      select: { id: true, name: true, phone: true, wechat: true, wechatNickname: true }
+    })
+    return new Map(customers.map((customer) => [customer.id, customer]))
+  }
+
+  private enrichCustomerInputs(
+    rawInputs: Record<string, unknown>,
+    customersById: Map<string, { id: string; name: string; phone: string | null; wechat: string | null; wechatNickname: string | null }>
+  ) {
+    const inputs = { ...rawInputs }
+    const selectedIds = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(inputs.customerIds) ? inputs.customerIds : []),
+          inputs.customerId
+        ].filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+      )
+    )
+    if (!selectedIds.length && !Array.isArray(inputs.customers)) return inputs
+
+    const existingCustomers = Array.isArray(inputs.customers) ? (inputs.customers.filter(Boolean) as Array<Record<string, unknown>>) : []
+    const existingById = new Map(
+      existingCustomers
+        .map((customer) => [typeof customer.id === 'string' ? customer.id : '', customer] as const)
+        .filter(([id]) => Boolean(id))
+    )
+    const merged = selectedIds.map((id) => customersById.get(id) || existingById.get(id)).filter(Boolean)
+    const extraExisting = existingCustomers.filter((customer) => typeof customer.id !== 'string' || !selectedIds.includes(customer.id))
+    const customers = [...merged, ...extraExisting]
+    if (customers.length) inputs.customers = customers
+    return inputs
   }
 
   async abnormalRecords(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string }) {

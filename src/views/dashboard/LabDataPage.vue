@@ -8,6 +8,9 @@
         <el-tag v-if="!labStore.sheet?.readonly" :type="autoSaveTagType" effect="plain">{{ autoSaveText }}</el-tag>
       </div>
       <div class="toolbar-right">
+        <el-button :icon="EditPen" :loading="labStore.saving" :disabled="labStore.sheet?.readonly" @click="handleBulkFillSamples">
+          {{ bulkFillButtonText }}
+        </el-button>
         <el-button :icon="ChatLineSquare" :loading="labStore.saving" @click="handleGenerateSms">
           {{ smsButtonText }}
         </el-button>
@@ -47,6 +50,14 @@
       @jump="jumpToBlacklist"
     />
 
+    <BulkSampleFillDialog
+      :visible="bulkFillDialogVisible"
+      :selected-count="selectedReportBlockIds.length"
+      @apply="applyBulkSampleFill"
+      @close="bulkFillDialogVisible = false"
+      @blacklist-hit="showBlacklistHit"
+    />
+
     <LabReportDialog
       :visible="reportDialogVisible"
       :blocks="labStore.sampleBlocks"
@@ -69,12 +80,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatLineSquare, DocumentChecked, Plus } from '@element-plus/icons-vue'
+import { ChatLineSquare, DocumentChecked, EditPen, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import type { BlacklistRecord } from '@/types/blacklist'
+import type { LabSampleInput } from '@/types/labSheet'
 import type { LabReportSmsTemplate, LabReportTemplate } from '@/types/labReport'
 import BlacklistHitDialog from '@/components/lab-sheet/BlacklistHitDialog.vue'
+import BulkSampleFillDialog from '@/components/lab-sheet/BulkSampleFillDialog.vue'
 import LabParameterPanel from '@/components/lab-sheet/LabParameterPanel.vue'
 import LabSheetGrid from '@/components/lab-sheet/LabSheetGrid.vue'
 import LabReportDialog from '@/components/lab-report/LabReportDialog.vue'
@@ -84,7 +97,7 @@ import { useLabSheetStore } from '@/stores/labSheet'
 import { todayInBeijing } from '@/utils/date'
 import { loadLabReportSmsTemplate, loadLabReportTemplate } from '@/utils/labReport'
 
-type GenerationMode = 'report' | 'sms' | null
+type GenerationMode = 'report' | 'sms' | 'bulkFill' | null
 
 const route = useRoute()
 const router = useRouter()
@@ -98,6 +111,7 @@ const generationMode = ref<GenerationMode>(null)
 const selectedReportBlockIds = ref<string[]>([])
 const reportDialogVisible = ref(false)
 const smsDialogVisible = ref(false)
+const bulkFillDialogVisible = ref(false)
 const highlightBlockId = ref('')
 const reportTemplate = ref<LabReportTemplate>(loadLabReportTemplate())
 const smsTemplate = ref<LabReportSmsTemplate>(loadLabReportSmsTemplate())
@@ -128,6 +142,11 @@ const reportButtonText = computed(() => {
 const smsButtonText = computed(() => {
   if (generationMode.value !== 'sms') return '生成化验短信'
   return selectedReportBlockIds.value.length ? '选择元素生成短信' : '请选择样品'
+})
+
+const bulkFillButtonText = computed(() => {
+  if (generationMode.value !== 'bulkFill') return '批量填写样品'
+  return selectedReportBlockIds.value.length ? `填写已选${selectedReportBlockIds.value.length}个样品` : '请选择样品'
 })
 
 const selectionMode = computed(() => generationMode.value !== null)
@@ -235,23 +254,73 @@ async function handleGenerateSms() {
   smsDialogVisible.value = true
 }
 
+async function handleBulkFillSamples() {
+  if (labStore.sheet?.readonly) {
+    ElMessage.warning('历史副表只读，不能批量填写')
+    return
+  }
+  if (beginSelection('bulkFill')) {
+    return
+  }
+  if (!selectedReportBlockIds.value.length) {
+    ElMessage.warning('请先选择至少一个样品')
+    return
+  }
+  bulkFillDialogVisible.value = true
+}
+
 function beginSelection(mode: Exclude<GenerationMode, null>) {
   if (generationMode.value === mode) return false
   generationMode.value = mode
   selectedReportBlockIds.value = []
-  ElMessage.info(`请在编号左侧勾选需要生成${mode === 'report' ? '化验报告' : '化验短信'}的样品`)
+  const actionText = mode === 'bulkFill' ? '批量填写' : `生成${mode === 'report' ? '化验报告' : '化验短信'}`
+  ElMessage.info(`请在编号左侧勾选需要${actionText}的样品`)
   return true
 }
 
 function cancelReportSelection() {
   generationMode.value = null
   selectedReportBlockIds.value = []
+  bulkFillDialogVisible.value = false
 }
 
 function toggleReportBlockSelection(blockId: string, checked: boolean) {
   selectedReportBlockIds.value = checked
     ? Array.from(new Set([...selectedReportBlockIds.value, blockId]))
     : selectedReportBlockIds.value.filter((id) => id !== blockId)
+}
+
+async function applyBulkSampleFill(payload: { patch: Partial<LabSampleInput> }) {
+  const selectedBlocks = labStore.sampleBlocks.filter((block) => selectedReportBlockIds.value.includes(block.id))
+  if (!selectedBlocks.length) {
+    ElMessage.warning('请先选择至少一个样品')
+    return
+  }
+  const fields = getBulkFillChangeLogFields(payload.patch)
+  selectedBlocks.forEach((block) => {
+    fields.forEach((field) => {
+      labStore.commitBlockFieldChange(block.id, field, block.inputs[field] ?? null, payload.patch[field] ?? null)
+    })
+    labStore.patchBlock(block.id, payload.patch)
+  })
+  await labStore.persistAllBlocks({ silent: true })
+  bulkFillDialogVisible.value = false
+  generationMode.value = null
+  selectedReportBlockIds.value = []
+  ElMessage.success(`已批量填写 ${selectedBlocks.length} 个样品`)
+}
+
+function getBulkFillChangeLogFields(patch: Partial<LabSampleInput>) {
+  const fields: Array<keyof LabSampleInput> = []
+  if (hasPatchField(patch, 'customerText')) fields.push('customerText')
+  if (hasPatchField(patch, 'price')) fields.push('price')
+  if (hasPatchField(patch, 'paymentStatus')) fields.push('paymentStatus')
+  if (hasPatchField(patch, 'elementNote')) fields.push('elementNote')
+  return fields
+}
+
+function hasPatchField(patch: Partial<LabSampleInput>, field: keyof LabSampleInput) {
+  return Object.prototype.hasOwnProperty.call(patch, field)
 }
 
 async function appendBlocks() {

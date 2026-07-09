@@ -119,6 +119,24 @@ const mockRows = {
   ],
   prepaidDaily: [
     { id: '2026-06-25__王总', date: '2026-06-25', frontendUserId: 'front-1', name: '凯里化验室', customer: '王总', sampleCount: 2, remark: '当天扣除 2 次' }
+  ],
+  deletionRequests: [
+    {
+      id: 'delete-1',
+      frontendUserId: 'front-1',
+      name: '凯里化验室',
+      sourceType: 'EXPENSE',
+      sourceLabel: '支出账单',
+      sourceId: 'e-1',
+      sourceSnapshot: { paymentDate: '2026-06-25', item: '试剂耗材采购', amount: 368, paymentMethod: 'online', remark: '铁硅铝日常检测耗材' },
+      sourceSummary: '2026-06-25 试剂耗材采购 ¥368.00',
+      reason: '录入重复，需要删除',
+      status: 'PENDING',
+      statusLabel: '待审核',
+      reviewRemark: '',
+      createdAt: '2026-06-25 12:00:00',
+      updatedAt: '2026-06-25 12:00:00'
+    }
   ]
 }
 
@@ -138,6 +156,9 @@ const mockSheet = {
         sequence: '001',
         sampleNumber: '6.25桂AA802',
         customerText: '张三',
+        customerId: 'customer-zhang-san',
+        customerIds: ['customer-zhang-san'],
+        customers: [{ id: 'customer-zhang-san', name: '张三', phone: '13800000001', wechat: 'zhangsan-wx', wechatNickname: '张总' }],
         price: 80,
         paymentStatus: '未结款',
         ironRaw: 1,
@@ -179,6 +200,9 @@ const mockSheet = {
         sequence: '002',
         sampleNumber: '粉矿',
         customerText: '李四',
+        customerId: 'customer-li-si',
+        customerIds: ['customer-li-si'],
+        customers: [{ id: 'customer-li-si', name: '李四', phone: '13800000002', wechat: 'lisi-wx', wechatNickname: '李总' }],
         price: 100,
         paymentStatus: '月结款',
         ironRaw: 0.34,
@@ -302,6 +326,10 @@ const mockRequest = {
     }
     if (url === '/admin/finance/monthly-customers') return mockRows.monthlyCustomers
     if (url === '/admin/finance/prepaid-recharges') return mockRows.prepaidRecharges
+    if (url === '/admin/finance/delete-requests') {
+      const status = String(config?.params?.status || '')
+      return status ? mockRows.deletionRequests.filter((row) => row.status === status) : mockRows.deletionRequests
+    }
     if (url === '/admin/finance/prepaid-report') {
       return { customerRows: mockRows.prepaidCustomers, dailyRows: mockRows.prepaidDaily }
     }
@@ -317,6 +345,27 @@ const mockRequest = {
       return { token: 'mock-admin-token', user: mockUser }
     }
     if (url === '/admin/accounts/invite-codes') return { code: `YS-${Date.now().toString().slice(-6)}` }
+    const approveDeletionMatch = url.match(/^\/admin\/finance\/delete-requests\/(.+)\/approve$/)
+    if (approveDeletionMatch) {
+      const row = mockRows.deletionRequests.find((item) => item.id === approveDeletionMatch[1])
+      if (row) {
+        row.status = 'APPROVED'
+        row.statusLabel = '已同意'
+        row.updatedAt = new Date().toISOString()
+      }
+      return row || { ok: true }
+    }
+    const rejectDeletionMatch = url.match(/^\/admin\/finance\/delete-requests\/(.+)\/reject$/)
+    if (rejectDeletionMatch) {
+      const row = mockRows.deletionRequests.find((item) => item.id === rejectDeletionMatch[1])
+      if (row) {
+        row.status = 'REJECTED'
+        row.statusLabel = '已拒绝'
+        row.reviewRemark = payload?.reviewRemark || ''
+        row.updatedAt = new Date().toISOString()
+      }
+      return row || { ok: true }
+    }
     return { ok: true }
   },
   async patch(url: string, payload?: any) {

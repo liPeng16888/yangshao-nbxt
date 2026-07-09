@@ -8,6 +8,7 @@ import {
   getPrepaidReport,
   getUnsettledSamples,
   markSampleAsPaid,
+  requestPrepaidRechargeDeletion,
   updateMonthlySettlementSummary,
   updatePrepaidCustomerRemark,
   updatePrepaidUsageRemark
@@ -38,6 +39,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   const monthlySavingId = ref('')
   const prepaidSaving = ref(false)
   const prepaidRemarkSavingId = ref('')
+  const prepaidDeletingId = ref('')
 
   async function loadIncomeReport(nextMonth = month.value) {
     loading.value = true
@@ -123,6 +125,19 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     }
   }
 
+  async function requestPrepaidDeletion(row: PrepaidRechargeRow, reason: string) {
+    prepaidDeletingId.value = row.id
+    try {
+      const requestRow = await requestPrepaidRechargeDeletion(row.id, reason)
+      prepaidRecharges.value = prepaidRecharges.value.map((item) =>
+        item.id === row.id ? { ...item, deleteRequestId: requestRow.id, deleteRequestStatus: requestRow.status } : item
+      )
+      return requestRow
+    } finally {
+      prepaidDeletingId.value = ''
+    }
+  }
+
   async function loadPrepaidReport() {
     loading.value = true
     try {
@@ -163,6 +178,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     monthlySavingId,
     prepaidSaving,
     prepaidRemarkSavingId,
+    prepaidDeletingId,
     loadIncomeReport,
     loadUnsettledRows,
     loadMonthlySettlementReport,
@@ -170,6 +186,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     saveMonthlySettlementRow,
     loadPrepaidRecharges,
     addPrepaidRecharge,
+    requestPrepaidDeletion,
     loadPrepaidReport,
     savePrepaidCustomerRemark,
     savePrepaidUsageRemark

@@ -93,6 +93,11 @@ export async function createPrepaidRecharge(payload: PrepaidRechargePayload): Pr
   return row
 }
 
+export async function requestPrepaidRechargeDeletion(sourceId: string, reason: string): Promise<{ id: string; status: 'PENDING' }> {
+  if (!useMocks) return request.post('/finance/delete-requests', { sourceType: 'prepaidRecharge', sourceId, reason })
+  return { id: `delete-request-${Date.now()}`, status: 'PENDING' }
+}
+
 export async function getPrepaidReport(): Promise<PrepaidReport> {
   if (!useMocks) return request.get('/finance/prepaid-report')
   await getLabSheetByDate(todayInBeijing())

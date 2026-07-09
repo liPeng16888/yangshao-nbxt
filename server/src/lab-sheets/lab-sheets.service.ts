@@ -126,12 +126,13 @@ export class LabSheetsService {
       include: { sampleBlocks: { orderBy: { index: 'asc' } } }
     })
     if (existing) return existing
+    const initialParameters = await this.getInitialParametersForNewSheet(frontendUserId, date)
     return this.prisma.labSheet.create({
       data: {
         frontendUserId,
         date,
         readonly: false,
-        parameters: defaultLabParameters,
+        parameters: initialParameters,
         sampleBlocks: {
           create: Array.from({ length: defaultSampleBlockCount }, (_, idx) => {
             const index = idx + 1
@@ -140,14 +141,35 @@ export class LabSheetsService {
               index,
               readonly: false,
               inputs,
-              results: calculateResults(inputs, defaultLabParameters),
-              parameterSnapshot: defaultLabParameters
+              results: calculateResults(inputs, initialParameters),
+              parameterSnapshot: initialParameters
             }
           })
         }
       },
       include: { sampleBlocks: { orderBy: { index: 'asc' } } }
     })
+  }
+
+  private async getInitialParametersForNewSheet(frontendUserId: string, date: string) {
+    const previousSheet = await this.prisma.labSheet.findFirst({
+      where: {
+        frontendUserId,
+        date: { lt: date }
+      },
+      orderBy: { date: 'desc' },
+      select: { parameters: true }
+    })
+    return this.normalizeLabParameters(previousSheet?.parameters)
+  }
+
+  private normalizeLabParameters(parameters: unknown) {
+    if (!this.isPlainObject(parameters)) return { ...defaultLabParameters }
+    return Object.entries(defaultLabParameters).reduce<typeof defaultLabParameters>((next, [key, defaultValue]) => {
+      const value = parameters[key]
+      next[key as keyof typeof defaultLabParameters] = typeof value === 'number' && Number.isFinite(value) ? value : defaultValue
+      return next
+    }, { ...defaultLabParameters })
   }
 
   private normalizeChangedFields(blockPayload: Record<string, unknown>) {

@@ -21,3 +21,8 @@ export async function getFinanceMonths(): Promise<string[]> {
   if (useMocks) return mockFinanceMonths()
   return request.get('/finance/months')
 }
+
+export async function requestFinanceEntryDeletion(sourceId: string, reason: string): Promise<{ id: string; status: 'PENDING' }> {
+  if (useMocks) return { id: `delete-request-${Date.now()}`, status: 'PENDING' }
+  return request.post('/finance/delete-requests', { sourceType: 'expense', sourceId, reason })
+}

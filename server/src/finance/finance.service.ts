@@ -1,5 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { MonthlySettlementStatus, PaymentMethod, Prisma, ReminderType } from '@prisma/client'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { FinanceDeletionRequestStatus, FinanceDeletionRequestType, MonthlySettlementStatus, PaymentMethod, Prisma, ReminderType } from '@prisma/client'
 import dayjs from 'dayjs'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CurrentUser } from '../auth/current-user'
@@ -52,6 +52,11 @@ type FrontendExpensePayload = {
   screenshotUrls?: string[]
   remark?: string
 }
+type FinanceDeletionSourcePayload = {
+  sourceType?: string
+  sourceId?: string
+  reason?: string
+}
 
 @Injectable()
 export class FinanceService {
@@ -61,13 +66,13 @@ export class FinanceService {
     private readonly reminders: RemindersService
   ) {}
 
-  listFrontendExpenses(frontendUserId: string, month = currentMonthInBeijing()) {
-    return this.prisma.financeEntry
-      .findMany({
-        where: { frontendUserId, paymentDate: { startsWith: month } },
-        orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }]
-      })
-      .then((rows) => rows.map((row) => this.expenseDto(row)))
+  async listFrontendExpenses(frontendUserId: string, month = currentMonthInBeijing()) {
+    const rows = await this.prisma.financeEntry.findMany({
+      where: { frontendUserId, paymentDate: { startsWith: month } },
+      orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }]
+    })
+    const pendingMap = await this.pendingDeletionRequestMap(frontendUserId, FinanceDeletionRequestType.EXPENSE, rows.map((row) => row.id))
+    return rows.map((row) => this.expenseDto(row, pendingMap.get(row.id)))
   }
 
   async createFrontendExpense(frontendUserId: string, payload: FrontendExpensePayload) {
@@ -182,7 +187,8 @@ export class FinanceService {
       where: { frontendUserId },
       orderBy: [{ rechargeDate: 'desc' }, { createdAt: 'desc' }]
     })
-    return rows.map((row) => this.prepaidRechargeDto(row))
+    const pendingMap = await this.pendingDeletionRequestMap(frontendUserId, FinanceDeletionRequestType.PREPAID_RECHARGE, rows.map((row) => row.id))
+    return rows.map((row) => this.prepaidRechargeDto(row, pendingMap.get(row.id)))
   }
 
   async createFrontendPrepaidRecharge(frontendUserId: string, payload: { rechargeDate?: string; customer?: string; amount?: number; usableTimes?: number; remark?: string }) {
@@ -204,6 +210,29 @@ export class FinanceService {
       }
     })
     return this.prepaidRechargeDto(row)
+  }
+
+  async createFrontendDeletionRequest(frontendUserId: string, payload: FinanceDeletionSourcePayload) {
+    const sourceType = this.parseDeletionSourceType(payload.sourceType)
+    const sourceId = String(payload.sourceId || '').trim()
+    const reason = String(payload.reason || '').trim()
+    if (!sourceId) throw new BadRequestException('删除记录不能为空')
+    if (!reason) throw new BadRequestException('请填写删除理由')
+    const existing = await this.prisma.financeDeletionRequest.findFirst({
+      where: { frontendUserId, sourceType, sourceId, status: FinanceDeletionRequestStatus.PENDING }
+    })
+    if (existing) throw new BadRequestException('这条记录已有待审核删除申请')
+    const sourceSnapshot = await this.loadDeletionSourceSnapshot(frontendUserId, sourceType, sourceId)
+    const request = await this.prisma.financeDeletionRequest.create({
+      data: {
+        frontendUserId,
+        sourceType,
+        sourceId,
+        reason,
+        sourceSnapshot
+      }
+    })
+    return this.deletionRequestDto(request)
   }
 
   async getFrontendPrepaidReport(frontendUserId: string) {
@@ -417,6 +446,90 @@ export class FinanceService {
       customerRows: report.customerRows,
       dailyRows: report.dailyRows.filter((row) => row.date >= range.startDate && row.date <= range.endDate)
     }
+  }
+
+  async getAdminDeletionRequests(admin: CurrentUser, query: { frontendUserIds?: string | string[]; status?: string }) {
+    const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, this.adminAccess.parseFrontendUserIds(query.frontendUserIds))
+    const status = this.parseDeletionStatus(query.status)
+    if (!frontendUserIds.length) return []
+    const rows = await this.prisma.financeDeletionRequest.findMany({
+      where: {
+        frontendUserId: { in: frontendUserIds },
+        ...(status ? { status } : {})
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        frontendUser: { select: { username: true, account: true, displayRemark: true } },
+        reviewedBy: { select: { username: true, account: true } }
+      }
+    })
+    return rows.map((row) => this.deletionRequestDto(row))
+  }
+
+  async approveDeletionRequest(admin: CurrentUser, id: string) {
+    const row = await this.loadAdminDeletionRequest(admin, id)
+    if (row.status !== FinanceDeletionRequestStatus.PENDING) throw new BadRequestException('删除申请已处理')
+    const approved = await this.prisma.$transaction(async (tx) => {
+      if (row.sourceType === FinanceDeletionRequestType.EXPENSE) {
+        const result = await tx.financeEntry.deleteMany({ where: { id: row.sourceId, frontendUserId: row.frontendUserId } })
+        if (!result.count) throw new NotFoundException('原支出记录不存在或已删除')
+      } else {
+        const result = await tx.prepaidRechargeRecord.deleteMany({ where: { id: row.sourceId, frontendUserId: row.frontendUserId } })
+        if (!result.count) throw new NotFoundException('原预存款记录不存在或已删除')
+      }
+      return tx.financeDeletionRequest.update({
+        where: { id: row.id },
+        data: {
+          status: FinanceDeletionRequestStatus.APPROVED,
+          reviewedById: admin.id,
+          reviewedAt: new Date(),
+          reviewRemark: null
+        },
+        include: {
+          frontendUser: { select: { username: true, account: true, displayRemark: true } },
+          reviewedBy: { select: { username: true, account: true } }
+        }
+      })
+    })
+    await this.reminders.createPaymentReminder({
+      frontendUserId: row.frontendUserId,
+      createdById: admin.id,
+      type: ReminderType.FINANCE_DELETE_APPROVED,
+      title: '删除申请已同意',
+      content: `${this.deletionSourceLabel(row.sourceType)}「${this.deletionSnapshotSummary(row)}」删除申请已同意，原记录已删除。`,
+      sourceType: 'finance_deletion_request',
+      sourceId: row.id
+    })
+    return this.deletionRequestDto(approved)
+  }
+
+  async rejectDeletionRequest(admin: CurrentUser, id: string, payload: { reviewRemark?: string }) {
+    const row = await this.loadAdminDeletionRequest(admin, id)
+    if (row.status !== FinanceDeletionRequestStatus.PENDING) throw new BadRequestException('删除申请已处理')
+    const reviewRemark = String(payload.reviewRemark || '').trim()
+    const rejected = await this.prisma.financeDeletionRequest.update({
+      where: { id: row.id },
+      data: {
+        status: FinanceDeletionRequestStatus.REJECTED,
+        reviewedById: admin.id,
+        reviewedAt: new Date(),
+        reviewRemark: reviewRemark || null
+      },
+      include: {
+        frontendUser: { select: { username: true, account: true, displayRemark: true } },
+        reviewedBy: { select: { username: true, account: true } }
+      }
+    })
+    await this.reminders.createPaymentReminder({
+      frontendUserId: row.frontendUserId,
+      createdById: admin.id,
+      type: ReminderType.FINANCE_DELETE_REJECTED,
+      title: '删除申请已拒绝',
+      content: `${this.deletionSourceLabel(row.sourceType)}「${this.deletionSnapshotSummary(row)}」删除申请已拒绝。原因：${reviewRemark || '管理员未填写原因'}。`,
+      sourceType: 'finance_deletion_request',
+      sourceId: row.id
+    })
+    return this.deletionRequestDto(rejected)
   }
 
   private loadSheets(frontendUserIds: string[], startDate?: string, endDate?: string) {
@@ -661,7 +774,10 @@ export class FinanceService {
     return monthlyElementDefinitions.map((definition) => map.get(definition.key)).filter(Boolean) as MonthlyElementCount[]
   }
 
-  private expenseDto(row: { id: string; paymentDate: string; item: string; amount: unknown; paymentMethod: PaymentMethod; screenshotUrl: string | null; remark: string | null }) {
+  private expenseDto(
+    row: { id: string; paymentDate: string; item: string; amount: unknown; paymentMethod: PaymentMethod; screenshotUrl: string | null; remark: string | null },
+    deletionRequest?: { id: string; status: FinanceDeletionRequestStatus } | null
+  ) {
     const screenshotUrls = this.parseScreenshotUrls(row.screenshotUrl)
     return {
       id: row.id,
@@ -671,7 +787,9 @@ export class FinanceService {
       paymentMethod: row.paymentMethod,
       screenshotUrl: screenshotUrls[0] || '',
       screenshotUrls,
-      remark: row.remark || ''
+      remark: row.remark || '',
+      deleteRequestId: deletionRequest?.id || '',
+      deleteRequestStatus: deletionRequest?.status || ''
     }
   }
 
@@ -708,7 +826,10 @@ export class FinanceService {
     return urls.length ? urls.join('，') : '无信息'
   }
 
-  private prepaidRechargeDto(row: { id: string; rechargeDate: string; customer: string; amount: unknown; usableTimes: number; remark: string | null; createdAt: Date }) {
+  private prepaidRechargeDto(
+    row: { id: string; rechargeDate: string; customer: string; amount: unknown; usableTimes: number; remark: string | null; createdAt: Date },
+    deletionRequest?: { id: string; status: FinanceDeletionRequestStatus } | null
+  ) {
     return {
       id: row.id,
       rechargeDate: row.rechargeDate,
@@ -716,8 +837,131 @@ export class FinanceService {
       amount: toMoney(row.amount),
       usableTimes: row.usableTimes,
       remark: row.remark || '',
-      createdAt: row.createdAt.toISOString()
+      createdAt: row.createdAt.toISOString(),
+      deleteRequestId: deletionRequest?.id || '',
+      deleteRequestStatus: deletionRequest?.status || ''
     }
+  }
+
+  private async pendingDeletionRequestMap(frontendUserId: string, sourceType: FinanceDeletionRequestType, sourceIds: string[]) {
+    if (!sourceIds.length) return new Map<string, { id: string; status: FinanceDeletionRequestStatus }>()
+    const rows = await this.prisma.financeDeletionRequest.findMany({
+      where: {
+        frontendUserId,
+        sourceType,
+        sourceId: { in: sourceIds },
+        status: FinanceDeletionRequestStatus.PENDING
+      },
+      select: { id: true, sourceId: true, status: true }
+    })
+    return new Map(rows.map((row) => [row.sourceId, { id: row.id, status: row.status }]))
+  }
+
+  private parseDeletionSourceType(value?: string) {
+    if (value === 'expense' || value === FinanceDeletionRequestType.EXPENSE) return FinanceDeletionRequestType.EXPENSE
+    if (value === 'prepaidRecharge' || value === FinanceDeletionRequestType.PREPAID_RECHARGE) return FinanceDeletionRequestType.PREPAID_RECHARGE
+    throw new BadRequestException('删除记录类型无效')
+  }
+
+  private parseDeletionStatus(value?: string) {
+    if (!value) return null
+    if (value === FinanceDeletionRequestStatus.PENDING || value === FinanceDeletionRequestStatus.APPROVED || value === FinanceDeletionRequestStatus.REJECTED) return value
+    return null
+  }
+
+  private async loadDeletionSourceSnapshot(frontendUserId: string, sourceType: FinanceDeletionRequestType, sourceId: string) {
+    if (sourceType === FinanceDeletionRequestType.EXPENSE) {
+      const row = await this.prisma.financeEntry.findUnique({ where: { id: sourceId } })
+      if (!row || row.frontendUserId !== frontendUserId) throw new NotFoundException('未找到支出记录')
+      return {
+        paymentDate: row.paymentDate,
+        item: row.item,
+        amount: toMoney(row.amount),
+        paymentMethod: row.paymentMethod,
+        screenshotUrls: this.parseScreenshotUrls(row.screenshotUrl),
+        remark: row.remark || ''
+      }
+    }
+    const row = await this.prisma.prepaidRechargeRecord.findUnique({ where: { id: sourceId } })
+    if (!row || row.frontendUserId !== frontendUserId) throw new NotFoundException('未找到预存款记录')
+    return {
+      rechargeDate: row.rechargeDate,
+      customer: row.customer,
+      amount: toMoney(row.amount),
+      usableTimes: row.usableTimes,
+      remark: row.remark || ''
+    }
+  }
+
+  private async loadAdminDeletionRequest(admin: CurrentUser, id: string) {
+    const row = await this.prisma.financeDeletionRequest.findUnique({
+      where: { id },
+      include: {
+        frontendUser: { select: { username: true, account: true, displayRemark: true } },
+        reviewedBy: { select: { username: true, account: true } }
+      }
+    })
+    if (!row) throw new NotFoundException('未找到删除申请')
+    await this.adminAccess.getAllowedFrontendUserIds(admin, [row.frontendUserId])
+    return row
+  }
+
+  private deletionRequestDto(row: {
+    id: string
+    frontendUserId: string
+    sourceType: FinanceDeletionRequestType
+    sourceId: string
+    reason: string
+    sourceSnapshot: unknown
+    status: FinanceDeletionRequestStatus
+    reviewRemark: string | null
+    reviewedAt: Date | null
+    createdAt: Date
+    updatedAt: Date
+    frontendUser?: { username: string; account: string; displayRemark?: string | null } | null
+    reviewedBy?: { username: string; account: string } | null
+  }) {
+    return {
+      id: row.id,
+      frontendUserId: row.frontendUserId,
+      name: row.frontendUser ? this.displayName(row.frontendUser) : '',
+      sourceType: row.sourceType,
+      sourceLabel: this.deletionSourceLabel(row.sourceType),
+      sourceId: row.sourceId,
+      sourceSnapshot: row.sourceSnapshot,
+      sourceSummary: this.deletionSnapshotSummary(row),
+      reason: row.reason,
+      status: row.status,
+      statusLabel: this.deletionStatusLabel(row.status),
+      reviewRemark: row.reviewRemark || '',
+      reviewedBy: row.reviewedBy ? row.reviewedBy.username || row.reviewedBy.account : '',
+      reviewedAt: row.reviewedAt?.toISOString() || '',
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString()
+    }
+  }
+
+  private deletionSourceLabel(type: FinanceDeletionRequestType) {
+    return type === FinanceDeletionRequestType.EXPENSE ? '支出账单' : '预存款添加记录'
+  }
+
+  private deletionStatusLabel(status: FinanceDeletionRequestStatus) {
+    if (status === FinanceDeletionRequestStatus.APPROVED) return '已同意'
+    if (status === FinanceDeletionRequestStatus.REJECTED) return '已拒绝'
+    return '待审核'
+  }
+
+  private deletionSnapshotSummary(row: { sourceType: FinanceDeletionRequestType; sourceSnapshot: unknown }) {
+    const snapshot = this.snapshotObject(row.sourceSnapshot)
+    if (row.sourceType === FinanceDeletionRequestType.EXPENSE) {
+      return `${String(snapshot.paymentDate || '无日期')} ${String(snapshot.item || '无项目')} ¥${toMoney(snapshot.amount).toFixed(2)}`
+    }
+    return `${String(snapshot.rechargeDate || '无日期')} ${String(snapshot.customer || '无客户')} ¥${toMoney(snapshot.amount).toFixed(2)} ${Number(snapshot.usableTimes || 0)}次`
+  }
+
+  private snapshotObject(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    return value as Record<string, unknown>
   }
 
   private buildPrepaidReport(

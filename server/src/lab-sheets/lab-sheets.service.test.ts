@@ -3,7 +3,7 @@ import { createEmptyInputs, defaultLabParameters } from '../common/lab'
 import { todayInBeijing } from '../common/date'
 import { LabSheetsService } from './lab-sheets.service'
 
-function makeBlock(index: number, inputs: Record<string, unknown> = {}) {
+function makeBlock(index: number, inputs: Record<string, unknown> = {}, parameters = defaultLabParameters) {
   const nextInputs = { ...createEmptyInputs(index), ...inputs }
   return {
     id: `block-${index}`,
@@ -11,17 +11,17 @@ function makeBlock(index: number, inputs: Record<string, unknown> = {}) {
     readonly: false,
     inputs: nextInputs,
     results: {},
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: parameters
   }
 }
 
-function makeSheet(date: string, blocks = [makeBlock(1)]) {
+function makeSheet(date: string, blocks = [makeBlock(1)], parameters = defaultLabParameters) {
   return {
     id: `sheet-${date}`,
     frontendUserId: 'front-1',
     date,
     readonly: date !== todayInBeijing(),
-    parameters: defaultLabParameters,
+    parameters,
     sampleBlocks: blocks
   }
 }
@@ -30,6 +30,7 @@ describe('LabSheetsService default sheet selection', () => {
   const prisma = {
     labSheet: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       findMany: vi.fn(),
       create: vi.fn()
     },
@@ -55,6 +56,7 @@ describe('LabSheetsService default sheet selection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     service = new LabSheetsService(prisma as never, realtime as never)
+    prisma.labSheet.findFirst.mockResolvedValue(null)
     prisma.cellChangeLog.findMany.mockResolvedValue([])
     prisma.cellChangeLog.findFirst.mockResolvedValue(null)
     prisma.cellChangeLog.create.mockResolvedValue({})
@@ -98,6 +100,57 @@ describe('LabSheetsService default sheet selection', () => {
       data: expect.objectContaining({
         frontendUserId: 'front-1',
         date: today
+      })
+    }))
+  })
+
+  it('copies the latest earlier sheet parameters when creating a new daily sheet', async () => {
+    const today = todayInBeijing()
+    const previousParameters = {
+      ...defaultLabParameters,
+      ironBlank: 0.11,
+      ironFactor: 31.23,
+      siliconBlank: 0.055,
+      magnesiumFactor: 0.678
+    }
+    const createdSheet = makeSheet(today, [makeBlock(1, {}, previousParameters)], previousParameters)
+    prisma.labSheet.findUnique.mockResolvedValue(null)
+    prisma.labSheet.findFirst.mockResolvedValue({ parameters: previousParameters })
+    prisma.labSheet.create.mockResolvedValue(createdSheet)
+
+    const result = await service.getDefaultSheetForFrontendUser('front-1')
+
+    expect(result.parameters).toMatchObject({
+      ironBlank: 0.11,
+      ironFactor: 31.23,
+      siliconBlank: 0.055,
+      magnesiumFactor: 0.678
+    })
+    expect(prisma.labSheet.findFirst).toHaveBeenCalledWith({
+      where: {
+        frontendUserId: 'front-1',
+        date: { lt: today }
+      },
+      orderBy: { date: 'desc' },
+      select: { parameters: true }
+    })
+    expect(prisma.labSheet.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        parameters: expect.objectContaining({
+          ironBlank: 0.11,
+          ironFactor: 31.23,
+          siliconBlank: 0.055,
+          magnesiumFactor: 0.678
+        }),
+        sampleBlocks: expect.objectContaining({
+          create: expect.arrayContaining([
+            expect.objectContaining({
+              parameterSnapshot: expect.objectContaining({
+                ironFactor: 31.23
+              })
+            })
+          ])
+        })
       })
     }))
   })

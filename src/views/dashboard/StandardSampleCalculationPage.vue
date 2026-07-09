@@ -79,20 +79,29 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, reactive } from 'vue'
+import { computed, defineComponent, h, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElButton, ElInputNumber } from 'element-plus'
 import {
   calculateAluminumStandard,
   calculateRatioStandard,
   formatStandardNumber,
+  type AluminumStandardInput,
   type RatioStandardInput,
   type RatioStandardResult
 } from '@/utils/standardSampleCalculator'
+import type { AuthUser } from '@/types/auth'
 
 const router = useRouter()
+const STORAGE_KEY_PREFIX = 'ys_standard_sample_inputs'
 
-const defaultAluminum = {
+type StandardSampleStorage = {
+  aluminum?: Partial<AluminumStandardInput>
+  silicon?: Partial<RatioStandardInput>
+  iron?: Partial<RatioStandardInput>
+}
+
+const defaultAluminum: AluminumStandardInput = {
   highStandard: 69.74,
   highReading: 7.7,
   lowStandard: 52,
@@ -100,23 +109,24 @@ const defaultAluminum = {
   baseValue: 214.38
 }
 
-const defaultSilicon = {
+const defaultSilicon: RatioStandardInput = {
   lowStandard: 4.88,
   lowReading: 0.405,
   highStandard: 17.05,
   highReading: 1.31
 }
 
-const defaultIron = {
+const defaultIron: RatioStandardInput = {
   lowStandard: 6.09,
   lowReading: 0.147,
   highStandard: 15.31,
   highReading: 0.461
 }
 
-const aluminum = reactive({ ...defaultAluminum })
-const silicon = reactive({ ...defaultSilicon })
-const iron = reactive({ ...defaultIron })
+const savedInputs = readSavedInputs()
+const aluminum = reactive<AluminumStandardInput>({ ...defaultAluminum, ...savedInputs.aluminum })
+const silicon = reactive<RatioStandardInput>({ ...defaultSilicon, ...savedInputs.silicon })
+const iron = reactive<RatioStandardInput>({ ...defaultIron, ...savedInputs.iron })
 
 const aluminumResult = computed(() => calculateAluminumStandard(aluminum))
 const siliconResult = computed(() => calculateRatioStandard(silicon))
@@ -134,9 +144,62 @@ function resetIron() {
   Object.assign(iron, defaultIron)
 }
 
-function format(value: number, precision = 3) {
-  return formatStandardNumber(value, precision)
+function format(value: number | null | undefined, precision = 3) {
+  return formatStandardNumber(typeof value === 'number' ? value : Number.NaN, precision)
 }
+
+function currentStorageKey() {
+  if (typeof window === 'undefined') return STORAGE_KEY_PREFIX
+  const rawUser = window.localStorage.getItem('ys_user')
+  if (!rawUser) return `${STORAGE_KEY_PREFIX}:guest`
+  try {
+    const user = JSON.parse(rawUser) as Partial<AuthUser>
+    return `${STORAGE_KEY_PREFIX}:${user.id || user.account || 'guest'}`
+  } catch {
+    return `${STORAGE_KEY_PREFIX}:guest`
+  }
+}
+
+function readSavedInputs(): StandardSampleStorage {
+  if (typeof window === 'undefined') return {}
+  const raw = window.localStorage.getItem(currentStorageKey())
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as StandardSampleStorage
+    return {
+      aluminum: pickNumberFields(parsed.aluminum, defaultAluminum),
+      silicon: pickNumberFields(parsed.silicon, defaultSilicon),
+      iron: pickNumberFields(parsed.iron, defaultIron)
+    }
+  } catch {
+    return {}
+  }
+}
+
+function pickNumberFields<T extends object>(source: unknown, defaults: T) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {}
+  return Object.keys(defaults).reduce<Partial<T>>((picked, key) => {
+    const value = (source as Record<string, unknown>)[key]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      picked[key as keyof T] = value as T[keyof T]
+    } else if (value === null) {
+      picked[key as keyof T] = null as T[keyof T]
+    }
+    return picked
+  }, {})
+}
+
+function saveInputs() {
+  if (typeof window === 'undefined') return
+  const payload: StandardSampleStorage = {
+    aluminum: { ...aluminum },
+    silicon: { ...silicon },
+    iron: { ...iron }
+  }
+  window.localStorage.setItem(currentStorageKey(), JSON.stringify(payload))
+}
+
+watch([aluminum, silicon, iron], saveInputs, { deep: true })
 
 const StandardRatioCard = defineComponent({
   name: 'StandardRatioCard',

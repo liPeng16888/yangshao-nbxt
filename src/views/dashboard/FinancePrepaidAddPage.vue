@@ -64,6 +64,12 @@
         </el-table-column>
         <el-table-column prop="usableTimes" label="可使用次数" width="120" />
         <el-table-column prop="remark" label="备注" min-width="240" />
+        <el-table-column label="操作" width="130" fixed="right">
+          <template #default="{ row }">
+            <el-tag v-if="row.deleteRequestStatus === 'PENDING'" type="warning" effect="plain">删除待审核</el-tag>
+            <el-button v-else type="danger" link :loading="store.prepaidDeletingId === row.id" @click="handleDeleteRequest(row)">删除</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </section>
   </div>
@@ -75,6 +81,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { searchCustomers } from '@/api/customer'
 import type { Customer } from '@/types/customer'
+import type { PrepaidRechargeRow } from '@/types/financeBills'
 import { useFinanceBillsStore } from '@/stores/financeBills'
 import { todayInBeijing } from '@/utils/date'
 
@@ -143,6 +150,19 @@ async function handleSubmit() {
   })
   ElMessage.success('预存款客户信息已添加')
   resetForm()
+}
+
+async function handleDeleteRequest(row: PrepaidRechargeRow) {
+  const result = await ElMessageBox.prompt(`确认申请删除「${row.rechargeDate} ${row.customer}」这条预存款记录？请填写删除理由。`, '删除申请', {
+    confirmButtonText: '提交申请',
+    cancelButtonText: '取消',
+    inputType: 'textarea',
+    inputPlaceholder: '请填写删除理由',
+    inputValidator: (value) => Boolean(String(value || '').trim()) || '请填写删除理由',
+    type: 'warning'
+  })
+  await store.requestPrepaidDeletion(row, String(result.value || '').trim())
+  ElMessage.success('删除申请已提交，等待后端审核')
 }
 
 function resetForm() {

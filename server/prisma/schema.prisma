@@ -35,6 +35,19 @@ enum MonthlySettlementStatus {
 enum ReminderType {
   UNSETTLED_PAYMENT
   MONTHLY_PAYMENT
+  FINANCE_DELETE_APPROVED
+  FINANCE_DELETE_REJECTED
+}
+
+enum FinanceDeletionRequestType {
+  EXPENSE
+  PREPAID_RECHARGE
+}
+
+enum FinanceDeletionRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 model User {
@@ -66,6 +79,8 @@ model User {
   blacklistUploads  BlacklistRecord[] @relation("BlacklistUploader")
   reminders         Reminder[]       @relation("FrontendReminders")
   createdReminders  Reminder[]       @relation("ReminderCreator")
+  financeDeletionRequests FinanceDeletionRequest[] @relation("FrontendFinanceDeletionRequests")
+  reviewedFinanceDeletionRequests FinanceDeletionRequest[] @relation("ReviewedFinanceDeletionRequests")
   inviteCodes       InviteCode[]     @relation("InviteCreator")
   usedInviteCodes   InviteCode[]     @relation("InviteUser")
   createdSubPerms   SubAdminFrontendPermission[] @relation("PermissionCreator")
@@ -329,4 +344,26 @@ model Reminder {
   createdBy      User?        @relation("ReminderCreator", fields: [createdById], references: [id])
 
   @@index([frontendUserId, readAt])
+}
+
+model FinanceDeletionRequest {
+  id             String                       @id @default(uuid())
+  frontendUserId String
+  sourceType     FinanceDeletionRequestType
+  sourceId       String
+  reason         String
+  sourceSnapshot Json
+  status         FinanceDeletionRequestStatus @default(PENDING)
+  reviewRemark   String?
+  reviewedById   String?
+  reviewedAt     DateTime?
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+
+  frontendUser   User                         @relation("FrontendFinanceDeletionRequests", fields: [frontendUserId], references: [id])
+  reviewedBy     User?                        @relation("ReviewedFinanceDeletionRequests", fields: [reviewedById], references: [id])
+
+  @@index([frontendUserId, status])
+  @@index([sourceType, sourceId])
+  @@index([status, createdAt])
 }

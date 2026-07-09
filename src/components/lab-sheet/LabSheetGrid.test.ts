@@ -368,4 +368,28 @@ describe('LabSheetGrid', () => {
     expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: null }])
     expect(wrapper.emitted('update')).not.toContainEqual(['block-1', { price: 0 }])
   })
+
+  it('emits selection changes from the sequence checkbox in selection mode', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock()],
+        selectionMode: true,
+        selectedBlockIds: []
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: {
+            template: '<div class="customer-editor-stub" />'
+          }
+        }
+      }
+    })
+
+    const checkbox = wrapper.findComponent({ name: 'ElCheckbox' })
+    checkbox.vm.$emit('change', true)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('selectionChange')).toContainEqual(['block-1', true])
+  })
 })

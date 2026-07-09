@@ -1,4 +1,5 @@
 import type { SamplePaymentStatus } from './labSheet'
+import type { FinanceDeleteRequestStatus } from './finance'
 
 export type IncomePaymentStatus = SamplePaymentStatus | '未选择'
 
@@ -82,6 +83,8 @@ export interface PrepaidRechargePayload {
 export interface PrepaidRechargeRow extends PrepaidRechargePayload {
   id: string
   createdAt?: string
+  deleteRequestId?: string
+  deleteRequestStatus?: FinanceDeleteRequestStatus
 }
 
 export interface PrepaidCustomerRow {
