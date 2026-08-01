@@ -36,3 +36,12 @@ export function retainAvailableFinanceCustomers(
 
   return selectedCustomers.filter((customer) => available.has(customer))
 }
+
+export function shouldApplyFinanceResponse(
+  requestedTab: string,
+  activeTab: string,
+  requestId: number,
+  latestRequestId: number
+): boolean {
+  return requestedTab === activeTab && requestId === latestRequestId
+}

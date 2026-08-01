@@ -3,7 +3,8 @@ import {
   filterFinanceRowsByCustomers,
   financeCustomerOptions,
   normalizeFinanceCustomer,
-  retainAvailableFinanceCustomers
+  retainAvailableFinanceCustomers,
+  shouldApplyFinanceResponse
 } from './financeCustomerFilter'
 
 describe('finance customer filtering', () => {
@@ -70,5 +71,11 @@ describe('finance customer filtering', () => {
     expect(
       retainAvailableFinanceCustomers(['客户甲', '客户丙'], ['客户甲', '客户乙'])
     ).toEqual(['客户甲'])
+  })
+
+  it('rejects responses for a stale request or a different active tab', () => {
+    expect(shouldApplyFinanceResponse('unsettled', 'monthlyDaily', 2, 2)).toBe(false)
+    expect(shouldApplyFinanceResponse('unsettled', 'unsettled', 1, 2)).toBe(false)
+    expect(shouldApplyFinanceResponse('unsettled', 'unsettled', 2, 2)).toBe(true)
   })
 })

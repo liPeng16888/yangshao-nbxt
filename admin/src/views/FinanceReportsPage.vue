@@ -244,7 +244,8 @@ import type { FrontendOption } from '../types'
 import {
   filterFinanceRowsByCustomers,
   financeCustomerOptions,
-  retainAvailableFinanceCustomers
+  retainAvailableFinanceCustomers,
+  shouldApplyFinanceResponse
 } from '../utils/financeCustomerFilter'
 
 const router = useRouter()
@@ -258,6 +259,7 @@ const rows = ref<any[]>([])
 const deletionStatus = ref('')
 const deletionDetailVisible = ref(false)
 const deletionDetailRow = ref<any | null>(null)
+let latestLoadRequestId = 0
 const customerFilterTabs = new Set([
   'unsettled',
   'monthlyDaily',
@@ -300,28 +302,47 @@ onMounted(async () => {
 })
 
 async function loadActive() {
+  const requestedTab = active.value
+  const requestId = ++latestLoadRequestId
   loading.value = true
   try {
     const params: Record<string, string> = { month: month.value, frontendUserIds: buildFrontendIds(selectedFrontendIds.value) }
-    if (active.value === 'deletionRequests' && deletionStatus.value) params.status = deletionStatus.value
-    if (active.value === 'income') report.value = await request.get('/admin/finance/income', { params })
-    else if (active.value === 'expenses') report.value = await request.get('/admin/finance/expenses', { params })
-    else if (active.value === 'unsettled') rows.value = await request.get('/admin/finance/unsettled', { params })
-    else if (active.value === 'monthlyDaily') rows.value = await request.get('/admin/finance/monthly-daily', { params })
-    else if (active.value === 'monthlyBills') report.value = await request.get('/admin/finance/monthly-bills', { params })
-    else if (active.value === 'monthlyCustomers') rows.value = await request.get('/admin/finance/monthly-customers', { params })
-    else if (active.value === 'prepaidRecharges') rows.value = await request.get('/admin/finance/prepaid-recharges', { params })
-    else if (active.value === 'deletionRequests') rows.value = await request.get('/admin/finance/delete-requests', { params })
-    else report.value = await request.get('/admin/finance/prepaid-report', { params })
-    if (customerFilterTabs.has(active.value)) {
-      customerSelections[active.value] = retainAvailableFinanceCustomers(
-        customerSelections[active.value] || [],
-        customerOptions.value
+    if (requestedTab === 'deletionRequests' && deletionStatus.value) params.status = deletionStatus.value
+
+    let response: any
+    if (requestedTab === 'income') response = await request.get('/admin/finance/income', { params })
+    else if (requestedTab === 'expenses') response = await request.get('/admin/finance/expenses', { params })
+    else if (requestedTab === 'unsettled') response = await request.get('/admin/finance/unsettled', { params })
+    else if (requestedTab === 'monthlyDaily') response = await request.get('/admin/finance/monthly-daily', { params })
+    else if (requestedTab === 'monthlyBills') response = await request.get('/admin/finance/monthly-bills', { params })
+    else if (requestedTab === 'monthlyCustomers') response = await request.get('/admin/finance/monthly-customers', { params })
+    else if (requestedTab === 'prepaidRecharges') response = await request.get('/admin/finance/prepaid-recharges', { params })
+    else if (requestedTab === 'deletionRequests') response = await request.get('/admin/finance/delete-requests', { params })
+    else response = await request.get('/admin/finance/prepaid-report', { params })
+
+    if (!shouldApplyFinanceResponse(requestedTab, active.value, requestId, latestLoadRequestId)) return
+
+    if (['income', 'expenses', 'monthlyBills', 'prepaidCustomers', 'prepaidDaily'].includes(requestedTab)) {
+      report.value = response
+    } else {
+      rows.value = response
+    }
+    if (customerFilterTabs.has(requestedTab)) {
+      customerSelections[requestedTab] = retainAvailableFinanceCustomers(
+        customerSelections[requestedTab] || [],
+        financeCustomerOptions(customerRowsFromResponse(requestedTab, response))
       )
     }
   } finally {
-    loading.value = false
+    if (requestId === latestLoadRequestId) loading.value = false
   }
+}
+
+function customerRowsFromResponse(tab: string, response: any): any[] {
+  if (tab === 'monthlyBills') return response?.summaryRows || []
+  if (tab === 'prepaidCustomers') return response?.customerRows || []
+  if (tab === 'prepaidDaily') return response?.dailyRows || []
+  return Array.isArray(response) ? response : []
 }
 
 function statusText(row: any, status: string) {
