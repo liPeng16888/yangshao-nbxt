@@ -27,6 +27,30 @@
       </div>
     </section>
 
+    <section v-if="customerFilterTabs.has(active)" class="panel customer-filter-panel">
+      <div class="customer-filter-bar">
+        <span>筛选客户</span>
+        <el-select
+          v-model="selectedCustomers"
+          multiple
+          filterable
+          clearable
+          collapse-tags
+          collapse-tags-tooltip
+          :max-collapse-tags="2"
+          :disabled="!customerOptions.length"
+          placeholder="选择一个或多个客户"
+        >
+          <el-option
+            v-for="customer in customerOptions"
+            :key="customer"
+            :label="customer"
+            :value="customer"
+          />
+        </el-select>
+      </div>
+    </section>
+
     <section v-if="active === 'income'" class="panel">
       <div class="panel__body stat-grid">
         <div class="stat-card"><span>本日收入</span><strong>¥{{ money(report.totals?.today?.amount) }}</strong></div>
@@ -63,7 +87,7 @@
     </section>
 
     <section v-else-if="active === 'unsettled'" class="panel">
-      <el-table :data="rows" border>
+      <el-table :data="filteredRows" border>
         <el-table-column prop="date" label="日期" width="120" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="sequence" label="编号" width="90" />
@@ -80,7 +104,7 @@
     </section>
 
     <section v-else-if="active === 'monthlyDaily'" class="panel">
-      <el-table :data="rows" border>
+      <el-table :data="filteredRows" border>
         <el-table-column prop="date" label="日期" width="120" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="customer" label="客户" min-width="180" />
@@ -90,7 +114,7 @@
     </section>
 
     <section v-else-if="active === 'monthlyBills'" class="panel">
-      <el-table :data="report.summaryRows || []" border>
+      <el-table :data="filteredRows" border>
         <el-table-column prop="month" label="日期" width="110" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="customer" label="客户" min-width="180" />
@@ -106,7 +130,7 @@
     </section>
 
     <section v-else-if="active === 'monthlyCustomers'" class="panel">
-      <el-table :data="rows" border>
+      <el-table :data="filteredRows" border>
         <el-table-column prop="firstDate" label="首次检测日期" width="130" />
         <el-table-column prop="lastDate" label="最后检测日期" width="130" />
         <el-table-column prop="name" label="名称" width="150" />
@@ -122,7 +146,7 @@
     </section>
 
     <section v-else-if="active === 'prepaidRecharges'" class="panel">
-      <el-table :data="rows" border>
+      <el-table :data="filteredRows" border>
         <el-table-column prop="rechargeDate" label="充值日期" width="120" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="customer" label="客户名称" min-width="180" />
@@ -172,7 +196,7 @@
     </section>
 
     <section v-else-if="active === 'prepaidCustomers'" class="panel">
-      <el-table :data="report.customerRows || []" border>
+      <el-table :data="filteredRows" border>
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="customer" label="客户名称" min-width="180" />
         <el-table-column label="累计充值金额" width="140"><template #default="{ row }">¥{{ money(row.totalAmount) }}</template></el-table-column>
@@ -184,7 +208,7 @@
     </section>
 
     <section v-else class="panel">
-      <el-table :data="report.dailyRows || []" border>
+      <el-table :data="filteredRows" border>
         <el-table-column prop="date" label="日期" width="120" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="customer" label="客户名称" min-width="180" />
@@ -213,10 +237,15 @@
 <script setup lang="ts">
 import dayjs from 'dayjs'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { buildFrontendIds, getFrontendOptions, request } from '../api'
 import type { FrontendOption } from '../types'
+import {
+  filterFinanceRowsByCustomers,
+  financeCustomerOptions,
+  retainAvailableFinanceCustomers
+} from '../utils/financeCustomerFilter'
 
 const router = useRouter()
 const frontendOptions = ref<FrontendOption[]>([])
@@ -229,6 +258,40 @@ const rows = ref<any[]>([])
 const deletionStatus = ref('')
 const deletionDetailVisible = ref(false)
 const deletionDetailRow = ref<any | null>(null)
+const customerFilterTabs = new Set([
+  'unsettled',
+  'monthlyDaily',
+  'monthlyBills',
+  'monthlyCustomers',
+  'prepaidRecharges',
+  'prepaidCustomers',
+  'prepaidDaily'
+])
+const customerSelections = reactive<Record<string, string[]>>({
+  unsettled: [],
+  monthlyDaily: [],
+  monthlyBills: [],
+  monthlyCustomers: [],
+  prepaidRecharges: [],
+  prepaidCustomers: [],
+  prepaidDaily: []
+})
+const customerFilterRows = computed<any[]>(() => {
+  if (active.value === 'monthlyBills') return report.value.summaryRows || []
+  if (active.value === 'prepaidCustomers') return report.value.customerRows || []
+  if (active.value === 'prepaidDaily') return report.value.dailyRows || []
+  return rows.value
+})
+const customerOptions = computed(() => financeCustomerOptions(customerFilterRows.value))
+const selectedCustomers = computed<string[]>({
+  get: () => customerSelections[active.value] || [],
+  set: (value) => {
+    customerSelections[active.value] = value
+  }
+})
+const filteredRows = computed(() =>
+  filterFinanceRowsByCustomers(customerFilterRows.value, selectedCustomers.value)
+)
 
 onMounted(async () => {
   frontendOptions.value = await getFrontendOptions()
@@ -250,6 +313,12 @@ async function loadActive() {
     else if (active.value === 'prepaidRecharges') rows.value = await request.get('/admin/finance/prepaid-recharges', { params })
     else if (active.value === 'deletionRequests') rows.value = await request.get('/admin/finance/delete-requests', { params })
     else report.value = await request.get('/admin/finance/prepaid-report', { params })
+    if (customerFilterTabs.has(active.value)) {
+      customerSelections[active.value] = retainAvailableFinanceCustomers(
+        customerSelections[active.value] || [],
+        customerOptions.value
+      )
+    }
   } finally {
     loading.value = false
   }
@@ -357,3 +426,38 @@ async function rejectDeletion(row: any) {
   await loadActive()
 }
 </script>
+
+<style scoped>
+.customer-filter-panel {
+  margin-bottom: 0;
+}
+
+.customer-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.customer-filter-bar > span {
+  flex: none;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.customer-filter-bar .el-select {
+  width: min(360px, 100%);
+}
+
+@media (max-width: 640px) {
+  .customer-filter-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .customer-filter-bar .el-select {
+    width: 100%;
+  }
+}
+</style>

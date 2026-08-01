@@ -27,3 +27,12 @@ export function filterFinanceRowsByCustomers<T>(
 
   return rows.filter((row) => selected.has(customerFromRow(row)))
 }
+
+export function retainAvailableFinanceCustomers(
+  selectedCustomers: string[],
+  availableCustomers: string[]
+): string[] {
+  const available = new Set(availableCustomers)
+
+  return selectedCustomers.filter((customer) => available.has(customer))
+}

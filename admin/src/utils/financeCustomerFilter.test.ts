@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   filterFinanceRowsByCustomers,
   financeCustomerOptions,
-  normalizeFinanceCustomer
+  normalizeFinanceCustomer,
+  retainAvailableFinanceCustomers
 } from './financeCustomerFilter'
 
 describe('finance customer filtering', () => {
@@ -63,5 +64,11 @@ describe('finance customer filtering', () => {
       rows[1],
       rows[2]
     ])
+  })
+
+  it('removes selected customers that no longer exist after a query', () => {
+    expect(
+      retainAvailableFinanceCustomers(['客户甲', '客户丙'], ['客户甲', '客户乙'])
+    ).toEqual(['客户甲'])
   })
 })
