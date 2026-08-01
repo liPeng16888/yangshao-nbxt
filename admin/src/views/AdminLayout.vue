@@ -106,6 +106,7 @@ const navItems = computed<Array<{ path: string; label: string; icon: Component }
   const items = [
     { path: '/data', label: '数据统计', icon: DataAnalysis },
     { path: '/finance', label: '财务报表', icon: Money },
+    { path: '/customer-overview', label: '客户总览', icon: User },
     { path: '/abnormal', label: '异常记录', icon: Memo },
     ...(user.value?.role === 'ROOT_ADMIN' ? [{ path: '/accounts', label: '账号管理', icon: User }] : []),
     { path: '/blacklist', label: '客户黑名单', icon: DocumentChecked }

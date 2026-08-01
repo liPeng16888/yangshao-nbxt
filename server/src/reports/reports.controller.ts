@@ -6,12 +6,22 @@ import type { CurrentUser } from '../auth/current-user'
 import { Roles } from '../auth/roles.decorator'
 import { RolesGuard } from '../auth/roles.guard'
 import { ReportsService } from './reports.service'
+import { CustomerOverviewService } from '../customer-overview/customer-overview.service'
 
 @Controller('reports')
 @UseGuards(AuthGuard, RolesGuard)
 @Roles(UserRole.FRONTEND_USER)
 export class ReportsController {
-  constructor(private readonly reports: ReportsService) {}
+  constructor(
+    private readonly reports: ReportsService,
+    private readonly customerOverviewService: CustomerOverviewService
+  ) {}
+
+  @Get('customer-overview')
+  async customerOverview(@CurrentUserInfo() user: CurrentUser) {
+    const rows = await this.customerOverviewService.getRows([user.id])
+    return rows.map(({ frontendUserId: _frontendUserId, frontendUserName: _frontendUserName, ...row }) => row)
+  }
 
   @Get('sample-detection')
   sampleDetection(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {

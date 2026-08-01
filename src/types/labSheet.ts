@@ -28,11 +28,16 @@ export interface LabParameter {
 
 export interface LabSampleInput {
   sequence?: string
+  completed?: boolean
   sampleNumber?: string
   customerId?: string
   customerIds?: string[]
   customers?: Customer[]
   customerText?: string
+  recipientCustomerId?: string
+  recipientCustomerIds?: string[]
+  recipientCustomers?: Customer[]
+  recipientCustomerText?: string
   price?: number | null
   paymentStatus?: SamplePaymentStatus | ''
   ironRaw?: number | null
@@ -50,6 +55,7 @@ export interface LabSampleInput {
   waterSample?: number | null
   bottleWater?: number | null
   bottleWaterSample?: number | null
+  moisture?: number | null
   crucible?: number | null
   sampleWeight?: number | null
   burnedCrucibleSample?: number | null

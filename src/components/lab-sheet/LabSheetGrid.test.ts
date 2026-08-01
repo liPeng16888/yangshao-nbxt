@@ -6,6 +6,13 @@ import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import type { SampleBlock } from '@/types/labSheet'
 
+const customerEditorStub = {
+  name: 'CustomerCellEditor',
+  props: ['customerRole', 'selectionLimit', 'modelValue', 'selectedCustomers', 'placeholder'],
+  emits: ['update', 'blacklistHit'],
+  template: '<div class="customer-editor-stub" />'
+}
+
 function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock {
   const inputs: SampleBlock['inputs'] = {
     sequence: '001',
@@ -28,6 +35,53 @@ function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock 
 }
 
 describe('LabSheetGrid', () => {
+  it('renders payer and recipient customer rows and forwards recipient updates', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({
+          customerText: '王总',
+          customers: [{ id: 'customer-wang', name: '王总' }],
+          recipientCustomerText: '李总、张总',
+          recipientCustomers: [
+            { id: 'customer-li', name: '李总' },
+            { id: 'customer-zhang', name: '张总' }
+          ]
+        })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: { CustomerCellEditor: customerEditorStub }
+      }
+    })
+
+    const editors = wrapper.findAllComponents({ name: 'CustomerCellEditor' })
+    expect(editors).toHaveLength(2)
+    expect(editors[0].props()).toMatchObject({
+      customerRole: 'payer',
+      selectionLimit: 1,
+      modelValue: '王总',
+      placeholder: '付款客户'
+    })
+    expect(editors[1].props()).toMatchObject({
+      customerRole: 'recipient',
+      selectionLimit: 0,
+      modelValue: '李总、张总',
+      placeholder: '数据发送'
+    })
+    expect(wrapper.find('[data-field="customerText"]').exists()).toBe(true)
+    expect(wrapper.find('[data-field="recipientCustomerText"]').exists()).toBe(true)
+
+    const recipientPatch = {
+      recipientCustomerIds: ['customer-li'],
+      recipientCustomers: [{ id: 'customer-li', name: '李总' }],
+      recipientCustomerText: '李总'
+    }
+    editors[1].vm.$emit('update', recipientPatch)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('update')).toContainEqual(['block-1', recipientPatch])
+  })
+
   it('emits numeric input updates from blank sample cells', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
@@ -89,6 +143,27 @@ describe('LabSheetGrid', () => {
     await inputs[2].setValue('-11.5678')
 
     expect(wrapper.emitted('update')).toContainEqual(['block-1', { ironRaw: -11.567 }])
+  })
+
+  it('allows moisture to be entered directly', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock()]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: {
+            template: '<div class="customer-editor-stub" />'
+          }
+        }
+      }
+    })
+
+    const moistureInput = wrapper.find('[data-field="moisture"] input')
+    await moistureInput.setValue('4.2689')
+
+    expect(wrapper.emitted('update')).toContainEqual(['block-1', { moisture: 4.268 }])
   })
 
   it('keeps blank sample data inputs empty when focused and blurred without typing', async () => {
@@ -210,7 +285,7 @@ describe('LabSheetGrid', () => {
     expect(wrapper.find('.lab-grid').attributes('style')).toContain('transform: scale(0.6)')
   })
 
-  it('warns when a locked calculation input is clicked before sample amount and payment status are filled', async () => {
+  it('warns when a locked calculation input is clicked before sample amount, payment status, and lab elements are filled', async () => {
     const warningSpy = vi.spyOn(ElMessage, 'warning').mockReturnValue({ close: vi.fn() } as any)
     const wrapper = mount(LabSheetGrid, {
       props: {
@@ -227,12 +302,12 @@ describe('LabSheetGrid', () => {
     })
 
     const blockedLayer = wrapper.find('.blocked-click-layer')
-    expect(blockedLayer.attributes('aria-label')).toBe('请先输入样品金额并选择费用状态')
+    expect(blockedLayer.attributes('aria-label')).toBe('请先输入样品金额、选择费用状态并选择化验元素')
     expect(wrapper.find('.blocked-warning-indicator').text()).toBe('!')
 
     await blockedLayer.trigger('click')
 
-    expect(warningSpy).toHaveBeenCalledWith('请先输入样品金额并选择费用状态')
+    expect(warningSpy).toHaveBeenCalledWith('请先输入样品金额、选择费用状态并选择化验元素')
     warningSpy.mockRestore()
   })
 
@@ -254,8 +329,49 @@ describe('LabSheetGrid', () => {
     const inputs = wrapper.findAll('input')
 
     expect(wrapper.findAll('.cell--blocked').length).toBeGreaterThan(0)
-    expect(wrapper.find('.blocked-click-layer').attributes('aria-label')).toBe('请先选择费用状态')
+    expect(wrapper.find('.blocked-click-layer').attributes('aria-label')).toBe('请先选择费用状态并选择化验元素')
     expect(inputs[2].attributes('disabled')).toBeDefined()
+  })
+
+  it('locks calculation inputs and marks lab elements required when only lab elements are missing', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({ sampleNumber: 'A-001', price: 20, paymentStatus: '已结款', elementNote: '' })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: {
+            template: '<div class="customer-editor-stub" />'
+          }
+        }
+      }
+    })
+
+    expect(wrapper.find('[data-field="elementNote"]').classes()).toContain('cell--required')
+    expect(wrapper.find('[data-field="ironRaw"]').classes()).toContain('cell--blocked')
+    expect(wrapper.find('.blocked-click-layer').attributes('aria-label')).toBe('请先选择化验元素')
+    expect(wrapper.find('[data-field="ironRaw"] input').attributes('disabled')).toBeDefined()
+  })
+
+  it('unlocks calculation inputs when customer, amount, payment status, and lab elements are complete', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({ customerText: '客户甲', price: 20, paymentStatus: '已结款', elementNote: '三氧化二铁' })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: {
+            template: '<div class="customer-editor-stub" />'
+          }
+        }
+      }
+    })
+
+    expect(wrapper.find('[data-field="elementNote"]').classes()).toContain('cell--required')
+    expect(wrapper.find('[data-field="ironRaw"]').classes()).not.toContain('cell--blocked')
+    expect(wrapper.find('[data-field="ironRaw"] input').attributes('disabled')).toBeUndefined()
   })
 
   it('emits payment status updates from the fee status selector', async () => {
@@ -278,6 +394,32 @@ describe('LabSheetGrid', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.emitted('update')).toContainEqual(['block-1', { paymentStatus: '已结款' }])
+  })
+
+  it('uses normal text styling only when a payment status is selected', () => {
+    const selectedBlock = makeBlock({ paymentStatus: '已结款' })
+    const emptyBlock = makeBlock({ paymentStatus: '' })
+    emptyBlock.id = 'block-2'
+    emptyBlock.index = 2
+
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [selectedBlock, emptyBlock]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: {
+            template: '<div class="customer-editor-stub" />'
+          }
+        }
+      }
+    })
+
+    const selects = wrapper.findAll('.cell--payment-status .el-select')
+    expect(selects).toHaveLength(2)
+    expect(selects[0].classes()).toContain('payment-status-select--selected')
+    expect(selects[1].classes()).not.toContain('payment-status-select--selected')
   })
 
   it('limits sample amount input to two decimal places', async () => {
@@ -391,5 +533,48 @@ describe('LabSheetGrid', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.emitted('selectionChange')).toContainEqual(['block-1', true])
+  })
+
+  it('toggles selection when the whole sequence cell is clicked in selection mode', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock()],
+        selectionMode: true,
+        selectedBlockIds: []
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: {
+            template: '<div class="customer-editor-stub" />'
+          }
+        }
+      }
+    })
+
+    await wrapper.find('[data-block-id="block-1"].cell--green').trigger('click')
+    expect(wrapper.emitted('selectionChange')).toContainEqual(['block-1', true])
+
+    await wrapper.setProps({ selectedBlockIds: ['block-1'] })
+    await wrapper.find('[data-block-id="block-1"].cell--green').trigger('click')
+    expect(wrapper.emitted('selectionChange')).toContainEqual(['block-1', false])
+  })
+
+  it('uses the completed color on the sequence area for completed samples', () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({ completed: true })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: {
+            template: '<div class="customer-editor-stub" />'
+          }
+        }
+      }
+    })
+
+    expect(wrapper.find('.cell--green').classes()).toContain('cell--completed')
   })
 })

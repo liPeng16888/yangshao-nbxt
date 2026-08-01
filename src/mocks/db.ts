@@ -10,7 +10,7 @@ import { defaultLabParameters, DEFAULT_SAMPLE_BLOCK_COUNT } from '@/constants/la
 import { financeCategoryRules } from '@/constants/reportCategories'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
-import { getReportRange, todayInBeijing } from '@/utils/date'
+import { businessDateInBeijing, getReportRange, todayInBeijing } from '@/utils/date'
 
 const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
 
@@ -111,6 +111,9 @@ function createEmptyBlock(index: number, parameters: LabParameter, date: string)
     customerIds: [],
     customers: [],
     customerText: '',
+    recipientCustomerIds: [],
+    recipientCustomers: [],
+    recipientCustomerText: '',
     price: null,
     paymentStatus: ''
   }
@@ -133,7 +136,7 @@ function getInitialParametersForSheet(date: string) {
   return clone(previousSheet?.parameters || labParameters)
 }
 
-function ensureSheet(date = todayInBeijing()) {
+function ensureSheet(date = businessDateInBeijing()) {
   if (!labSheets.has(date)) {
     const initialParameters = getInitialParametersForSheet(date)
     const sampleBlocks = Array.from({ length: DEFAULT_SAMPLE_BLOCK_COUNT }, (_, idx) => ({
@@ -143,13 +146,13 @@ function ensureSheet(date = todayInBeijing()) {
     labSheets.set(date, {
       id: `sheet-${date}`,
       date,
-      readonly: date !== todayInBeijing(),
+      readonly: date !== businessDateInBeijing(),
       parameters: clone(initialParameters),
       sampleBlocks
     })
   }
   const sheet = labSheets.get(date)!
-  const readonly = date !== todayInBeijing()
+  const readonly = date !== businessDateInBeijing()
   sheet.readonly = readonly
   sheet.sampleBlocks.forEach((block) => {
     block.readonly = readonly

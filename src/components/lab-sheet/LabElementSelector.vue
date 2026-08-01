@@ -227,7 +227,7 @@ function saveGroups(nextGroups: ElementGroup[]) {
 }
 
 .lab-element-selector__text--empty {
-  color: rgba(31, 41, 55, 0.42);
+  color: rgba(31, 41, 55, 0.3);
 }
 
 .lab-element-selector__action {

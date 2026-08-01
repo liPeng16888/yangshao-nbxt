@@ -20,7 +20,7 @@ import {
   summarizeMonthlySettlementReport,
   summarizePrepaidReport
 } from '@/utils/financeBills'
-import { todayInBeijing } from '@/utils/date'
+import { businessDateInBeijing, todayInBeijing } from '@/utils/date'
 
 const MONTHLY_SETTLEMENT_STORAGE_KEY = 'ys_monthly_settlement_records'
 const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
@@ -35,7 +35,7 @@ export async function getIncomeBillReport(month: string): Promise<IncomeBillRepo
 
 export async function getUnsettledSamples(): Promise<UnsettledSampleRow[]> {
   if (!useMocks) return request.get('/finance/unsettled-samples')
-  await getLabSheetByDate(todayInBeijing())
+  await getLabSheetByDate(businessDateInBeijing())
   const history = await getLabSheetHistory()
   const rows = await Promise.all(history.map(async (sheet) => getUnsettledRowsFromSheet(await getLabSheetByDate(sheet.date))))
   return rows.flat().sort((a, b) => `${b.date}-${b.sequence}`.localeCompare(`${a.date}-${a.sequence}`))
@@ -100,7 +100,7 @@ export async function requestPrepaidRechargeDeletion(sourceId: string, reason: s
 
 export async function getPrepaidReport(): Promise<PrepaidReport> {
   if (!useMocks) return request.get('/finance/prepaid-report')
-  await getLabSheetByDate(todayInBeijing())
+  await getLabSheetByDate(businessDateInBeijing())
   const history = await getLabSheetHistory()
   const dailyRows = await Promise.all(history.map(async (sheet) => getPrepaidDailyRowsFromSheet(await getLabSheetByDate(sheet.date))))
   return summarizePrepaidReport(loadPrepaidRecharges(), dailyRows.flat(), loadRecord(PREPAID_CUSTOMER_REMARK_STORAGE_KEY), loadRecord(PREPAID_USAGE_REMARK_STORAGE_KEY))

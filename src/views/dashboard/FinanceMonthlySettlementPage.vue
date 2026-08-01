@@ -85,21 +85,28 @@
     <section class="panel">
       <div class="panel__header">
         <h2>月结款每日客户明细</h2>
-        <el-select
-          v-model="selectedDailyCustomer"
-          class="customer-filter"
-          clearable
-          filterable
-          placeholder="选择客户"
-          size="small"
-        >
-          <el-option
-            v-for="customer in dailyCustomerOptions"
-            :key="customer.value"
-            :label="customer.label"
-            :value="customer.value"
-          />
-        </el-select>
+        <div class="daily-detail-actions">
+          <el-button data-testid="open-monthly-bill-export" @click="billExportVisible = true">导出本月明细</el-button>
+          <el-select
+            v-model="selectedDailyCustomers"
+            class="customer-filter"
+            clearable
+            filterable
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            :max-collapse-tags="2"
+            placeholder="选择客户"
+            size="small"
+          >
+            <el-option
+              v-for="customer in dailyCustomerOptions"
+              :key="customer.value"
+              :label="customer.label"
+              :value="customer.value"
+            />
+          </el-select>
+        </div>
       </div>
       <el-table :data="filteredDailyRows" border v-loading="store.loading" empty-text="暂无月结款样品">
         <el-table-column prop="date" label="日期" width="130" />
@@ -117,19 +124,28 @@
         </el-table-column>
       </el-table>
     </section>
+
+    <MonthlySettlementBillExportDialog
+      :visible="billExportVisible"
+      :month="report?.month || store.monthlySettlementMonth"
+      :rows="report?.dailyRows || []"
+      @close="billExportVisible = false"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import MonthlySettlementBillExportDialog from '@/components/finance/MonthlySettlementBillExportDialog.vue'
 import type { MonthlySettlementDailyRow, MonthlySettlementElementCount, MonthlySettlementStatus, MonthlySettlementSummaryRow } from '@/types/financeBills'
 import { useFinanceBillsStore } from '@/stores/financeBills'
-import { createPaidSettlementRemark, createPartialSettlementRemark, roundMoney } from '@/utils/financeBills'
+import { createPaidSettlementRemark, createPartialSettlementRemark, filterMonthlySettlementDailyRows, roundMoney } from '@/utils/financeBills'
 
 const store = useFinanceBillsStore()
 const report = computed(() => store.monthlySettlementReport)
-const selectedDailyCustomer = ref('')
+const selectedDailyCustomers = ref<string[]>([])
+const billExportVisible = ref(false)
 const settlementStatusOptions: MonthlySettlementStatus[] = ['已结款', '未结款', '部分结款']
 
 const dailyCustomerOptions = computed(() => {
@@ -143,9 +159,7 @@ const dailyCustomerOptions = computed(() => {
 })
 
 const filteredDailyRows = computed(() => {
-  const rows = report.value?.dailyRows || []
-  if (!selectedDailyCustomer.value) return rows
-  return rows.filter((row) => row.customer === selectedDailyCustomer.value)
+  return filterMonthlySettlementDailyRows(report.value?.dailyRows || [], selectedDailyCustomers.value)
 })
 
 onMounted(() => {
@@ -153,7 +167,7 @@ onMounted(() => {
 })
 
 function handleMonthChange(value: string) {
-  selectedDailyCustomer.value = ''
+  selectedDailyCustomers.value = []
   store.loadMonthlySettlementReport(value)
 }
 
@@ -245,11 +259,25 @@ function getCustomerDisplay(row: MonthlySettlementDailyRow | MonthlySettlementSu
   line-height: 1.5;
 }
 
+.daily-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: auto;
+}
+
 .customer-filter {
-  width: min(360px, 42vw);
+  width: min(360px, 100%);
 }
 
 @media (max-width: 760px) {
+  .daily-detail-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .customer-filter {
     width: 100%;
   }

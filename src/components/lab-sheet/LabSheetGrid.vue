@@ -54,8 +54,13 @@
 
             <div
               class="cell cell--input cell--rowspan-3 cell--green"
-              :class="{ 'cell--highlight': block.id === highlightBlockId }"
+              :class="{
+                'cell--completed': block.inputs.completed,
+                'cell--selection-target': selectionMode,
+                'cell--highlight': block.id === highlightBlockId
+              }"
               :data-block-id="block.id"
+              @click="handleSequenceCellClick(block.id, $event)"
             >
               <div class="sequence-editor" :data-block-id="block.id" data-field="sequence">
                 <el-checkbox
@@ -82,15 +87,33 @@
                     @update:model-value="(value) => updateText(block.id, 'sampleNumber', value)"
                   />
                 </div>
-                <div class="customer-editor-wrap" :data-block-id="block.id" data-field="customerText">
-                  <CustomerCellEditor
-                    :model-value="block.inputs.customerText"
-                    :selected-customers="block.inputs.customers"
-                    :disabled="isDisabled(block)"
-                    placeholder="客户"
-                    @update="(patch) => emitUpdate(block.id, patch)"
-                    @blacklist-hit="(records) => emit('blacklistHit', records)"
-                  />
+                <div class="customer-role-row" :data-block-id="block.id" data-field="customerText">
+                  <div class="customer-editor-wrap">
+                    <CustomerCellEditor
+                      customer-role="payer"
+                      :selection-limit="1"
+                      :model-value="block.inputs.customerText"
+                      :selected-customers="block.inputs.customers"
+                      :disabled="isDisabled(block)"
+                      placeholder="付款客户"
+                      @update="(patch) => handleCustomerUpdate(block.id, patch)"
+                      @blacklist-hit="(records) => emit('blacklistHit', records)"
+                    />
+                  </div>
+                </div>
+                <div class="customer-role-row" :data-block-id="block.id" data-field="recipientCustomerText">
+                  <div class="customer-editor-wrap">
+                    <CustomerCellEditor
+                      customer-role="recipient"
+                      :selection-limit="0"
+                      :model-value="block.inputs.recipientCustomerText"
+                      :selected-customers="block.inputs.recipientCustomers"
+                      :disabled="isDisabled(block)"
+                      placeholder="数据发送"
+                      @update="(patch) => handleCustomerUpdate(block.id, patch)"
+                      @blacklist-hit="(records) => emit('blacklistHit', records)"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -111,7 +134,7 @@
             <NumberInputCell :block-id="block.id" field="waterSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.waterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'waterSample', value)" />
             <NumberInputCell :block-id="block.id" field="bottleWater" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWater" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWater', value)" />
             <NumberInputCell :block-id="block.id" field="bottleWaterSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWaterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWaterSample', value)" />
-            <FormulaCell class="cell--rowspan-2 cell--water" :value="block.results.moisture" />
+            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="moisture" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.moisture" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'moisture', value)" />
             <NumberInputCell :block-id="block.id" field="crucible" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.crucible" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'crucible', value)" />
             <NumberInputCell :block-id="block.id" field="sampleWeight" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sampleWeight" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sampleWeight', value)" />
             <NumberInputCell :block-id="block.id" field="burnedCrucibleSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.burnedCrucibleSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'burnedCrucibleSample', value)" />
@@ -144,6 +167,7 @@
               data-field="paymentStatus"
             >
               <el-select
+                :class="{ 'payment-status-select--selected': Boolean(block.inputs.paymentStatus) }"
                 clearable
                 size="small"
                 placeholder="费用状态"
@@ -154,8 +178,18 @@
                 <el-option v-for="status in paymentStatusOptions" :key="status" :label="status" :value="status" />
               </el-select>
             </div>
-            <div class="cell cell--label cell--remark">化验元素</div>
-            <div class="cell cell--input cell--span-5 cell--remark" :data-block-id="block.id" data-field="elementNote">
+            <div
+              class="cell cell--label cell--remark"
+              :class="{ 'cell--required-label': isElementNoteRequired(block) }"
+            >
+              化验元素
+            </div>
+            <div
+              class="cell cell--input cell--span-5 cell--remark"
+              :class="{ 'cell--required': isElementNoteRequired(block) }"
+              :data-block-id="block.id"
+              data-field="elementNote"
+            >
               <LabElementSelector
                 :disabled="isDisabled(block)"
                 :model-value="block.inputs.elementNote"
@@ -381,21 +415,34 @@ function hasPaymentStatus(block: SampleBlock) {
   return Boolean(block.inputs.paymentStatus)
 }
 
+function hasElementNote(block: SampleBlock) {
+  return Boolean(block.inputs.elementNote?.trim())
+}
+
 function isPaymentStatusRequired(block: SampleBlock) {
   return isAmountRequired(block)
 }
 
+function isElementNoteRequired(block: SampleBlock) {
+  return isAmountRequired(block)
+}
+
 function isCalculationBlocked(block: SampleBlock) {
-  return isAmountRequired(block) && (!hasSampleAmount(block) || !hasPaymentStatus(block))
+  return isAmountRequired(block) && (!hasSampleAmount(block) || !hasPaymentStatus(block) || !hasElementNote(block))
 }
 
 function getCalculationBlockMessage(block: SampleBlock) {
-  const amountMissing = !hasSampleAmount(block)
-  const statusMissing = !hasPaymentStatus(block)
-  if (amountMissing && statusMissing) return '请先输入样品金额并选择费用状态'
-  if (amountMissing) return isPrepaidBlock(block) ? '请先输入扣除次数' : '请先输入样品金额'
-  if (statusMissing) return '请先选择费用状态'
-  return '请先完善样品金额和费用状态'
+  const missingActions: string[] = []
+  if (!hasSampleAmount(block)) missingActions.push(isPrepaidBlock(block) ? '输入扣除次数' : '输入样品金额')
+  if (!hasPaymentStatus(block)) missingActions.push('选择费用状态')
+  if (!hasElementNote(block)) missingActions.push('选择化验元素')
+
+  if (missingActions.length === 1) return `请先${missingActions[0]}`
+  if (missingActions.length === 2) return `请先${missingActions[0]}并${missingActions[1]}`
+  if (missingActions.length > 2) {
+    return `请先${missingActions.slice(0, -1).join('、')}并${missingActions.at(-1)}`
+  }
+  return '请先完善样品金额、费用状态和化验元素'
 }
 
 function warnCalculationPrerequisite(message: string) {
@@ -406,8 +453,20 @@ function emitUpdate(blockId: string, patch: Partial<LabSampleInput>) {
   emit('update', blockId, patch)
 }
 
+function handleCustomerUpdate(blockId: string, patch: Partial<LabSampleInput>) {
+  emitUpdate(blockId, patch)
+  void refreshScrollState()
+}
+
 function handleSelectionChange(blockId: string, checked: string | number | boolean) {
   emit('selectionChange', blockId, Boolean(checked))
+}
+
+function handleSequenceCellClick(blockId: string, event: MouseEvent) {
+  if (!selectionMode.value) return
+  const target = event.target instanceof Element ? event.target : null
+  if (target?.closest('.el-checkbox')) return
+  emit('selectionChange', blockId, !selectedBlockIds.value.includes(blockId))
 }
 
 function updateNumber(blockId: string, field: keyof LabSampleInput, value: string) {
@@ -730,18 +789,19 @@ const FormulaCell = defineComponent({
   display: grid;
   width: 100%;
   min-height: 100%;
-  grid-template-rows: 36px minmax(88px, 1fr);
+  grid-template-rows: 36px 36px 36px;
 }
 
 .sample-number-editor,
+.customer-role-row,
 .customer-editor-wrap {
-  display: flex;
-  align-items: center;
   min-width: 0;
-  padding: 2px;
 }
 
 .sample-number-editor {
+  display: flex;
+  align-items: center;
+  padding: 2px;
   border-bottom: 1px solid #111827;
 
   :deep(.el-input__inner) {
@@ -752,17 +812,28 @@ const FormulaCell = defineComponent({
   }
 
   :deep(.el-input__inner::placeholder) {
-    color: rgba(31, 41, 55, 0.42);
+    color: rgba(31, 41, 55, 0.3);
     font-size: 15px;
     font-weight: 400;
-    -webkit-text-fill-color: rgba(31, 41, 55, 0.42);
+    -webkit-text-fill-color: rgba(31, 41, 55, 0.3);
+  }
+}
+
+.customer-role-row {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 2px;
+  border-bottom: 1px solid #111827;
+
+  &:last-child {
+    border-bottom: 0;
   }
 }
 
 .customer-editor-wrap {
-  align-items: flex-start;
-  min-height: 88px;
-  padding-top: 4px;
+  width: 100%;
+  overflow: visible;
 }
 
 .cell--formula {
@@ -774,6 +845,18 @@ const FormulaCell = defineComponent({
 
 .cell--green {
   background: #effbf4;
+}
+
+.cell--green.cell--completed {
+  background: #fed7aa;
+}
+
+.cell--selection-target {
+  cursor: pointer;
+}
+
+.cell--selection-target:hover {
+  box-shadow: inset 0 0 0 2px #409eff;
 }
 
 .cell--highlight {
@@ -795,10 +878,6 @@ const FormulaCell = defineComponent({
   height: 16px;
 }
 
-.cell--water {
-  background: #e5efff;
-}
-
 .cell--remark {
   background: #fef9ff;
 }
@@ -808,6 +887,18 @@ const FormulaCell = defineComponent({
 
   :deep(.el-select) {
     width: 100%;
+  }
+
+  :deep(.el-select__placeholder),
+  :deep(.el-select__input::placeholder) {
+    color: rgba(31, 41, 55, 0.3);
+    -webkit-text-fill-color: rgba(31, 41, 55, 0.3);
+  }
+
+  :deep(.payment-status-select--selected .el-select__placeholder) {
+    color: #1f2937;
+    font-weight: 500;
+    -webkit-text-fill-color: #1f2937;
   }
 }
 
@@ -886,9 +977,9 @@ const FormulaCell = defineComponent({
 .cell--customer :deep(.el-input__inner::placeholder),
 .cell--customer :deep(.el-select__placeholder),
 .cell--customer :deep(.el-select__input::placeholder) {
-  color: rgba(31, 41, 55, 0.42);
+  color: rgba(31, 41, 55, 0.3);
   font-size: 15px;
   font-weight: 400;
-  -webkit-text-fill-color: rgba(31, 41, 55, 0.42);
+  -webkit-text-fill-color: rgba(31, 41, 55, 0.3);
 }
 </style>

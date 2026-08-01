@@ -14,11 +14,16 @@ export const defaultSampleBlockCount = 10
 
 export const editableInputFields = [
   'sequence',
+  'completed',
   'sampleNumber',
   'customerId',
   'customerIds',
   'customers',
   'customerText',
+  'recipientCustomerId',
+  'recipientCustomerIds',
+  'recipientCustomers',
+  'recipientCustomerText',
   'price',
   'paymentStatus',
   'ironRaw',
@@ -36,6 +41,7 @@ export const editableInputFields = [
   'waterSample',
   'bottleWater',
   'bottleWaterSample',
+  'moisture',
   'crucible',
   'sampleWeight',
   'burnedCrucibleSample',
@@ -59,6 +65,7 @@ export const labDetectionInputFields = [
   'waterSample',
   'bottleWater',
   'bottleWaterSample',
+  'moisture',
   'crucible',
   'sampleWeight',
   'burnedCrucibleSample'
@@ -67,10 +74,14 @@ export const labDetectionInputFields = [
 export function createEmptyInputs(index: number) {
   return {
     sequence: String(index).padStart(3, '0'),
+    completed: false,
     sampleNumber: '',
     customerIds: [],
     customers: [],
     customerText: '',
+    recipientCustomerIds: [],
+    recipientCustomers: [],
+    recipientCustomerText: '',
     price: null,
     paymentStatus: ''
   }
@@ -119,8 +130,8 @@ export function calculateResults(inputs: Record<string, unknown>, parameters: ty
   if (number('calciumRaw') !== null) result.calcium = round(number('calciumRaw')! * parameters.calciumFactor)
   if (number('magnesiumRaw') !== null && number('calciumRaw') !== null) result.magnesium = round((number('magnesiumRaw')! - number('calciumRaw')!) * parameters.magnesiumFactor)
   if (number('titaniumRaw') !== null) result.titanium = round(number('titaniumRaw')! * parameters.titaniumFactor)
-  if (number('waterSample') !== null && number('bottleWater') !== null && number('bottleWaterSample') !== null) {
-    result.moisture = round(divide(number('waterSample')!, number('waterSample')! + number('bottleWater')! - number('bottleWaterSample')!) * 0.99823)
+  if (number('moisture') !== null) {
+    result.moisture = round(number('moisture')!)
   }
   if (number('sampleWeight') !== null && number('crucible') !== null && number('burnedCrucibleSample') !== null) {
     result.burnLoss = round(divide(number('sampleWeight')! + number('crucible')! - number('burnedCrucibleSample')!, number('sampleWeight')!) * 100)

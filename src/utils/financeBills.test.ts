@@ -3,6 +3,8 @@ import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import type { LabSheet, SampleBlock } from '@/types/labSheet'
 import {
   createPaidSettlementRemark,
+  filterMonthlySettlementDailyRows,
+  filterUnsettledRows,
   getMonthlySettlementDailyRowsFromSheet,
   getPrepaidDailyRowsFromSheet,
   getUnsettledRowsFromSheet,
@@ -102,6 +104,69 @@ describe('finance bill aggregation', () => {
     })
   })
 
+  it('filters unsettled samples by one or multiple selected customers', () => {
+    const rows = [
+      { date: '2026-06-25', sheetId: 's1', blockId: 'b1', sequence: '001', sampleNumber: '样品1', customer: '客户甲', amount: 10 },
+      { date: '2026-06-25', sheetId: 's1', blockId: 'b2', sequence: '002', sampleNumber: '样品2', customer: '客户乙', amount: 20 },
+      { date: '2026-06-25', sheetId: 's1', blockId: 'b3', sequence: '003', sampleNumber: '样品3', customer: '客户丙', amount: 30 }
+    ]
+
+    expect(filterUnsettledRows(rows, [])).toEqual(rows)
+    expect(filterUnsettledRows(rows, ['客户乙']).map((row) => row.customer)).toEqual(['客户乙'])
+    expect(filterUnsettledRows(rows, ['客户甲', '客户丙']).map((row) => row.customer)).toEqual(['客户甲', '客户丙'])
+  })
+
+  it('uses only the payer for unsettled, monthly settlement, and prepaid finance ownership', () => {
+    const payer = {
+      id: 'customer-wang',
+      name: '王总',
+      phone: '13055558888',
+      wechat: 'wangzong',
+      wechatNickname: '王总微信',
+      note: '付款客户'
+    }
+    const recipient = {
+      id: 'customer-li',
+      name: '李总',
+      phone: '13900000000',
+      note: '仅接收数据'
+    }
+    const sheet: LabSheet = {
+      ...makeSheet(),
+      sampleBlocks: [
+        makeBlock('001', 10, '未结款'),
+        makeBlock('002', 20, '月结款'),
+        makeBlock('003', 3, '预存款')
+      ]
+    }
+
+    sheet.sampleBlocks.forEach((block) => {
+      Object.assign(block.inputs, {
+        customerId: payer.id,
+        customerIds: [payer.id],
+        customers: [payer],
+        customerText: payer.name,
+        recipientCustomerId: recipient.id,
+        recipientCustomerIds: [recipient.id],
+        recipientCustomers: [recipient],
+        recipientCustomerText: recipient.name
+      })
+    })
+
+    const unsettledRows = getUnsettledRowsFromSheet(sheet)
+    const monthlyRows = getMonthlySettlementDailyRowsFromSheet(sheet)
+    const prepaidRows = getPrepaidDailyRowsFromSheet(sheet)
+
+    expect(unsettledRows[0]).toMatchObject({ customer: '王总' })
+    expect(filterUnsettledRows(unsettledRows, ['王总'])).toHaveLength(1)
+    expect(filterUnsettledRows(unsettledRows, ['李总'])).toEqual([])
+    expect(monthlyRows[0]).toMatchObject({
+      customer: '王总',
+      customerDisplay: '王总 13055558888 wangzong 王总微信 付款客户'
+    })
+    expect(prepaidRows[0]).toMatchObject({ customer: '王总', sampleCount: 3 })
+  })
+
   it('groups monthly settlement samples by date and customer, then summarizes by customer for the month', () => {
     const sheet: LabSheet = {
       ...makeSheet(),
@@ -149,8 +214,6 @@ describe('finance bill aggregation', () => {
         sampleCount: 2,
         amount: 30,
         elementCounts: [
-          { label: '铝', count: 2 },
-          { label: '硅', count: 2 },
           { label: '铝硅比', count: 2 },
           { label: '硫', count: 1 },
           { label: '白度', count: 1 }
@@ -169,6 +232,33 @@ describe('finance bill aggregation', () => {
       paidAmount: 12,
       remark: '已收 12'
     })
+  })
+
+  it('keeps aluminum and silicon separate when a sample does not also select aluminum-silicon ratio', () => {
+    const sheet: LabSheet = {
+      ...makeSheet(),
+      sampleBlocks: [makeBlock('001', 60, '月结款')]
+    }
+    Object.assign(sheet.sampleBlocks[0].inputs, { elementNote: '铝、硅' })
+
+    const rows = getMonthlySettlementDailyRowsFromSheet(sheet)
+
+    expect(rows[0].elementCounts).toEqual([
+      { key: 'aluminum', label: '铝', count: 1 },
+      { key: 'silicon', label: '硅', count: 1 }
+    ])
+  })
+
+  it('counts a standalone aluminum-silicon ratio selection as the ratio item', () => {
+    const sheet: LabSheet = {
+      ...makeSheet(),
+      sampleBlocks: [makeBlock('001', 60, '月结款')]
+    }
+    Object.assign(sheet.sampleBlocks[0].inputs, { elementNote: '铝硅比' })
+
+    expect(getMonthlySettlementDailyRowsFromSheet(sheet)[0].elementCounts).toEqual([
+      { key: 'aluminumSiliconRatio', label: '铝硅比', count: 1 }
+    ])
   })
 
   it('uses a fixed settled remark when monthly settlement status is paid', () => {
@@ -196,6 +286,18 @@ describe('finance bill aggregation', () => {
       paidAmount: 100,
       remark: createPaidSettlementRemark()
     })
+  })
+
+  it('filters monthly settlement details by one or multiple selected customers', () => {
+    const rows = [
+      { id: '1', date: '2026-06-25', customer: '客户甲', sampleCount: 1, amount: 10, elementCounts: [] },
+      { id: '2', date: '2026-06-25', customer: '客户乙', sampleCount: 2, amount: 20, elementCounts: [] },
+      { id: '3', date: '2026-06-25', customer: '客户丙', sampleCount: 3, amount: 30, elementCounts: [] }
+    ]
+
+    expect(filterMonthlySettlementDailyRows(rows, [])).toEqual(rows)
+    expect(filterMonthlySettlementDailyRows(rows, ['客户乙']).map((row) => row.customer)).toEqual(['客户乙'])
+    expect(filterMonthlySettlementDailyRows(rows, ['客户甲', '客户丙']).map((row) => row.customer)).toEqual(['客户甲', '客户丙'])
   })
 
   it('merges prepaid recharges and deducts daily prepaid sample usage by customer', () => {

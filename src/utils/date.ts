@@ -3,8 +3,26 @@ import 'dayjs/locale/zh-cn'
 
 dayjs.locale('zh-cn')
 
+const BEIJING_UTC_OFFSET_MS = 8 * 60 * 60 * 1000
+const BUSINESS_DAY_START_HOUR_MS = 4 * 60 * 60 * 1000
+const BEIJING_BUSINESS_DATE_SHIFT_MS = BEIJING_UTC_OFFSET_MS - BUSINESS_DAY_START_HOUR_MS
+
 export function todayInBeijing() {
   return dayjs().format('YYYY-MM-DD')
+}
+
+export function businessDateInBeijing(now = new Date()) {
+  return new Date(now.getTime() + BEIJING_BUSINESS_DATE_SHIFT_MS).toISOString().slice(0, 10)
+}
+
+export function millisecondsUntilNextBusinessDayInBeijing(now = new Date()) {
+  const shifted = new Date(now.getTime() + BEIJING_BUSINESS_DATE_SHIFT_MS)
+  const nextShiftedMidnight = Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate() + 1
+  )
+  return nextShiftedMidnight - shifted.getTime()
 }
 
 export function currentMonth() {

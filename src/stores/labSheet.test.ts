@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
+import type { Customer } from '@/types/customer'
 import type { LabSheet, SampleBlock } from '@/types/labSheet'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import { useLabSheetStore } from './labSheet'
@@ -20,6 +21,31 @@ const messageMocks = vi.hoisted(() => ({
   error: vi.fn(),
   warning: vi.fn()
 }))
+
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>()
+
+  return {
+    get length() {
+      return values.size
+    },
+    clear() {
+      values.clear()
+    },
+    getItem(key: string) {
+      return values.get(key) ?? null
+    },
+    key(index: number) {
+      return Array.from(values.keys())[index] ?? null
+    },
+    removeItem(key: string) {
+      values.delete(key)
+    },
+    setItem(key: string, value: string) {
+      values.set(key, value)
+    }
+  }
+}
 
 type FakeEventSource = {
   close: ReturnType<typeof vi.fn>
@@ -69,10 +95,16 @@ describe('labSheet store auto save', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     setActivePinia(createPinia())
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: createMemoryStorage()
+    })
+    window.localStorage.clear()
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', account: 'front-1' }))
     apiMocks.createLabSheetEventSource.mockReturnValue(null)
     apiMocks.getLabSheetClientId.mockReturnValue('client-1')
-    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheet())
-    apiMocks.getLabSheetByDate.mockResolvedValue(makeSheet())
+    apiMocks.getCurrentLabSheet.mockImplementation(async () => makeSheet())
+    apiMocks.getLabSheetByDate.mockImplementation(async () => makeSheet())
     apiMocks.updateCurrentParameters.mockResolvedValue(defaultLabParameters)
     apiMocks.addSampleBlocks.mockImplementation(async (_sheetId: string, count: number) => {
       const sheet = makeSheet()
@@ -127,6 +159,33 @@ describe('labSheet store auto save', () => {
     expect(store.lastAutoSavedAt).not.toBe('')
   })
 
+  it('persists recipient customer fields through the field-level save payload', async () => {
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    const recipient = { id: 'customer-2', name: '李总' } as Customer
+
+    store.patchBlock('block-1', {
+      recipientCustomerId: recipient.id,
+      recipientCustomerIds: [recipient.id],
+      recipientCustomers: [recipient],
+      recipientCustomerText: recipient.name
+    })
+    await vi.advanceTimersByTimeAsync(900)
+
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledWith(
+      'sheet-1',
+      expect.objectContaining({
+        id: 'block-1',
+        changedFields: expect.objectContaining({
+          recipientCustomerId: 'customer-2',
+          recipientCustomerIds: ['customer-2'],
+          recipientCustomers: [recipient],
+          recipientCustomerText: '李总'
+        })
+      })
+    )
+  })
+
   it('debounces repeated edits and only persists the latest block state', async () => {
     const store = useLabSheetStore()
     await store.loadCurrentSheet()
@@ -143,6 +202,87 @@ describe('labSheet store auto save', () => {
         changedFields: expect.objectContaining({ sampleNumber: 'A-002' })
       })
     )
+  })
+
+  it('retries transient failures and keeps a recoverable local draft', async () => {
+    apiMocks.saveSampleBlock.mockRejectedValue({ response: { status: 500 }, message: 'server error' })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    store.patchBlock('block-1', { sampleNumber: 'LOCAL-DRAFT' })
+    await vi.advanceTimersByTimeAsync(900)
+    await vi.runAllTimersAsync()
+
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(4)
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-DRAFT')
+    expect(store.autoSaveStatus).toBe('error')
+    expect(Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index))).toEqual(
+      expect.arrayContaining([expect.stringContaining('ys_lab_draft:v1:front-1:2026-06-25:sheet-1')])
+    )
+  })
+
+  it('restores an unsaved local draft after the store is recreated', async () => {
+    apiMocks.saveSampleBlock.mockRejectedValue({ response: { status: 400 }, message: 'bad request' })
+    const firstStore = useLabSheetStore()
+    await firstStore.loadCurrentSheet()
+    firstStore.patchBlock('block-1', { sampleNumber: 'RESTORED-DRAFT' })
+    await vi.advanceTimersByTimeAsync(900)
+
+    setActivePinia(createPinia())
+    const restoredStore = useLabSheetStore()
+    await restoredStore.loadCurrentSheet()
+
+    expect(restoredStore.sampleBlocks[0].inputs.sampleNumber).toBe('RESTORED-DRAFT')
+    expect(restoredStore.pendingAutoSaveCount).toBe(1)
+  })
+
+  it('stops a date change when pending data cannot be saved', async () => {
+    apiMocks.saveSampleBlock.mockRejectedValue({ response: { status: 400 }, message: 'bad request' })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { sampleNumber: 'KEEP-CURRENT' })
+
+    const loaded = await store.loadSheetByDate('2026-06-24')
+
+    expect(loaded).toBe(false)
+    expect(apiMocks.getLabSheetByDate).not.toHaveBeenCalled()
+    expect(store.sheet?.date).toBe('2026-06-25')
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('KEEP-CURRENT')
+  })
+
+  it('rebases a newer edit on an earlier in-flight save result', async () => {
+    let resolveFirstSave!: (value: SampleBlock) => void
+    const firstSave = new Promise<SampleBlock>((resolve) => {
+      resolveFirstSave = resolve
+    })
+    apiMocks.saveSampleBlock
+      .mockReturnValueOnce(firstSave)
+      .mockImplementationOnce(async (_sheetId: string, payload: { changedFields?: Partial<SampleBlock['inputs']> }) => {
+        const block = makeBlock({ sampleNumber: String(payload.changedFields?.sampleNumber || '') })
+        block.updatedAt = '2026-06-25T00:00:02.000Z'
+        return block
+      })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    store.patchBlock('block-1', { sampleNumber: 'FIRST' })
+    await vi.advanceTimersByTimeAsync(900)
+    store.patchBlock('block-1', { sampleNumber: 'SECOND' })
+    await vi.advanceTimersByTimeAsync(900)
+    const firstSavedBlock = makeBlock({ sampleNumber: 'FIRST' })
+    firstSavedBlock.updatedAt = '2026-06-25T00:00:01.000Z'
+    resolveFirstSave(firstSavedBlock)
+    await vi.runAllTimersAsync()
+
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(2)
+    expect(apiMocks.saveSampleBlock.mock.calls[1][1]).toEqual(
+      expect.objectContaining({
+        baseUpdatedAt: '2026-06-25T00:00:01.000Z',
+        changedFields: expect.objectContaining({ sampleNumber: 'SECOND' })
+      })
+    )
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('SECOND')
+    expect(store.autoSaveStatus).toBe('saved')
   })
 
   it('does not persist clean blocks when flushing the current sheet', async () => {
@@ -218,6 +358,52 @@ describe('labSheet store auto save', () => {
     } as MessageEvent)
 
     expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
+  })
+
+  it('merges remote changes to clean fields while preserving local dirty fields', async () => {
+    const source = makeEventSource()
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { sampleNumber: 'LOCAL-001' })
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'block-saved',
+        date: '2026-06-25',
+        sheetId: 'sheet-1',
+        sourceClientId: 'client-2',
+        updatedAt: new Date().toISOString(),
+        block: makeBlock({ price: 88 })
+      })
+    } as MessageEvent)
+
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
+    expect(store.sampleBlocks[0].inputs.price).toBe(88)
+    expect(store.autoSaveStatus).toBe('pending')
+  })
+
+  it('keeps the local value and marks a true same-field remote conflict', async () => {
+    const source = makeEventSource()
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { sampleNumber: 'LOCAL-001' })
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'block-saved',
+        date: '2026-06-25',
+        sheetId: 'sheet-1',
+        sourceClientId: 'client-2',
+        updatedAt: new Date().toISOString(),
+        block: makeBlock({ sampleNumber: 'REMOTE-001' })
+      })
+    } as MessageEvent)
+
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
+    expect(store.autoSaveStatus).toBe('conflict')
+    expect(store.conflictBlockIds).toEqual(['block-1'])
   })
 
   it('keeps old parameter snapshots for filled blocks and applies new parameters to newly filled blocks', async () => {

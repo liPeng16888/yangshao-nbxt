@@ -7,10 +7,11 @@ import type {
   LabReportTemplate
 } from '@/types/labReport'
 import type { SampleBlock } from '@/types/labSheet'
-import type { Customer } from '@/types/customer'
+import { getRecipientCustomerDisplayText, getRecipientCustomerName } from './sampleCustomers'
 
 export const LAB_REPORT_TEMPLATE_STORAGE_KEY = 'yangshao-lab-report-template'
 export const LAB_REPORT_SMS_TEMPLATE_STORAGE_KEY = 'yangshao-lab-report-sms-template'
+export const LAB_REPORT_SAMPLE_UNIT_STORAGE_PREFIX = 'yangshao-lab-report-sample-units:v1:'
 const MIN_REPORT_ELEMENT_COLUMNS = 5
 const REPORT_FONT_FAMILY = '"Microsoft YaHei", "PingFang SC", Arial, sans-serif'
 const STATEMENT_FONT = `12px ${REPORT_FONT_FAMILY}`
@@ -107,22 +108,56 @@ export function saveLabReportSmsTemplate(template: LabReportSmsTemplate) {
   )
 }
 
+export function loadLabReportSampleUnits(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(getLabReportSampleUnitStorageKey())
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return normalizeLabReportSampleUnits(Array.isArray(parsed) ? parsed : [])
+  } catch {
+    return []
+  }
+}
+
+export function saveLabReportSampleUnits(units: string[]): string[] {
+  const normalized = normalizeLabReportSampleUnits(units)
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(getLabReportSampleUnitStorageKey(), JSON.stringify(normalized))
+  }
+  return normalized
+}
+
+function getLabReportSampleUnitStorageKey() {
+  let owner = 'guest'
+  try {
+    const rawUser = window.localStorage.getItem('ys_user')
+    const user = rawUser ? (JSON.parse(rawUser) as { id?: string; account?: string }) : null
+    owner = user?.id || user?.account || owner
+  } catch {
+    // Invalid login cache should not prevent the report from being edited.
+  }
+  return `${LAB_REPORT_SAMPLE_UNIT_STORAGE_PREFIX}${owner}`
+}
+
+function normalizeLabReportSampleUnits(units: unknown[]) {
+  const normalized = units
+    .filter((unit): unit is string => typeof unit === 'string')
+    .map((unit) => unit.trim())
+    .filter(Boolean)
+  return [...new Set(normalized)].slice(0, 100)
+}
+
 export function getBlockDisplayName(block: SampleBlock) {
   return block.inputs.sampleNumber?.trim() || block.inputs.sequence?.trim() || String(block.index).padStart(3, '0')
 }
 
 export function getBlockCustomerName(block: SampleBlock) {
-  const selectedCustomers = block.inputs.customers?.map((customer) => customer.name).filter(Boolean).join('、')
-  return block.inputs.customerText?.trim() || selectedCustomers || ''
+  return getRecipientCustomerName(block.inputs)
 }
 
 export function getBlockCustomerDisplayText(block: SampleBlock) {
-  const selectedCustomers = block.inputs.customers?.map(formatCustomerDisplayText).filter(Boolean).join('、')
-  return selectedCustomers || block.inputs.customerText?.trim() || ''
-}
-
-function formatCustomerDisplayText(customer: Customer) {
-  return [customer.name, customer.phone, customer.wechat, customer.wechatNickname, customer.note].map((value) => value?.trim()).filter(Boolean).join(' ')
+  return getRecipientCustomerDisplayText(block.inputs)
 }
 
 export function detectReportElementKeys(block: SampleBlock): LabReportElementKey[] {
@@ -382,14 +417,14 @@ type ReportCanvasLayout = {
   elementWidth: number
 }
 
-function createReportCanvasLayout(draft: LabReportDraft): ReportCanvasLayout {
+export function createReportCanvasLayout(draft: LabReportDraft): ReportCanvasLayout {
   const width = 1008
   const titleHeight = 68
   const metaTop = titleHeight
   const metaRowHeight = 35
   const resultTop = metaTop + metaRowHeight * 2
   const resultRowHeight = 35
-  const resultRows = 7
+  const resultRows = 2 + Math.max(5, draft.rows.length)
   const inspectorTop = resultTop + resultRowHeight * resultRows
   const inspectorHeight = 35
   const bottomTop = inspectorTop + inspectorHeight
@@ -776,9 +811,10 @@ export function getSmsElementLabel(key: LabReportElementKey) {
 export function parseLabElementKeys(value: string): LabReportElementKey[] {
   const text = value.trim()
   if (!text) return []
-  const tokens = text
+  const protectedText = text.replace(/A\/S/gi, (match) => match.replace('/', '∕'))
+  const tokens = protectedText
     .split(/[、,，\s/]+/)
-    .map((token) => token.trim())
+    .map((token) => token.replace('∕', '/').trim())
     .filter(Boolean)
   const matchedKeys = labReportElements.filter((element) => {
     const aliases = labElementAliases[element.key]
@@ -804,8 +840,7 @@ const labElementAliases: Record<LabReportElementKey, string[]> = {
 }
 
 function isElementAliasMatched(text: string, tokens: string[], alias: string) {
-  const hasAsciiSymbol = /^[A-Za-z]+$/.test(alias)
-  if (alias.length <= 2 && hasAsciiSymbol) {
+  if (alias.length <= 2) {
     return tokens.includes(alias)
   }
   return text.includes(alias) || tokens.includes(alias)

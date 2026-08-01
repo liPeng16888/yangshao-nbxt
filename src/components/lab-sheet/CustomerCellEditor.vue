@@ -2,20 +2,25 @@
   <div class="customer-editor">
     <el-select
       ref="customerSelectRef"
-      v-model="selectedNames"
+      :model-value="selectedNames"
       multiple
       filterable
       remote
       allow-create
       default-first-option
+      collapse-tags
+      collapse-tags-tooltip
+      :max-collapse-tags="1"
       :disabled="disabled"
       :loading="searching"
-      :placeholder="placeholder || '输入或搜索客户'"
+      :placeholder="placeholder || customerRoleLabel"
       popper-class="customer-select-popper"
       :remote-method="querySearch"
       size="small"
+      @update:model-value="handleSelectedNamesUpdate"
       @change="handleSelectionChange"
-      @blur="handleCommit"
+      @focus="isFocused = true"
+      @blur="handleBlur"
       @keyup.enter="handleCommit"
     >
       <el-option
@@ -41,15 +46,14 @@
       </el-option>
     </el-select>
 
+    <span v-if="showEmptyLabel" class="customer-empty-label">{{ customerRoleLabel }}</span>
+
     <div class="customer-actions">
       <el-tooltip content="新增客户" placement="top">
         <el-button :disabled="disabled" size="small" :icon="Plus" aria-label="新增客户" @click="showCreate = true" />
       </el-tooltip>
       <el-tooltip content="复制客户信息" placement="top">
         <el-button :disabled="!copyText" size="small" :icon="CopyDocument" aria-label="复制客户信息" @click="copyCustomerInfo" />
-      </el-tooltip>
-      <el-tooltip content="删除已选客户" placement="top">
-        <el-button :disabled="disabled || !selectedNames.length" size="small" :icon="Delete" aria-label="删除已选客户" @click="clearSelectedCustomers" />
       </el-tooltip>
     </div>
 
@@ -85,13 +89,19 @@ import { createCustomer, deleteCustomer, searchCustomers } from '@/api/customer'
 import type { BlacklistRecord } from '@/types/blacklist'
 import type { Customer } from '@/types/customer'
 import type { LabSampleInput } from '@/types/labSheet'
+import { buildSampleCustomerPatch, type SampleCustomerRole } from '@/utils/sampleCustomers'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue?: string
   selectedCustomers?: Customer[]
   disabled?: boolean
   placeholder?: string
-}>()
+  customerRole?: SampleCustomerRole
+  selectionLimit?: number
+}>(), {
+  customerRole: 'payer',
+  selectionLimit: 0
+})
 
 const emit = defineEmits<{
   update: [patch: Partial<LabSampleInput>]
@@ -102,6 +112,7 @@ const selectedNames = ref<string[]>(splitCustomerText(props.modelValue))
 const customerOptions = ref<Customer[]>(props.selectedCustomers || [])
 const customerSelectRef = ref<{ blur: () => void } | null>(null)
 const searching = ref(false)
+const isFocused = ref(false)
 const showCreate = ref(false)
 const creating = ref(false)
 const deletingCustomerId = ref('')
@@ -112,16 +123,12 @@ const createForm = reactive({
   wechatNickname: ''
 })
 
-let syncingFromProps = false
-
 watch(
   () => props.modelValue,
   (value) => {
     const nextNames = splitCustomerText(value)
     if (nextNames.join('|') === selectedNames.value.join('|')) return
-    syncingFromProps = true
     selectedNames.value = nextNames
-    syncingFromProps = false
   }
 )
 
@@ -133,12 +140,9 @@ watch(
   { immediate: true }
 )
 
-watch(selectedNames, () => {
-  if (syncingFromProps) return
-  emitSelectedCustomers()
-})
-
 const selectedExistingCustomers = computed(() => selectedNames.value.map(findCustomerByName).filter(Boolean) as Customer[])
+const customerRoleLabel = computed(() => props.customerRole === 'payer' ? '付款客户' : '数据发送')
+const showEmptyLabel = computed(() => !selectedNames.value.length && !isFocused.value)
 const canSaveCustomer = computed(() =>
   Boolean(createForm.name.trim() || createForm.phone.trim() || createForm.wechat.trim() || createForm.wechatNickname.trim())
 )
@@ -186,12 +190,19 @@ function formatCustomerDisplay(customer: Customer) {
 
 function emitSelectedCustomers() {
   const customers = selectedExistingCustomers.value
-  emit('update', {
-    customerId: customers[0]?.id,
-    customerIds: customers.map((customer) => customer.id),
-    customers,
-    customerText: selectedNames.value.join('、')
-  })
+  emit('update', buildSampleCustomerPatch(props.customerRole, selectedNames.value, customers))
+}
+
+function handleSelectedNamesUpdate(value: string[]) {
+  const names = normalizeSelectedNames(value)
+  selectedNames.value = names
+  emitSelectedCustomers()
+}
+
+function normalizeSelectedNames(value: string[]) {
+  const names = Array.from(new Set(value.map((name) => name.trim()).filter(Boolean)))
+  if (props.selectionLimit <= 0 || names.length <= props.selectionLimit) return names
+  return names.slice(-props.selectionLimit)
 }
 
 function handleSelectionChange() {
@@ -210,13 +221,6 @@ function closeCustomerDropdown() {
   })
 }
 
-function clearSelectedCustomers() {
-  if (props.disabled || !selectedNames.value.length) return
-  selectedNames.value = []
-  emitSelectedCustomers()
-  ElMessage.success('已删除当前格客户信息')
-}
-
 async function deleteSavedCustomer(customer: Customer) {
   if (props.disabled || deletingCustomerId.value) return
   try {
@@ -233,7 +237,8 @@ async function deleteSavedCustomer(customer: Customer) {
   try {
     await deleteCustomer(customer.id)
     customerOptions.value = customerOptions.value.filter((item) => item.id !== customer.id)
-    if (selectedNames.value.includes(customer.name)) {
+    const wasSelected = selectedNames.value.includes(customer.name)
+    if (wasSelected) {
       selectedNames.value = selectedNames.value.filter((name) => name !== customer.name)
       emitSelectedCustomers()
     }
@@ -258,6 +263,11 @@ async function querySearch(query: string) {
 async function handleCommit() {
   if (selectedNames.value.length) closeCustomerDropdown()
   await checkBlacklistAfterCommit(copyText.value || selectedNames.value.join(' '))
+}
+
+async function handleBlur() {
+  isFocused.value = false
+  await handleCommit()
 }
 
 async function checkBlacklistAfterCommit(keyword: string) {
@@ -299,7 +309,9 @@ async function createNewCustomer() {
       wechatNickname: trimmedForm.wechatNickname || undefined
     })
     mergeCustomerOptions([customer])
-    selectedNames.value = Array.from(new Set([...selectedNames.value, customer.name]))
+    selectedNames.value = props.customerRole === 'payer'
+      ? [customer.name]
+      : Array.from(new Set([...selectedNames.value, customer.name]))
     emitSelectedCustomers()
     ElMessage.success('客户信息已新增')
     showCreate.value = false
@@ -318,20 +330,39 @@ function resetCreateForm() {
 
 <style scoped lang="scss">
 .customer-editor {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
-  align-items: start;
-  gap: 4px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px;
   width: 100%;
   min-width: 0;
 }
 
+.customer-empty-label {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 56px;
+  left: 7px;
+  overflow: hidden;
+  color: rgba(31, 41, 55, 0.3);
+  font-size: 15px;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
 .customer-actions {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  gap: 2px;
 
   :deep(.el-button) {
-    width: 30px;
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
     margin-left: 0;
     padding: 0;
   }
@@ -389,17 +420,20 @@ function resetCreateForm() {
 }
 
 :deep(.el-select__wrapper) {
-  align-items: flex-start;
-  min-height: 46px;
-  padding: 4px 6px;
+  align-items: center;
+  min-height: 28px;
+  max-height: 28px;
+  padding: 2px 5px;
+  overflow: hidden;
   box-shadow: none;
 }
 
 :deep(.el-select__selection) {
-  align-items: flex-start;
-  flex-wrap: wrap;
-  row-gap: 4px;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 2px;
   min-width: 0;
+  overflow: hidden;
 }
 
 :deep(.el-select__selected-item) {
@@ -408,38 +442,42 @@ function resetCreateForm() {
 
 :deep(.el-select__selected-item .el-tag) {
   align-items: center;
-  height: auto;
+  height: 22px;
   min-height: 22px;
-  width: 100%;
+  width: auto;
   max-width: 100%;
   color: #1f2937;
   font-size: 15px;
-  white-space: normal;
+  white-space: nowrap;
 }
 
 :deep(.el-select__selected-item .el-tag__content) {
   min-width: 0;
-  white-space: normal;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 :deep(.el-select__tags-text) {
-  overflow: visible;
-  white-space: normal;
-  text-overflow: clip;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+  cursor: text;
+  user-select: text;
 }
 
 :deep(.el-select__input-wrapper) {
-  flex: 1 0 72px;
-  min-width: 72px;
+  flex: 1 1 36px;
+  min-width: 36px;
 }
 
 :deep(.el-select__placeholder),
 :deep(.el-select__input::placeholder) {
-  color: rgba(31, 41, 55, 0.42);
+  color: rgba(31, 41, 55, 0.3);
   font-size: 15px;
-  -webkit-text-fill-color: rgba(31, 41, 55, 0.42);
+  -webkit-text-fill-color: rgba(31, 41, 55, 0.3);
 }
 
 :deep(.el-select__input) {

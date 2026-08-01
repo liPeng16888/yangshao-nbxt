@@ -1,57 +1,71 @@
 <template>
   <el-dialog :model-value="visible" width="780px" class="bulk-sample-fill-dialog" title="批量填写样品" @close="emit('close')">
     <el-alert
-      :title="`已选择 ${selectedCount} 个样品。勾选需要应用的字段后，确认即可批量填充到这些样品。`"
+      :title="`已选择 ${selectedCount} 个样品。直接填写需要批量应用的内容，未填写的字段保持原样。`"
       type="info"
       show-icon
       :closable="false"
     />
 
     <div class="bulk-fill-form">
-      <section class="bulk-fill-item" :class="{ 'bulk-fill-item--disabled': !enabled.customer }">
+      <section class="bulk-fill-item">
         <div class="bulk-fill-item__header">
-          <el-checkbox v-model="enabled.customer">客户选择</el-checkbox>
+          付款客户
         </div>
         <CustomerCellEditor
-          :model-value="customerPatch.customerText"
-          :selected-customers="customerPatch.customers"
-          :disabled="!enabled.customer"
-          placeholder="选择或输入客户"
-          @update="handleCustomerUpdate"
+          customer-role="payer"
+          :selection-limit="1"
+          :model-value="payerCustomerPatch.customerText"
+          :selected-customers="payerCustomerPatch.customers"
+          placeholder="选择或输入付款客户"
+          @update="payerCustomerPatch = $event"
           @blacklist-hit="(records) => emit('blacklistHit', records)"
         />
       </section>
 
-      <section class="bulk-fill-item" :class="{ 'bulk-fill-item--disabled': !enabled.price }">
+      <section class="bulk-fill-item">
         <div class="bulk-fill-item__header">
-          <el-checkbox v-model="enabled.price">样品金额</el-checkbox>
+          数据发送
+        </div>
+        <CustomerCellEditor
+          customer-role="recipient"
+          :selection-limit="0"
+          :model-value="recipientCustomerPatch.recipientCustomerText"
+          :selected-customers="recipientCustomerPatch.recipientCustomers"
+          placeholder="选择或输入数据发送客户"
+          @update="recipientCustomerPatch = $event"
+          @blacklist-hit="(records) => emit('blacklistHit', records)"
+        />
+      </section>
+
+      <section class="bulk-fill-item">
+        <div class="bulk-fill-item__header">
+          样品金额
         </div>
         <el-input-number
           v-model="price"
           controls-position="right"
-          :disabled="!enabled.price"
           :precision="pricePrecision"
           :step="priceStep"
           placeholder="填写金额"
         />
       </section>
 
-      <section class="bulk-fill-item" :class="{ 'bulk-fill-item--disabled': !enabled.paymentStatus }">
+      <section class="bulk-fill-item">
         <div class="bulk-fill-item__header">
-          <el-checkbox v-model="enabled.paymentStatus">费用状态</el-checkbox>
+          费用状态
         </div>
-        <el-select v-model="paymentStatus" clearable :disabled="!enabled.paymentStatus" placeholder="选择费用状态">
+        <el-select v-model="paymentStatus" clearable placeholder="选择费用状态">
           <el-option v-for="status in paymentStatusOptions" :key="status" :label="status" :value="status" />
         </el-select>
       </section>
 
-      <section class="bulk-fill-item" :class="{ 'bulk-fill-item--disabled': !enabled.elementNote }">
+      <section class="bulk-fill-item">
         <div class="bulk-fill-item__header">
-          <el-checkbox v-model="enabled.elementNote">化验元素</el-checkbox>
+          化验元素
         </div>
         <LabElementSelector
           :model-value="elementNote"
-          :disabled="!enabled.elementNote"
           @update:model-value="elementNote = $event"
         />
       </section>
@@ -65,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import CustomerCellEditor from './CustomerCellEditor.vue'
 import LabElementSelector from './LabElementSelector.vue'
@@ -84,18 +98,13 @@ const emit = defineEmits<{
 }>()
 
 const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款']
-const enabled = reactive({
-  customer: false,
-  price: false,
-  paymentStatus: false,
-  elementNote: false
-})
-const customerPatch = ref<Partial<LabSampleInput>>({})
+const payerCustomerPatch = ref<Partial<LabSampleInput>>({})
+const recipientCustomerPatch = ref<Partial<LabSampleInput>>({})
 const price = ref<number | null>(null)
 const paymentStatus = ref<SamplePaymentStatus | ''>('')
 const elementNote = ref('')
 
-const pricePrecision = computed(() => (enabled.paymentStatus && paymentStatus.value === '预存款' ? 0 : 2))
+const pricePrecision = computed(() => (paymentStatus.value === '预存款' ? 0 : 2))
 const priceStep = computed(() => (pricePrecision.value === 0 ? 1 : 0.01))
 
 watch(
@@ -105,10 +114,6 @@ watch(
   }
 )
 
-function handleCustomerUpdate(patch: Partial<LabSampleInput>) {
-  customerPatch.value = patch
-}
-
 async function confirmApply() {
   if (!props.selectedCount) {
     ElMessage.warning('请先选择至少一个样品')
@@ -117,12 +122,12 @@ async function confirmApply() {
 
   const patch = buildPatch()
   if (!Object.keys(patch).length) {
-    ElMessage.warning('请至少勾选并填写一项内容')
+    ElMessage.warning('请至少填写一项内容')
     return
   }
 
   try {
-    await ElMessageBox.confirm(`确认将已勾选内容填充到 ${props.selectedCount} 个样品吗？`, '批量填写确认', {
+    await ElMessageBox.confirm(`确认将已填写内容填充到 ${props.selectedCount} 个样品吗？`, '批量填写确认', {
       confirmButtonText: '确认填充',
       cancelButtonText: '取消',
       type: 'warning',
@@ -138,42 +143,36 @@ async function confirmApply() {
 function buildPatch(): Partial<LabSampleInput> {
   const patch: Partial<LabSampleInput> = {}
 
-  if (enabled.customer) {
-    const customerText = customerPatch.value.customerText?.trim() || ''
-    if (!customerText) {
-      ElMessage.warning('请选择或输入客户')
-      return {}
-    }
+  const customerText = payerCustomerPatch.value.customerText?.trim() || ''
+  if (customerText) {
     Object.assign(patch, {
-      customerId: customerPatch.value.customerId,
-      customerIds: customerPatch.value.customerIds || [],
-      customers: customerPatch.value.customers || [],
+      customerId: payerCustomerPatch.value.customerId,
+      customerIds: payerCustomerPatch.value.customerIds || [],
+      customers: payerCustomerPatch.value.customers || [],
       customerText
     })
   }
 
-  if (enabled.price) {
-    if (typeof price.value !== 'number' || !Number.isFinite(price.value)) {
-      ElMessage.warning('请输入样品金额')
-      return {}
-    }
+  const recipientCustomerText = recipientCustomerPatch.value.recipientCustomerText?.trim() || ''
+  if (recipientCustomerText) {
+    Object.assign(patch, {
+      recipientCustomerId: recipientCustomerPatch.value.recipientCustomerId,
+      recipientCustomerIds: recipientCustomerPatch.value.recipientCustomerIds || [],
+      recipientCustomers: recipientCustomerPatch.value.recipientCustomers || [],
+      recipientCustomerText
+    })
+  }
+
+  if (typeof price.value === 'number' && Number.isFinite(price.value)) {
     patch.price = pricePrecision.value === 0 ? Math.trunc(price.value) : Number(price.value.toFixed(2))
   }
 
-  if (enabled.paymentStatus) {
-    if (!paymentStatus.value) {
-      ElMessage.warning('请选择费用状态')
-      return {}
-    }
+  if (paymentStatus.value) {
     patch.paymentStatus = paymentStatus.value
   }
 
-  if (enabled.elementNote) {
-    const note = elementNote.value.trim()
-    if (!note) {
-      ElMessage.warning('请选择化验元素')
-      return {}
-    }
+  const note = elementNote.value.trim()
+  if (note) {
     patch.elementNote = note
   }
 
@@ -181,11 +180,8 @@ function buildPatch(): Partial<LabSampleInput> {
 }
 
 function resetForm() {
-  enabled.customer = false
-  enabled.price = false
-  enabled.paymentStatus = false
-  enabled.elementNote = false
-  customerPatch.value = {}
+  payerCustomerPatch.value = {}
+  recipientCustomerPatch.value = {}
   price.value = null
   paymentStatus.value = ''
   elementNote.value = ''
@@ -209,9 +205,6 @@ function resetForm() {
   border-radius: 8px;
   background: #fff;
 
-  &--disabled {
-    background: #f8fafc;
-  }
 }
 
 .bulk-fill-item__header {

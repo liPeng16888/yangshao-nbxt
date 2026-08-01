@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createEmptyInputs, defaultLabParameters } from '../common/lab'
-import { todayInBeijing } from '../common/date'
+import { businessDateInBeijing } from '../common/date'
 import { LabSheetsService } from './lab-sheets.service'
 
 function makeBlock(index: number, inputs: Record<string, unknown> = {}, parameters = defaultLabParameters) {
@@ -20,7 +20,7 @@ function makeSheet(date: string, blocks = [makeBlock(1)], parameters = defaultLa
     id: `sheet-${date}`,
     frontendUserId: 'front-1',
     date,
-    readonly: date !== todayInBeijing(),
+    readonly: date !== businessDateInBeijing(),
     parameters,
     sampleBlocks: blocks
   }
@@ -63,8 +63,45 @@ describe('LabSheetsService default sheet selection', () => {
     prisma.abnormalRecord.deleteMany.mockResolvedValue({})
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('uses the previous calendar date before 04:00 Beijing time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T19:59:59.000Z'))
+    const businessDate = '2026-07-30'
+    const createdSheet = makeSheet(businessDate, [makeBlock(1)])
+    prisma.labSheet.findUnique.mockResolvedValue(null)
+    prisma.labSheet.create.mockResolvedValue(createdSheet)
+
+    const result = await service.getDefaultSheetForFrontendUser('front-1')
+
+    expect(result.date).toBe(businessDate)
+    expect(prisma.labSheet.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ date: businessDate })
+    }))
+  })
+
+  it('locks the previous business date from 04:00 Beijing time', async () => {
+    vi.useFakeTimers()
+    const previousDate = '2026-07-30'
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(previousDate, [makeBlock(1)]))
+
+    vi.setSystemTime(new Date('2026-07-30T19:59:59.000Z'))
+    const beforeBoundary = await service.getSheetForFrontendUser('front-1', previousDate)
+    expect(beforeBoundary.readonly).toBe(false)
+
+    vi.setSystemTime(new Date('2026-07-30T20:00:00.000Z'))
+    const afterBoundary = await service.getSheetForFrontendUser('front-1', previousDate)
+    expect(afterBoundary.readonly).toBe(true)
+    await expect(service.addSampleBlocks('front-1', `sheet-${previousDate}`, 1)).rejects.toThrow(
+      '历史日期表格仅支持查看，不能修改'
+    )
+  })
+
   it('returns today sheet when today already has visible data', async () => {
-    const today = todayInBeijing()
+    const today = businessDateInBeijing()
     const todaySheet = makeSheet(today, [makeBlock(1, { sampleNumber: 'A-001' })])
     prisma.labSheet.findUnique.mockResolvedValue(todaySheet)
 
@@ -76,7 +113,7 @@ describe('LabSheetsService default sheet selection', () => {
   })
 
   it('returns today sheet when today is empty even if history has data', async () => {
-    const today = todayInBeijing()
+    const today = businessDateInBeijing()
     const emptyTodaySheet = makeSheet(today, [makeBlock(1)])
     prisma.labSheet.findUnique.mockResolvedValue(emptyTodaySheet)
 
@@ -87,7 +124,7 @@ describe('LabSheetsService default sheet selection', () => {
   })
 
   it('creates today sheet when no sheet has visible data', async () => {
-    const today = todayInBeijing()
+    const today = businessDateInBeijing()
     const createdSheet = makeSheet(today, [makeBlock(1)])
     prisma.labSheet.findUnique.mockResolvedValue(null)
     prisma.labSheet.findMany.mockResolvedValue([])
@@ -105,7 +142,7 @@ describe('LabSheetsService default sheet selection', () => {
   })
 
   it('copies the latest earlier sheet parameters when creating a new daily sheet', async () => {
-    const today = todayInBeijing()
+    const today = businessDateInBeijing()
     const previousParameters = {
       ...defaultLabParameters,
       ironBlank: 0.11,
@@ -169,7 +206,7 @@ describe('LabSheetsService default sheet selection', () => {
   })
 
   it('keeps today sheet editable even when it was stored readonly before today', async () => {
-    const today = todayInBeijing()
+    const today = businessDateInBeijing()
     const storedReadonlySheet = {
       ...makeSheet(today, [{ ...makeBlock(1, { sampleNumber: 'TODAY-001' }), readonly: true }]),
       readonly: true
@@ -214,7 +251,7 @@ describe('LabSheetsService default sheet selection', () => {
   })
 
   it('adds sample blocks to today sheet even when it was stored readonly before today', async () => {
-    const today = todayInBeijing()
+    const today = businessDateInBeijing()
     const storedReadonlyToday = {
       ...makeSheet(today, [makeBlock(1)]),
       readonly: true
@@ -234,7 +271,7 @@ describe('LabSheetsService default sheet selection', () => {
   })
 
   it('merges only changed fields when saving a sample block', async () => {
-    const today = todayInBeijing()
+    const today = businessDateInBeijing()
     const updatedAt = new Date('2026-07-03T00:00:00.000Z')
     const block = {
       id: 'block-1',
@@ -261,7 +298,7 @@ describe('LabSheetsService default sheet selection', () => {
         id: 'block-1',
         baseUpdatedAt: updatedAt.toISOString(),
         baseInputs: { sampleNumber: 'OLD' },
-        changedFields: { sampleNumber: 'NEW' }
+        changedFields: { sampleNumber: 'NEW', moisture: 4.268, completed: true }
       },
       'client-1'
     )
@@ -270,15 +307,82 @@ describe('LabSheetsService default sheet selection', () => {
       data: expect.objectContaining({
         inputs: expect.objectContaining({
           sampleNumber: 'NEW',
+          moisture: 4.268,
+          completed: true,
           customerText: '保留客户'
         })
       })
     }))
     expect((result.inputs as Record<string, unknown>).sampleNumber).toBe('NEW')
+    expect((result.inputs as Record<string, unknown>).moisture).toBe(4.268)
+    expect((result.inputs as Record<string, unknown>).completed).toBe(true)
+  })
+
+  it('saves every recipient customer field through the field-level payload', async () => {
+    const today = businessDateInBeijing()
+    const updatedAt = new Date('2026-07-03T00:00:00.000Z')
+    const block = {
+      id: 'block-1',
+      sheetId: `sheet-${today}`,
+      index: 1,
+      readonly: false,
+      updatedAt,
+      inputs: { ...createEmptyInputs(1), customerText: '付款客户' },
+      results: {},
+      parameterSnapshot: defaultLabParameters
+    }
+    const recipient = { id: 'customer-2', name: '李总' }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-07-03T00:00:01.000Z')
+    }))
+
+    const result = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: 'block-1',
+        baseUpdatedAt: updatedAt.toISOString(),
+        baseInputs: {
+          recipientCustomerId: undefined,
+          recipientCustomerIds: [],
+          recipientCustomers: [],
+          recipientCustomerText: ''
+        },
+        changedFields: {
+          recipientCustomerId: recipient.id,
+          recipientCustomerIds: [recipient.id],
+          recipientCustomers: [recipient],
+          recipientCustomerText: recipient.name
+        }
+      },
+      'client-1'
+    )
+
+    expect(prisma.sampleBlock.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        inputs: expect.objectContaining({
+          customerText: '付款客户',
+          recipientCustomerId: 'customer-2',
+          recipientCustomerIds: ['customer-2'],
+          recipientCustomers: [recipient],
+          recipientCustomerText: '李总'
+        })
+      })
+    }))
+    expect(result.inputs).toMatchObject({
+      recipientCustomerId: 'customer-2',
+      recipientCustomerIds: ['customer-2'],
+      recipientCustomers: [recipient],
+      recipientCustomerText: '李总'
+    })
   })
 
   it('rejects stale same-field saves instead of overwriting newer data', async () => {
-    const today = todayInBeijing()
+    const today = businessDateInBeijing()
     const block = {
       id: 'block-1',
       sheetId: `sheet-${today}`,
@@ -305,6 +409,37 @@ describe('LabSheetsService default sheet selection', () => {
         'client-1'
       )
     ).rejects.toThrow('该样品格已被另一台设备修改，请确认后再保存')
+    expect(prisma.sampleBlock.update).not.toHaveBeenCalled()
+  })
+
+  it('treats a repeated save as successful when the requested value is already stored', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      id: 'block-1',
+      sheetId: `sheet-${today}`,
+      index: 1,
+      readonly: false,
+      updatedAt: new Date('2026-07-03T00:00:05.000Z'),
+      inputs: { ...createEmptyInputs(1), sampleNumber: 'ALREADY-SAVED' },
+      results: {},
+      parameterSnapshot: defaultLabParameters
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+
+    const result = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: 'block-1',
+        baseUpdatedAt: '2026-07-03T00:00:00.000Z',
+        baseInputs: { sampleNumber: 'OLD' },
+        changedFields: { sampleNumber: 'ALREADY-SAVED' }
+      },
+      'client-1'
+    )
+
+    expect((result.inputs as Record<string, unknown>).sampleNumber).toBe('ALREADY-SAVED')
     expect(prisma.sampleBlock.update).not.toHaveBeenCalled()
   })
 })

@@ -1,14 +1,32 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import type { SampleBlock } from '@/types/labSheet'
 import {
   createLabReportSmsText,
+  createReportCanvasLayout,
   createReportDraft,
   defaultLabReportSmsTemplate,
   defaultLabReportTemplate,
   detectReportElementKeys,
-  downloadLabReportElementAsPng
+  downloadLabReportElementAsPng,
+  loadLabReportSampleUnits,
+  parseLabElementKeys,
+  saveLabReportSampleUnits
 } from './labReport'
+
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>()
+  return {
+    get length() {
+      return values.size
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, String(value))
+  }
+}
 
 function makeBlock(): SampleBlock {
   return {
@@ -43,6 +61,10 @@ function makeBlock(): SampleBlock {
 }
 
 describe('lab report generation', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, 'localStorage', { value: createMemoryStorage(), configurable: true })
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
@@ -53,6 +75,12 @@ describe('lab report generation', () => {
     const block = makeBlock()
 
     expect(detectReportElementKeys(block)).toEqual(['aluminum', 'silicon', 'iron', 'aluminumSiliconRatio'])
+  })
+
+  it('parses aluminum-silicon ratio as an independent selection', () => {
+    expect(parseLabElementKeys('铝硅比')).toEqual(['aluminumSiliconRatio'])
+    expect(parseLabElementKeys('A/S')).toEqual(['aluminumSiliconRatio'])
+    expect(parseLabElementKeys('铝、硅、铝硅比')).toEqual(['aluminum', 'silicon', 'aluminumSiliconRatio'])
   })
 
   it('creates an editable draft from selected samples and selected elements', () => {
@@ -76,6 +104,66 @@ describe('lab report generation', () => {
         aluminumSiliconRatio: '6.8'
       }
     })
+  })
+
+  it('uses the data recipient as the report sample unit and falls back to the payer', () => {
+    const recipientBlock = makeBlock()
+    recipientBlock.inputs.recipientCustomerText = '李总'
+    const fallbackBlock = makeBlock()
+    fallbackBlock.inputs.recipientCustomerText = ''
+
+    const recipientDraft = createReportDraft(
+      [recipientBlock],
+      [{ blockId: recipientBlock.id, elementKeys: ['aluminum'] }],
+      defaultLabReportTemplate,
+      '2026-06-25'
+    )
+    const fallbackDraft = createReportDraft(
+      [fallbackBlock],
+      [{ blockId: fallbackBlock.id, elementKeys: ['aluminum'] }],
+      defaultLabReportTemplate,
+      '2026-06-25'
+    )
+
+    expect(recipientDraft.sampleUnit).toBe('李总')
+    expect(fallbackDraft.sampleUnit).toBe('王总')
+  })
+
+  it('expands the exported report result grid beyond five sample rows', () => {
+    const blocks = Array.from({ length: 6 }, (_, index) => {
+      const block = makeBlock()
+      block.id = `block-${index + 1}`
+      block.index = index + 1
+      block.inputs.sequence = String(index + 1).padStart(3, '0')
+      return block
+    })
+    const draft = createReportDraft(
+      blocks,
+      blocks.map((block) => ({ blockId: block.id, elementKeys: ['aluminum'] })),
+      defaultLabReportTemplate,
+      '2026-06-25'
+    )
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+
+    const layout = createReportCanvasLayout(draft)
+    const fiveSampleLayout = createReportCanvasLayout({ ...draft, rows: draft.rows.slice(0, 5) })
+
+    expect(layout.resultRows).toBe(8)
+    expect(layout.inspectorTop - layout.resultTop).toBe(layout.resultRowHeight * 8)
+    expect(layout.height - fiveSampleLayout.height).toBe(layout.resultRowHeight)
+  })
+
+  it('stores report sample unit shortcuts separately for each signed-in account', () => {
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', account: 'account-1' }))
+    expect(saveLabReportSampleUnits([' 王庄客户 ', '王庄客户', '', '清镇客户'])).toEqual(['王庄客户', '清镇客户'])
+    expect(loadLabReportSampleUnits()).toEqual(['王庄客户', '清镇客户'])
+
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-2', account: 'account-2' }))
+    expect(loadLabReportSampleUnits()).toEqual([])
+    saveLabReportSampleUnits(['富宁客户'])
+
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', account: 'account-1' }))
+    expect(loadLabReportSampleUnits()).toEqual(['王庄客户', '清镇客户'])
   })
 
   it('creates SMS content with prefix, suffix, sample line, and blank lines between samples', () => {

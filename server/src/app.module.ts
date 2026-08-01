@@ -10,6 +10,7 @@ import { RemindersModule } from './reminders/reminders.module'
 import { AdminModule } from './admin/admin.module'
 import { CustomersModule } from './customers/customers.module'
 import { ReportsModule } from './reports/reports.module'
+import { CustomerOverviewModule } from './customer-overview/customer-overview.module'
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { ReportsModule } from './reports/reports.module'
     UploadsModule,
     RemindersModule,
     ReportsModule,
+    CustomerOverviewModule,
     AdminModule
   ]
 })

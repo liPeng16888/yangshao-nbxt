@@ -2,7 +2,7 @@
   <el-dialog :model-value="visible" width="960px" class="lab-sms-dialog" :title="dialogTitle" @close="emit('close')">
     <div v-if="step === 'elements'" class="element-step">
       <el-alert
-        title="每个样品默认不勾选检测元素，请手动选择需要出现在化验短信里的项目。"
+        title="优先使用数据计算中已选择的化验元素；未填写的样品保持空白，可在这里手动选择。"
         type="info"
         show-icon
         :closable="false"
@@ -67,7 +67,8 @@ import {
   createLabReportSmsText,
   getBlockCustomerName,
   getBlockDisplayName,
-  labReportElements
+  labReportElements,
+  parseLabElementKeys
 } from '@/utils/labReport'
 
 const props = defineProps<{
@@ -98,7 +99,7 @@ watch(
     bulkElementKeys.value = []
     const nextSelections: Record<string, LabReportElementKey[]> = {}
     selectedBlocks.value.forEach((block) => {
-      nextSelections[block.id] = []
+      nextSelections[block.id] = parseLabElementKeys(block.inputs.elementNote || '')
     })
     selectionMap.value = nextSelections
   },

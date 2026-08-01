@@ -56,4 +56,31 @@ describe('calculateSampleResults', () => {
     expect(result.moisture).toBe(0)
     expect(result.burnLoss).toBe(0)
   })
+
+  it('uses directly entered moisture instead of the derived moisture formula', () => {
+    const result = calculateSampleResults(
+      {
+        moisture: 4.268,
+        waterSample: 1,
+        bottleWater: 2,
+        bottleWaterSample: 2.5
+      },
+      defaultLabParameters
+    )
+
+    expect(result.moisture).toBe(4.268)
+  })
+
+  it('does not derive moisture from sample and bottle measurements', () => {
+    const result = calculateSampleResults(
+      {
+        waterSample: 0.5,
+        bottleWater: 1,
+        bottleWaterSample: 1.4
+      },
+      defaultLabParameters
+    )
+
+    expect(result.moisture).toBe(0)
+  })
 })

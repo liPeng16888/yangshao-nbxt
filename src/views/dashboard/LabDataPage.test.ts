@@ -1,12 +1,16 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { defineComponent, h, nextTick } from 'vue'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ElMessage } from 'element-plus'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import LabDataPage from './LabDataPage.vue'
 
 const mocks = vi.hoisted(() => ({
   routerPush: vi.fn(),
+  accessGuard: {
+    loadSettings: vi.fn(),
+    requestAccess: vi.fn(() => true)
+  },
   labStore: {
     loading: false,
     saving: false,
@@ -16,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     lastAutoSavedAt: '',
     autoSaveError: '',
     pendingAutoSaveCount: 0,
+    conflictBlockIds: [] as string[],
     sheet: { date: '2026-06-24', readonly: false },
     currentParameters: null,
     sampleBlocks: [] as any[],
@@ -25,6 +30,8 @@ const mocks = vi.hoisted(() => ({
     patchBlock: vi.fn(),
     commitBlockFieldChange: vi.fn(),
     persistAllBlocks: vi.fn(),
+    retryFailedSaves: vi.fn(),
+    confirmConflictOverwrite: vi.fn(),
     appendSampleBlocks: vi.fn(),
     disconnectRealtime: vi.fn()
   }
@@ -40,10 +47,7 @@ vi.mock('@/stores/labSheet', () => ({
 }))
 
 vi.mock('@/stores/accessGuard', () => ({
-  useAccessGuardStore: () => ({
-    loadSettings: vi.fn(),
-    requestAccess: vi.fn(() => true)
-  })
+  useAccessGuardStore: () => mocks.accessGuard
 }))
 
 function mountPage() {
@@ -90,6 +94,45 @@ function mountPage() {
                   onClick: () => emit('apply', { patch: { price: 20, paymentStatus: '月结款' } })
                 },
                 '应用批量填写'
+              ),
+              h(
+                'button',
+                {
+                  class: 'bulk-fill-recipient-apply',
+                  type: 'button',
+                  onClick: () => emit('apply', {
+                    patch: {
+                      recipientCustomerId: 'recipient-1',
+                      recipientCustomerIds: ['recipient-1'],
+                      recipientCustomers: [{ id: 'recipient-1', name: '李总' }],
+                      recipientCustomerText: '李总'
+                    }
+                  })
+                },
+                '应用数据发送'
+              )
+            ])
+          : null
+    }
+  })
+
+  const SampleCompletionDialogStub = defineComponent({
+    props: {
+      visible: { type: Boolean, default: false }
+    },
+    emits: ['apply', 'close'],
+    setup(props, { emit }) {
+      return () =>
+        props.visible
+          ? h('div', { class: 'sample-completion-dialog-stub' }, [
+              h(
+                'button',
+                {
+                  class: 'sample-completion-apply',
+                  type: 'button',
+                  onClick: () => emit('apply', { blockIds: ['block-1'], completed: true })
+                },
+                '确认完成001'
               )
             ])
           : null
@@ -108,11 +151,19 @@ function mountPage() {
         LabReportDialog: true,
         LabSmsDialog: true,
         BulkSampleFillDialog: BulkSampleFillDialogStub,
+        SampleCompletionDialog: SampleCompletionDialogStub,
         BlacklistHitDialog: true,
-        ElDatePicker: { template: '<input />' },
+        ElDatePicker: {
+          props: ['modelValue'],
+          emits: ['update:modelValue', 'change'],
+          template: '<input class="date-picker-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" @change="$emit(\'change\', $event.target.value)" />'
+        },
         ElTag: { template: '<span><slot /></span>' },
         ElInput: { template: '<input />' },
-        ElButton: { template: '<button type="button" @click="$emit(\'click\')"><slot /></button>' }
+        ElButton: {
+          emits: ['click'],
+          template: '<button type="button" @click="$emit(\'click\')"><slot /></button>'
+        }
       }
     }
   })
@@ -126,15 +177,27 @@ async function settleMountedPage() {
 
 describe('LabDataPage table layout', () => {
   beforeEach(() => {
+    mocks.labStore.loadCurrentSheet.mockReset()
     mocks.labStore.loadCurrentSheet.mockResolvedValue(undefined)
+    mocks.labStore.loadSheetByDate.mockReset()
     mocks.labStore.loadSheetByDate.mockResolvedValue(undefined)
     mocks.labStore.saveParameters.mockReset()
     mocks.labStore.patchBlock.mockReset()
     mocks.labStore.commitBlockFieldChange.mockReset()
     mocks.labStore.persistAllBlocks.mockReset()
-    mocks.labStore.persistAllBlocks.mockResolvedValue(undefined)
+    mocks.labStore.persistAllBlocks.mockResolvedValue({ success: true, failedBlockIds: [], conflictBlockIds: [] })
+    mocks.labStore.retryFailedSaves.mockReset()
+    mocks.labStore.retryFailedSaves.mockResolvedValue({ success: true, failedBlockIds: [], conflictBlockIds: [] })
+    mocks.labStore.confirmConflictOverwrite.mockReset()
+    mocks.labStore.confirmConflictOverwrite.mockResolvedValue({ success: true, failedBlockIds: [], conflictBlockIds: [] })
     mocks.labStore.appendSampleBlocks.mockResolvedValue(undefined)
     mocks.labStore.disconnectRealtime.mockReset()
+    mocks.accessGuard.loadSettings.mockReset()
+    mocks.accessGuard.requestAccess.mockReset()
+    mocks.accessGuard.requestAccess.mockReturnValue(true)
+    mocks.labStore.autoSaveStatus = 'idle'
+    mocks.labStore.autoSaveError = ''
+    mocks.labStore.conflictBlockIds = []
     mocks.labStore.sheet = { date: '2026-06-24', readonly: false }
     mocks.labStore.sampleBlocks = [
       {
@@ -154,6 +217,110 @@ describe('LabDataPage table layout', () => {
         parameterSnapshot: {}
       }
     ]
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('uses the previous business date before 04:00 Beijing time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T19:59:59.000Z'))
+    mocks.labStore.sheet = null as any
+    mocks.labStore.loadCurrentSheet.mockImplementation(async () => {
+      mocks.labStore.sheet = { date: '2026-07-30', readonly: false }
+      return true
+    })
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect((wrapper.find('.date-picker-stub').element as HTMLInputElement).value).toBe('2026-07-30')
+    wrapper.unmount()
+  })
+
+  it('does not treat the active pre-04:00 business date as history', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T19:59:59.000Z'))
+    mocks.labStore.sheet = { date: '2026-07-30', readonly: false }
+    mocks.labStore.loadSheetByDate.mockResolvedValue(true)
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+    await wrapper.find('.date-picker-stub').setValue('2026-07-30')
+    await Promise.resolve()
+
+    expect(mocks.accessGuard.requestAccess).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('treats the previous date as history from 04:00 Beijing time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T20:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-07-31', readonly: false }
+    mocks.labStore.loadSheetByDate.mockResolvedValue(true)
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+    await wrapper.find('.date-picker-stub').setValue('2026-07-30')
+    await Promise.resolve()
+
+    expect(mocks.accessGuard.requestAccess).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('loads the new business day when the page crosses 04:00 Beijing time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T19:59:59.000Z'))
+    mocks.labStore.sheet = { date: '2026-07-30', readonly: false }
+    mocks.labStore.loadCurrentSheet.mockImplementation(async () => {
+      mocks.labStore.sheet = { date: '2026-07-31', readonly: false }
+      return true
+    })
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await nextTick()
+
+    expect(mocks.labStore.loadCurrentSheet).toHaveBeenCalledTimes(1)
+    expect((wrapper.find('.date-picker-stub').element as HTMLInputElement).value).toBe('2026-07-31')
+    wrapper.unmount()
+  })
+
+  it('recovers a missed 04:00 switch when the page opens after the boundary', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T20:01:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-07-30', readonly: false }
+    mocks.labStore.loadCurrentSheet.mockImplementation(async () => {
+      mocks.labStore.sheet = { date: '2026-07-31', readonly: false }
+      return true
+    })
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(mocks.labStore.loadCurrentSheet).toHaveBeenCalledTimes(1)
+    expect((wrapper.find('.date-picker-stub').element as HTMLInputElement).value).toBe('2026-07-31')
+    wrapper.unmount()
+  })
+
+  it('keeps the previous table visible when the business-day switch cannot save', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T19:59:59.000Z'))
+    mocks.labStore.sheet = { date: '2026-07-30', readonly: false }
+    mocks.labStore.loadCurrentSheet.mockResolvedValue(false)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await nextTick()
+
+    expect((wrapper.find('.date-picker-stub').element as HTMLInputElement).value).toBe('2026-07-30')
+    expect(errorSpy).toHaveBeenCalledWith('仍有数据未保存，已保留当前表格，请保存成功后再切换业务日')
+    wrapper.unmount()
+    errorSpy.mockRestore()
   })
 
   it('uses the grid internal scrollbar without rendering an external mirror scrollbar', async () => {
@@ -228,6 +395,79 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.commitBlockFieldChange).toHaveBeenCalledWith('block-1', 'price', null, 20)
     expect(mocks.labStore.commitBlockFieldChange).toHaveBeenCalledWith('block-1', 'paymentStatus', '', '月结款')
     expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
+  })
+
+  it('records and saves recipient customers during bulk fill', async () => {
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '填写已选1个样品').trigger('click')
+    await wrapper.find('.bulk-fill-recipient-apply').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.patchBlock).toHaveBeenCalledWith('block-1', expect.objectContaining({
+      recipientCustomerText: '李总'
+    }))
+    expect(mocks.labStore.commitBlockFieldChange).toHaveBeenCalledWith(
+      'block-1',
+      'recipientCustomerText',
+      null,
+      '李总'
+    )
+    expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
+  })
+
+  it('marks the selected sample as completed and persists immediately', async () => {
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '标记样品完成').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.sample-completion-dialog-stub').exists()).toBe(true)
+
+    await wrapper.find('.sample-completion-apply').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.commitBlockFieldChange).toHaveBeenCalledWith('block-1', 'completed', false, true)
+    expect(mocks.labStore.patchBlock).toHaveBeenCalledWith('block-1', { completed: true })
+    expect(mocks.labStore.patchBlock).not.toHaveBeenCalledWith('block-2', expect.anything())
+    expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
+  })
+
+  it('disables the sample completion action for readonly history sheets', async () => {
+    mocks.labStore.sheet = { date: '2026-06-24', readonly: true }
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(findButtonByText(wrapper, '标记样品完成').attributes('disabled')).toBeDefined()
+  })
+
+  it('retries unsaved fields from the toolbar after a save failure', async () => {
+    mocks.labStore.autoSaveStatus = 'error'
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '重试保存').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.retryFailedSaves).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires confirmation before overwriting conflicting server fields', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    mocks.labStore.autoSaveStatus = 'conflict'
+    mocks.labStore.conflictBlockIds = ['block-1']
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '确认保存本机内容').trigger('click')
+    await Promise.resolve()
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(mocks.labStore.confirmConflictOverwrite).toHaveBeenCalledTimes(1)
+    confirmSpy.mockRestore()
   })
 })
 

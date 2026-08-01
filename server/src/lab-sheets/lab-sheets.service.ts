@@ -2,7 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CurrentUser } from '../auth/current-user'
-import { todayInBeijing } from '../common/date'
+import { businessDateInBeijing } from '../common/date'
 import { calculateResults, createEmptyInputs, defaultLabParameters, defaultSampleBlockCount, editableInputFields, hasLabDetectionInput } from '../common/lab'
 import { LabSheetRealtimeService } from './lab-sheet-realtime.service'
 import { collapseConsecutiveFieldChanges } from '../common/change-log'
@@ -14,17 +14,17 @@ export class LabSheetsService {
     private readonly realtime: LabSheetRealtimeService
   ) {}
 
-  async getSheetForFrontendUser(frontendUserId: string, date = todayInBeijing()) {
+  async getSheetForFrontendUser(frontendUserId: string, date = businessDateInBeijing()) {
     const sheet = await this.ensureSheet(frontendUserId, date)
     return this.toSheetDto(sheet)
   }
 
   async getDefaultSheetForFrontendUser(frontendUserId: string) {
-    return this.toSheetDto(await this.ensureSheet(frontendUserId, todayInBeijing()))
+    return this.toSheetDto(await this.ensureSheet(frontendUserId, businessDateInBeijing()))
   }
 
   async updateCurrentParameters(frontendUserId: string, parameters: Record<string, number>, sourceClientId?: string) {
-    const sheet = await this.ensureSheet(frontendUserId, todayInBeijing())
+    const sheet = await this.ensureSheet(frontendUserId, businessDateInBeijing())
     const nextParameters = { ...defaultLabParameters, ...parameters, savedAt: new Date().toISOString() }
     await this.prisma.labSheet.update({ where: { id: sheet.id }, data: { parameters: nextParameters as Prisma.InputJsonValue } })
     this.realtime.publish({
@@ -83,8 +83,13 @@ export class LabSheetsService {
     const oldInputs = (block.inputs || {}) as Record<string, unknown>
     const changedFields = this.normalizeChangedFields(blockPayload)
     if (!Object.keys(changedFields).length) return this.toBlockDto(block)
-    this.assertNoInputConflict(block, blockPayload, changedFields)
-    const nextInputs = { ...oldInputs, ...changedFields }
+    const effectiveChangedFields = Object.entries(changedFields).reduce<Record<string, unknown>>((fields, [field, value]) => {
+      if (!this.isJsonEqual(oldInputs[field] ?? null, value ?? null)) fields[field] = value
+      return fields
+    }, {})
+    if (!Object.keys(effectiveChangedFields).length) return this.toBlockDto(block)
+    this.assertNoInputConflict(block, blockPayload, effectiveChangedFields)
+    const nextInputs = { ...oldInputs, ...effectiveChangedFields }
     const sheetParameters = (sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
     const existingSnapshot = (block.parameterSnapshot || sheetParameters) as typeof defaultLabParameters
     const parameters = !hasLabDetectionInput(oldInputs) && hasLabDetectionInput(nextInputs) ? sheetParameters : existingSnapshot
@@ -254,7 +259,7 @@ export class LabSheetsService {
           sheetId,
           blockId,
           frontendUserId,
-          date: sheet?.date || todayInBeijing(),
+          date: sheet?.date || businessDateInBeijing(),
           field,
           changeCount
         },
@@ -326,7 +331,7 @@ export class LabSheetsService {
   }
 
   private isReadonlySheet(sheet: { date: string; readonly: boolean }) {
-    return sheet.date !== todayInBeijing()
+    return sheet.date !== businessDateInBeijing()
   }
 
   private hasSheetContent(blocks: Array<{ inputs: unknown }>) {

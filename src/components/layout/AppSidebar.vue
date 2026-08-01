@@ -46,7 +46,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import { useRoute } from 'vue-router'
-import { DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, Warning } from '@element-plus/icons-vue'
+import { DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, User, Warning } from '@element-plus/icons-vue'
 
 interface NavChild {
   path: string
@@ -93,6 +93,7 @@ const navItems: NavItem[] = [
     ]
   },
   { path: '/reports', label: '报表', icon: DocumentChecked },
+  { path: '/customers-overview', label: '客户总览', icon: User },
   { path: '/blacklist', label: '黑名单', icon: Warning }
 ]
 

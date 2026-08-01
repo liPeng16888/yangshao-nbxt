@@ -739,6 +739,10 @@ export class FinanceService {
 
   private getMonthlyElementCounts(inputs: Record<string, unknown>): MonthlyElementCount[] {
     const selectedKeys = new Set(this.parseMonthlyElementKeys(typeof inputs.elementNote === 'string' ? inputs.elementNote : ''))
+    if (selectedKeys.has('aluminum') && selectedKeys.has('silicon') && selectedKeys.has('aluminumSiliconRatio')) {
+      selectedKeys.delete('aluminum')
+      selectedKeys.delete('silicon')
+    }
     return monthlyElementDefinitions
       .filter((definition) => selectedKeys.has(definition.key))
       .map((definition) => ({ key: definition.key, label: definition.label, count: 1 }))

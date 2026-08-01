@@ -3,12 +3,25 @@
     <div class="toolbar">
       <div class="toolbar-left">
         <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" @change="handleDateChange" />
-        <el-tag v-if="labStore.sheet?.readonly" type="warning" effect="plain">历史副表只读</el-tag>
+        <el-tag v-if="switchingBusinessDay" type="info" effect="plain">正在切换业务日</el-tag>
+        <el-tag v-else-if="labStore.sheet?.readonly" type="warning" effect="plain">历史副表只读</el-tag>
         <el-tag v-else type="success" effect="plain">当前表可编辑</el-tag>
-        <el-tag v-if="!labStore.sheet?.readonly" :type="autoSaveTagType" effect="plain">{{ autoSaveText }}</el-tag>
+        <el-tag v-if="!isPageReadonly" :type="autoSaveTagType" effect="plain">{{ autoSaveText }}</el-tag>
+        <el-button
+          v-if="!isPageReadonly && (labStore.autoSaveStatus === 'error' || labStore.autoSaveStatus === 'conflict')"
+          size="small"
+          :type="labStore.autoSaveStatus === 'conflict' ? 'danger' : 'primary'"
+          :loading="labStore.saving || labStore.autoSaving"
+          @click="handleSaveRecovery"
+        >
+          {{ labStore.autoSaveStatus === 'conflict' ? '确认保存本机内容' : '重试保存' }}
+        </el-button>
       </div>
       <div class="toolbar-right">
-        <el-button :icon="EditPen" :loading="labStore.saving" :disabled="labStore.sheet?.readonly" @click="handleBulkFillSamples">
+        <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
+          标记样品完成
+        </el-button>
+        <el-button :icon="EditPen" :loading="labStore.saving" :disabled="isPageReadonly" @click="handleBulkFillSamples">
           {{ bulkFillButtonText }}
         </el-button>
         <el-button :icon="ChatLineSquare" :loading="labStore.saving" @click="handleGenerateSms">
@@ -21,11 +34,11 @@
       </div>
     </div>
 
-    <LabParameterPanel :parameters="labStore.currentParameters" :saving="labStore.saving" :readonly="labStore.sheet?.readonly" @save="labStore.saveParameters" />
+    <LabParameterPanel :parameters="labStore.currentParameters" :saving="labStore.saving" :readonly="isPageReadonly" @save="labStore.saveParameters" />
 
     <LabSheetGrid
       :blocks="labStore.sampleBlocks"
-      :readonly="labStore.sheet?.readonly"
+      :readonly="isPageReadonly"
       :selection-mode="selectionMode"
       :selected-block-ids="selectedReportBlockIds"
       :highlight-block-id="highlightBlockId"
@@ -35,7 +48,7 @@
       @selection-change="toggleReportBlockSelection"
     />
 
-    <section class="panel append-panel" v-if="!labStore.sheet?.readonly">
+    <section class="panel append-panel" v-if="!isPageReadonly">
       <div class="panel__body append-body">
         <span>增加样品数量</span>
         <el-input v-model.trim="appendCount" placeholder="正整数" class="append-input" />
@@ -56,6 +69,14 @@
       @apply="applyBulkSampleFill"
       @close="bulkFillDialogVisible = false"
       @blacklist-hit="showBlacklistHit"
+    />
+
+    <SampleCompletionDialog
+      :visible="completionDialogVisible"
+      :blocks="labStore.sampleBlocks"
+      :saving="labStore.saving || labStore.autoSaving"
+      @apply="applySampleCompletion"
+      @close="completionDialogVisible = false"
     />
 
     <LabReportDialog
@@ -80,8 +101,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatLineSquare, DocumentChecked, EditPen, Plus } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ChatLineSquare, CircleCheck, DocumentChecked, EditPen, Plus } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import type { BlacklistRecord } from '@/types/blacklist'
 import type { LabSampleInput } from '@/types/labSheet'
@@ -90,11 +111,12 @@ import BlacklistHitDialog from '@/components/lab-sheet/BlacklistHitDialog.vue'
 import BulkSampleFillDialog from '@/components/lab-sheet/BulkSampleFillDialog.vue'
 import LabParameterPanel from '@/components/lab-sheet/LabParameterPanel.vue'
 import LabSheetGrid from '@/components/lab-sheet/LabSheetGrid.vue'
+import SampleCompletionDialog from '@/components/lab-sheet/SampleCompletionDialog.vue'
 import LabReportDialog from '@/components/lab-report/LabReportDialog.vue'
 import LabSmsDialog from '@/components/lab-report/LabSmsDialog.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useLabSheetStore } from '@/stores/labSheet'
-import { todayInBeijing } from '@/utils/date'
+import { businessDateInBeijing, millisecondsUntilNextBusinessDayInBeijing } from '@/utils/date'
 import { loadLabReportSmsTemplate, loadLabReportTemplate } from '@/utils/labReport'
 
 type GenerationMode = 'report' | 'sms' | 'bulkFill' | null
@@ -103,7 +125,10 @@ const route = useRoute()
 const router = useRouter()
 const labStore = useLabSheetStore()
 const accessGuard = useAccessGuardStore()
-const selectedDate = ref(todayInBeijing())
+const BUSINESS_DAY_PREFLUSH_LEAD_MS = 5_000
+const BUSINESS_DAY_RETRY_MS = 60_000
+
+const selectedDate = ref(businessDateInBeijing())
 const appendCount = ref('1')
 const hitDialogVisible = ref(false)
 const hitRecords = ref<BlacklistRecord[]>([])
@@ -112,23 +137,33 @@ const selectedReportBlockIds = ref<string[]>([])
 const reportDialogVisible = ref(false)
 const smsDialogVisible = ref(false)
 const bulkFillDialogVisible = ref(false)
+const completionDialogVisible = ref(false)
+const switchingBusinessDay = ref(false)
 const highlightBlockId = ref('')
 const reportTemplate = ref<LabReportTemplate>(loadLabReportTemplate())
 const smsTemplate = ref<LabReportSmsTemplate>(loadLabReportSmsTemplate())
+let businessDayBoundaryTimer: number | undefined
+let businessDayPreflushTimer: number | undefined
+
+const isPageReadonly = computed(() => Boolean(labStore.sheet?.readonly || switchingBusinessDay.value))
 
 const autoSaveText = computed(() => {
   if (labStore.autoSaveStatus === 'pending') return '等待自动保存'
   if (labStore.autoSaveStatus === 'saving') return '自动保存中'
+  if (labStore.autoSaveStatus === 'retrying') return '网络不稳定，正在重试保存'
   if (labStore.autoSaveStatus === 'saved') {
     return labStore.lastAutoSavedAt ? `已自动保存 ${dayjs(labStore.lastAutoSavedAt).format('HH:mm:ss')}` : '已自动保存'
   }
   if (labStore.autoSaveStatus === 'error') return '自动保存失败，请手动保存'
+  if (labStore.autoSaveStatus === 'conflict') return '保存冲突，本机内容已保留'
   return '自动保存开启'
 })
 
 const autoSaveTagType = computed(() => {
   if (labStore.autoSaveStatus === 'error') return 'danger'
+  if (labStore.autoSaveStatus === 'conflict') return 'danger'
   if (labStore.autoSaveStatus === 'pending') return 'warning'
+  if (labStore.autoSaveStatus === 'retrying') return 'warning'
   if (labStore.autoSaveStatus === 'saving') return 'info'
   if (labStore.autoSaveStatus === 'saved') return 'success'
   return 'info'
@@ -153,9 +188,13 @@ const selectionMode = computed(() => generationMode.value !== null)
 
 onMounted(async () => {
   await loadSheetFromRoute()
+  bindBusinessDayListeners()
+  await checkBusinessDayBoundary()
 })
 
 onBeforeUnmount(() => {
+  clearBusinessDayTimers()
+  unbindBusinessDayListeners()
   labStore.disconnectRealtime()
 })
 
@@ -166,13 +205,95 @@ watch(
   }
 )
 
+function bindBusinessDayListeners() {
+  window.addEventListener('focus', handleBusinessDayRecovery)
+  window.addEventListener('online', handleBusinessDayRecovery)
+  document.addEventListener('visibilitychange', handleBusinessDayVisibilityChange)
+}
+
+function unbindBusinessDayListeners() {
+  window.removeEventListener('focus', handleBusinessDayRecovery)
+  window.removeEventListener('online', handleBusinessDayRecovery)
+  document.removeEventListener('visibilitychange', handleBusinessDayVisibilityChange)
+}
+
+function clearBusinessDayTimers() {
+  if (businessDayBoundaryTimer !== undefined) window.clearTimeout(businessDayBoundaryTimer)
+  if (businessDayPreflushTimer !== undefined) window.clearTimeout(businessDayPreflushTimer)
+  businessDayBoundaryTimer = undefined
+  businessDayPreflushTimer = undefined
+}
+
+function scheduleBusinessDayBoundary() {
+  clearBusinessDayTimers()
+  const delay = millisecondsUntilNextBusinessDayInBeijing()
+  businessDayPreflushTimer = window.setTimeout(() => {
+    void preflushBeforeBusinessDayBoundary()
+  }, Math.max(0, delay - BUSINESS_DAY_PREFLUSH_LEAD_MS))
+  businessDayBoundaryTimer = window.setTimeout(() => {
+    void checkBusinessDayBoundary()
+  }, delay)
+}
+
+function scheduleBusinessDayRetry() {
+  clearBusinessDayTimers()
+  businessDayBoundaryTimer = window.setTimeout(() => {
+    void checkBusinessDayBoundary()
+  }, BUSINESS_DAY_RETRY_MS)
+}
+
+async function preflushBeforeBusinessDayBoundary() {
+  const currentSheet = labStore.sheet
+  if (!currentSheet || currentSheet.readonly || currentSheet.date !== businessDateInBeijing()) return
+  await labStore.persistAllBlocks({ silent: true })
+}
+
+async function checkBusinessDayBoundary() {
+  const explicitDate = typeof route.query.date === 'string' ? route.query.date : ''
+  if (explicitDate) {
+    scheduleBusinessDayBoundary()
+    return
+  }
+  const businessDate = businessDateInBeijing()
+  if (!labStore.sheet || labStore.sheet.date === businessDate) {
+    scheduleBusinessDayBoundary()
+    return
+  }
+  if (switchingBusinessDay.value) return
+  switchingBusinessDay.value = true
+  try {
+    const loaded = await labStore.loadCurrentSheet()
+    if (loaded === false) {
+      ElMessage.error('仍有数据未保存，已保留当前表格，请保存成功后再切换业务日')
+      scheduleBusinessDayRetry()
+      return
+    }
+    selectedDate.value = labStore.sheet?.date || businessDate
+    highlightBlockId.value = ''
+    scheduleBusinessDayBoundary()
+  } catch {
+    ElMessage.error('新业务日表格加载失败，已保留当前表格')
+    scheduleBusinessDayRetry()
+  } finally {
+    switchingBusinessDay.value = false
+  }
+}
+
+function handleBusinessDayRecovery() {
+  void checkBusinessDayBoundary()
+}
+
+function handleBusinessDayVisibilityChange() {
+  if (document.visibilityState === 'visible') void checkBusinessDayBoundary()
+}
+
 async function loadSheetFromRoute() {
   const queryDate = typeof route.query.date === 'string' ? route.query.date : ''
   const queryBlock = typeof route.query.block === 'string' ? route.query.block : ''
   if (queryDate) {
     const allowed = await requestHistoricalDateAccess(queryDate, () => loadRouteSheetFromQuery(queryDate, queryBlock))
     if (!allowed) {
-      selectedDate.value = labStore.sheet?.date || todayInBeijing()
+      selectedDate.value = labStore.sheet?.date || businessDateInBeijing()
       highlightBlockId.value = ''
       return
     }
@@ -180,7 +301,7 @@ async function loadSheetFromRoute() {
   } else if (!labStore.sheet) {
     await labStore.loadCurrentSheet()
     const loadedSheet = labStore.sheet as { date?: string } | null
-    selectedDate.value = loadedSheet?.date || todayInBeijing()
+    selectedDate.value = loadedSheet?.date || businessDateInBeijing()
   }
   highlightBlockId.value = queryBlock
   if (queryBlock) await scrollToHighlightedBlock(queryBlock)
@@ -190,7 +311,7 @@ async function handleDateChange(value: string) {
   if (!value) return
   const allowed = await requestHistoricalDateAccess(value, () => loadSelectedDate(value))
   if (!allowed) {
-    selectedDate.value = labStore.sheet?.date || todayInBeijing()
+    selectedDate.value = labStore.sheet?.date || businessDateInBeijing()
     return
   }
   await loadSelectedDate(value)
@@ -198,7 +319,10 @@ async function handleDateChange(value: string) {
 
 async function loadRouteSheet(queryDate: string, queryBlock: string) {
   selectedDate.value = queryDate
-  if (labStore.sheet?.date !== queryDate || queryBlock) await labStore.loadSheetByDate(queryDate)
+  if (labStore.sheet?.date !== queryDate || queryBlock) {
+    const loaded = await labStore.loadSheetByDate(queryDate)
+    if (!loaded) selectedDate.value = labStore.sheet?.date || businessDateInBeijing()
+  }
 }
 
 async function loadRouteSheetFromQuery(queryDate: string, queryBlock: string) {
@@ -210,11 +334,15 @@ async function loadRouteSheetFromQuery(queryDate: string, queryBlock: string) {
 async function loadSelectedDate(value: string) {
   selectedDate.value = value
   highlightBlockId.value = ''
-  await labStore.loadSheetByDate(value)
+  const loaded = await labStore.loadSheetByDate(value)
+  if (!loaded) {
+    selectedDate.value = labStore.sheet?.date || businessDateInBeijing()
+    ElMessage.error('仍有数据未保存，已停止切换日期')
+  }
 }
 
 async function requestHistoricalDateAccess(date: string, onSuccess: () => void | Promise<void>) {
-  if (date === todayInBeijing()) return true
+  if (date === businessDateInBeijing()) return true
   await accessGuard.loadSettings()
   return accessGuard.requestAccess({
     title: '历史日期访问验证',
@@ -236,7 +364,8 @@ async function handleGenerateReport() {
     ElMessage.warning('请先选择至少一个样品')
     return
   }
-  await labStore.persistAllBlocks({ silent: true })
+  const saved = await labStore.persistAllBlocks({ silent: true })
+  if (!saved.success) return
   reportTemplate.value = loadLabReportTemplate()
   reportDialogVisible.value = true
 }
@@ -249,13 +378,14 @@ async function handleGenerateSms() {
     ElMessage.warning('请先选择至少一个样品')
     return
   }
-  await labStore.persistAllBlocks({ silent: true })
+  const saved = await labStore.persistAllBlocks({ silent: true })
+  if (!saved.success) return
   smsTemplate.value = loadLabReportSmsTemplate()
   smsDialogVisible.value = true
 }
 
 async function handleBulkFillSamples() {
-  if (labStore.sheet?.readonly) {
+  if (isPageReadonly.value) {
     ElMessage.warning('历史副表只读，不能批量填写')
     return
   }
@@ -267,6 +397,34 @@ async function handleBulkFillSamples() {
     return
   }
   bulkFillDialogVisible.value = true
+}
+
+function openSampleCompletionDialog() {
+  if (isPageReadonly.value) {
+    ElMessage.warning('历史副表只读，不能修改完成状态')
+    return
+  }
+  completionDialogVisible.value = true
+}
+
+async function applySampleCompletion(payload: { blockIds: string[]; completed: boolean }) {
+  const targetBlocks = labStore.sampleBlocks.filter((block) => payload.blockIds.includes(block.id))
+  const changedBlocks = targetBlocks.filter((block) => Boolean(block.inputs.completed) !== payload.completed)
+  if (!changedBlocks.length) {
+    ElMessage.info(payload.completed ? '所选样品已经标记为完成' : '所选样品当前没有完成标记')
+    return
+  }
+  changedBlocks.forEach((block) => {
+    labStore.commitBlockFieldChange(block.id, 'completed', Boolean(block.inputs.completed), payload.completed)
+    labStore.patchBlock(block.id, { completed: payload.completed })
+  })
+  const saved = await labStore.persistAllBlocks({ silent: true })
+  if (!saved.success) {
+    ElMessage.error('样品完成状态尚未保存，请先重试保存')
+    return
+  }
+  completionDialogVisible.value = false
+  ElMessage.success(payload.completed ? `已标记 ${changedBlocks.length} 个样品为完成` : `已取消 ${changedBlocks.length} 个样品的完成标记`)
 }
 
 function beginSelection(mode: Exclude<GenerationMode, null>) {
@@ -303,7 +461,11 @@ async function applyBulkSampleFill(payload: { patch: Partial<LabSampleInput> }) 
     })
     labStore.patchBlock(block.id, payload.patch)
   })
-  await labStore.persistAllBlocks({ silent: true })
+  const saved = await labStore.persistAllBlocks({ silent: true })
+  if (!saved.success) {
+    ElMessage.error('批量填写内容尚未保存，请先重试')
+    return
+  }
   bulkFillDialogVisible.value = false
   generationMode.value = null
   selectedReportBlockIds.value = []
@@ -313,6 +475,7 @@ async function applyBulkSampleFill(payload: { patch: Partial<LabSampleInput> }) 
 function getBulkFillChangeLogFields(patch: Partial<LabSampleInput>) {
   const fields: Array<keyof LabSampleInput> = []
   if (hasPatchField(patch, 'customerText')) fields.push('customerText')
+  if (hasPatchField(patch, 'recipientCustomerText')) fields.push('recipientCustomerText')
   if (hasPatchField(patch, 'price')) fields.push('price')
   if (hasPatchField(patch, 'paymentStatus')) fields.push('paymentStatus')
   if (hasPatchField(patch, 'elementNote')) fields.push('elementNote')
@@ -321,6 +484,25 @@ function getBulkFillChangeLogFields(patch: Partial<LabSampleInput>) {
 
 function hasPatchField(patch: Partial<LabSampleInput>, field: keyof LabSampleInput) {
   return Object.prototype.hasOwnProperty.call(patch, field)
+}
+
+async function handleSaveRecovery() {
+  if (labStore.autoSaveStatus === 'conflict') {
+    try {
+      await ElMessageBox.confirm(
+        `确认用本机内容覆盖 ${labStore.conflictBlockIds.length} 个冲突样品格中的对应字段吗？`,
+        '确认保存本机内容',
+        { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+    const result = await labStore.confirmConflictOverwrite()
+    if (result.success) ElMessage.success('冲突内容已保存')
+    return
+  }
+  const result = await labStore.retryFailedSaves()
+  if (result.success) ElMessage.success('未保存内容已重新保存')
 }
 
 async function appendBlocks() {

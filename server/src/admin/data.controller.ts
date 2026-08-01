@@ -28,6 +28,11 @@ export class AdminDataController {
     return this.data.cellHistory(user, query)
   }
 
+  @Get('customer-overview')
+  customerOverview(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
+    return this.data.customerOverview(user, query)
+  }
+
   @Get('abnormal-records')
   abnormalRecords(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
     return this.data.abnormalRecords(user, query)

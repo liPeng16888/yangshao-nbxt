@@ -17,3 +17,15 @@ export interface FrontendOption {
 export interface ApiPageState {
   loading: boolean
 }
+
+export interface AdminCustomerOverviewRow {
+  frontendUserId: string
+  frontendUserName: string
+  customerKey: string
+  customer: string
+  customerDisplay: string
+  sampleCount: number
+  totalAmount: number
+  firstDetectionDate: string
+  lastDetectionDate: string
+}

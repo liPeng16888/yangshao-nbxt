@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { getAccessGuardSettings, updateAccessGuardSettings } from '@/api/accessGuard'
+import { isSensitiveAccessPath } from '@/router/guards'
 
 const SETTINGS_STORAGE_KEY = 'ys_sensitive_access_guard_settings'
 const UNLOCKED_UNTIL_STORAGE_KEY = 'ys_sensitive_access_unlocked_until'
@@ -137,7 +138,7 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
   }
 
   function isProtectedPath(path: string) {
-    return path.startsWith('/finance') || path.startsWith('/reports') || path.startsWith('/blacklist')
+    return isSensitiveAccessPath(path)
   }
 
   function hasValidSession() {

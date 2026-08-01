@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import type { AdminUser, FrontendOption } from './types'
+import type { AdminCustomerOverviewRow, AdminUser, FrontendOption } from './types'
 
 export const ADMIN_TOKEN_KEY = 'ys_admin_token'
 export const ADMIN_USER_KEY = 'ys_admin_user'
@@ -69,6 +69,19 @@ const mockFrontendOptions: FrontendOption[] = [
 ]
 
 const mockRows = {
+  customerOverview: [
+    {
+      frontendUserId: 'front-1',
+      frontendUserName: '凯里化验室',
+      customerKey: 'ids:customer-zhang-san',
+      customer: '张三',
+      customerDisplay: '张三 13800000001 zhangsan-wx 张总',
+      sampleCount: 3,
+      totalAmount: 240,
+      firstDetectionDate: '2026-06-20',
+      lastDetectionDate: '2026-06-25'
+    }
+  ],
   frontendUsers: [
     {
       id: 'front-1',
@@ -279,6 +292,12 @@ const mockRequest = {
       const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasLabDetectionInput(block.inputs))
       return sampleBlocks.length ? [{ ...mockSheet, date: config?.params?.date || mockSheet.date, sampleBlocks }] : []
     }
+    if (url === '/admin/customer-overview') {
+      const selectedIds = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
+      return selectedIds.length
+        ? mockRows.customerOverview.filter((row) => selectedIds.includes(row.frontendUserId))
+        : mockRows.customerOverview
+    }
     if (url === '/admin/data-statistics/cell-history') {
       const fields = parseHistoryFields(config?.params?.fields || config?.params?.field || 'sampleNumber')
       return fields.flatMap((field, index) => {
@@ -435,4 +454,10 @@ export function getFrontendOptions() {
 
 export function buildFrontendIds(ids: string[]) {
   return ids.join(',')
+}
+
+export function getAdminCustomerOverview(frontendUserIds: string[]) {
+  return request.get<any, AdminCustomerOverviewRow[]>('/admin/customer-overview', {
+    params: { frontendUserIds: buildFrontendIds(frontendUserIds) }
+  })
 }

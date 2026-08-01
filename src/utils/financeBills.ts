@@ -13,7 +13,8 @@ import type {
   UnsettledSampleRow
 } from '@/types/financeBills'
 import type { LabSheet, SampleBlock } from '@/types/labSheet'
-import { getBlockCustomerDisplayText, getBlockCustomerName, getSmsElementLabel, labReportElements, parseLabElementKeys } from './labReport'
+import { getSmsElementLabel, labReportElements, parseLabElementKeys } from './labReport'
+import { getPayerCustomerDisplayText, getPayerCustomerName } from './sampleCustomers'
 
 export const incomePaymentStatuses: IncomePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款', '未选择']
 
@@ -102,9 +103,15 @@ export function getUnsettledRowsFromSheet(sheet: LabSheet): UnsettledSampleRow[]
       blockId: block.id,
       sequence: block.inputs.sequence || String(block.index).padStart(3, '0'),
       sampleNumber: block.inputs.sampleNumber?.trim() || '无信息',
-      customer: getBlockCustomerName(block) || '无信息',
+      customer: getPayerCustomerName(block.inputs) || '无信息',
       amount: block.inputs.price || 0
     }))
+}
+
+export function filterUnsettledRows(rows: UnsettledSampleRow[], selectedCustomers: string[]) {
+  if (!selectedCustomers.length) return rows
+  const selectedCustomerSet = new Set(selectedCustomers)
+  return rows.filter((row) => selectedCustomerSet.has(row.customer))
 }
 
 export function getMonthlySettlementDailyRowsFromSheet(sheet: LabSheet): MonthlySettlementDailyRow[] {
@@ -112,8 +119,8 @@ export function getMonthlySettlementDailyRowsFromSheet(sheet: LabSheet): Monthly
   sheet.sampleBlocks
     .filter((block) => isIncomeSample(block) && block.inputs.paymentStatus === '月结款')
     .forEach((block) => {
-      const customer = getBlockCustomerName(block) || '无信息'
-      const customerDisplay = getBlockCustomerDisplayText(block) || customer
+      const customer = getPayerCustomerName(block.inputs) || '无信息'
+      const customerDisplay = getPayerCustomerDisplayText(block.inputs) || customer
       const id = `${sheet.date}__${customer}`
       const current = rowMap.get(id) || {
         id,
@@ -176,12 +183,18 @@ export function summarizeMonthlySettlementReport(
   }
 }
 
+export function filterMonthlySettlementDailyRows(rows: MonthlySettlementDailyRow[], selectedCustomers: string[]) {
+  if (!selectedCustomers.length) return rows
+  const selectedCustomerSet = new Set(selectedCustomers)
+  return rows.filter((row) => selectedCustomerSet.has(row.customer))
+}
+
 export function getPrepaidDailyRowsFromSheet(sheet: LabSheet): PrepaidDailyUsageRow[] {
   const rowMap = new Map<string, PrepaidDailyUsageRow>()
   sheet.sampleBlocks
     .filter((block) => isIncomeSample(block) && block.inputs.paymentStatus === '预存款')
     .forEach((block) => {
-      const customer = getBlockCustomerName(block) || '无信息'
+      const customer = getPayerCustomerName(block.inputs) || '无信息'
       const id = createPrepaidDailyUsageId(sheet.date, customer)
       const current = rowMap.get(id) || {
         id,
@@ -284,6 +297,14 @@ function sortMonthlySettlementDailyRows(rows: MonthlySettlementDailyRow[]) {
 
 function getMonthlyElementCounts(block: SampleBlock): MonthlySettlementElementCount[] {
   const selectedKeys = new Set(parseLabElementKeys(block.inputs.elementNote || ''))
+  if (
+    selectedKeys.has('aluminum') &&
+    selectedKeys.has('silicon') &&
+    selectedKeys.has('aluminumSiliconRatio')
+  ) {
+    selectedKeys.delete('aluminum')
+    selectedKeys.delete('silicon')
+  }
   return labReportElements
     .filter((element) => selectedKeys.has(element.key))
     .map((element) => ({ key: element.key, label: getSmsElementLabel(element.key), count: 1 }))

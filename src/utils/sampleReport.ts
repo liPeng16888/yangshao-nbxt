@@ -16,6 +16,7 @@ const labDetectionInputFields: Array<keyof LabSampleInput> = [
   'waterSample',
   'bottleWater',
   'bottleWaterSample',
+  'moisture',
   'crucible',
   'sampleWeight',
   'burnedCrucibleSample'

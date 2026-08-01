@@ -6,13 +6,21 @@ import { hasLabDetectionInput } from '../common/lab'
 import { toMoney } from '../common/money'
 import { AdminAccessService } from './admin-access.service'
 import { collapseConsecutiveFieldChanges } from '../common/change-log'
+import { CustomerOverviewService } from '../customer-overview/customer-overview.service'
 
 @Injectable()
 export class AdminDataService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly access: AdminAccessService
+    private readonly access: AdminAccessService,
+    private readonly customerOverviewService: CustomerOverviewService
   ) {}
+
+  async customerOverview(admin: CurrentUser, query: { frontendUserIds?: string | string[] }) {
+    const requestedIds = this.access.parseFrontendUserIds(query.frontendUserIds)
+    const allowedIds = await this.access.getAllowedFrontendUserIds(admin, requestedIds)
+    return this.customerOverviewService.getRows(allowedIds)
+  }
 
   async frontendOptions(admin: CurrentUser) {
     const ids = await this.access.getAllowedFrontendUserIds(admin)

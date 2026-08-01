@@ -67,9 +67,8 @@ export function calculateSampleResults(inputs: LabSampleInput, parameters: LabPa
     result.titanium = safeRound(inputs.titaniumRaw * parameters.titaniumFactor)
   }
 
-  if (hasNumber(inputs.waterSample) && hasNumber(inputs.bottleWater) && hasNumber(inputs.bottleWaterSample)) {
-    const denominator = inputs.waterSample + inputs.bottleWater - inputs.bottleWaterSample
-    result.moisture = safeRound(safeDivide(inputs.waterSample, denominator) * 0.99823)
+  if (hasNumber(inputs.moisture)) {
+    result.moisture = safeRound(inputs.moisture)
   }
 
   if (hasNumber(inputs.sampleWeight) && hasNumber(inputs.crucible) && hasNumber(inputs.burnedCrucibleSample)) {
