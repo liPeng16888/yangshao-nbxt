@@ -11,6 +11,7 @@ import { AdminModule } from './admin/admin.module'
 import { CustomersModule } from './customers/customers.module'
 import { ReportsModule } from './reports/reports.module'
 import { CustomerOverviewModule } from './customer-overview/customer-overview.module'
+import { MedicineInventoryModule } from './medicine-inventory/medicine-inventory.module'
 
 @Module({
   imports: [
@@ -25,7 +26,8 @@ import { CustomerOverviewModule } from './customer-overview/customer-overview.mo
     RemindersModule,
     ReportsModule,
     CustomerOverviewModule,
-    AdminModule
+    AdminModule,
+    MedicineInventoryModule
   ]
 })
 export class AppModule {}
