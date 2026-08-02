@@ -396,6 +396,7 @@ model MedicineInventoryItem {
   movements       MedicineInventoryMovement[]
 
   @@unique([frontendUserId, name, unit])
+  @@unique([id, frontendUserId])
   @@index([frontendUserId, name])
 }
 
@@ -412,7 +413,7 @@ model MedicineInventoryMovement {
   correctionOfId     String?
   createdAt          DateTime                   @default(now())
   frontendUser       User                       @relation("FrontendMedicineMovements", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  medicineItem       MedicineInventoryItem      @relation(fields: [medicineItemId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  medicineItem       MedicineInventoryItem      @relation(fields: [medicineItemId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
   originalMovement   MedicineInventoryMovement? @relation("MedicineMovementCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   correctionMovement MedicineInventoryMovement? @relation("MedicineMovementCorrection")
 
