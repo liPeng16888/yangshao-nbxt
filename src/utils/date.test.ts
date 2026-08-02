@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   businessDateInBeijing,
+  currentMonth,
   formatDateTime,
   millisecondsUntilNextBusinessDayInBeijing,
   todayInBeijing
@@ -42,5 +43,11 @@ describe('Beijing date utilities', () => {
 
   it('formats timestamps in Beijing time regardless of the device time zone', () => {
     expect(formatDateTime('2026-08-02T16:30:00.000Z')).toBe('2026-08-03 00:30')
+  })
+
+  it('uses the Beijing month at the calendar month boundary', () => {
+    vi.setSystemTime(new Date('2026-09-30T16:30:00.000Z'))
+
+    expect(currentMonth()).toBe('2026-10')
   })
 })

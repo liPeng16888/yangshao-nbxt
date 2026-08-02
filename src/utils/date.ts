@@ -26,7 +26,7 @@ export function millisecondsUntilNextBusinessDayInBeijing(now = new Date()) {
 }
 
 export function currentMonth() {
-  return dayjs().format('YYYY-MM')
+  return todayInBeijing().slice(0, 7)
 }
 
 export function formatDateTime(value: string | Date) {
