@@ -1,6 +1,12 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import type { AdminCustomerOverviewRow, AdminUser, FrontendOption } from './types'
+import type {
+  AdminCustomerOverviewRow,
+  AdminMedicineInventoryItem,
+  AdminMedicineInventoryMovement,
+  AdminUser,
+  FrontendOption
+} from './types'
 
 export const ADMIN_TOKEN_KEY = 'ys_admin_token'
 export const ADMIN_USER_KEY = 'ys_admin_user'
@@ -80,6 +86,58 @@ const mockRows = {
       totalAmount: 240,
       firstDetectionDate: '2026-06-20',
       lastDetectionDate: '2026-06-25'
+    }
+  ],
+  medicineInventoryItems: [
+    {
+      id: 'medicine-item-1',
+      frontendUserId: 'front-1',
+      name: '盐酸',
+      unit: 'BOTTLE',
+      unitLabel: '瓶',
+      currentQuantity: 12,
+      createdAt: '2026-08-02T00:00:00.000Z',
+      updatedAt: '2026-08-02T08:00:00.000Z'
+    },
+    {
+      id: 'medicine-item-2',
+      frontendUserId: 'front-2',
+      name: '酒精',
+      unit: 'LITER',
+      unitLabel: '升',
+      currentQuantity: 2.5,
+      createdAt: '2026-08-02T00:00:00.000Z',
+      updatedAt: '2026-08-02T09:00:00.000Z'
+    }
+  ],
+  medicineInventoryMovements: [
+    {
+      id: 'medicine-movement-1',
+      frontendUserId: 'front-1',
+      medicineItemId: 'medicine-item-1',
+      type: 'INBOUND',
+      occurredOn: '2026-08-02',
+      quantity: 12,
+      nameSnapshot: '盐酸',
+      unitSnapshot: 'BOTTLE',
+      unitLabel: '瓶',
+      remark: '首次入库',
+      correctionOfId: null,
+      createdAt: '2026-08-02T08:00:00.000Z'
+    },
+    {
+      id: 'medicine-movement-2',
+      frontendUserId: 'front-2',
+      medicineItemId: 'medicine-item-2',
+      type: 'OUTBOUND',
+      occurredOn: '2026-08-02',
+      quantity: 0.5,
+      nameSnapshot: '酒精',
+      unitSnapshot: 'LITER',
+      unitLabel: '升',
+      remark: '日常使用',
+      correctionOfId: null,
+      createdAt: '2026-08-02T09:00:00.000Z'
     }
   ],
   frontendUsers: [
@@ -298,6 +356,29 @@ const mockRequest = {
         ? mockRows.customerOverview.filter((row) => selectedIds.includes(row.frontendUserId))
         : mockRows.customerOverview
     }
+    if (url === '/admin/medicine-inventory/items') {
+      const selectedFrontendIds = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
+      const selectedItemIds = String(config?.params?.medicineItemIds || '').split(',').filter(Boolean)
+      return mockRows.medicineInventoryItems.filter((row) =>
+        (!selectedFrontendIds.length || selectedFrontendIds.includes(row.frontendUserId)) &&
+        (!selectedItemIds.length || selectedItemIds.includes(row.id))
+      )
+    }
+    if (url === '/admin/medicine-inventory/inbounds' || url === '/admin/medicine-inventory/outbounds') {
+      const selectedFrontendIds = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
+      const selectedItemIds = String(config?.params?.medicineItemIds || '').split(',').filter(Boolean)
+      const startDate = String(config?.params?.startDate || '')
+      const endDate = String(config?.params?.endDate || '')
+      const isInbound = url.endsWith('/inbounds')
+      const types = isInbound ? ['INBOUND', 'CORRECTION_OUT'] : ['OUTBOUND', 'CORRECTION_IN']
+      return mockRows.medicineInventoryMovements.filter((row) =>
+        types.includes(row.type) &&
+        (!selectedFrontendIds.length || selectedFrontendIds.includes(row.frontendUserId)) &&
+        (!selectedItemIds.length || selectedItemIds.includes(row.medicineItemId)) &&
+        (!startDate || row.occurredOn >= startDate) &&
+        (!endDate || row.occurredOn <= endDate)
+      )
+    }
     if (url === '/admin/data-statistics/cell-history') {
       const fields = parseHistoryFields(config?.params?.fields || config?.params?.field || 'sampleNumber')
       return fields.flatMap((field, index) => {
@@ -459,5 +540,46 @@ export function buildFrontendIds(ids: string[]) {
 export function getAdminCustomerOverview(frontendUserIds: string[]) {
   return request.get<any, AdminCustomerOverviewRow[]>('/admin/customer-overview', {
     params: { frontendUserIds: buildFrontendIds(frontendUserIds) }
+  })
+}
+
+export function getAdminMedicineItems(frontendUserIds: string[], medicineItemIds: string[] = []) {
+  return request.get<any, AdminMedicineInventoryItem[]>('/admin/medicine-inventory/items', {
+    params: {
+      frontendUserIds: buildFrontendIds(frontendUserIds),
+      ...(medicineItemIds.length ? { medicineItemIds: medicineItemIds.join(',') } : {})
+    }
+  })
+}
+
+export function getAdminMedicineInbounds(
+  frontendUserIds: string[],
+  medicineItemIds: string[] = [],
+  startDate?: string,
+  endDate?: string
+) {
+  return request.get<any, AdminMedicineInventoryMovement[]>('/admin/medicine-inventory/inbounds', {
+    params: {
+      frontendUserIds: buildFrontendIds(frontendUserIds),
+      ...(medicineItemIds.length ? { medicineItemIds: medicineItemIds.join(',') } : {}),
+      ...(startDate ? { startDate } : {}),
+      ...(endDate ? { endDate } : {})
+    }
+  })
+}
+
+export function getAdminMedicineOutbounds(
+  frontendUserIds: string[],
+  medicineItemIds: string[] = [],
+  startDate?: string,
+  endDate?: string
+) {
+  return request.get<any, AdminMedicineInventoryMovement[]>('/admin/medicine-inventory/outbounds', {
+    params: {
+      frontendUserIds: buildFrontendIds(frontendUserIds),
+      ...(medicineItemIds.length ? { medicineItemIds: medicineItemIds.join(',') } : {}),
+      ...(startDate ? { startDate } : {}),
+      ...(endDate ? { endDate } : {})
+    }
   })
 }

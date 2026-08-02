@@ -50,42 +50,58 @@ enum FinanceDeletionRequestStatus {
   REJECTED
 }
 
+enum MedicineUnit {
+  BOTTLE
+  LITER
+  MILLILITER
+  GRAM
+}
+
+enum MedicineMovementType {
+  INBOUND
+  OUTBOUND
+  CORRECTION_IN
+  CORRECTION_OUT
+}
+
 model User {
-  id                String    @id @default(uuid())
-  account           String    @unique
-  username          String
-  displayRemark     String?
-  role              UserRole
-  passwordHash      String
-  passwordCipher    String?
-  accessGuardEnabled Boolean  @default(false)
-  accessGuardPassword String?
-  accessGuardTtlMinutes Int   @default(5)
+  id                        String    @id @default(uuid())
+  account                   String    @unique
+  username                  String
+  displayRemark             String?
+  role                      UserRole
+  passwordHash              String
+  passwordCipher            String?
+  accessGuardEnabled        Boolean   @default(false)
+  accessGuardPassword       String?
+  accessGuardTtlMinutes     Int       @default(5)
   accessGuardRecoveryPrompt String?
   accessGuardRecoveryAnswer String?
-  disabled          Boolean   @default(false)
-  disabledReason    String?
-  deletedAt         DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  disabled                  Boolean   @default(false)
+  disabledReason            String?
+  deletedAt                 DateTime?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
 
-  frontendSheets    LabSheet[]       @relation("FrontendSheets")
-  financeEntries    FinanceEntry[]   @relation("FrontendFinance")
-  monthlyCustomerRemarks MonthlyCustomerRemark[] @relation("FrontendMonthlyCustomerRemarks")
-  prepaidRecharges  PrepaidRechargeRecord[] @relation("FrontendPrepaidRecharges")
-  prepaidCustomerRemarks PrepaidCustomerRemark[] @relation("FrontendPrepaidCustomerRemarks")
-  prepaidUsageRemarks PrepaidUsageRemark[] @relation("FrontendPrepaidUsageRemarks")
-  customers         Customer[]       @relation("FrontendCustomers")
-  blacklistUploads  BlacklistRecord[] @relation("BlacklistUploader")
-  reminders         Reminder[]       @relation("FrontendReminders")
-  createdReminders  Reminder[]       @relation("ReminderCreator")
-  financeDeletionRequests FinanceDeletionRequest[] @relation("FrontendFinanceDeletionRequests")
-  reviewedFinanceDeletionRequests FinanceDeletionRequest[] @relation("ReviewedFinanceDeletionRequests")
-  inviteCodes       InviteCode[]     @relation("InviteCreator")
-  usedInviteCodes   InviteCode[]     @relation("InviteUser")
-  createdSubPerms   SubAdminFrontendPermission[] @relation("PermissionCreator")
-  subAdminPerms     SubAdminFrontendPermission[] @relation("SubAdminPermissions")
-  frontendPerms     SubAdminFrontendPermission[] @relation("FrontendPermissions")
+  frontendSheets                  LabSheet[]                   @relation("FrontendSheets")
+  financeEntries                  FinanceEntry[]               @relation("FrontendFinance")
+  monthlyCustomerRemarks          MonthlyCustomerRemark[]      @relation("FrontendMonthlyCustomerRemarks")
+  prepaidRecharges                PrepaidRechargeRecord[]      @relation("FrontendPrepaidRecharges")
+  prepaidCustomerRemarks          PrepaidCustomerRemark[]      @relation("FrontendPrepaidCustomerRemarks")
+  prepaidUsageRemarks             PrepaidUsageRemark[]         @relation("FrontendPrepaidUsageRemarks")
+  customers                       Customer[]                   @relation("FrontendCustomers")
+  blacklistUploads                BlacklistRecord[]            @relation("BlacklistUploader")
+  reminders                       Reminder[]                   @relation("FrontendReminders")
+  createdReminders                Reminder[]                   @relation("ReminderCreator")
+  financeDeletionRequests         FinanceDeletionRequest[]     @relation("FrontendFinanceDeletionRequests")
+  reviewedFinanceDeletionRequests FinanceDeletionRequest[]     @relation("ReviewedFinanceDeletionRequests")
+  inviteCodes                     InviteCode[]                 @relation("InviteCreator")
+  usedInviteCodes                 InviteCode[]                 @relation("InviteUser")
+  createdSubPerms                 SubAdminFrontendPermission[] @relation("PermissionCreator")
+  subAdminPerms                   SubAdminFrontendPermission[] @relation("SubAdminPermissions")
+  frontendPerms                   SubAdminFrontendPermission[] @relation("FrontendPermissions")
+  medicineItems                   MedicineInventoryItem[]      @relation("FrontendMedicineItems")
+  medicineMovements               MedicineInventoryMovement[]  @relation("FrontendMedicineMovements")
 
   @@index([role])
   @@index([deletedAt])
@@ -101,7 +117,7 @@ model Customer {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  frontendUser   User     @relation("FrontendCustomers", fields: [frontendUserId], references: [id])
+  frontendUser User @relation("FrontendCustomers", fields: [frontendUserId], references: [id])
 
   @@unique([frontendUserId, name])
   @@index([frontendUserId])
@@ -117,8 +133,8 @@ model InviteCode {
   createdById String
   usedById    String?
 
-  createdBy   User      @relation("InviteCreator", fields: [createdById], references: [id])
-  usedBy      User?     @relation("InviteUser", fields: [usedById], references: [id])
+  createdBy User  @relation("InviteCreator", fields: [createdById], references: [id])
+  usedBy    User? @relation("InviteUser", fields: [usedById], references: [id])
 }
 
 model SubAdminFrontendPermission {
@@ -128,9 +144,9 @@ model SubAdminFrontendPermission {
   createdById    String
   createdAt      DateTime @default(now())
 
-  subAdmin      User @relation("SubAdminPermissions", fields: [subAdminId], references: [id])
-  frontendUser  User @relation("FrontendPermissions", fields: [frontendUserId], references: [id])
-  createdBy     User @relation("PermissionCreator", fields: [createdById], references: [id])
+  subAdmin     User @relation("SubAdminPermissions", fields: [subAdminId], references: [id])
+  frontendUser User @relation("FrontendPermissions", fields: [frontendUserId], references: [id])
+  createdBy    User @relation("PermissionCreator", fields: [createdById], references: [id])
 
   @@unique([subAdminId, frontendUserId])
   @@index([frontendUserId])
@@ -145,9 +161,9 @@ model LabSheet {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  frontendUser   User          @relation("FrontendSheets", fields: [frontendUserId], references: [id])
-  sampleBlocks   SampleBlock[]
-  changeLogs     CellChangeLog[]
+  frontendUser    User             @relation("FrontendSheets", fields: [frontendUserId], references: [id])
+  sampleBlocks    SampleBlock[]
+  changeLogs      CellChangeLog[]
   abnormalRecords AbnormalRecord[]
 
   @@unique([frontendUserId, date])
@@ -165,9 +181,9 @@ model SampleBlock {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  sheet             LabSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
-  changeLogs        CellChangeLog[]
-  abnormalRecords   AbnormalRecord[]
+  sheet           LabSheet         @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  changeLogs      CellChangeLog[]
+  abnormalRecords AbnormalRecord[]
 
   @@unique([sheetId, index])
   @@index([sheetId])
@@ -184,8 +200,8 @@ model CellChangeLog {
   changedById    String
   changedAt      DateTime @default(now())
 
-  sheet          LabSheet    @relation(fields: [sheetId], references: [id], onDelete: Cascade)
-  block          SampleBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  sheet LabSheet    @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  block SampleBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
 
   @@index([frontendUserId, changedAt])
   @@index([blockId, field])
@@ -203,8 +219,8 @@ model AbnormalRecord {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  sheet          LabSheet    @relation(fields: [sheetId], references: [id], onDelete: Cascade)
-  block          SampleBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  sheet LabSheet    @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  block SampleBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
 
   @@unique([blockId, field])
   @@index([frontendUserId, date])
@@ -223,7 +239,7 @@ model FinanceEntry {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  frontendUser   User          @relation("FrontendFinance", fields: [frontendUserId], references: [id])
+  frontendUser User @relation("FrontendFinance", fields: [frontendUserId], references: [id])
 
   @@index([frontendUserId, paymentDate])
 }
@@ -251,7 +267,7 @@ model MonthlyCustomerRemark {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  frontendUser   User     @relation("FrontendMonthlyCustomerRemarks", fields: [frontendUserId], references: [id])
+  frontendUser User @relation("FrontendMonthlyCustomerRemarks", fields: [frontendUserId], references: [id])
 
   @@unique([frontendUserId, customer])
   @@index([frontendUserId])
@@ -268,7 +284,7 @@ model PrepaidRechargeRecord {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  frontendUser   User     @relation("FrontendPrepaidRecharges", fields: [frontendUserId], references: [id])
+  frontendUser User @relation("FrontendPrepaidRecharges", fields: [frontendUserId], references: [id])
 
   @@index([frontendUserId, rechargeDate])
   @@index([frontendUserId, customer])
@@ -282,7 +298,7 @@ model PrepaidCustomerRemark {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  frontendUser   User     @relation("FrontendPrepaidCustomerRemarks", fields: [frontendUserId], references: [id])
+  frontendUser User @relation("FrontendPrepaidCustomerRemarks", fields: [frontendUserId], references: [id])
 
   @@unique([frontendUserId, customer])
   @@index([frontendUserId])
@@ -297,7 +313,7 @@ model PrepaidUsageRemark {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  frontendUser   User     @relation("FrontendPrepaidUsageRemarks", fields: [frontendUserId], references: [id])
+  frontendUser User @relation("FrontendPrepaidUsageRemarks", fields: [frontendUserId], references: [id])
 
   @@unique([frontendUserId, usageDate, customer])
   @@index([frontendUserId, usageDate])
@@ -315,17 +331,17 @@ model BlacklistRecord {
   other          String?
   note           String?
 
-  uploadedBy     User     @relation("BlacklistUploader", fields: [uploadedById], references: [id])
+  uploadedBy User @relation("BlacklistUploader", fields: [uploadedById], references: [id])
 }
 
 model UploadedFile {
-  id          String   @id @default(uuid())
+  id           String   @id @default(uuid())
   originalName String
-  mimeType    String
-  size        Int
-  path        String
-  url         String
-  createdAt   DateTime @default(now())
+  mimeType     String
+  size         Int
+  path         String
+  url          String
+  createdAt    DateTime @default(now())
 }
 
 model Reminder {
@@ -340,8 +356,8 @@ model Reminder {
   readAt         DateTime?
   createdAt      DateTime     @default(now())
 
-  frontendUser   User         @relation("FrontendReminders", fields: [frontendUserId], references: [id])
-  createdBy      User?        @relation("ReminderCreator", fields: [createdById], references: [id])
+  frontendUser User  @relation("FrontendReminders", fields: [frontendUserId], references: [id])
+  createdBy    User? @relation("ReminderCreator", fields: [createdById], references: [id])
 
   @@index([frontendUserId, readAt])
 }
@@ -360,10 +376,48 @@ model FinanceDeletionRequest {
   createdAt      DateTime                     @default(now())
   updatedAt      DateTime                     @updatedAt
 
-  frontendUser   User                         @relation("FrontendFinanceDeletionRequests", fields: [frontendUserId], references: [id])
-  reviewedBy     User?                        @relation("ReviewedFinanceDeletionRequests", fields: [reviewedById], references: [id])
+  frontendUser User  @relation("FrontendFinanceDeletionRequests", fields: [frontendUserId], references: [id])
+  reviewedBy   User? @relation("ReviewedFinanceDeletionRequests", fields: [reviewedById], references: [id])
 
   @@index([frontendUserId, status])
   @@index([sourceType, sourceId])
   @@index([status, createdAt])
+}
+
+model MedicineInventoryItem {
+  id              String                      @id @default(uuid())
+  frontendUserId  String
+  name            String
+  unit            MedicineUnit
+  currentQuantity Decimal                     @default(0) @db.Decimal(14, 3)
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+  frontendUser    User                        @relation("FrontendMedicineItems", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  movements       MedicineInventoryMovement[]
+
+  @@unique([frontendUserId, name, unit])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, name])
+}
+
+model MedicineInventoryMovement {
+  id                 String                     @id @default(uuid())
+  frontendUserId     String
+  medicineItemId     String
+  type               MedicineMovementType
+  occurredOn         String
+  quantity           Decimal                    @db.Decimal(14, 3)
+  nameSnapshot       String
+  unitSnapshot       MedicineUnit
+  remark             String?
+  correctionOfId     String?
+  createdAt          DateTime                   @default(now())
+  frontendUser       User                       @relation("FrontendMedicineMovements", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  medicineItem       MedicineInventoryItem      @relation(fields: [medicineItemId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  originalMovement   MedicineInventoryMovement? @relation("MedicineMovementCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  correctionMovement MedicineInventoryMovement? @relation("MedicineMovementCorrection")
+
+  @@unique([correctionOfId])
+  @@index([frontendUserId, occurredOn])
+  @@index([medicineItemId, occurredOn])
 }

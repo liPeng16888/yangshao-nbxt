@@ -8,7 +8,7 @@ const BUSINESS_DAY_START_HOUR_MS = 4 * 60 * 60 * 1000
 const BEIJING_BUSINESS_DATE_SHIFT_MS = BEIJING_UTC_OFFSET_MS - BUSINESS_DAY_START_HOUR_MS
 
 export function todayInBeijing() {
-  return dayjs().format('YYYY-MM-DD')
+  return new Date(Date.now() + BEIJING_UTC_OFFSET_MS).toISOString().slice(0, 10)
 }
 
 export function businessDateInBeijing(now = new Date()) {
@@ -26,11 +26,13 @@ export function millisecondsUntilNextBusinessDayInBeijing(now = new Date()) {
 }
 
 export function currentMonth() {
-  return dayjs().format('YYYY-MM')
+  return todayInBeijing().slice(0, 7)
 }
 
 export function formatDateTime(value: string | Date) {
-  return dayjs(value).format('YYYY-MM-DD HH:mm')
+  const timestamp = new Date(value).getTime()
+  if (!Number.isFinite(timestamp)) return '无信息'
+  return new Date(timestamp + BEIJING_UTC_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ')
 }
 
 export function getReportRange(mode: 'daily' | 'weekly' | 'monthly' | 'custom', date: string, startDate?: string, endDate?: string) {

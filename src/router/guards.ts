@@ -12,6 +12,7 @@ export function resolveAuthRedirect(input: AuthRedirectInput) {
 
 export function isSensitiveAccessPath(path: string) {
   return path.startsWith('/finance') ||
+    path.startsWith('/medicine-inventory') ||
     path.startsWith('/reports') ||
     path.startsWith('/customers-overview') ||
     path.startsWith('/blacklist')

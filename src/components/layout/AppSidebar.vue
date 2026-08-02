@@ -46,7 +46,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import { useRoute } from 'vue-router'
-import { DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, User, Warning } from '@element-plus/icons-vue'
+import { Box, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, User, Warning } from '@element-plus/icons-vue'
 
 interface NavChild {
   path: string
@@ -93,6 +93,16 @@ const navItems: NavItem[] = [
     ]
   },
   { path: '/reports', label: '报表', icon: DocumentChecked },
+  {
+    path: '/medicine-inventory',
+    label: '药品库存',
+    icon: Box,
+    children: [
+      { path: '/medicine-inventory/stock', label: '药品库存' },
+      { path: '/medicine-inventory/inbound', label: '药品入库' },
+      { path: '/medicine-inventory/outbound', label: '药品出库' }
+    ]
+  },
   { path: '/customers-overview', label: '客户总览', icon: User },
   { path: '/blacklist', label: '黑名单', icon: Warning }
 ]
