@@ -14,6 +14,9 @@ import FinanceUnsettledPage from '@/views/dashboard/FinanceUnsettledPage.vue'
 import ReportPage from '@/views/dashboard/ReportPage.vue'
 import BlacklistPage from '@/views/dashboard/BlacklistPage.vue'
 import CustomerOverviewPage from '@/views/dashboard/CustomerOverviewPage.vue'
+import MedicineInventoryStockPage from '@/views/dashboard/MedicineInventoryStockPage.vue'
+import MedicineInventoryInboundPage from '@/views/dashboard/MedicineInventoryInboundPage.vue'
+import MedicineInventoryOutboundPage from '@/views/dashboard/MedicineInventoryOutboundPage.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { resolveAuthRedirect } from './guards'
@@ -78,6 +81,25 @@ const router = createRouter({
           meta: { title: '预存款', requiresAuth: true }
         },
         { path: 'reports', name: 'reports', component: ReportPage, meta: { title: '报表', requiresAuth: true } },
+        { path: 'medicine-inventory', redirect: '/medicine-inventory/stock' },
+        {
+          path: 'medicine-inventory/stock',
+          name: 'medicineInventoryStock',
+          component: MedicineInventoryStockPage,
+          meta: { title: '药品库存', requiresAuth: true }
+        },
+        {
+          path: 'medicine-inventory/inbound',
+          name: 'medicineInventoryInbound',
+          component: MedicineInventoryInboundPage,
+          meta: { title: '药品入库', requiresAuth: true }
+        },
+        {
+          path: 'medicine-inventory/outbound',
+          name: 'medicineInventoryOutbound',
+          component: MedicineInventoryOutboundPage,
+          meta: { title: '药品出库', requiresAuth: true }
+        },
         {
           path: 'customers-overview',
           name: 'customerOverview',
@@ -118,6 +140,7 @@ router.beforeEach(async (to) => {
 
 function getAccessGuardTitle(path: string) {
   if (path.startsWith('/finance')) return '财务访问验证'
+  if (path.startsWith('/medicine-inventory')) return '药品库存访问验证'
   if (path.startsWith('/reports')) return '报表访问验证'
   if (path.startsWith('/customers-overview')) return '客户总览访问验证'
   if (path.startsWith('/blacklist')) return '黑名单访问验证'

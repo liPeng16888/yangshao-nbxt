@@ -18,4 +18,9 @@ describe('resolveAuthRedirect', () => {
     expect(isSensitiveAccessPath('/customers-overview')).toBe(true)
     expect(isSensitiveAccessPath('/data')).toBe(false)
   })
+
+  it('protects every medicine inventory page with the shared sensitive access password', () => {
+    expect(isSensitiveAccessPath('/medicine-inventory/stock')).toBe(true)
+    expect(isSensitiveAccessPath('/medicine-inventory/outbound')).toBe(true)
+  })
 })
