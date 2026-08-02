@@ -8,6 +8,10 @@
         </div>
       </div>
       <div class="panel__body" v-loading="loading">
+        <div v-if="itemsError" class="medicine-load-error" data-testid="outbound-items-error" role="alert">
+          <span>{{ itemsError }}</span>
+          <el-button data-testid="outbound-items-retry" link type="primary" :loading="loading" @click="loadItems">重试</el-button>
+        </div>
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent>
           <div class="medicine-form-grid">
             <el-form-item label="出库日期" prop="occurredOn">
@@ -54,9 +58,13 @@
           <el-select v-model="historyMedicineItemIds" multiple clearable collapse-tags placeholder="筛选药品" @change="loadHistory">
             <el-option v-for="item in items" :key="item.id" :label="itemLabel(item)" :value="item.id" />
           </el-select>
-          <el-date-picker v-model="historyDateRange" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" @change="loadHistory" />
+          <el-date-picker :model-value="historyDateRange" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" @update:model-value="handleHistoryDateRangeChange" />
           <el-button :loading="historyLoading" @click="loadHistory">刷新</el-button>
         </div>
+      </div>
+      <div v-if="historyError" class="medicine-load-error medicine-load-error--table" data-testid="outbound-history-error" role="alert">
+        <span>{{ historyError }}</span>
+        <el-button data-testid="outbound-history-retry" link type="primary" :loading="historyLoading" @click="loadHistory">重试</el-button>
       </div>
       <el-table :data="movements" border v-loading="historyLoading" empty-text="暂无出库明细">
         <el-table-column prop="occurredOn" label="出库日期" width="120" />
@@ -95,21 +103,24 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { correctMedicineMovement, createMedicineOutbound, getMedicineItems, getMedicineMovements } from '@/api/medicineInventory'
 import type { MedicineInventoryItem, MedicineInventoryMovement } from '@/types/medicineInventory'
+import { formatDateTime, todayInBeijing } from '@/utils/date'
 import { formatMedicineQuantity, validateMedicineQuantity } from '@/utils/medicineInventory'
-import { todayInBeijing } from '@/utils/date'
 
 const formRef = ref<FormInstance>()
 const items = ref<MedicineInventoryItem[]>([])
 const movements = ref<MedicineInventoryMovement[]>([])
 const loading = ref(false)
 const historyLoading = ref(false)
+const itemsError = ref('')
+const historyError = ref('')
 const saving = ref(false)
 const correctionVisible = ref(false)
 const correctionSaving = ref(false)
 const correctionMovementId = ref('')
 const correctionReason = ref('')
 const historyMedicineItemIds = ref<string[]>([])
-const historyDateRange = ref<string[]>([])
+const historyDateRange = ref<string[] | undefined>()
+let historyRequestId = 0
 
 const form = reactive({
   occurredOn: todayInBeijing(),
@@ -123,7 +134,7 @@ const selectedItem = computed(() => items.value.find((item) => item.id === form.
 const quantityValidation = computed(() => selectedItem.value ? validateMedicineQuantity(selectedItem.value.unit, form.quantity) : null)
 const remainingQuantity = computed(() => {
   if (!selectedItem.value || !quantityValidation.value?.ok) return null
-  return selectedItem.value.currentQuantity - Number(quantityValidation.value.value)
+  return Number((selectedItem.value.currentQuantity - Number(quantityValidation.value.value)).toFixed(3))
 })
 const remainingLabel = computed(() => {
   if (!selectedItem.value) return '选择药品后显示'
@@ -146,28 +157,45 @@ onMounted(() => {
 
 async function loadItems() {
   loading.value = true
+  itemsError.value = ''
   try {
     items.value = await getMedicineItems()
   } catch (error) {
-    ElMessage.error(errorMessage(error, '药品库存加载失败，请稍后重试'))
+    items.value = []
+    itemsError.value = errorMessage(error, '药品库存加载失败，请稍后重试')
+    ElMessage.error(itemsError.value)
   } finally {
     loading.value = false
   }
 }
 
 async function loadHistory() {
+  const requestId = ++historyRequestId
+  const [startDate, endDate] = historyDateRange.value || []
   historyLoading.value = true
+  historyError.value = ''
+  movements.value = []
   try {
-    movements.value = await getMedicineMovements('outbound', {
+    const result = await getMedicineMovements('outbound', {
       ...(historyMedicineItemIds.value.length ? { medicineItemIds: historyMedicineItemIds.value } : {}),
-      ...(historyDateRange.value[0] ? { startDate: historyDateRange.value[0] } : {}),
-      ...(historyDateRange.value[1] ? { endDate: historyDateRange.value[1] } : {})
+      ...(startDate ? { startDate } : {}),
+      ...(endDate ? { endDate } : {})
     })
+    if (requestId !== historyRequestId) return
+    movements.value = result
   } catch (error) {
-    ElMessage.error(errorMessage(error, '出库明细加载失败，请稍后重试'))
+    if (requestId !== historyRequestId) return
+    movements.value = []
+    historyError.value = errorMessage(error, '出库明细加载失败，请稍后重试')
+    ElMessage.error(historyError.value)
   } finally {
-    historyLoading.value = false
+    if (requestId === historyRequestId) historyLoading.value = false
   }
+}
+
+function handleHistoryDateRangeChange(value: string[] | undefined) {
+  historyDateRange.value = value
+  void loadHistory()
 }
 
 async function handleSubmit() {
@@ -291,10 +319,6 @@ function movementTypeLabel(type: MedicineInventoryMovement['type']) {
   return type === 'CORRECTION_IN' ? '更正入库' : '出库'
 }
 
-function formatDateTime(value: string) {
-  return value.replace('T', ' ').slice(0, 16)
-}
-
 function isConflict(error: unknown) {
   return (error as { response?: { status?: number } })?.response?.status === 409
 }
@@ -325,6 +349,23 @@ function errorMessage(error: unknown, fallback: string) {
 
 .medicine-form-grid__wide {
   grid-column: span 2;
+}
+
+.medicine-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  color: #b42318;
+  background: #fef3f2;
+  border: 1px solid #fecdca;
+  border-radius: 6px;
+}
+
+.medicine-load-error--table {
+  margin: 0 16px 12px;
 }
 
 .medicine-quantity-readout {
@@ -376,6 +417,10 @@ function errorMessage(error: unknown, fallback: string) {
 
   .medicine-history-filters > * {
     width: 100%;
+  }
+
+  .medicine-load-error {
+    align-items: flex-start;
   }
 }
 </style>

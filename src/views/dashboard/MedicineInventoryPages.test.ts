@@ -46,6 +46,16 @@ const items = [
     currentQuantity: 250.5,
     createdAt: '2026-08-01T08:00:00.000Z',
     updatedAt: '2026-08-03T08:00:00.000Z'
+  },
+  {
+    id: 'item-alcohol',
+    frontendUserId: 'frontend-1',
+    name: '酒精',
+    unit: 'LITER' as const,
+    unitLabel: '升',
+    currentQuantity: 0.3,
+    createdAt: '2026-08-01T08:00:00.000Z',
+    updatedAt: '2026-08-03T08:00:00.000Z'
   }
 ]
 
@@ -126,6 +136,7 @@ describe('MedicineInventoryStockPage', () => {
 
     expect(wrapper.text()).toContain('阿莫西林')
     expect(wrapper.text()).toContain('生理盐水')
+    expect(wrapper.text()).toContain('2026-08-02 16:00')
     const medicineSelect = wrapper.getComponent(ElSelect)
     expect(medicineSelect.props('multiple')).toBe(true)
 
@@ -138,12 +149,26 @@ describe('MedicineInventoryStockPage', () => {
     await nextTick()
     expect(wrapper.text()).toContain('生理盐水')
   })
+
+  it('keeps a persistent load error visible and retries stock loading in the page', async () => {
+    api.getMedicineItems.mockRejectedValueOnce(new Error('network'))
+    const wrapper = mountPage(MedicineInventoryStockPage)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="stock-load-error"]').text()).toContain('药品库存加载失败')
+    await wrapper.get('[data-testid="stock-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="stock-load-error"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('阿莫西林')
+  })
 })
 
 describe('MedicineInventoryInboundPage', () => {
   it('locks the unit for an existing item and blocks a new name without a unit', async () => {
     const wrapper = mountPage(MedicineInventoryInboundPage)
     await flushPromises()
+    expect(wrapper.text()).toContain('2026-08-02 16:00')
 
     const itemSelect = componentByTestId(wrapper, 'inbound-item')
     itemSelect.vm.$emit('update:modelValue', 'item-amoxicillin')
@@ -160,6 +185,53 @@ describe('MedicineInventoryInboundPage', () => {
     await flushPromises()
 
     expect(api.createMedicineInbound).not.toHaveBeenCalled()
+  })
+
+  it('reloads all inbound history after the date range is cleared', async () => {
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+    const historyDatePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[1] as VueWrapper<any>
+
+    historyDatePicker.vm.$emit('update:modelValue', ['2026-08-01', '2026-08-02'])
+    await flushPromises()
+    expect(api.getMedicineMovements).toHaveBeenLastCalledWith('inbound', {
+      startDate: '2026-08-01',
+      endDate: '2026-08-02'
+    })
+
+    historyDatePicker.vm.$emit('update:modelValue', undefined)
+    await flushPromises()
+    expect(api.getMedicineMovements).toHaveBeenLastCalledWith('inbound', {})
+  })
+
+  it('clears stale inbound history after a filter request fails and retries in the page', async () => {
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+    expect(wrapper.text()).toContain('初始入库')
+    api.getMedicineMovements.mockRejectedValueOnce(new Error('network'))
+    const historySelect = wrapper.findAllComponents(ElSelect)[2]
+
+    historySelect.vm.$emit('update:modelValue', ['item-saline'])
+    historySelect.vm.$emit('change')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('初始入库')
+    expect(wrapper.get('[data-testid="inbound-history-error"]').text()).toContain('入库明细加载失败')
+    await wrapper.get('[data-testid="inbound-history-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('初始入库')
+  })
+
+  it('keeps an inbound item load error visible and retries its inventory items', async () => {
+    api.getMedicineItems.mockRejectedValueOnce(new Error('network'))
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="inbound-items-error"]').text()).toContain('药品库存加载失败')
+    await wrapper.get('[data-testid="inbound-items-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="inbound-items-error"]').exists()).toBe(false)
+    expect(api.getMedicineItems).toHaveBeenCalledTimes(2)
   })
 
   it('confirms a valid inbound and refreshes stock and history', async () => {
@@ -215,7 +287,49 @@ describe('MedicineInventoryOutboundPage', () => {
 
     expect(wrapper.text()).toContain('当前库存 10 瓶')
     expect(wrapper.text()).toContain('出库后剩余 -1 瓶')
+    expect(wrapper.text()).toContain('2026-08-02 16:00')
     expect(wrapper.get('[data-testid="outbound-submit"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('formats a decimal remaining quantity without floating-point tails', async () => {
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-alcohol')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('0.2')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('出库后剩余 0.1 升')
+    expect(wrapper.text()).not.toContain('0.09999999999999998')
+  })
+
+  it('reloads all outbound history after the date range is cleared', async () => {
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+    const historyDatePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[1] as VueWrapper<any>
+
+    historyDatePicker.vm.$emit('update:modelValue', ['2026-08-01', '2026-08-02'])
+    await flushPromises()
+    expect(api.getMedicineMovements).toHaveBeenLastCalledWith('outbound', {
+      startDate: '2026-08-01',
+      endDate: '2026-08-02'
+    })
+
+    historyDatePicker.vm.$emit('update:modelValue', undefined)
+    await flushPromises()
+    expect(api.getMedicineMovements).toHaveBeenLastCalledWith('outbound', {})
+  })
+
+  it('keeps an outbound item load error visible and retries its inventory items', async () => {
+    api.getMedicineItems.mockRejectedValueOnce(new Error('network'))
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="outbound-items-error"]').text()).toContain('药品库存加载失败')
+    await wrapper.get('[data-testid="outbound-items-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="outbound-items-error"]').exists()).toBe(false)
+    expect(api.getMedicineItems).toHaveBeenCalledTimes(2)
   })
 
   it('preserves the outbound form after a 409 and updates the displayed current stock', async () => {

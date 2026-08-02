@@ -10,6 +10,11 @@
       </el-select>
     </section>
 
+    <section v-if="loadError" class="inventory-load-error" data-testid="stock-load-error" role="alert">
+      <span>{{ loadError }}</span>
+      <el-button data-testid="stock-retry" link type="primary" :loading="loading" @click="loadItems">重试</el-button>
+    </section>
+
     <el-table :data="visibleItems" border v-loading="loading" empty-text="暂无药品库存">
       <el-table-column prop="name" label="药品名称" min-width="180" />
       <el-table-column label="现有库存" width="140">
@@ -28,9 +33,11 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getMedicineItems } from '@/api/medicineInventory'
 import type { MedicineInventoryItem } from '@/types/medicineInventory'
+import { formatDateTime } from '@/utils/date'
 import { formatMedicineQuantity } from '@/utils/medicineInventory'
 
 const loading = ref(false)
+const loadError = ref('')
 const items = ref<MedicineInventoryItem[]>([])
 const selectedMedicineItemIds = ref<string[]>([])
 
@@ -46,10 +53,13 @@ onMounted(() => {
 
 async function loadItems() {
   loading.value = true
+  loadError.value = ''
   try {
     items.value = await getMedicineItems()
   } catch (error) {
-    ElMessage.error(errorMessage(error, '药品库存加载失败，请稍后重试'))
+    items.value = []
+    loadError.value = errorMessage(error, '药品库存加载失败，请稍后重试')
+    ElMessage.error(loadError.value)
   } finally {
     loading.value = false
   }
@@ -57,10 +67,6 @@ async function loadItems() {
 
 function itemLabel(item: MedicineInventoryItem) {
   return `${item.name}（${item.unitLabel}）`
-}
-
-function formatDateTime(value: string) {
-  return value.replace('T', ' ').slice(0, 16)
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -89,6 +95,18 @@ function errorMessage(error: unknown, fallback: string) {
 
 .inventory-filter {
   width: min(420px, 100%);
+}
+
+.inventory-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  color: #b42318;
+  background: #fef3f2;
+  border: 1px solid #fecdca;
+  border-radius: 6px;
 }
 
 @media (max-width: 680px) {
