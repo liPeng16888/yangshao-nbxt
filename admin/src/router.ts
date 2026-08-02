@@ -8,6 +8,7 @@ import AbnormalRecordsPage from './views/AbnormalRecordsPage.vue'
 import AccountManagementPage from './views/AccountManagementPage.vue'
 import BlacklistPage from './views/BlacklistPage.vue'
 import CustomerOverviewPage from './views/CustomerOverviewPage.vue'
+import MedicineInventoryPage from './views/MedicineInventoryPage.vue'
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -21,6 +22,7 @@ export const router = createRouter({
         { path: 'data', component: DataStatisticsPage, meta: { title: '数据统计' } },
         { path: 'finance', component: FinanceReportsPage, meta: { title: '财务报表' } },
         { path: 'customer-overview', component: CustomerOverviewPage, meta: { title: '客户总览' } },
+        { path: 'medicine-inventory', component: MedicineInventoryPage, meta: { title: '药品库存' } },
         { path: 'abnormal', component: AbnormalRecordsPage, meta: { title: '异常记录' } },
         { path: 'accounts', component: AccountManagementPage, meta: { title: '账号管理', rootOnly: true } },
         { path: 'blacklist', component: BlacklistPage, meta: { title: '客户黑名单' } }
