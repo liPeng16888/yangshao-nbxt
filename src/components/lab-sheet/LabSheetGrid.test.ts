@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import ElementPlus, { ElMessage } from 'element-plus'
 import LabSheetGrid from './LabSheetGrid.vue'
@@ -35,6 +36,37 @@ function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock 
 }
 
 describe('LabSheetGrid', () => {
+  it('hides only completed sample detection, amount, and payment values without the completed-data grant', () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({ completed: true, ironRaw: 1.2, price: 88, paymentStatus: '已结款' })],
+        canViewCompletedSensitiveData: false
+      },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    expect(wrapper.find('[data-field="completedSensitiveData"]').text()).toContain('已完成样品数据已加密')
+    expect(wrapper.find('[data-field="ironRaw"]').exists()).toBe(false)
+    expect(wrapper.find('[data-field="price"]').text()).toBe('🔒')
+    expect(wrapper.find('[data-field="paymentStatus"]').text()).toBe('🔒')
+    expect(wrapper.text()).toContain('样品名称')
+  })
+
+  it('shows completed sample values after the completed-data grant is available', () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({ completed: true, ironRaw: 1.2, price: 88, paymentStatus: '已结款' })],
+        canViewCompletedSensitiveData: true
+      },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    expect(wrapper.find('[data-field="completedSensitiveData"]').exists()).toBe(false)
+    expect(wrapper.find('[data-field="ironRaw"]').exists()).toBe(true)
+    expect(wrapper.find('[data-field="price"]').text()).not.toBe('🔒')
+    expect(wrapper.find('[data-field="paymentStatus"]').text()).not.toBe('🔒')
+  })
+
   it('renders payer and recipient customer rows and forwards recipient updates', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
@@ -576,5 +608,11 @@ describe('LabSheetGrid', () => {
     })
 
     expect(wrapper.find('.cell--green').classes()).toContain('cell--completed')
+  })
+
+  it('fills completed sequence areas with the approved peach color', () => {
+    const componentSource = readFileSync('src/components/lab-sheet/LabSheetGrid.vue', 'utf8')
+
+    expect(componentSource).toMatch(/\.cell--green\.cell--completed\s*\{\s*background:\s*#fff3eb;/)
   })
 })

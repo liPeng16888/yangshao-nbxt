@@ -76,13 +76,13 @@ afterEach(() => {
 })
 
 describe('monthly settlement bill PNG export', () => {
-  it('uses actual groups up to five and grows height for continuation rows', () => {
+  it('uses five stable columns and grows height for continuation rows', () => {
     const twoGroup = createMonthlyBillCanvasLayout(makeReadyDraft(2))
     const sevenGroup = createMonthlyBillCanvasLayout(makeReadyDraft(7))
 
-    expect(twoGroup.groupCount).toBe(2)
+    expect(twoGroup.groupCount).toBe(5)
     expect(sevenGroup.groupCount).toBe(5)
-    expect(sevenGroup.width).toBeGreaterThan(twoGroup.width)
+    expect(sevenGroup.width).toBe(twoGroup.width)
     expect(sevenGroup.height).toBeGreaterThan(twoGroup.height)
   })
 
@@ -121,7 +121,7 @@ describe('monthly settlement bill PNG export', () => {
   it('truncates long title, date and element labels within their cell width', async () => {
     const context = mockCanvasContext()
     let draft = makeReadyDraft(1)
-    draft.title = '超长客户完整信息'.repeat(12)
+    draft.title = '超长客户完整信息'.repeat(30)
     draft.entries[0].date = '这是一个非常长的手动日期文本'
     draft.entries[0].elementLabel = '这是一个非常长的检测元素名称'
     draft = recalculateMonthlyBillDraft(draft)

@@ -91,11 +91,24 @@ export function hasLabDetectionInput(inputs: Record<string, unknown>) {
   return labDetectionInputFields.some((field) => hasDetectionInputValue(inputs[field]))
 }
 
+export function hasVisibleSampleBlockInput(inputs: Record<string, unknown>) {
+  return editableInputFields
+    .filter((field) => field !== 'sequence' && field !== 'completed')
+    .some((field) => hasSavedInputValue(inputs[field]))
+}
+
 function hasDetectionInputValue(value: unknown) {
   if (typeof value === 'number') return Number.isFinite(value)
   if (typeof value !== 'string') return false
   const trimmed = value.trim()
   return trimmed !== '' && Number.isFinite(Number(trimmed))
+}
+
+function hasSavedInputValue(value: unknown) {
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'string') return value.trim() !== ''
+  if (Array.isArray(value)) return value.length > 0
+  return Boolean(value)
 }
 
 export function calculateResults(inputs: Record<string, unknown>, parameters: typeof defaultLabParameters) {

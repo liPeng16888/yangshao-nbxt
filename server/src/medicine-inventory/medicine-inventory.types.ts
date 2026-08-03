@@ -64,6 +64,14 @@ export interface MedicineInventoryMovementDto {
   createdAt: Date
 }
 
+export interface MedicineCommonNameDto {
+  id: string
+  frontendUserId: string
+  name: string
+  createdAt: Date
+  updatedAt: Date
+}
+
 export function validateMedicineQuantity(unit: MedicineUnit, input: unknown): MedicineQuantityValidation {
   if (!Object.values(MedicineUnit).includes(unit)) {
     return { ok: false, message: '药品单位无效' }

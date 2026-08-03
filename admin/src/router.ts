@@ -9,6 +9,16 @@ import AccountManagementPage from './views/AccountManagementPage.vue'
 import BlacklistPage from './views/BlacklistPage.vue'
 import CustomerOverviewPage from './views/CustomerOverviewPage.vue'
 import MedicineInventoryPage from './views/MedicineInventoryPage.vue'
+import TodoPage from './views/TodoPage.vue'
+import { financeNavigationGroups } from './config/financeNavigation'
+
+const financeRoutes = financeNavigationGroups.flatMap((group) =>
+  group.children.map((child) => ({
+    path: child.path.slice(1),
+    component: FinanceReportsPage,
+    meta: { title: '财务报表', financeGroup: group.id, financePage: child.page }
+  }))
+)
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -20,7 +30,9 @@ export const router = createRouter({
       children: [
         { path: '', redirect: '/data' },
         { path: 'data', component: DataStatisticsPage, meta: { title: '数据统计' } },
-        { path: 'finance', component: FinanceReportsPage, meta: { title: '财务报表' } },
+        { path: 'finance', redirect: '/finance/income' },
+        ...financeRoutes,
+        { path: 'todos', component: TodoPage, meta: { title: '待办事项' } },
         { path: 'customer-overview', component: CustomerOverviewPage, meta: { title: '客户总览' } },
         { path: 'medicine-inventory', component: MedicineInventoryPage, meta: { title: '药品库存' } },
         { path: 'abnormal', component: AbnormalRecordsPage, meta: { title: '异常记录' } },

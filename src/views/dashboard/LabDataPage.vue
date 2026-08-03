@@ -21,6 +21,7 @@
         <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
           标记样品完成
         </el-button>
+        <el-button v-if="!canViewCompletedSensitiveData" @click="requestCompletedSampleDataAccess">查看加密数据</el-button>
         <el-button :icon="EditPen" :loading="labStore.saving" :disabled="isPageReadonly" @click="handleBulkFillSamples">
           {{ bulkFillButtonText }}
         </el-button>
@@ -42,6 +43,7 @@
       :selection-mode="selectionMode"
       :selected-block-ids="selectedReportBlockIds"
       :highlight-block-id="highlightBlockId"
+      :can-view-completed-sensitive-data="canViewCompletedSensitiveData"
       @update="labStore.patchBlock"
       @field-commit="labStore.commitBlockFieldChange"
       @blacklist-hit="showBlacklistHit"
@@ -146,6 +148,10 @@ let businessDayBoundaryTimer: number | undefined
 let businessDayPreflushTimer: number | undefined
 
 const isPageReadonly = computed(() => Boolean(labStore.sheet?.readonly || switchingBusinessDay.value))
+const canViewCompletedSensitiveData = computed(() => {
+  accessGuard.accessSessionRevision
+  return accessGuard.hasFeatureAccess('COMPLETED_SAMPLE_DATA')
+})
 
 const autoSaveText = computed(() => {
   if (labStore.autoSaveStatus === 'pending') return '等待自动保存'
@@ -187,6 +193,7 @@ const bulkFillButtonText = computed(() => {
 const selectionMode = computed(() => generationMode.value !== null)
 
 onMounted(async () => {
+  await accessGuard.loadGroups()
   await loadSheetFromRoute()
   bindBusinessDayListeners()
   await checkBusinessDayBoundary()
@@ -343,11 +350,20 @@ async function loadSelectedDate(value: string) {
 
 async function requestHistoricalDateAccess(date: string, onSuccess: () => void | Promise<void>) {
   if (date === businessDateInBeijing()) return true
-  await accessGuard.loadSettings()
-  return accessGuard.requestAccess({
+  await accessGuard.loadGroups()
+  return accessGuard.requestFeatureAccess('HISTORICAL_DATES', {
     title: '历史日期访问验证',
     message: '默认只能查看当日数据。请输入访问密码后查看过往日期数据。',
     onSuccess
+  })
+}
+
+async function requestCompletedSampleDataAccess() {
+  await accessGuard.loadGroups()
+  accessGuard.requestFeatureAccess('COMPLETED_SAMPLE_DATA', {
+    title: '已完成样品数据访问验证',
+    message: '已完成样品的检测数据、样品金额和结款状态已隐藏。请输入对应组合密码后查看。',
+    onSuccess: async () => { await labStore.loadSheetByDate(selectedDate.value) }
   })
 }
 

@@ -18,6 +18,24 @@
     <section class="panel">
       <div class="panel__header">
         <h2>每日收入分类统计</h2>
+        <div class="chart-metric-toggle" aria-label="图表统计维度">
+          <el-button
+            data-testid="chart-metric-amount"
+            size="small"
+            :type="chartMetric === 'amount' ? 'primary' : 'default'"
+            @click="chartMetric = 'amount'"
+          >
+            金额
+          </el-button>
+          <el-button
+            data-testid="chart-metric-count"
+            size="small"
+            :type="chartMetric === 'count' ? 'primary' : 'default'"
+            @click="chartMetric = 'count'"
+          >
+            样品数量
+          </el-button>
+        </div>
       </div>
       <div class="panel__body">
         <el-empty v-if="!report.rows.length" description="当前周期暂无统计数据" />
@@ -30,7 +48,7 @@
       </div>
       <el-table :data="report.rows" border>
         <el-table-column prop="date" label="日期" />
-        <el-table-column prop="sampleCount" label="收入数量" width="100" />
+        <el-table-column prop="sampleCount" label="样品数量" width="100" />
         <el-table-column prop="totalPrice" label="收入金额" width="120">
           <template #default="{ row }">¥{{ row.totalPrice.toFixed(2) }}</template>
         </el-table-column>
@@ -48,7 +66,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { EChartsOption } from 'echarts'
 import type { IncomePaymentStatus } from '@/types/financeBills'
 import type { SampleDetectionDailyRow, SampleDetectionReport } from '@/types/report'
@@ -68,25 +86,46 @@ const summaryItems = computed(() => [
 ])
 
 const visibleStatuses = computed(() => incomePaymentStatuses)
+const chartMetric = ref<'amount' | 'count'>('amount')
 
 const statusSummaries = computed(() =>
   visibleStatuses.value.map((status) => props.report.summary.statusSummaries.find((item) => item.status === status) || { status, count: 0, amount: 0 })
 )
 
-const chartOption = computed<EChartsOption>(() => ({
-  tooltip: { trigger: 'axis' },
-  legend: { data: visibleStatuses.value },
-  grid: { left: 56, right: 32, top: 52, bottom: 38 },
-  xAxis: { type: 'category', data: props.report.rows.map((row) => row.date) },
-  yAxis: { type: 'value', name: '金额' },
-  series: visibleStatuses.value.map((status) => ({
-    name: status,
-    type: 'bar',
-    stack: 'income',
-    data: props.report.rows.map((row) => getRowStatusSummary(row, status).amount),
-    itemStyle: { color: statusColors[status] }
-  }))
-}))
+const chartOption = computed<EChartsOption>(() => {
+  const isAmountMetric = chartMetric.value === 'amount'
+  const totalAmountSeries = {
+    name: '当日总金额',
+    type: 'line' as const,
+    data: props.report.rows.map((row) => row.totalPrice),
+    symbol: 'circle',
+    symbolSize: 7,
+    z: 10,
+    itemStyle: { color: '#0f172a' },
+    lineStyle: { color: '#0f172a', width: 2 }
+  }
+
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { data: [...visibleStatuses.value, ...(isAmountMetric ? [totalAmountSeries.name] : [])] },
+    grid: { left: 56, right: 32, top: 52, bottom: 38 },
+    xAxis: { type: 'category', data: props.report.rows.map((row) => row.date) },
+    yAxis: { type: 'value', name: isAmountMetric ? '金额（元）' : '样品数量（个）' },
+    series: [
+      ...visibleStatuses.value.map((status) => ({
+        name: status,
+        type: 'bar' as const,
+        stack: 'income',
+        data: props.report.rows.map((row) => {
+          const summary = getRowStatusSummary(row, status)
+          return isAmountMetric ? summary.amount : summary.count
+        }),
+        itemStyle: { color: statusColors[status] }
+      })),
+      ...(isAmountMetric ? [totalAmountSeries] : [])
+    ]
+  }
+})
 
 const statusColors: Record<IncomePaymentStatus, string> = {
   已结款: '#16a34a',
@@ -143,6 +182,11 @@ function getRowStatusSummary(row: SampleDetectionDailyRow, status: IncomePayment
     color: #64748b;
     font-size: 12px;
   }
+}
+
+.chart-metric-toggle {
+  display: flex;
+  gap: 8px;
 }
 
 @media (max-width: 1200px) {

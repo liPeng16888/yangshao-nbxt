@@ -3,6 +3,17 @@ import type { AuthResponse, AuthUser, LoginPayload, RegisterPayload, UpdatePassw
 import type { BlacklistCheckResult, BlacklistPayload, BlacklistRecord } from '@/types/blacklist'
 import type { Customer, CustomerPayload } from '@/types/customer'
 import type { FinanceEntry, FinancePayload } from '@/types/finance'
+import type {
+  CreateMedicineInboundPayload,
+  CreateMedicineOutboundPayload,
+  MedicineCommonName,
+  MedicineInventoryItem,
+  MedicineInventoryMovement,
+  MedicineInventoryMutationResponse,
+  MedicineMovementKind,
+  MedicineMovementQuery,
+  MedicineUnit
+} from '@/types/medicineInventory'
 import type { DateRange, FinanceReport, SampleDetectionReport } from '@/types/report'
 import type { PrepaidRechargeRow } from '@/types/financeBills'
 import type { LabParameter, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
@@ -11,8 +22,10 @@ import { financeCategoryRules } from '@/constants/reportCategories'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
 import { businessDateInBeijing, getReportRange, todayInBeijing } from '@/utils/date'
+import { medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
 
 const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
+const MEDICINE_COMMON_NAME_STORAGE_KEY = 'ys_medicine_common_names'
 
 let currentUser: AuthUser = {
   id: 'u-admin',
@@ -92,9 +105,14 @@ let financeEntries: FinanceEntry[] = [
   }
 ]
 
+let medicineInventoryItems: MedicineInventoryItem[] = []
+let medicineInventoryMovements: MedicineInventoryMovement[] = []
+let medicineCommonNames: MedicineCommonName[] = []
+
 const labSheets = new Map<string, LabSheet>()
 
 function clone<T>(value: T): T {
+  if (value === undefined) return value
   return JSON.parse(JSON.stringify(value)) as T
 }
 
@@ -363,6 +381,171 @@ export async function mockCreateFinance(payload: FinancePayload) {
 export async function mockFinanceMonths() {
   const months = Array.from(new Set(financeEntries.map((item) => item.paymentDate.slice(0, 7))))
   return delay(months.sort().reverse())
+}
+
+export async function mockMedicineItems(itemIds?: string[]): Promise<MedicineInventoryItem[]> {
+  const selectedIds = new Set(itemIds || [])
+  return delay(medicineInventoryItems.filter((item) =>
+    item.frontendUserId === currentUser.id && (!selectedIds.size || selectedIds.has(item.id))
+  ))
+}
+
+export async function mockMedicineCommonNames(): Promise<MedicineCommonName[]> {
+  return delay(readMedicineCommonNames().filter((item) => item.frontendUserId === currentUser.id).sort((left, right) => left.name.localeCompare(right.name, 'zh-CN')))
+}
+
+export async function mockCreateMedicineCommonName(nameInput: string): Promise<MedicineCommonName> {
+  const name = nameInput.trim()
+  if (!name) throw new Error('请填写常用药品名称')
+
+  const names = readMedicineCommonNames()
+  const normalizedName = name.toLocaleLowerCase()
+  const existing = names.find((item) => item.frontendUserId === currentUser.id && item.name.toLocaleLowerCase() === normalizedName)
+  if (existing) return delay(existing)
+
+  const timestamp = new Date().toISOString()
+  const entry: MedicineCommonName = {
+    id: mockId('medicine-common'),
+    frontendUserId: currentUser.id,
+    name,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  }
+  saveMedicineCommonNames([...names, entry])
+  return delay(entry)
+}
+
+export async function mockDeleteMedicineCommonName(id: string): Promise<void> {
+  const names = readMedicineCommonNames()
+  const entry = names.find((item) => item.id === id && item.frontendUserId === currentUser.id)
+  if (!entry) throw new Error('未找到当前账号的常用药品名称')
+  saveMedicineCommonNames(names.filter((item) => item.id !== id))
+  await delay(undefined)
+}
+
+export async function mockMedicineMovements(kind: MedicineMovementKind, query: MedicineMovementQuery = {}): Promise<MedicineInventoryMovement[]> {
+  const expectedTypes = kind === 'inbound' ? ['INBOUND', 'CORRECTION_OUT'] : ['OUTBOUND', 'CORRECTION_IN']
+  const selectedItemIds = new Set(query.medicineItemIds || [])
+  return delay(medicineInventoryMovements.filter((movement) =>
+    movement.frontendUserId === currentUser.id &&
+    expectedTypes.includes(movement.type) &&
+    (!selectedItemIds.size || selectedItemIds.has(movement.medicineItemId)) &&
+    (!query.startDate || movement.occurredOn >= query.startDate) &&
+    (!query.endDate || movement.occurredOn <= query.endDate)
+  ).sort((left, right) => right.createdAt.localeCompare(left.createdAt)))
+}
+
+export async function mockCreateMedicineInbound(payload: CreateMedicineInboundPayload): Promise<MedicineInventoryMutationResponse> {
+  const name = payload.name.trim()
+  if (!name) throw new Error('请填写药品名称')
+  const unit = payload.unit
+  const quantity = validatedMedicineQuantity(unit, payload.quantity)
+  const now = new Date().toISOString()
+  const currentIndex = medicineInventoryItems.findIndex((item) =>
+    item.frontendUserId === currentUser.id && item.unit === unit && item.name.toLocaleLowerCase() === name.toLocaleLowerCase()
+  )
+  const item: MedicineInventoryItem = currentIndex >= 0
+    ? { ...medicineInventoryItems[currentIndex], currentQuantity: medicineInventoryItems[currentIndex].currentQuantity + quantity, updatedAt: now }
+    : {
+        id: mockId('medicine-item'),
+        frontendUserId: currentUser.id,
+        name,
+        unit,
+        unitLabel: medicineUnitLabel(unit),
+        currentQuantity: quantity,
+        createdAt: now,
+        updatedAt: now
+      }
+  if (currentIndex >= 0) medicineInventoryItems[currentIndex] = item
+  else medicineInventoryItems = [...medicineInventoryItems, item]
+
+  const movement = createMedicineMovement(item, 'INBOUND', payload.occurredOn, quantity, payload.remark)
+  medicineInventoryMovements = [movement, ...medicineInventoryMovements]
+  return delay({ item, movement })
+}
+
+export async function mockCreateMedicineOutbound(payload: CreateMedicineOutboundPayload): Promise<MedicineInventoryMutationResponse> {
+  const itemIndex = medicineInventoryItems.findIndex((item) => item.id === payload.medicineItemId && item.frontendUserId === currentUser.id)
+  if (itemIndex < 0) throw new Error('未找到当前账号的药品库存')
+  const item = medicineInventoryItems[itemIndex]
+  const quantity = validatedMedicineQuantity(item.unit, payload.quantity)
+  if (item.currentQuantity < quantity) throw new Error('库存不足')
+  const updatedItem = { ...item, currentQuantity: item.currentQuantity - quantity, updatedAt: new Date().toISOString() }
+  medicineInventoryItems[itemIndex] = updatedItem
+  const movement = createMedicineMovement(updatedItem, 'OUTBOUND', payload.occurredOn, quantity, payload.remark)
+  medicineInventoryMovements = [movement, ...medicineInventoryMovements]
+  return delay({ item: updatedItem, movement })
+}
+
+function createMedicineMovement(
+  item: MedicineInventoryItem,
+  type: MedicineInventoryMovement['type'],
+  occurredOn: string,
+  quantity: number,
+  remark?: string
+): MedicineInventoryMovement {
+  return {
+    id: mockId('medicine-movement'),
+    frontendUserId: currentUser.id,
+    medicineItemId: item.id,
+    type,
+    occurredOn,
+    quantity,
+    nameSnapshot: item.name,
+    unitSnapshot: item.unit,
+    unitLabel: item.unitLabel,
+    remark: remark?.trim() || null,
+    correctionOfId: null,
+    createdAt: new Date().toISOString()
+  }
+}
+
+function validatedMedicineQuantity(unit: MedicineUnit, input: CreateMedicineInboundPayload['quantity']) {
+  const validation = validateMedicineQuantity(unit, input)
+  if (!validation.ok) throw new Error(validation.message)
+  return Number(validation.value)
+}
+
+function medicineUnitLabel(unit: MedicineUnit) {
+  return medicineUnitOptions.find((option) => option.value === unit)?.label || unit
+}
+
+function readMedicineCommonNames(): MedicineCommonName[] {
+  const storage = medicineCommonNameStorage()
+  if (!storage) return medicineCommonNames
+  try {
+    const raw = storage.getItem(MEDICINE_COMMON_NAME_STORAGE_KEY)
+    if (!raw) return medicineCommonNames
+    const parsed: unknown = JSON.parse(raw)
+    const names = Array.isArray(parsed)
+      ? parsed.filter((item): item is MedicineCommonName => Boolean(item && typeof item === 'object' && typeof item.id === 'string' && typeof item.frontendUserId === 'string' && typeof item.name === 'string'))
+      : []
+    medicineCommonNames = names
+    return names
+  } catch {
+    return medicineCommonNames
+  }
+}
+
+function saveMedicineCommonNames(names: MedicineCommonName[]) {
+  medicineCommonNames = names
+  try {
+    medicineCommonNameStorage()?.setItem(MEDICINE_COMMON_NAME_STORAGE_KEY, JSON.stringify(names))
+  } catch {
+    // The in-memory copy keeps local demo mode usable when browser storage is unavailable.
+  }
+}
+
+function medicineCommonNameStorage(): Storage | undefined {
+  try {
+    return typeof window === 'undefined' ? undefined : window.localStorage
+  } catch {
+    return undefined
+  }
+}
+
+function mockId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
 function datesBetween(startDate: string, endDate: string) {

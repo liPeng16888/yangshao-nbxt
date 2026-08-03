@@ -205,6 +205,25 @@ describe('LabSheetsService default sheet selection', () => {
     expect(result.sampleBlocks[0].readonly).toBe(true)
   })
 
+  it('redacts only completed sample detection, amount, and payment fields without a completed-data grant', async () => {
+    const today = businessDateInBeijing()
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [makeBlock(1, {
+      completed: true,
+      sampleNumber: 'KEEP-001',
+      customerText: '保留客户',
+      ironRaw: 1.234,
+      price: 88,
+      paymentStatus: '已结款',
+      note: '保留备注'
+    })]))
+
+    const result = await service.getSheetForFrontendUser('front-1', today, false)
+    const block = result.sampleBlocks[0]
+
+    expect(block.sensitiveFieldsHidden).toBe(true)
+    expect((block.inputs as Record<string, unknown>)).toMatchObject({ sampleNumber: 'KEEP-001', customerText: '保留客户', note: '保留备注', ironRaw: null, price: null, paymentStatus: null })
+  })
+
   it('keeps today sheet editable even when it was stored readonly before today', async () => {
     const today = businessDateInBeijing()
     const storedReadonlySheet = {

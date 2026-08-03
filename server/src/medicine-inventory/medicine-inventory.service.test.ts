@@ -160,6 +160,50 @@ describe('MedicineInventoryService listItems', () => {
   })
 })
 
+describe('MedicineInventoryService common names', () => {
+  const prisma = {
+    medicineCommonName: {
+      findMany: vi.fn(),
+      upsert: vi.fn(),
+      deleteMany: vi.fn()
+    }
+  }
+  let service: MedicineInventoryService
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    service = new MedicineInventoryService(prisma as never)
+  })
+
+  it('keeps common-name listing and deletion within the current frontend account', async () => {
+    prisma.medicineCommonName.findMany.mockResolvedValue([])
+    prisma.medicineCommonName.deleteMany.mockResolvedValue({ count: 1 })
+
+    await service.listCommonNames(['front-1'])
+    await service.deleteCommonName('front-1', 'common-1')
+
+    expect(prisma.medicineCommonName.findMany).toHaveBeenCalledWith({
+      where: { frontendUserId: { in: ['front-1'] } },
+      orderBy: { name: 'asc' }
+    })
+    expect(prisma.medicineCommonName.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'common-1', frontendUserId: 'front-1' }
+    })
+  })
+
+  it('normalizes common names before creating or reusing them', async () => {
+    prisma.medicineCommonName.upsert.mockResolvedValue({ id: 'common-1', frontendUserId: 'front-1', name: '盐酸' })
+
+    await service.createCommonName('front-1', ' 盐酸 ')
+
+    expect(prisma.medicineCommonName.upsert).toHaveBeenCalledWith({
+      where: { frontendUserId_name: { frontendUserId: 'front-1', name: '盐酸' } },
+      create: { frontendUserId: 'front-1', name: '盐酸' },
+      update: {}
+    })
+  })
+})
+
 describe('MedicineInventoryService inventory transactions', () => {
   const tx = {
     medicineInventoryItem: {

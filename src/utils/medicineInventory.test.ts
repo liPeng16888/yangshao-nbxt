@@ -11,7 +11,7 @@ const requestMock = vi.hoisted(() => ({
   post: vi.fn()
 }))
 
-vi.mock('@/utils/request', () => ({ default: requestMock }))
+vi.mock('@/utils/request', () => ({ default: requestMock, useMocks: false }))
 
 describe('medicine inventory quantity utilities', () => {
   it('accepts positive integer bottle quantities', () => {

@@ -2,28 +2,45 @@
   <div class="page">
     <section class="panel">
       <div class="panel__header">
-        <strong>财务报表</strong>
+        <strong>{{ currentFinanceGroup.label }}</strong>
         <div class="filters">
           <el-select v-model="selectedFrontendIds" multiple filterable collapse-tags placeholder="选择前端账号" style="width: 300px">
             <el-option v-for="item in frontendOptions" :key="item.id" :label="`${item.name}（${item.account}）`" :value="item.id" />
           </el-select>
-          <el-date-picker v-model="month" type="month" value-format="YYYY-MM" />
-          <el-button type="primary" :loading="loading" @click="loadActive">查询</el-button>
+          <template v-if="!isReportPage">
+            <el-date-picker v-model="month" type="month" value-format="YYYY-MM" />
+            <el-button type="primary" :loading="loading" @click="loadActive">查询</el-button>
+          </template>
         </div>
       </div>
       <div class="panel__body">
-        <el-tabs v-model="active" @tab-change="loadActive">
-          <el-tab-pane label="收入账单" name="income" />
-          <el-tab-pane label="支出账单" name="expenses" />
-          <el-tab-pane label="未结款" name="unsettled" />
-          <el-tab-pane label="月结款每日明细" name="monthlyDaily" />
-          <el-tab-pane label="月结款账单明细" name="monthlyBills" />
-          <el-tab-pane label="月结客户信息收录" name="monthlyCustomers" />
-          <el-tab-pane label="预存款添加记录" name="prepaidRecharges" />
-          <el-tab-pane label="预存款客户" name="prepaidCustomers" />
-          <el-tab-pane label="预存款每日明细" name="prepaidDaily" />
-          <el-tab-pane label="删除申请" name="deletionRequests" />
+        <el-tabs :model-value="active" @tab-change="switchFinancePage">
+          <el-tab-pane v-for="item in currentFinanceGroup.children" :key="item.page" :label="item.label" :name="item.page" />
         </el-tabs>
+      </div>
+    </section>
+
+    <section v-if="isReportPage" class="panel report-range-filter">
+      <div class="panel__body report-range-filter__body">
+        <el-radio-group v-model="reportMode">
+          <el-radio-button value="daily">日报</el-radio-button>
+          <el-radio-button value="weekly">周报</el-radio-button>
+          <el-radio-button value="monthly">月报</el-radio-button>
+          <el-radio-button value="custom">筛选日期</el-radio-button>
+        </el-radio-group>
+        <el-date-picker
+          v-if="reportMode !== 'custom'"
+          v-model="reportDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          placeholder="选择日期"
+        />
+        <template v-else>
+          <el-date-picker v-model="customStartDate" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" />
+          <span class="report-range-filter__separator">至</span>
+          <el-date-picker v-model="customEndDate" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" />
+        </template>
+        <el-button type="primary" :loading="loading" @click="loadActive">查询</el-button>
       </div>
     </section>
 
@@ -57,6 +74,17 @@
         <div class="stat-card"><span>本周收入</span><strong>¥{{ money(report.totals?.week?.amount) }}</strong></div>
         <div class="stat-card"><span>本月收入</span><strong>¥{{ money(report.totals?.month?.amount) }}</strong></div>
       </div>
+      <div class="finance-chart-section">
+        <div class="finance-chart-section__header">
+          <strong>收入图形分析</strong>
+          <div class="finance-chart-switcher" aria-label="收入图形类型">
+            <el-button data-testid="income-chart-bar" size="small" :type="incomeChartType === 'bar' ? 'primary' : 'default'" @click="incomeChartType = 'bar'">柱状图</el-button>
+            <el-button data-testid="income-chart-pie" size="small" :type="incomeChartType === 'pie' ? 'primary' : 'default'" @click="incomeChartType = 'pie'">饼状图</el-button>
+          </div>
+        </div>
+        <el-empty v-if="!incomeRows.length" description="当前筛选条件暂无收入图形数据" />
+        <FinanceChart v-else :option="incomeChartOption" />
+      </div>
       <el-table :data="report.rows || []" border>
         <el-table-column prop="date" label="日期" width="130" />
         <el-table-column prop="sampleCount" label="样品数量" width="110" />
@@ -73,6 +101,17 @@
         <div class="stat-card"><span>本日开支</span><strong>¥{{ money(report.totals?.today?.amount) }}</strong></div>
         <div class="stat-card"><span>本周开支</span><strong>¥{{ money(report.totals?.week?.amount) }}</strong></div>
         <div class="stat-card"><span>本月开支</span><strong>¥{{ money(report.totals?.month?.amount) }}</strong></div>
+      </div>
+      <div class="finance-chart-section">
+        <div class="finance-chart-section__header">
+          <strong>支出图形分析</strong>
+          <div class="finance-chart-switcher" aria-label="支出图形类型">
+            <el-button data-testid="expense-chart-bar" size="small" :type="expenseChartType === 'bar' ? 'primary' : 'default'" @click="expenseChartType = 'bar'">柱状图</el-button>
+            <el-button data-testid="expense-chart-pie" size="small" :type="expenseChartType === 'pie' ? 'primary' : 'default'" @click="expenseChartType = 'pie'">饼状图</el-button>
+          </div>
+        </div>
+        <el-empty v-if="!expenseRows.length" description="当前筛选条件暂无支出图形数据" />
+        <FinanceChart v-else :option="expenseChartOption" />
       </div>
       <el-table :data="report.rows || []" border>
         <el-table-column prop="paymentDate" label="支付日期" width="120" />
@@ -157,44 +196,6 @@
       </el-table>
     </section>
 
-    <section v-else-if="active === 'deletionRequests'" class="panel">
-      <div class="panel__header">
-        <strong>删除申请记录</strong>
-        <div class="filters">
-          <el-select v-model="deletionStatus" clearable placeholder="全部状态" style="width: 140px" @change="loadActive">
-            <el-option label="待审核" value="PENDING" />
-            <el-option label="已同意" value="APPROVED" />
-            <el-option label="已拒绝" value="REJECTED" />
-          </el-select>
-        </div>
-      </div>
-      <el-table :data="rows" border>
-        <el-table-column prop="createdAt" label="申请时间" width="190" />
-        <el-table-column prop="name" label="名称" width="150" />
-        <el-table-column prop="sourceLabel" label="类型" width="140" />
-        <el-table-column prop="sourceSummary" label="删除内容" min-width="260" />
-        <el-table-column prop="reason" label="删除理由" min-width="220" />
-        <el-table-column label="状态" width="110">
-          <template #default="{ row }">
-            <el-tag :type="deletionStatusType(row.status)" effect="plain">{{ row.statusLabel }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="reviewRemark" label="审核备注" min-width="180">
-          <template #default="{ row }">{{ row.reviewRemark || '无信息' }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="230" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" @click="openDeletionDetail(row)">详情</el-button>
-            <template v-if="row.status === 'PENDING'">
-              <el-button size="small" type="primary" @click="approveDeletion(row)">同意</el-button>
-              <el-button size="small" type="danger" @click="rejectDeletion(row)">拒绝</el-button>
-            </template>
-            <span v-else class="muted">已处理</span>
-          </template>
-        </el-table-column>
-      </el-table>
-    </section>
-
     <section v-else-if="active === 'prepaidCustomers'" class="panel">
       <el-table :data="filteredRows" border>
         <el-table-column prop="name" label="名称" width="150" />
@@ -217,28 +218,15 @@
       </el-table>
     </section>
 
-    <el-dialog v-model="deletionDetailVisible" title="删除申请详情" width="680px">
-      <el-descriptions v-if="deletionDetailRow" :column="1" border>
-        <el-descriptions-item label="名称">{{ deletionDetailRow.name || '无信息' }}</el-descriptions-item>
-        <el-descriptions-item label="类型">{{ deletionDetailRow.sourceLabel || '无信息' }}</el-descriptions-item>
-        <el-descriptions-item label="状态">{{ deletionDetailRow.statusLabel || '无信息' }}</el-descriptions-item>
-        <el-descriptions-item label="申请时间">{{ deletionDetailRow.createdAt || '无信息' }}</el-descriptions-item>
-        <el-descriptions-item label="删除理由">{{ deletionDetailRow.reason || '无信息' }}</el-descriptions-item>
-        <el-descriptions-item v-for="item in deletionSnapshotEntries(deletionDetailRow)" :key="item.key" :label="item.label">
-          {{ item.value }}
-        </el-descriptions-item>
-        <el-descriptions-item label="审核备注">{{ deletionDetailRow.reviewRemark || '无信息' }}</el-descriptions-item>
-        <el-descriptions-item label="审核时间">{{ deletionDetailRow.reviewedAt || '无信息' }}</el-descriptions-item>
-      </el-descriptions>
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import dayjs from 'dayjs'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import type { EChartsOption } from 'echarts'
 import { buildFrontendIds, getFrontendOptions, request } from '../api'
 import type { FrontendOption } from '../types'
 import {
@@ -247,19 +235,31 @@ import {
   retainAvailableFinanceCustomers,
   shouldApplyFinanceResponse
 } from '../utils/financeCustomerFilter'
+import { financeNavigationGroups, type FinancePageId } from '../config/financeNavigation'
+import FinanceChart from '../components/FinanceChart.vue'
+import { buildExpenseBarData, buildExpensePieData, buildIncomeBarData, buildIncomePieData } from '../utils/financeChartData'
+import { buildFinanceReportRange, type FinanceReportMode } from '../utils/financeReportRange'
 
+const route = useRoute()
 const router = useRouter()
 const frontendOptions = ref<FrontendOption[]>([])
 const selectedFrontendIds = ref<string[]>([])
 const month = ref(dayjs().format('YYYY-MM'))
-const active = ref('income')
+const reportMode = ref<FinanceReportMode>('daily')
+const reportDate = ref(dayjs().format('YYYY-MM-DD'))
+const customStartDate = ref(dayjs().format('YYYY-MM-DD'))
+const customEndDate = ref(dayjs().format('YYYY-MM-DD'))
+const active = ref<FinancePageId>('income')
+const incomeChartType = ref<'bar' | 'pie'>('bar')
+const expenseChartType = ref<'bar' | 'pie'>('bar')
 const loading = ref(false)
 const report = ref<any>({})
 const rows = ref<any[]>([])
-const deletionStatus = ref('')
-const deletionDetailVisible = ref(false)
-const deletionDetailRow = ref<any | null>(null)
 let latestLoadRequestId = 0
+const currentFinanceGroup = computed(() =>
+  financeNavigationGroups.find((group) => group.id === route.meta.financeGroup) || financeNavigationGroups[0]
+)
+const isReportPage = computed(() => active.value === 'income' || active.value === 'expenses')
 const customerFilterTabs = new Set([
   'unsettled',
   'monthlyDaily',
@@ -294,21 +294,73 @@ const selectedCustomers = computed<string[]>({
 const filteredRows = computed(() =>
   filterFinanceRowsByCustomers(customerFilterRows.value, selectedCustomers.value)
 )
+const incomeRows = computed<any[]>(() => Array.isArray(report.value.rows) ? report.value.rows : [])
+const expenseRows = computed<any[]>(() => Array.isArray(report.value.rows) ? report.value.rows : [])
+const incomeChartOption = computed<EChartsOption>(() => {
+  if (incomeChartType.value === 'pie') {
+    return {
+      tooltip: { trigger: 'item' },
+      legend: { type: 'scroll', bottom: 0 },
+      series: [{ name: '收入结款状态', type: 'pie', radius: ['38%', '68%'], data: buildIncomePieData(incomeRows.value) }]
+    }
+  }
+  const data = buildIncomeBarData(incomeRows.value)
+  return {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 62, right: 28, top: 26, bottom: 48 },
+    xAxis: { type: 'category', data: data.labels, axisLabel: { rotate: data.labels.length > 8 ? 30 : 0 } },
+    yAxis: { type: 'value', name: '金额（元）' },
+    series: [{ name: '收入金额', type: 'bar', data: data.values, barMaxWidth: 44, itemStyle: { color: '#2563eb', borderRadius: [4, 4, 0, 0] } }]
+  }
+})
+const expenseChartOption = computed<EChartsOption>(() => {
+  if (expenseChartType.value === 'pie') {
+    return {
+      tooltip: { trigger: 'item' },
+      legend: { type: 'scroll', bottom: 0 },
+      series: [{ name: '开支项目', type: 'pie', radius: ['38%', '68%'], data: buildExpensePieData(expenseRows.value) }]
+    }
+  }
+  const data = buildExpenseBarData(expenseRows.value)
+  return {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 62, right: 28, top: 26, bottom: 48 },
+    xAxis: { type: 'category', data: data.labels, axisLabel: { rotate: data.labels.length > 8 ? 30 : 0 } },
+    yAxis: { type: 'value', name: '金额（元）' },
+    series: [{ name: '支出金额', type: 'bar', data: data.values, barMaxWidth: 44, itemStyle: { color: '#d9472f', borderRadius: [4, 4, 0, 0] } }]
+  }
+})
 
 onMounted(async () => {
+  active.value = financePageFromRoute()
   frontendOptions.value = await getFrontendOptions()
   selectedFrontendIds.value = frontendOptions.value.map((item) => item.id)
   await loadActive()
 })
+
+watch(
+  () => route.meta.financePage,
+  () => {
+    const nextPage = financePageFromRoute()
+    if (nextPage === active.value) return
+    active.value = nextPage
+    if (frontendOptions.value.length) void loadActive()
+  }
+)
 
 async function loadActive() {
   const requestedTab = active.value
   const requestId = ++latestLoadRequestId
   loading.value = true
   try {
-    const params: Record<string, string> = { month: month.value, frontendUserIds: buildFrontendIds(selectedFrontendIds.value) }
-    if (requestedTab === 'deletionRequests' && deletionStatus.value) params.status = deletionStatus.value
-
+    const params: Record<string, string> = { frontendUserIds: buildFrontendIds(selectedFrontendIds.value) }
+    if (requestedTab === 'income' || requestedTab === 'expenses') {
+      const range = buildFinanceReportRange(reportMode.value, reportDate.value, customStartDate.value, customEndDate.value)
+      params.startDate = range.startDate
+      params.endDate = range.endDate
+    } else {
+      params.month = month.value
+    }
     let response: any
     if (requestedTab === 'income') response = await request.get('/admin/finance/income', { params })
     else if (requestedTab === 'expenses') response = await request.get('/admin/finance/expenses', { params })
@@ -317,7 +369,6 @@ async function loadActive() {
     else if (requestedTab === 'monthlyBills') response = await request.get('/admin/finance/monthly-bills', { params })
     else if (requestedTab === 'monthlyCustomers') response = await request.get('/admin/finance/monthly-customers', { params })
     else if (requestedTab === 'prepaidRecharges') response = await request.get('/admin/finance/prepaid-recharges', { params })
-    else if (requestedTab === 'deletionRequests') response = await request.get('/admin/finance/delete-requests', { params })
     else response = await request.get('/admin/finance/prepaid-report', { params })
 
     if (!shouldApplyFinanceResponse(requestedTab, active.value, requestId, latestLoadRequestId)) return
@@ -380,77 +431,59 @@ async function saveMonthlyCustomerRemark(row: any) {
   ElMessage.success('备注已保存')
 }
 
-function deletionStatusType(status: string) {
-  if (status === 'APPROVED') return 'success'
-  if (status === 'REJECTED') return 'danger'
-  return 'warning'
+function financePageFromRoute(): FinancePageId {
+  const candidate = route.meta.financePage
+  const exists = financeNavigationGroups.some((group) => group.children.some((item) => item.page === candidate))
+  return exists ? candidate as FinancePageId : 'income'
 }
 
-function openDeletionDetail(row: any) {
-  deletionDetailRow.value = row
-  deletionDetailVisible.value = true
-}
-
-function deletionSnapshotEntries(row: any) {
-  const snapshot = row?.sourceSnapshot && typeof row.sourceSnapshot === 'object' ? row.sourceSnapshot : {}
-  return Object.entries(snapshot).map(([key, value]) => ({
-    key,
-    label: deletionSnapshotLabel(key),
-    value: deletionSnapshotValue(key, value)
-  }))
-}
-
-function deletionSnapshotLabel(key: string) {
-  const labels: Record<string, string> = {
-    paymentDate: '支付日期',
-    item: '开支项目',
-    amount: '金额',
-    paymentMethod: '支付方式',
-    screenshotUrls: '支付截图',
-    remark: '备注',
-    rechargeDate: '充值日期',
-    customer: '客户名称',
-    usableTimes: '可使用次数'
-  }
-  return labels[key] || key
-}
-
-function deletionSnapshotValue(key: string, value: unknown) {
-  if (key === 'amount') return `¥${money(value)}`
-  if (key === 'paymentMethod') return value === 'cash' ? '现金支付' : value === 'online' ? '线上支付' : '无信息'
-  if (Array.isArray(value)) return value.length ? value.join('，') : '无信息'
-  if (value === null || value === undefined || value === '') return '无信息'
-  return String(value)
-}
-
-async function approveDeletion(row: any) {
-  await ElMessageBox.confirm(`确认同意删除「${row.sourceSummary}」？同意后原记录会被删除，并通知前端账号。`, '同意删除申请', {
-    confirmButtonText: '同意删除',
-    cancelButtonText: '取消',
-    type: 'warning'
-  })
-  await request.post(`/admin/finance/delete-requests/${row.id}/approve`)
-  ElMessage.success('已同意删除申请，并发送前端提醒')
-  await loadActive()
-}
-
-async function rejectDeletion(row: any) {
-  const result = await ElMessageBox.prompt(`确认拒绝「${row.sourceSummary}」的删除申请？可填写拒绝原因。`, '拒绝删除申请', {
-    confirmButtonText: '确认拒绝',
-    cancelButtonText: '取消',
-    inputType: 'textarea',
-    inputPlaceholder: '可填写拒绝原因',
-    type: 'warning'
-  })
-  await request.post(`/admin/finance/delete-requests/${row.id}/reject`, { reviewRemark: String(result.value || '').trim() })
-  ElMessage.success('已拒绝删除申请，并发送前端提醒')
-  await loadActive()
+function switchFinancePage(page: string | number) {
+  const target = currentFinanceGroup.value.children.find((item) => item.page === page)
+  if (target) void router.push(target.path)
 }
 </script>
 
 <style scoped>
 .customer-filter-panel {
   margin-bottom: 0;
+}
+
+.report-range-filter__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.report-range-filter__separator {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.finance-chart-section {
+  margin: 0 14px 14px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.finance-chart-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 46px;
+  padding: 0 14px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.finance-chart-section__header strong {
+  color: #1e293b;
+  font-size: 14px;
+}
+
+.finance-chart-switcher {
+  display: flex;
+  gap: 8px;
 }
 
 .customer-filter-bar {

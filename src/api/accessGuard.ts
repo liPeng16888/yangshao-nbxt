@@ -1,67 +1,71 @@
 import request, { useMocks } from '@/utils/request'
+import type { AccessGuardFeature } from '@/router/guards'
 
-export interface AccessGuardSettingsResponse {
+export interface AccessGuardGroup {
+  id: string
+  name: string
   enabled: boolean
   ttlMinutes: number
   password: string
   recoveryPrompt: string
   recoveryAnswer: string
+  features: AccessGuardFeature[]
 }
 
-export interface AccessGuardSettingsPayload {
-  enabled: boolean
-  ttlMinutes: number
-  password?: string
-  disablePassword?: string
-  recoveryPrompt?: string
-  recoveryAnswer?: string
+export type AccessGuardGroupPayload = Omit<AccessGuardGroup, 'id'>
+
+export interface AccessGuardVerification {
+  expiresAt: number
+  token?: string
 }
 
-const MOCK_ACCESS_GUARD_STORAGE_KEY = 'ys_mock_access_guard_settings'
+const STORAGE_KEY = 'ys_mock_access_guard_groups'
 
-const defaultSettings: AccessGuardSettingsResponse = {
-  enabled: false,
-  ttlMinutes: 5,
-  password: '',
-  recoveryPrompt: '',
-  recoveryAnswer: ''
-}
-
-function readMockSettings() {
+function readGroups(): AccessGuardGroup[] {
   try {
-    const raw = window.localStorage.getItem(MOCK_ACCESS_GUARD_STORAGE_KEY)
-    return raw ? { ...defaultSettings, ...(JSON.parse(raw) as Partial<AccessGuardSettingsResponse>) } : { ...defaultSettings }
+    const value: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '[]')
+    return Array.isArray(value) ? value as AccessGuardGroup[] : []
   } catch {
-    return { ...defaultSettings }
+    return []
   }
 }
 
-function writeMockSettings(settings: AccessGuardSettingsResponse) {
-  window.localStorage.setItem(MOCK_ACCESS_GUARD_STORAGE_KEY, JSON.stringify(settings))
+function writeGroups(groups: AccessGuardGroup[]) {
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(groups))
 }
 
-export async function getAccessGuardSettings() {
-  if (useMocks) return readMockSettings()
-  return request.get<unknown, AccessGuardSettingsResponse>('/auth/access-guard')
+export async function getAccessGuardGroups(): Promise<AccessGuardGroup[]> {
+  if (useMocks) return readGroups()
+  return request.get('/auth/access-groups')
 }
 
-export async function updateAccessGuardSettings(payload: AccessGuardSettingsPayload) {
-  if (useMocks) {
-    const current = readMockSettings()
-    if (current.enabled && !payload.enabled && current.password) {
-      const disablePassword = payload.disablePassword?.trim() || ''
-      if (!disablePassword) throw new Error('请输入访问密码后关闭访问密码')
-      if (disablePassword !== current.password) throw new Error('访问密码不正确，无法关闭')
-    }
-    const next = {
-      enabled: payload.enabled,
-      ttlMinutes: payload.ttlMinutes,
-      password: payload.password ?? current.password,
-      recoveryPrompt: payload.recoveryPrompt ?? current.recoveryPrompt,
-      recoveryAnswer: payload.recoveryAnswer ?? current.recoveryAnswer
-    }
-    writeMockSettings(next)
-    return next
-  }
-  return request.patch<unknown, AccessGuardSettingsResponse>('/auth/access-guard', payload)
+export async function createAccessGuardGroup(payload: AccessGuardGroupPayload): Promise<AccessGuardGroup> {
+  if (!useMocks) return request.post('/auth/access-groups', payload)
+  const groups = readGroups()
+  const duplicate = payload.features.find((feature) => groups.some((group) => group.features.includes(feature)))
+  if (duplicate) throw new Error('该功能已加入其他访问组合')
+  const group = { ...payload, id: `access-group-${Date.now()}-${Math.random().toString(16).slice(2)}` }
+  writeGroups([...groups, group])
+  return group
+}
+
+export async function updateAccessGuardGroup(id: string, payload: AccessGuardGroupPayload): Promise<AccessGuardGroup> {
+  if (!useMocks) return request.patch(`/auth/access-groups/${encodeURIComponent(id)}`, payload)
+  const groups = readGroups()
+  const duplicate = payload.features.find((feature) => groups.some((group) => group.id !== id && group.features.includes(feature)))
+  if (duplicate) throw new Error('该功能已加入其他访问组合')
+  const group = { ...payload, id }
+  writeGroups(groups.map((item) => item.id === id ? group : item))
+  return group
+}
+
+export async function deleteAccessGuardGroup(id: string): Promise<void> {
+  if (!useMocks) return request.delete(`/auth/access-groups/${encodeURIComponent(id)}`)
+  writeGroups(readGroups().filter((group) => group.id !== id))
+}
+
+export async function verifyAccessGuardGroup(id: string, password: string, ttlMinutes: number, expectedPassword?: string): Promise<AccessGuardVerification> {
+  if (!useMocks) return request.post(`/auth/access-groups/${encodeURIComponent(id)}/verify`, { password })
+  if (password.trim() !== expectedPassword) throw new Error('访问密码不正确')
+  return { expiresAt: Date.now() + ttlMinutes * 60_000 }
 }

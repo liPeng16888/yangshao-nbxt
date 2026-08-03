@@ -12,6 +12,7 @@ import {
   MEDICINE_UNIT_LABELS,
   MedicineInventoryItemDto,
   MedicineInventoryMovementDto,
+  MedicineCommonNameDto,
   MedicineMovementKind,
   MedicineMovementQuery,
   validateMedicineQuantity
@@ -34,6 +35,32 @@ export class MedicineInventoryService {
       orderBy: [{ name: 'asc' }, { unit: 'asc' }]
     })
     return rows.map((row) => this.itemDto(row))
+  }
+
+  async listCommonNames(frontendUserIds: string[]): Promise<MedicineCommonNameDto[]> {
+    const scopedFrontendUserIds = this.uniqueStrings(frontendUserIds)
+    if (!scopedFrontendUserIds.length) return []
+    return this.prisma.medicineCommonName.findMany({
+      where: { frontendUserId: { in: scopedFrontendUserIds } },
+      orderBy: { name: 'asc' }
+    })
+  }
+
+  async createCommonName(frontendUserId: string, nameInput: string): Promise<MedicineCommonNameDto> {
+    const accountId = this.requiredString(frontendUserId, '前台账号不能为空')
+    const name = this.requiredString(nameInput, '请填写常用药品名称')
+    return this.prisma.medicineCommonName.upsert({
+      where: { frontendUserId_name: { frontendUserId: accountId, name } },
+      create: { frontendUserId: accountId, name },
+      update: {}
+    })
+  }
+
+  async deleteCommonName(frontendUserId: string, commonNameId: string): Promise<void> {
+    const accountId = this.requiredString(frontendUserId, '前台账号不能为空')
+    const id = this.requiredString(commonNameId, '请选择常用药品名称')
+    const result = await this.prisma.medicineCommonName.deleteMany({ where: { id, frontendUserId: accountId } })
+    if (!result.count) throw new NotFoundException('未找到当前账号的常用药品名称')
   }
 
   async listMovements(

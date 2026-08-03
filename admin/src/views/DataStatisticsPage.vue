@@ -60,6 +60,14 @@
             </div>
           </template>
         </el-table-column>
+        <el-table-column label="化验元素" min-width="160">
+          <template #default="{ row }">
+            <div class="history-cell">
+              <span>{{ row.inputs.elementNote || '未选择' }}</span>
+              <el-button v-if="historyLookupEnabled" link type="primary" @click="openHistory(row.id, 'elementNote', '化验元素')">历史</el-button>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column
           v-for="column in elementColumns"
           :key="column.key"

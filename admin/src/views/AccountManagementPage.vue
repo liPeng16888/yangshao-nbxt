@@ -29,17 +29,20 @@
         <el-table-column prop="password" label="密码" width="160" />
         <el-table-column label="前端访问密码" min-width="320">
           <template #default="{ row }">
-            <div class="access-info">
-              <div>
-                <el-tag size="small" :type="row.accessGuard?.enabled ? 'success' : 'info'">
-                  {{ row.accessGuard?.enabled ? '已启用' : '未启用' }}
-                </el-tag>
-                <span>免输 {{ row.accessGuard?.ttlMinutes || 5 }} 分钟</span>
-              </div>
-              <div>密码：{{ row.accessGuard?.password || '未设置' }}</div>
-              <div>提示词：{{ row.accessGuard?.recoveryPrompt || '未设置' }}</div>
-              <div>找回答案：{{ row.accessGuard?.recoveryAnswer || '未设置' }}</div>
+            <div v-if="row.accessGroups?.length" class="access-info">
+              <section v-for="group in row.accessGroups" :key="group.id" class="access-group-row">
+                <div>
+                  <strong>{{ group.name }}</strong>
+                  <el-tag size="small" :type="group.enabled ? 'success' : 'info'">{{ group.enabled ? '已启用' : '已停用' }}</el-tag>
+                  <span>免输 {{ group.ttlMinutes }} 分钟</span>
+                </div>
+                <div>功能：{{ group.features.map(accessFeatureLabel).join('、') }}</div>
+                <div>密码：{{ group.password }}</div>
+                <div>提示词：{{ group.recoveryPrompt }}</div>
+                <div>找回答案：{{ group.recoveryAnswer }}</div>
+              </section>
             </div>
+            <span v-else class="muted">未创建访问组合</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="120">
@@ -168,6 +171,10 @@ async function saveFrontendRemark(row: any) {
   await loadActive()
 }
 
+function accessFeatureLabel(feature: string) {
+  return ({ FINANCE: '财务', REPORTS: '报表', BLACKLIST: '黑名单', HISTORICAL_DATES: '历史日期查看', MEDICINE_INVENTORY: '药品库存', CUSTOMER_OVERVIEW: '客户总览', COMPLETED_SAMPLE_DATA: '已完成样品隐藏数据' } as Record<string, string>)[feature] || feature
+}
+
 function openSubDialog(row?: any) {
   editingSub.value = row || null
   subForm.account = ''
@@ -209,4 +216,8 @@ async function saveSubAdmin() {
   align-items: center;
   gap: 8px;
 }
+
+.access-group-row + .access-group-row { border-top: 1px solid #e2e8f0; padding-top: 6px; }
+.access-group-row strong { margin-right: 6px; }
+.muted { color: #94a3b8; }
 </style>

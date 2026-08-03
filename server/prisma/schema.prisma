@@ -64,6 +64,16 @@ enum MedicineMovementType {
   CORRECTION_OUT
 }
 
+enum AccessGuardFeature {
+  FINANCE
+  REPORTS
+  BLACKLIST
+  HISTORICAL_DATES
+  MEDICINE_INVENTORY
+  CUSTOMER_OVERVIEW
+  COMPLETED_SAMPLE_DATA
+}
+
 model User {
   id                        String    @id @default(uuid())
   account                   String    @unique
@@ -102,9 +112,46 @@ model User {
   frontendPerms                   SubAdminFrontendPermission[] @relation("FrontendPermissions")
   medicineItems                   MedicineInventoryItem[]      @relation("FrontendMedicineItems")
   medicineMovements               MedicineInventoryMovement[]  @relation("FrontendMedicineMovements")
+  medicineCommonNames             MedicineCommonName[]         @relation("FrontendMedicineCommonNames")
+  accessGuardGroups               AccessGuardGroup[]           @relation("FrontendAccessGuardGroups")
+  accessGuardGroupFeatures        AccessGuardGroupFeature[]    @relation("FrontendAccessGuardGroupFeatures")
 
   @@index([role])
   @@index([deletedAt])
+}
+
+model AccessGuardGroup {
+  id             String                    @id @default(uuid())
+  frontendUserId String
+  name           String
+  enabled        Boolean                   @default(true)
+  ttlMinutes     Int                       @default(5)
+  password       String
+  recoveryPrompt String
+  recoveryAnswer String
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  frontendUser User                      @relation("FrontendAccessGuardGroups", fields: [frontendUserId], references: [id], onDelete: Cascade)
+  features     AccessGuardGroupFeature[]
+
+  @@unique([frontendUserId, name])
+  @@index([frontendUserId])
+}
+
+model AccessGuardGroupFeature {
+  id             String             @id @default(uuid())
+  groupId        String
+  frontendUserId String
+  feature        AccessGuardFeature
+  createdAt      DateTime           @default(now())
+
+  group        AccessGuardGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  frontendUser User             @relation("FrontendAccessGuardGroupFeatures", fields: [frontendUserId], references: [id], onDelete: Cascade)
+
+  @@unique([frontendUserId, feature])
+  @@unique([groupId, feature])
+  @@index([groupId])
 }
 
 model Customer {
@@ -420,4 +467,17 @@ model MedicineInventoryMovement {
   @@unique([correctionOfId])
   @@index([frontendUserId, occurredOn])
   @@index([medicineItemId, occurredOn])
+}
+
+model MedicineCommonName {
+  id             String   @id @default(uuid())
+  frontendUserId String
+  name           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  frontendUser User @relation("FrontendMedicineCommonNames", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([frontendUserId, name])
+  @@index([frontendUserId, name])
 }

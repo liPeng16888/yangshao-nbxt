@@ -117,40 +117,53 @@
                 </div>
               </div>
             </div>
-            <NumberInputCell :block-id="block.id" field="ironRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.ironRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'ironRaw', value)" />
-            <NumberInputCell :block-id="block.id" field="siliconRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.siliconRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'siliconRaw', value)" />
-            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="siliconAdjust" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.siliconAdjust" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'siliconAdjust', value)" />
-            <NumberInputCell :block-id="block.id" field="aluminumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumRaw', value)" />
-            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="aluminumAdjust" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumAdjust" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumAdjust', value)" />
-            <FormulaCell class="cell--rowspan-2" :value="block.results.aluminumSiliconRatio" />
-            <FormulaCell class="cell--rowspan-2" :value="block.results.total" />
-            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="sulfur" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sulfur" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sulfur', value)" />
-            <NumberInputCell :block-id="block.id" field="densityRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.densityRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'densityRaw', value)" />
-            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="whiteness" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.whiteness" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'whiteness', value)" />
-            <NumberInputCell :block-id="block.id" field="calciumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.calciumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'calciumRaw', value)" />
-            <NumberInputCell :block-id="block.id" field="magnesiumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.magnesiumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'magnesiumRaw', value)" />
-            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="carbon" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.carbon" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'carbon', value)" />
-            <NumberInputCell :block-id="block.id" field="titaniumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.titaniumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'titaniumRaw', value)" />
-            <NumberInputCell :block-id="block.id" field="waterSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.waterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'waterSample', value)" />
-            <NumberInputCell :block-id="block.id" field="bottleWater" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWater" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWater', value)" />
-            <NumberInputCell :block-id="block.id" field="bottleWaterSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWaterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWaterSample', value)" />
-            <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="moisture" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.moisture" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'moisture', value)" />
-            <NumberInputCell :block-id="block.id" field="crucible" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.crucible" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'crucible', value)" />
-            <NumberInputCell :block-id="block.id" field="sampleWeight" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sampleWeight" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sampleWeight', value)" />
-            <NumberInputCell :block-id="block.id" field="burnedCrucibleSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.burnedCrucibleSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'burnedCrucibleSample', value)" />
+            <template v-if="isCompletedSensitiveHidden(block.id)">
+              <div class="completed-data-band" :data-block-id="block.id" data-field="completedSensitiveData" aria-label="已完成样品数据已加密，验证后查看">
+                <span class="completed-data-band__lock" aria-hidden="true">🔒</span>
+                <span>已完成样品数据已加密</span>
+                <span class="completed-data-band__hint">验证后查看</span>
+              </div>
+            </template>
+            <template v-else>
+              <NumberInputCell :block-id="block.id" field="ironRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.ironRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'ironRaw', value)" />
+              <NumberInputCell :block-id="block.id" field="siliconRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.siliconRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'siliconRaw', value)" />
+              <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="siliconAdjust" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.siliconAdjust" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'siliconAdjust', value)" />
+              <NumberInputCell :block-id="block.id" field="aluminumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumRaw', value)" />
+              <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="aluminumAdjust" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumAdjust" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumAdjust', value)" />
+              <FormulaCell class="cell--rowspan-2" :value="block.results.aluminumSiliconRatio" />
+              <FormulaCell class="cell--rowspan-2" :value="block.results.total" />
+              <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="sulfur" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sulfur" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sulfur', value)" />
+              <NumberInputCell :block-id="block.id" field="densityRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.densityRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'densityRaw', value)" />
+              <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="whiteness" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.whiteness" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'whiteness', value)" />
+              <NumberInputCell :block-id="block.id" field="calciumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.calciumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'calciumRaw', value)" />
+              <NumberInputCell :block-id="block.id" field="magnesiumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.magnesiumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'magnesiumRaw', value)" />
+              <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="carbon" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.carbon" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'carbon', value)" />
+              <NumberInputCell :block-id="block.id" field="titaniumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.titaniumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'titaniumRaw', value)" />
+              <NumberInputCell :block-id="block.id" field="waterSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.waterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'waterSample', value)" />
+              <NumberInputCell :block-id="block.id" field="bottleWater" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWater" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWater', value)" />
+              <NumberInputCell :block-id="block.id" field="bottleWaterSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.bottleWaterSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'bottleWaterSample', value)" />
+              <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="moisture" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.moisture" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'moisture', value)" />
+              <NumberInputCell :block-id="block.id" field="crucible" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.crucible" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'crucible', value)" />
+              <NumberInputCell :block-id="block.id" field="sampleWeight" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sampleWeight" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sampleWeight', value)" />
+              <NumberInputCell :block-id="block.id" field="burnedCrucibleSample" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.burnedCrucibleSample" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'burnedCrucibleSample', value)" />
 
-            <FormulaCell :value="block.results.iron" />
-            <FormulaCell :value="block.results.silicon" />
-            <FormulaCell :value="block.results.aluminum" />
-            <FormulaCell :value="block.results.density" />
-            <FormulaCell :value="block.results.calcium" />
-            <FormulaCell :value="block.results.magnesium" />
-            <FormulaCell :value="block.results.titanium" />
-            <FormulaCell class="cell--span-3" :value="block.results.moisture" />
-            <FormulaCell class="cell--span-3" :value="block.results.burnLoss" />
+              <FormulaCell :value="block.results.iron" />
+              <FormulaCell :value="block.results.silicon" />
+              <FormulaCell :value="block.results.aluminum" />
+              <FormulaCell :value="block.results.density" />
+              <FormulaCell :value="block.results.calcium" />
+              <FormulaCell :value="block.results.magnesium" />
+              <FormulaCell :value="block.results.titanium" />
+              <FormulaCell class="cell--span-3" :value="block.results.moisture" />
+              <FormulaCell class="cell--span-3" :value="block.results.burnLoss" />
+            </template>
 
             <div class="cell cell--label cell--remark cell--required-label">{{ getAmountLabel(block) }}</div>
+            <div v-if="isCompletedSensitiveHidden(block.id)" class="cell cell--input cell--remark completed-data-compact-mask" :data-block-id="block.id" data-field="price" aria-label="样品金额已加密">
+              <span aria-hidden="true">🔒</span>
+            </div>
             <NumberInputCell
+              v-else
               class="cell--remark"
               :block-id="block.id"
               field="price"
@@ -166,7 +179,9 @@
               :data-block-id="block.id"
               data-field="paymentStatus"
             >
+              <span v-if="isCompletedSensitiveHidden(block.id)" class="completed-data-compact-mask" aria-label="结款状态已加密" title="结款状态已加密" aria-hidden="true">🔒</span>
               <el-select
+                v-else
                 :class="{ 'payment-status-select--selected': Boolean(block.inputs.paymentStatus) }"
                 clearable
                 size="small"
@@ -229,6 +244,7 @@ const props = defineProps<{
   selectionMode?: boolean
   selectedBlockIds?: string[]
   highlightBlockId?: string
+  canViewCompletedSensitiveData?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -250,6 +266,9 @@ const gridColumns = computed(() => labSheetColumns.map((column) => `${column.wid
 const selectionMode = computed(() => Boolean(props.selectionMode))
 const selectedBlockIds = computed(() => props.selectedBlockIds || [])
 const highlightBlockId = computed(() => props.highlightBlockId || '')
+function isCompletedSensitiveHidden(blockId: string) {
+  return Boolean(props.blocks.find((block) => block.id === blockId)?.inputs.completed && !props.canViewCompletedSensitiveData)
+}
 const scrollRef = ref<HTMLElement | null>(null)
 const gridRef = ref<HTMLElement | null>(null)
 const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款']
@@ -527,6 +546,7 @@ const NumberInputCell = defineComponent({
     disabled: { type: Boolean, default: false },
     blocked: { type: Boolean, default: false },
     blockedMessage: { type: String, default: '请先输入样品金额' },
+    hidden: { type: Boolean, default: false },
     required: { type: Boolean, default: false },
     precision: { type: Number as PropType<number>, default: DEFAULT_SAMPLE_INPUT_PRECISION },
     blockId: { type: String, required: true },
@@ -536,6 +556,7 @@ const NumberInputCell = defineComponent({
   setup(cellProps, { emit: cellEmit, attrs }) {
     const localValue = ref(formatInputValue(cellProps.value, cellProps.precision))
     const focused = ref(false)
+    const sensitiveHidden = computed(() => cellProps.hidden || isCompletedSensitiveHidden(cellProps.blockId))
 
     watch(
       () => [cellProps.value, cellProps.precision] as const,
@@ -590,7 +611,7 @@ const NumberInputCell = defineComponent({
           'data-field': cellProps.field
         },
         [
-          h(ElInput, {
+          sensitiveHidden.value ? h('span', { class: 'sensitive-hidden' }, '已隐藏') : h(ElInput, {
             size: 'small',
             disabled: cellProps.disabled || cellProps.blocked,
             modelValue: localValue.value,
@@ -601,7 +622,7 @@ const NumberInputCell = defineComponent({
             onBlur: handleBlur,
             'onUpdate:modelValue': handleUpdate
           }),
-          cellProps.blocked
+          cellProps.blocked && !sensitiveHidden.value
             ? h(
                 ElTooltip,
                 { content: cellProps.blockedMessage, placement: 'top' },
@@ -648,10 +669,11 @@ function sanitizeDecimalInput(value: string, precision: number) {
 const FormulaCell = defineComponent({
   name: 'FormulaCell',
   props: {
-    value: { type: Number, required: true }
+    value: { type: Number, required: true },
+    hidden: { type: Boolean, default: false }
   },
   setup(cellProps, { attrs }) {
-    return () => h('div', { class: ['cell', 'cell--formula', attrs.class] }, formatFormulaValue(cellProps.value))
+    return () => h('div', { class: ['cell', 'cell--formula', attrs.class] }, cellProps.hidden ? '已隐藏' : formatFormulaValue(cellProps.value))
   }
 })
 </script>
@@ -848,7 +870,7 @@ const FormulaCell = defineComponent({
 }
 
 .cell--green.cell--completed {
-  background: #fed7aa;
+  background: #fff3eb;
 }
 
 .cell--selection-target {
@@ -963,6 +985,49 @@ const FormulaCell = defineComponent({
 .cell--number-input :deep(.el-input__inner),
 .sequence-editor :deep(.el-input__inner) {
   font-weight: 700;
+}
+
+.completed-data-band {
+  display: flex;
+  grid-column: span 21;
+  grid-row: span 2;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 72px;
+  color: #64748b;
+  background:
+    linear-gradient(90deg, rgba(226, 232, 240, 0.2), rgba(219, 234, 254, 0.68) 18%, rgba(219, 234, 254, 0.68) 82%, rgba(226, 232, 240, 0.2)),
+    repeating-linear-gradient(-45deg, rgba(148, 163, 184, 0.07) 0 6px, transparent 6px 12px);
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.completed-data-band__lock {
+  font-size: 15px;
+}
+
+.completed-data-band__hint {
+  padding-left: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.completed-data-compact-mask {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 26px;
+  color: #94a3b8;
+  background: linear-gradient(90deg, rgba(219, 234, 254, 0.24), rgba(219, 234, 254, 0.62), rgba(219, 234, 254, 0.24));
+  border-radius: 3px;
+  font-size: 12px;
 }
 
 .cell--green :deep(.el-input__inner),

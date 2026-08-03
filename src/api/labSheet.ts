@@ -76,14 +76,22 @@ function clientHeaders() {
   return { headers: { 'X-YS-Client-Id': getLabSheetClientId() } }
 }
 
+function accessGrantHeaders() {
+  try {
+    const sessions = JSON.parse(window.localStorage.getItem('ys_access_guard_group_sessions') || '{}') as Record<string, { expiresAt?: number; token?: string }>
+    const token = Object.values(sessions).find((session) => (session.expiresAt || 0) > Date.now() && session.token)?.token
+    return token ? { headers: { 'X-YS-Access-Grant': token } } : undefined
+  } catch { return undefined }
+}
+
 export async function getCurrentLabSheet(): Promise<LabSheet> {
   if (useMocks) return mockCurrentLabSheet()
-  return request.get('/lab-sheets/current')
+  return request.get('/lab-sheets/current', accessGrantHeaders())
 }
 
 export async function getLabSheetByDate(date: string): Promise<LabSheet> {
   if (useMocks) return mockLabSheetByDate(date)
-  return request.get('/lab-sheets', { params: { date } })
+  return request.get('/lab-sheets', { params: { date }, ...accessGrantHeaders() })
 }
 
 export async function getCurrentParameters(): Promise<LabParameter> {
@@ -103,7 +111,7 @@ export async function addSampleBlocks(sheetId: string, count: number): Promise<L
 
 export async function saveSampleBlock(sheetId: string, block: SampleBlockSavePayload): Promise<SampleBlock> {
   if (useMocks) return mockSaveSampleBlock(sheetId, block)
-  return request.put(`/lab-sheets/${sheetId}/cells`, block, clientHeaders())
+  return request.put(`/lab-sheets/${sheetId}/cells`, block, { headers: { ...clientHeaders().headers, ...(accessGrantHeaders()?.headers || {}) } })
 }
 
 export async function getLabSheetHistory(): Promise<Array<{ id: string; date: string; readonly: boolean }>> {

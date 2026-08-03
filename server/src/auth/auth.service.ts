@@ -1,10 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { UserRole } from '@prisma/client'
+import { AccessGuardFeature, Prisma, UserRole } from '@prisma/client'
 import jwt from 'jsonwebtoken'
 import { PrismaService } from '../prisma/prisma.service'
 import { PasswordService } from './password.service'
-import { AccessGuardSettingsDto, LoginDto, RegisterDto, UpdateAdminProfileDto, UpdatePasswordDto } from './dto'
+import { AccessGuardGroupDto, AccessGuardSettingsDto, LoginDto, RegisterDto, UpdateAdminProfileDto, UpdatePasswordDto } from './dto'
 import type { CurrentUser } from './current-user'
 
 @Injectable()
@@ -161,6 +161,94 @@ export class AuthService {
     return this.accessGuardDto(updated)
   }
 
+  async getAccessGuardGroups(currentUser: CurrentUser) {
+    this.assertFrontendUser(currentUser)
+    const groups = await this.prisma.accessGuardGroup.findMany({
+      where: { frontendUserId: currentUser.id },
+      include: { features: { orderBy: { feature: 'asc' } } },
+      orderBy: { createdAt: 'asc' }
+    })
+    return groups.map((group) => this.accessGuardGroupDto(group))
+  }
+
+  async createAccessGuardGroup(currentUser: CurrentUser, dto: AccessGuardGroupDto) {
+    this.assertFrontendUser(currentUser)
+    const data = this.normalizeAccessGuardGroup(dto)
+    await this.ensureNoGroupFeatureConflict(currentUser.id, data.features)
+    try {
+      const group = await this.prisma.accessGuardGroup.create({
+        data: {
+          frontendUserId: currentUser.id,
+          name: data.name,
+          enabled: data.enabled,
+          ttlMinutes: data.ttlMinutes,
+          password: data.password,
+          recoveryPrompt: data.recoveryPrompt,
+          recoveryAnswer: data.recoveryAnswer,
+          features: { create: data.features.map((feature) => ({ frontendUserId: currentUser.id, feature })) }
+        },
+        include: { features: { orderBy: { feature: 'asc' } } }
+      })
+      return this.accessGuardGroupDto(group)
+    } catch (error) { this.rethrowGroupConflict(error) }
+  }
+
+  async updateAccessGuardGroup(currentUser: CurrentUser, id: string, dto: AccessGuardGroupDto) {
+    this.assertFrontendUser(currentUser)
+    const data = this.normalizeAccessGuardGroup(dto)
+    const existing = await this.prisma.accessGuardGroup.findFirst({ where: { id, frontendUserId: currentUser.id } })
+    if (!existing) throw new UnauthorizedException('访问组合不存在或无权修改')
+    await this.ensureNoGroupFeatureConflict(currentUser.id, data.features, id)
+    try {
+      const group = await this.prisma.$transaction(async (tx) => {
+        await tx.accessGuardGroupFeature.deleteMany({ where: { groupId: id } })
+        return tx.accessGuardGroup.update({
+          where: { id },
+          data: {
+            name: data.name, enabled: data.enabled, ttlMinutes: data.ttlMinutes, password: data.password,
+            recoveryPrompt: data.recoveryPrompt, recoveryAnswer: data.recoveryAnswer,
+            features: { create: data.features.map((feature) => ({ frontendUserId: currentUser.id, feature })) }
+          },
+          include: { features: { orderBy: { feature: 'asc' } } }
+        })
+      })
+      return this.accessGuardGroupDto(group)
+    } catch (error) { this.rethrowGroupConflict(error) }
+  }
+
+  async deleteAccessGuardGroup(currentUser: CurrentUser, id: string) {
+    this.assertFrontendUser(currentUser)
+    const result = await this.prisma.accessGuardGroup.deleteMany({ where: { id, frontendUserId: currentUser.id } })
+    if (!result.count) throw new UnauthorizedException('访问组合不存在或无权删除')
+    return { ok: true }
+  }
+
+  async verifyAccessGuardGroup(currentUser: CurrentUser, id: string, password: string) {
+    this.assertFrontendUser(currentUser)
+    const group = await this.prisma.accessGuardGroup.findFirst({ where: { id, frontendUserId: currentUser.id }, include: { features: true } })
+    if (!group || !group.enabled) throw new UnauthorizedException('访问组合不存在或未启用')
+    if (password.trim() !== group.password) throw new UnauthorizedException('访问密码不正确')
+    const expiresAt = Date.now() + group.ttlMinutes * 60_000
+    const token = jwt.sign({ sub: currentUser.id, type: 'access-guard', groupId: group.id, features: group.features.map((item) => item.feature), exp: Math.floor(expiresAt / 1000) }, this.config.get<string>('JWT_SECRET') || 'dev-secret')
+    return { expiresAt, token }
+  }
+
+  hasAccessGrant(currentUserId: string, token: string | undefined, feature: AccessGuardFeature) {
+    if (!token) return false
+    try {
+      const payload = jwt.verify(token, this.config.get<string>('JWT_SECRET') || 'dev-secret') as { sub?: string; type?: string; features?: AccessGuardFeature[] }
+      return payload.sub === currentUserId && payload.type === 'access-guard' && Array.isArray(payload.features) && payload.features.includes(feature)
+    } catch { return false }
+  }
+
+  async isFeatureProtected(currentUserId: string, feature: AccessGuardFeature) {
+    const membership = await this.prisma.accessGuardGroupFeature.findFirst({
+      where: { frontendUserId: currentUserId, feature, group: { enabled: true } },
+      select: { id: true }
+    })
+    return Boolean(membership)
+  }
+
   private async buildPasswordUpdate(passwordHash: string, dto: UpdatePasswordDto) {
     if (!dto.currentPassword || !dto.newPassword || !dto.confirmPassword) throw new BadRequestException('请完整填写当前密码、新密码和确认密码')
     if (dto.newPassword !== dto.confirmPassword) throw new BadRequestException('两次新密码不一致')
@@ -187,6 +275,54 @@ export class AuthService {
       recoveryPrompt: user.accessGuardRecoveryPrompt || '',
       recoveryAnswer: user.accessGuardRecoveryAnswer || ''
     }
+  }
+
+  private accessGuardGroupDto(group: {
+    id: string
+    name: string
+    enabled: boolean
+    ttlMinutes: number
+    password: string
+    recoveryPrompt: string
+    recoveryAnswer: string
+    features: Array<{ feature: AccessGuardFeature }>
+  }) {
+    return {
+      id: group.id,
+      name: group.name,
+      enabled: group.enabled,
+      ttlMinutes: group.ttlMinutes,
+      password: group.password,
+      recoveryPrompt: group.recoveryPrompt,
+      recoveryAnswer: group.recoveryAnswer,
+      features: group.features.map((feature) => feature.feature)
+    }
+  }
+
+  private assertFrontendUser(currentUser: CurrentUser) {
+    if (currentUser.role !== UserRole.FRONTEND_USER) throw new ForbiddenException('无权管理访问组合')
+  }
+
+  private normalizeAccessGuardGroup(dto: AccessGuardGroupDto) {
+    const name = dto.name?.trim()
+    const password = dto.password?.trim()
+    const recoveryPrompt = dto.recoveryPrompt?.trim()
+    const recoveryAnswer = dto.recoveryAnswer?.trim()
+    const features = Array.from(new Set(dto.features || []))
+    if (!name || !password || password.length < 4 || !recoveryPrompt || !recoveryAnswer || !features.length) throw new BadRequestException('请完整填写访问组合信息')
+    return { name, password, recoveryPrompt, recoveryAnswer, enabled: Boolean(dto.enabled), ttlMinutes: this.normalizeAccessGuardTtl(dto.ttlMinutes), features }
+  }
+
+  private async ensureNoGroupFeatureConflict(frontendUserId: string, features: AccessGuardFeature[], excludingGroupId?: string) {
+    const conflict = await this.prisma.accessGuardGroupFeature.findFirst({
+      where: { frontendUserId, feature: { in: features }, ...(excludingGroupId ? { groupId: { not: excludingGroupId } } : {}) }
+    })
+    if (conflict) throw new BadRequestException('所选功能已加入其他访问组合')
+  }
+
+  private rethrowGroupConflict(error: unknown): never {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new BadRequestException('组合名称或所选功能已存在')
+    throw error
   }
 
   private normalizeAccessGuardTtl(value: unknown) {

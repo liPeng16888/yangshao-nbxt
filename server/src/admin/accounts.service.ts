@@ -32,6 +32,10 @@ export class AdminAccountsService {
           orderBy: { updatedAt: 'desc' },
           take: 1,
           select: { updatedAt: true }
+        },
+        accessGuardGroups: {
+          orderBy: { createdAt: 'asc' },
+          include: { features: { orderBy: { feature: 'asc' } } }
         }
       }
     })
@@ -52,6 +56,16 @@ export class AdminAccountsService {
         recoveryPrompt: user.accessGuardRecoveryPrompt || '',
         recoveryAnswer: user.accessGuardRecoveryAnswer || ''
       },
+      accessGroups: user.accessGuardGroups.map((group) => ({
+        id: group.id,
+        name: group.name,
+        enabled: group.enabled,
+        ttlMinutes: group.ttlMinutes,
+        password: group.password,
+        recoveryPrompt: group.recoveryPrompt,
+        recoveryAnswer: group.recoveryAnswer,
+        features: group.features.map((feature) => feature.feature)
+      })),
       createdAt: user.createdAt,
       lastDataUpdatedAt: user.frontendSheets[0]?.updatedAt || null
     }))

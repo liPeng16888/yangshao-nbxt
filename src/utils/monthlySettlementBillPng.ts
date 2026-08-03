@@ -1,5 +1,6 @@
 import type {
   MonthlyBillDraft,
+  MonthlyBillElementTotal,
   MonthlyBillEntry,
   MonthlyBillTableLayout
 } from '@/types/monthlySettlementBill'
@@ -95,7 +96,7 @@ function drawMonthlyBillCanvas(
   )
   drawHeader(context, layout)
   drawDetailRows(context, layout.table, layout.groupCount)
-  drawSummaryRows(context, layout.table, layout.groupCount)
+  drawSummaryRows(context, layout.table)
   drawTotal(context, draft, layout)
 
   context.restore()
@@ -154,8 +155,7 @@ function drawDetailRows(
 
 function drawSummaryRows(
   context: CanvasRenderingContext2D,
-  table: MonthlyBillTableLayout,
-  groupCount: number
+  table: MonthlyBillTableLayout
 ) {
   let top = TITLE_HEIGHT + HEADER_HEIGHT + table.detailRows.length * ROW_HEIGHT
   if (table.summaryRows.length) {
@@ -172,68 +172,52 @@ function drawSummaryRows(
   table.summaryRows.forEach((row) => {
     row.forEach((total, index) => {
       const groupLeft = DATE_WIDTH + index * getGroupWidth()
-      drawCell(context, groupLeft, top, ELEMENT_WIDTH, ROW_HEIGHT, total.elementLabel, '15px')
-      drawCell(context, groupLeft + ELEMENT_WIDTH, top, QUANTITY_WIDTH, ROW_HEIGHT, `${total.quantity}`, '15px')
-      drawCell(
-        context,
-        groupLeft + ELEMENT_WIDTH + QUANTITY_WIDTH,
-        top,
-        PRICE_WIDTH,
-        ROW_HEIGHT,
-        formatMonthlyBillMoney(total.amount),
-        '15px'
-      )
+      drawTotalCells(context, total, groupLeft, top)
     })
-
-    drawEmptyGroupCells(context, row.length, groupCount, top)
     top += ROW_HEIGHT
   })
 }
 
 function drawEntryCells(
   context: CanvasRenderingContext2D,
-  entries: MonthlyBillEntry[],
+  entries: Array<MonthlyBillEntry | null>,
   top: number,
   groupCount: number
 ) {
-  entries.forEach((entry, index) => {
+  for (let index = 0; index < groupCount; index += 1) {
+    const entry = entries[index]
     const groupLeft = DATE_WIDTH + index * getGroupWidth()
-    drawCell(context, groupLeft, top, ELEMENT_WIDTH, ROW_HEIGHT, entry.elementLabel, '15px')
-    drawCell(context, groupLeft + ELEMENT_WIDTH, top, QUANTITY_WIDTH, ROW_HEIGHT, `${entry.quantity}`, '15px')
+    drawCell(context, groupLeft, top, ELEMENT_WIDTH, ROW_HEIGHT, entry?.elementLabel || '', '15px')
+    drawCell(context, groupLeft + ELEMENT_WIDTH, top, QUANTITY_WIDTH, ROW_HEIGHT, entry ? `${entry.quantity}` : '', '15px')
     drawCell(
       context,
       groupLeft + ELEMENT_WIDTH + QUANTITY_WIDTH,
       top,
       PRICE_WIDTH,
       ROW_HEIGHT,
-      formatMonthlyBillMoney(entry.subtotal),
-      '15px'
-    )
-  })
-
-  drawEmptyGroupCells(context, entries.length, groupCount, top)
-}
-
-function drawEmptyGroupCells(
-  context: CanvasRenderingContext2D,
-  usedGroups: number,
-  groupCount: number,
-  top: number
-) {
-  for (let index = usedGroups; index < groupCount; index += 1) {
-    const groupLeft = DATE_WIDTH + index * getGroupWidth()
-    drawCell(context, groupLeft, top, ELEMENT_WIDTH, ROW_HEIGHT, '', '15px')
-    drawCell(context, groupLeft + ELEMENT_WIDTH, top, QUANTITY_WIDTH, ROW_HEIGHT, '', '15px')
-    drawCell(
-      context,
-      groupLeft + ELEMENT_WIDTH + QUANTITY_WIDTH,
-      top,
-      PRICE_WIDTH,
-      ROW_HEIGHT,
-      '',
+      entry ? formatMonthlyBillMoney(entry.subtotal) : '',
       '15px'
     )
   }
+}
+
+function drawTotalCells(
+  context: CanvasRenderingContext2D,
+  total: MonthlyBillElementTotal | null,
+  groupLeft: number,
+  top: number
+) {
+  drawCell(context, groupLeft, top, ELEMENT_WIDTH, ROW_HEIGHT, total?.elementLabel || '', '15px')
+  drawCell(context, groupLeft + ELEMENT_WIDTH, top, QUANTITY_WIDTH, ROW_HEIGHT, total ? `${total.quantity}` : '', '15px')
+  drawCell(
+    context,
+    groupLeft + ELEMENT_WIDTH + QUANTITY_WIDTH,
+    top,
+    PRICE_WIDTH,
+    ROW_HEIGHT,
+    total ? formatMonthlyBillMoney(total.amount) : '',
+    '15px'
+  )
 }
 
 function drawTotal(

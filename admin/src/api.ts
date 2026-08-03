@@ -148,7 +148,10 @@ const mockRows = {
       displayRemark: '',
       displayName: '凯里化验室',
       password: '123456',
-      accessGuard: { enabled: true, password: '2580', ttlMinutes: 5, recoveryPrompt: '管理员提示', recoveryAnswer: '凯里' },
+      accessGroups: [
+        { id: 'group-1', name: '经营数据', enabled: true, password: '2580', ttlMinutes: 5, recoveryPrompt: '管理员提示', recoveryAnswer: '凯里', features: ['FINANCE', 'REPORTS'] },
+        { id: 'group-2', name: '样品历史', enabled: true, password: '9527', ttlMinutes: 10, recoveryPrompt: '城市', recoveryAnswer: '凯里', features: ['HISTORICAL_DATES', 'COMPLETED_SAMPLE_DATA'] }
+      ],
       disabled: false,
       createdAt: '2026-06-25 09:00:00'
     },
@@ -159,7 +162,7 @@ const mockRows = {
       displayRemark: '',
       displayName: '仰韶客户二',
       password: '123456',
-      accessGuard: { enabled: false, password: '', ttlMinutes: 5, recoveryPrompt: '', recoveryAnswer: '' },
+      accessGroups: [],
       disabled: false,
       createdAt: '2026-06-25 10:00:00'
     }
@@ -298,36 +301,13 @@ const mockSheet = {
   ]
 }
 
-const labDetectionInputFields = [
-  'ironRaw',
-  'siliconRaw',
-  'siliconAdjust',
-  'aluminumRaw',
-  'aluminumAdjust',
-  'sulfur',
-  'densityRaw',
-  'whiteness',
-  'calciumRaw',
-  'magnesiumRaw',
-  'carbon',
-  'titaniumRaw',
-  'waterSample',
-  'bottleWater',
-  'bottleWaterSample',
-  'crucible',
-  'sampleWeight',
-  'burnedCrucibleSample'
-]
-
-function hasLabDetectionInput(inputs: Record<string, unknown>) {
-  return labDetectionInputFields.some((field) => hasDetectionInputValue(inputs[field]))
-}
-
-function hasDetectionInputValue(value: unknown) {
-  if (typeof value === 'number') return Number.isFinite(value)
-  if (typeof value !== 'string') return false
-  const trimmed = value.trim()
-  return trimmed !== '' && Number.isFinite(Number(trimmed))
+function hasVisibleSampleInput(inputs: Record<string, unknown>) {
+  return Object.entries(inputs).some(([field, value]) => {
+    if (field === 'sequence' || field === 'completed') return false
+    if (typeof value === 'number') return Number.isFinite(value)
+    if (typeof value === 'string') return value.trim() !== ''
+    return Array.isArray(value) ? value.length > 0 : Boolean(value)
+  })
 }
 
 function parseHistoryFields(value: unknown) {
@@ -347,7 +327,7 @@ const mockRequest = {
       }))
     }
     if (url === '/admin/data-statistics/lab-sheets') {
-      const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasLabDetectionInput(block.inputs))
+      const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
       return sampleBlocks.length ? [{ ...mockSheet, date: config?.params?.date || mockSheet.date, sampleBlocks }] : []
     }
     if (url === '/admin/customer-overview') {

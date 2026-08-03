@@ -1,275 +1,94 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { getAccessGuardSettings, updateAccessGuardSettings } from '@/api/accessGuard'
-import { isSensitiveAccessPath } from '@/router/guards'
+import { createAccessGuardGroup, deleteAccessGuardGroup, getAccessGuardGroups, updateAccessGuardGroup, verifyAccessGuardGroup, type AccessGuardGroup, type AccessGuardGroupPayload } from '@/api/accessGuard'
+import { featureForPath, type AccessGuardFeature } from '@/router/guards'
 
-const SETTINGS_STORAGE_KEY = 'ys_sensitive_access_guard_settings'
-const UNLOCKED_UNTIL_STORAGE_KEY = 'ys_sensitive_access_unlocked_until'
-const DEFAULT_TTL_MINUTES = 5
-
-export interface AccessGuardSettings {
-  enabled: boolean
-  ttlMinutes: number
-  password: string
-  recoveryPrompt: string
-  recoveryAnswer: string
-}
-
-interface SaveSettingsPayload {
-  enabled: boolean
-  ttlMinutes: number
-  password: string
-  confirmPassword: string
-  disablePassword?: string
-  recoveryPrompt: string
-  recoveryAnswer: string
-}
-
-interface RecoveryResetPayload {
-  recoveryAnswer: string
-  newPassword: string
-  confirmPassword: string
-}
-
-interface AccessRequestOptions {
-  title: string
-  message: string
-  onSuccess: () => void | Promise<void>
-}
-
-interface ActionResult {
-  ok: boolean
-  message: string
-}
-
+interface AccessRequestOptions { title: string; message: string; onSuccess: () => void | Promise<void> }
 type PendingAction = (() => void | Promise<void>) | null
 
-const defaultSettings: AccessGuardSettings = {
-  enabled: false,
-  ttlMinutes: DEFAULT_TTL_MINUTES,
-  password: '',
-  recoveryPrompt: '',
-  recoveryAnswer: ''
-}
+const SESSION_KEY = 'ys_access_guard_group_sessions'
 
-function hasWindow() {
-  return typeof window !== 'undefined'
-}
+export interface AccessGuardSession { expiresAt: number; token?: string }
 
-function normalizeSettings(value: Partial<AccessGuardSettings> | null): AccessGuardSettings {
-  return {
-    enabled: Boolean(value?.enabled),
-    ttlMinutes: clampTtlMinutes(value?.ttlMinutes ?? DEFAULT_TTL_MINUTES),
-    password: (value as Partial<AccessGuardSettings> & { passwordHash?: string })?.password || '',
-    recoveryPrompt: value?.recoveryPrompt || '',
-    recoveryAnswer: (value as Partial<AccessGuardSettings> & { recoveryAnswerHash?: string })?.recoveryAnswer || ''
-  }
-}
-
-function readSettings() {
-  if (!hasWindow()) return { ...defaultSettings }
+function readSessions(): Record<string, AccessGuardSession> {
   try {
-    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
-    if (!raw) return { ...defaultSettings }
-    return normalizeSettings(JSON.parse(raw) as Partial<AccessGuardSettings>)
-  } catch {
-    return { ...defaultSettings }
-  }
+    const stored = JSON.parse(window.localStorage.getItem(SESSION_KEY) || '{}') as Record<string, AccessGuardSession | number>
+    return Object.fromEntries(Object.entries(stored).map(([id, value]) => [id, typeof value === 'number' ? { expiresAt: value } : value]))
+  } catch { return {} }
 }
 
-function readUnlockedUntil() {
-  if (!hasWindow()) return 0
-  const raw = Number(window.localStorage.getItem(UNLOCKED_UNTIL_STORAGE_KEY) || 0)
-  return Number.isFinite(raw) ? raw : 0
-}
-
-function clampTtlMinutes(value: number) {
-  if (!Number.isFinite(value)) return DEFAULT_TTL_MINUTES
-  return Math.min(1440, Math.max(1, Math.round(value)))
-}
-
-function normalizeSecret(value: string) {
-  return value.trim()
-}
+function writeSessions(value: Record<string, AccessGuardSession>) { window.localStorage.setItem(SESSION_KEY, JSON.stringify(value)) }
 
 export const useAccessGuardStore = defineStore('accessGuard', () => {
-  const settings = ref<AccessGuardSettings>(readSettings())
-  const unlockedUntil = ref(readUnlockedUntil())
-  const dialogVisible = ref(false)
+  const groups = ref<AccessGuardGroup[]>([])
+  const loaded = ref(false)
   const settingsVisible = ref(false)
+  const dialogVisible = ref(false)
   const accessTitle = ref('访问验证')
   const accessMessage = ref('请输入访问密码后继续')
-  const loaded = ref(false)
+  const activeGroupId = ref('')
+  const accessSessionRevision = ref(0)
   let pendingAction: PendingAction = null
 
-  const isProtectionActive = computed(() => settings.value.enabled && Boolean(settings.value.password))
-  const hasRecovery = computed(() => Boolean(settings.value.recoveryPrompt && settings.value.recoveryAnswer))
+  const activeGroup = computed(() => groups.value.find((group) => group.id === activeGroupId.value) || null)
+  const settings = computed(() => activeGroup.value || { enabled: false, ttlMinutes: 5, password: '', recoveryPrompt: '', recoveryAnswer: '' })
+  const isProtectionActive = computed(() => groups.value.some((group) => group.enabled && group.features.length))
+  const hasRecovery = computed(() => Boolean(activeGroup.value?.recoveryPrompt && activeGroup.value?.recoveryAnswer))
 
-  function persistSettings() {
-    if (!hasWindow()) return
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings.value))
+  async function loadGroups(force = false) {
+    if (loaded.value && !force) return groups.value
+    groups.value = await getAccessGuardGroups()
+    loaded.value = true
+    return groups.value
   }
 
-  function persistUnlockedUntil() {
-    if (!hasWindow()) return
-    window.localStorage.setItem(UNLOCKED_UNTIL_STORAGE_KEY, String(unlockedUntil.value))
+  function groupForFeature(feature: AccessGuardFeature) { return groups.value.find((group) => group.enabled && group.features.includes(feature)) || null }
+  function hasFeatureAccess(feature: AccessGuardFeature) {
+    const group = groupForFeature(feature)
+    if (!group) return true
+    return (readSessions()[group.id]?.expiresAt || 0) > Date.now()
   }
-
-  function openSettings() {
-    settingsVisible.value = true
-  }
-
-  async function loadSettings() {
-    if (loaded.value) return settings.value
-    try {
-      settings.value = normalizeSettings(await getAccessGuardSettings())
-      persistSettings()
-    } catch {
-      // Keep the local cache available if the network request fails during app startup.
-    } finally {
-      loaded.value = true
-    }
-    return settings.value
-  }
-
-  function cancelAccess() {
-    pendingAction = null
-    dialogVisible.value = false
-  }
-
-  function isProtectedPath(path: string) {
-    return isSensitiveAccessPath(path)
-  }
-
-  function hasValidSession() {
-    if (!isProtectionActive.value) return true
-    return Date.now() < unlockedUntil.value
-  }
-
-  function shouldAskForAccess() {
-    return isProtectionActive.value && !hasValidSession()
-  }
-
-  function requiresAccessForPath(path: string) {
-    return isProtectedPath(path) && shouldAskForAccess()
-  }
-
-  function requestAccess(options: AccessRequestOptions) {
-    if (!shouldAskForAccess()) return true
+  function hasValidSession() { return Boolean(activeGroup.value && hasFeatureAccess(activeGroup.value.features[0])) }
+  function isProtectedPath(path: string) { return featureForPath(path) !== null }
+  function requiresAccessForPath(path: string) { const feature = featureForPath(path); return Boolean(feature && !hasFeatureAccess(feature)) }
+  function requestFeatureAccess(feature: AccessGuardFeature, options: AccessRequestOptions) {
+    const group = groupForFeature(feature)
+    if (!group || hasFeatureAccess(feature)) return true
+    activeGroupId.value = group.id
     accessTitle.value = options.title
     accessMessage.value = options.message
     pendingAction = options.onSuccess
     dialogVisible.value = true
     return false
   }
-
-  function grantSession() {
-    unlockedUntil.value = Date.now() + settings.value.ttlMinutes * 60 * 1000
-    persistUnlockedUntil()
+  function requestAccess(options: AccessRequestOptions) {
+    const feature = featureForPath(location.pathname)
+    return feature ? requestFeatureAccess(feature, options) : true
   }
-
-  async function runPendingAction() {
-    const action = pendingAction
-    pendingAction = null
-    dialogVisible.value = false
-    if (action) await action()
-  }
-
-  async function verifyPassword(password: string): Promise<ActionResult> {
-    if (!normalizeSecret(password)) return { ok: false, message: '请输入访问密码' }
-    if (!settings.value.password) return { ok: false, message: '当前还没有设置访问密码' }
-    if (normalizeSecret(password) !== settings.value.password) return { ok: false, message: '访问密码不正确' }
-    grantSession()
-    await runPendingAction()
-    return { ok: true, message: '已通过访问验证' }
-  }
-
-  async function resetPasswordWithRecovery(payload: RecoveryResetPayload): Promise<ActionResult> {
-    if (!hasRecovery.value) return { ok: false, message: '当前还没有设置找回提示词和答案' }
-    if (!normalizeSecret(payload.recoveryAnswer)) return { ok: false, message: '请输入找回答案' }
-    if (normalizeSecret(payload.newPassword).length < 4) return { ok: false, message: '新访问密码至少 4 位' }
-    if (normalizeSecret(payload.newPassword) !== normalizeSecret(payload.confirmPassword)) return { ok: false, message: '两次新访问密码不一致' }
-
-    if (normalizeSecret(payload.recoveryAnswer) !== settings.value.recoveryAnswer) return { ok: false, message: '找回答案不正确' }
-
-    settings.value = normalizeSettings(
-      await updateAccessGuardSettings({
-        enabled: true,
-        ttlMinutes: settings.value.ttlMinutes,
-        password: normalizeSecret(payload.newPassword),
-        recoveryPrompt: settings.value.recoveryPrompt,
-        recoveryAnswer: settings.value.recoveryAnswer
-      })
-    )
-    persistSettings()
-    grantSession()
-    await runPendingAction()
-    return { ok: true, message: '访问密码已重置' }
-  }
-
-  async function saveSettings(payload: SaveSettingsPayload): Promise<ActionResult> {
-    const nextSettings: AccessGuardSettings = {
-      ...settings.value,
-      enabled: payload.enabled,
-      ttlMinutes: clampTtlMinutes(payload.ttlMinutes)
+  function cancelAccess() { pendingAction = null; dialogVisible.value = false }
+  async function verifyPassword(password: string) {
+    const group = activeGroup.value
+    if (!group) return { ok: false, message: '未找到访问组合' }
+    if (!password.trim()) return { ok: false, message: '请输入访问密码' }
+    try {
+      const verification = await verifyAccessGuardGroup(group.id, password.trim(), group.ttlMinutes, group.password)
+      const sessions = readSessions(); sessions[group.id] = verification; writeSessions(sessions); accessSessionRevision.value += 1
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : '访问密码不正确' }
     }
-
-    const password = normalizeSecret(payload.password)
-    const confirmPassword = normalizeSecret(payload.confirmPassword)
-    const disablePassword = normalizeSecret(payload.disablePassword || '')
-    if (settings.value.enabled && !payload.enabled && settings.value.password) {
-      if (!disablePassword) return { ok: false, message: '请输入访问密码后关闭访问密码' }
-      if (disablePassword !== settings.value.password) return { ok: false, message: '访问密码不正确，无法关闭' }
-    }
-    if (payload.enabled) {
-      if (password || confirmPassword) {
-        if (password.length < 4) return { ok: false, message: '访问密码至少 4 位' }
-        if (password !== confirmPassword) return { ok: false, message: '两次访问密码不一致' }
-        nextSettings.password = password
-      }
-      if (!nextSettings.password) return { ok: false, message: '开启访问密码时请先设置密码' }
-
-      const recoveryPrompt = normalizeSecret(payload.recoveryPrompt)
-      const recoveryAnswer = normalizeSecret(payload.recoveryAnswer)
-      if (recoveryPrompt) nextSettings.recoveryPrompt = recoveryPrompt
-      if (recoveryAnswer) nextSettings.recoveryAnswer = recoveryAnswer
-      if (!nextSettings.recoveryPrompt || !nextSettings.recoveryAnswer) {
-        return { ok: false, message: '开启访问密码时请设置找回提示词和答案' }
-      }
-    }
-
-    settings.value = normalizeSettings(
-      await updateAccessGuardSettings({
-        enabled: nextSettings.enabled,
-        ttlMinutes: nextSettings.ttlMinutes,
-        ...(password ? { password } : {}),
-        ...(!nextSettings.enabled && disablePassword ? { disablePassword } : {}),
-        recoveryPrompt: nextSettings.recoveryPrompt,
-        ...(normalizeSecret(payload.recoveryAnswer) ? { recoveryAnswer: nextSettings.recoveryAnswer } : {})
-      })
-    )
-    persistSettings()
-    return { ok: true, message: payload.enabled ? '访问密码设置已保存' : '访问密码已关闭' }
+    const action = pendingAction; pendingAction = null; dialogVisible.value = false; if (action) await action()
+    return { ok: true, message: `已通过“${group.name}”访问验证` }
   }
-
-  return {
-    settings,
-    dialogVisible,
-    settingsVisible,
-    accessTitle,
-    accessMessage,
-    isProtectionActive,
-    hasRecovery,
-    loadSettings,
-    openSettings,
-    cancelAccess,
-    isProtectedPath,
-    hasValidSession,
-    shouldAskForAccess,
-    requiresAccessForPath,
-    requestAccess,
-    verifyPassword,
-    resetPasswordWithRecovery,
-    saveSettings
+  async function resetPasswordWithRecovery(payload: { recoveryAnswer: string; newPassword: string; confirmPassword: string }) {
+    const group = activeGroup.value
+    if (!group || payload.recoveryAnswer.trim() !== group.recoveryAnswer) return { ok: false, message: '找回答案不正确' }
+    if (payload.newPassword.trim().length < 4 || payload.newPassword.trim() !== payload.confirmPassword.trim()) return { ok: false, message: '新访问密码至少 4 位且两次输入一致' }
+    await updateAccessGuardGroup(group.id, { ...group, password: payload.newPassword.trim() }); await loadGroups(true)
+    return verifyPassword(payload.newPassword)
   }
+  async function saveGroup(payload: AccessGuardGroupPayload, id?: string) { const result = id ? await updateAccessGuardGroup(id, payload) : await createAccessGuardGroup(payload); await loadGroups(true); return result }
+  async function removeGroup(id: string) { await deleteAccessGuardGroup(id); await loadGroups(true) }
+  function openSettings() { settingsVisible.value = true; void loadGroups() }
+
+  return { groups, settings, activeGroup, settingsVisible, dialogVisible, accessTitle, accessMessage, accessSessionRevision, isProtectionActive, hasRecovery, loadGroups, openSettings, cancelAccess, isProtectedPath, hasValidSession, requiresAccessForPath, requestAccess, requestFeatureAccess, hasFeatureAccess, verifyPassword, resetPasswordWithRecovery, saveGroup, removeGroup }
 })

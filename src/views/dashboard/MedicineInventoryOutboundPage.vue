@@ -28,7 +28,7 @@
             <el-form-item label="单位">
               <div class="medicine-quantity-readout">{{ selectedItem?.unitLabel || '-' }}</div>
             </el-form-item>
-            <el-form-item label="出库数量" prop="quantity">
+            <el-form-item label="出库数量" prop="quantity" required>
               <el-input v-model="form.quantity" data-testid="outbound-quantity" inputmode="decimal" placeholder="输入出库数量" />
             </el-form-item>
             <el-form-item label="出库后剩余">
@@ -148,7 +148,10 @@ const correctedMovementIds = computed(() => new Set(movements.value.flatMap((mov
 const rules: FormRules<typeof form> = {
   occurredOn: [{ required: true, message: '请选择出库日期', trigger: 'change' }],
   medicineItemId: [{ required: true, message: '请选择出库药品', trigger: 'change' }],
-  quantity: [{ validator: validateQuantity, trigger: 'change' }]
+  quantity: [
+    { required: true, message: '请输入数量', trigger: 'change' },
+    { validator: validateQuantity, trigger: 'change' }
+  ]
 }
 
 onMounted(() => {

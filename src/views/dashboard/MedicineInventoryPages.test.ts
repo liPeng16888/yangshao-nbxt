@@ -1,6 +1,6 @@
 import { defineComponent, nextTick, type Component } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import ElementPlus, { ElMessageBox, ElSelect } from 'element-plus'
+import ElementPlus, { ElAutocomplete, ElMessageBox, ElSelect } from 'element-plus'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
@@ -11,6 +11,9 @@ import MedicineInventoryStockPage from './MedicineInventoryStockPage.vue'
 
 const api = vi.hoisted(() => ({
   getMedicineItems: vi.fn(),
+  getMedicineCommonNames: vi.fn(),
+  createMedicineCommonName: vi.fn(),
+  deleteMedicineCommonName: vi.fn(),
   getMedicineMovements: vi.fn(),
   createMedicineInbound: vi.fn(),
   createMedicineOutbound: vi.fn(),
@@ -74,6 +77,10 @@ const inboundMovement = {
   createdAt: '2026-08-02T08:00:00.000Z'
 }
 
+const commonNames = [
+  { id: 'common-saline', frontendUserId: 'frontend-1', name: '生理盐水', createdAt: '2026-08-02T08:00:00.000Z', updatedAt: '2026-08-02T08:00:00.000Z' }
+]
+
 function mountPage(component: Component) {
   return mount(component, {
     global: {
@@ -90,11 +97,17 @@ function componentByTestId(wrapper: VueWrapper, testId: string): VueWrapper<any>
 beforeEach(() => {
   vi.restoreAllMocks()
   api.getMedicineItems.mockReset()
+  api.getMedicineCommonNames.mockReset()
+  api.createMedicineCommonName.mockReset()
+  api.deleteMedicineCommonName.mockReset()
   api.getMedicineMovements.mockReset()
   api.createMedicineInbound.mockReset()
   api.createMedicineOutbound.mockReset()
   api.correctMedicineMovement.mockReset()
   api.getMedicineItems.mockResolvedValue(items)
+  api.getMedicineCommonNames.mockResolvedValue(commonNames)
+  api.createMedicineCommonName.mockResolvedValue({ id: 'common-hydrochloric', frontendUserId: 'frontend-1', name: '盐酸', createdAt: '2026-08-03T08:00:00.000Z', updatedAt: '2026-08-03T08:00:00.000Z' })
+  api.deleteMedicineCommonName.mockResolvedValue(undefined)
   api.getMedicineMovements.mockResolvedValue([inboundMovement])
   api.createMedicineInbound.mockResolvedValue({ item: items[0], movement: inboundMovement })
   api.createMedicineOutbound.mockResolvedValue({ item: items[0], movement: inboundMovement })
@@ -165,19 +178,60 @@ describe('MedicineInventoryStockPage', () => {
 })
 
 describe('MedicineInventoryInboundPage', () => {
+  it('accepts a directly typed medicine name and saves personal common names', async () => {
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+
+    const medicineInput = wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>
+    medicineInput.vm.$emit('update:modelValue', '盐酸')
+    componentByTestId(wrapper, 'inbound-unit').vm.$emit('update:modelValue', 'BOTTLE')
+    await wrapper.get('[data-testid="inbound-quantity"]').setValue('2')
+    await nextTick()
+    await wrapper.get('[data-testid="inbound-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createMedicineInbound).toHaveBeenCalledWith(expect.objectContaining({ name: '盐酸', unit: 'BOTTLE' }))
+
+    await wrapper.get('[data-testid="common-name-input"]').setValue('盐酸')
+    await wrapper.get('[data-testid="common-name-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createMedicineCommonName).toHaveBeenCalledWith({ name: '盐酸' })
+  })
+
+  it('marks quantity as required and blocks an empty inbound submission', async () => {
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+
+    const quantityItem = wrapper.findAll('.el-form-item').find((item) => item.text().includes('数量'))
+    expect(quantityItem?.classes()).toContain('is-required')
+    const quantityFormItem = wrapper.findAllComponents({ name: 'ElFormItem' })
+      .find((item) => item.find('[data-testid="inbound-quantity"]').exists())
+    expect(quantityFormItem?.props('required')).toBe(true)
+
+    const itemSelect = wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>
+    itemSelect.vm.$emit('select', { value: '阿莫西林', item: items[0] })
+    await nextTick()
+    await wrapper.get('[data-testid="inbound-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createMedicineInbound).not.toHaveBeenCalled()
+  })
+
   it('locks the unit for an existing item and blocks a new name without a unit', async () => {
     const wrapper = mountPage(MedicineInventoryInboundPage)
     await flushPromises()
     expect(wrapper.text()).toContain('2026-08-02 16:00')
 
-    const itemSelect = componentByTestId(wrapper, 'inbound-item')
-    itemSelect.vm.$emit('update:modelValue', 'item-amoxicillin')
+    const itemSelect = wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>
+    itemSelect.vm.$emit('select', { value: '阿莫西林', item: items[0] })
     await nextTick()
     const unitSelect = componentByTestId(wrapper, 'inbound-unit')
     expect(unitSelect.props('disabled')).toBe(true)
-    expect(wrapper.text()).toContain('阿莫西林（瓶）')
+    expect(itemSelect.props('modelValue')).toBe('阿莫西林')
 
     itemSelect.vm.$emit('update:modelValue', '新药品')
+    itemSelect.vm.$emit('input', '新药品')
     await nextTick()
     expect(unitSelect.props('disabled')).toBe(false)
     await wrapper.get('[data-testid="inbound-quantity"]').setValue('2')
@@ -209,7 +263,7 @@ describe('MedicineInventoryInboundPage', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('初始入库')
     api.getMedicineMovements.mockRejectedValueOnce(new Error('network'))
-    const historySelect = wrapper.findAllComponents(ElSelect)[2]
+    const historySelect = wrapper.findAllComponents(ElSelect)[1]
 
     historySelect.vm.$emit('update:modelValue', ['item-saline'])
     historySelect.vm.$emit('change')
@@ -240,7 +294,7 @@ describe('MedicineInventoryInboundPage', () => {
     const initialItemLoads = api.getMedicineItems.mock.calls.length
     const initialHistoryLoads = api.getMedicineMovements.mock.calls.length
 
-    componentByTestId(wrapper, 'inbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    ;(wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>).vm.$emit('select', { value: '阿莫西林', item: items[0] })
     await wrapper.get('[data-testid="inbound-quantity"]').setValue('2')
     await nextTick()
     await wrapper.get('[data-testid="inbound-submit"]').trigger('click')
@@ -277,6 +331,23 @@ describe('MedicineInventoryInboundPage', () => {
 })
 
 describe('MedicineInventoryOutboundPage', () => {
+  it('marks quantity as required and blocks an empty outbound submission', async () => {
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    const quantityItem = wrapper.findAll('.el-form-item')
+      .find((item) => item.find('[data-testid="outbound-quantity"]').exists())
+    expect(quantityItem?.classes()).toContain('is-required')
+    const quantityFormItem = wrapper.findAllComponents({ name: 'ElFormItem' })
+      .find((item) => item.find('[data-testid="outbound-quantity"]').exists())
+    expect(quantityFormItem?.props('required')).toBe(true)
+
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await nextTick()
+    expect(wrapper.get('[data-testid="outbound-submit"]').attributes('disabled')).toBeDefined()
+    expect(api.createMedicineOutbound).not.toHaveBeenCalled()
+  })
+
   it('shows current and remaining stock and disables submission above available quantity', async () => {
     const wrapper = mountPage(MedicineInventoryOutboundPage)
     await flushPromises()

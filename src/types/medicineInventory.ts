@@ -30,6 +30,14 @@ export interface MedicineInventoryMovement {
   createdAt: string
 }
 
+export interface MedicineCommonName {
+  id: string
+  frontendUserId: string
+  name: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface MedicineMovementQuery {
   medicineItemIds?: string[]
   startDate?: string

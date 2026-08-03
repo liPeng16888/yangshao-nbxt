@@ -157,6 +157,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { LabReportDraft, LabReportDraftRow, LabReportElementKey, LabReportTemplate } from '@/types/labReport'
 import type { SampleBlock } from '@/types/labSheet'
 import {
+  createLabReportFilename,
   createReportDraft,
   downloadLabReportAsPng,
   getBlockCustomerName,
@@ -332,7 +333,7 @@ async function downloadCurrentReport() {
   exportingReport.value = true
   ElMessage.info('正在生成化验报告图片')
   try {
-    const filename = `${sanitizeFilename(draft.value.title)}-${props.date}.png`
+    const filename = createLabReportFilename(selectedBlocks.value, draft.value.reportDate || props.date)
     const downloaded = await downloadLabReportAsPng(draft.value, filename)
     if (downloaded) {
       ElMessage.success('化验报告图片已开始下载')
@@ -371,9 +372,6 @@ function contactInputWidth(value: string, minChars: number) {
   return `${length + 1}em`
 }
 
-function sanitizeFilename(value: string) {
-  return value.replace(/[\\/:*?"<>|]/g, '').trim() || '化验报告'
-}
 </script>
 
 <style scoped lang="scss">

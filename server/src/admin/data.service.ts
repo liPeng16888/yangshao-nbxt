@@ -2,7 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service'
 import type { CurrentUser } from '../auth/current-user'
 import { todayInBeijing } from '../common/date'
-import { hasLabDetectionInput } from '../common/lab'
+import { hasVisibleSampleBlockInput } from '../common/lab'
 import { toMoney } from '../common/money'
 import { AdminAccessService } from './admin-access.service'
 import { collapseConsecutiveFieldChanges } from '../common/change-log'
@@ -58,7 +58,7 @@ export class AdminDataService {
         readonly: true,
         parameters: sheet.parameters,
         sampleBlocks: sheet.sampleBlocks
-          .filter((block) => hasLabDetectionInput(block.inputs as Record<string, unknown>))
+          .filter((block) => hasVisibleSampleBlockInput(block.inputs as Record<string, unknown>))
           .map((block) => ({
             id: block.id,
             index: block.index,

@@ -8,8 +8,10 @@ import LabDataPage from './LabDataPage.vue'
 const mocks = vi.hoisted(() => ({
   routerPush: vi.fn(),
   accessGuard: {
-    loadSettings: vi.fn(),
-    requestAccess: vi.fn(() => true)
+    loadGroups: vi.fn(),
+    requestFeatureAccess: vi.fn(() => true),
+    hasFeatureAccess: vi.fn(() => true),
+    accessSessionRevision: 0
   },
   labStore: {
     loading: false,
@@ -192,9 +194,11 @@ describe('LabDataPage table layout', () => {
     mocks.labStore.confirmConflictOverwrite.mockResolvedValue({ success: true, failedBlockIds: [], conflictBlockIds: [] })
     mocks.labStore.appendSampleBlocks.mockResolvedValue(undefined)
     mocks.labStore.disconnectRealtime.mockReset()
-    mocks.accessGuard.loadSettings.mockReset()
-    mocks.accessGuard.requestAccess.mockReset()
-    mocks.accessGuard.requestAccess.mockReturnValue(true)
+    mocks.accessGuard.loadGroups.mockReset()
+    mocks.accessGuard.requestFeatureAccess.mockReset()
+    mocks.accessGuard.requestFeatureAccess.mockReturnValue(true)
+    mocks.accessGuard.hasFeatureAccess.mockReset()
+    mocks.accessGuard.hasFeatureAccess.mockReturnValue(true)
     mocks.labStore.autoSaveStatus = 'idle'
     mocks.labStore.autoSaveError = ''
     mocks.labStore.conflictBlockIds = []
@@ -250,7 +254,7 @@ describe('LabDataPage table layout', () => {
     await wrapper.find('.date-picker-stub').setValue('2026-07-30')
     await Promise.resolve()
 
-    expect(mocks.accessGuard.requestAccess).not.toHaveBeenCalled()
+    expect(mocks.accessGuard.requestFeatureAccess).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -265,7 +269,7 @@ describe('LabDataPage table layout', () => {
     await wrapper.find('.date-picker-stub').setValue('2026-07-30')
     await Promise.resolve()
 
-    expect(mocks.accessGuard.requestAccess).toHaveBeenCalledTimes(1)
+    expect(mocks.accessGuard.requestFeatureAccess).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 

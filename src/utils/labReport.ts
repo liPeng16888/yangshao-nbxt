@@ -7,7 +7,7 @@ import type {
   LabReportTemplate
 } from '@/types/labReport'
 import type { SampleBlock } from '@/types/labSheet'
-import { getRecipientCustomerDisplayText, getRecipientCustomerName } from './sampleCustomers'
+import { getPayerCustomerName, getRecipientCustomerDisplayText, getRecipientCustomerName } from './sampleCustomers'
 
 export const LAB_REPORT_TEMPLATE_STORAGE_KEY = 'yangshao-lab-report-template'
 export const LAB_REPORT_SMS_TEMPLATE_STORAGE_KEY = 'yangshao-lab-report-sms-template'
@@ -158,6 +158,27 @@ export function getBlockCustomerName(block: SampleBlock) {
 
 export function getBlockCustomerDisplayText(block: SampleBlock) {
   return getRecipientCustomerDisplayText(block.inputs)
+}
+
+export function createLabReportFilename(blocks: SampleBlock[], date: string) {
+  const payerNames = blocks
+    .flatMap((block) => getPayerCustomerName(block.inputs).split(/[、，,]/))
+    .map((name) => name.trim())
+    .filter(Boolean)
+  const payerName = sanitizeReportFilenamePart([...new Set(payerNames)].join('、')) || '化验报告'
+  const reportDate = formatReportFilenameDate(date)
+
+  return `${payerName}${reportDate ? `-${reportDate}` : ''}.png`
+}
+
+function formatReportFilenameDate(date: string) {
+  const match = date.trim().match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/)
+  if (!match) return sanitizeReportFilenamePart(date)
+  return `${match[1]}.${Number(match[2])}.${Number(match[3])}`
+}
+
+function sanitizeReportFilenamePart(value: string) {
+  return value.replace(/[\\/:*?"<>|]/g, '').trim()
 }
 
 export function detectReportElementKeys(block: SampleBlock): LabReportElementKey[] {

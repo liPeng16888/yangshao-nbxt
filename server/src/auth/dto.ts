@@ -1,4 +1,5 @@
-import { IsOptional, IsString, MinLength } from 'class-validator'
+import { ArrayNotEmpty, IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator'
+import { AccessGuardFeature } from '@prisma/client'
 
 export class LoginDto {
   @IsString()
@@ -83,4 +84,38 @@ export class AccessGuardSettingsDto {
   @IsOptional()
   @IsString()
   recoveryAnswer?: string
+}
+
+export class AccessGuardGroupDto {
+  @IsString()
+  @MaxLength(24)
+  name!: string
+
+  @IsBoolean()
+  enabled!: boolean
+
+  @IsInt()
+  @Min(1)
+  @Max(1440)
+  ttlMinutes!: number
+
+  @IsString()
+  @MinLength(4)
+  password!: string
+
+  @IsString()
+  recoveryPrompt!: string
+
+  @IsString()
+  recoveryAnswer!: string
+
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsEnum(AccessGuardFeature, { each: true })
+  features!: AccessGuardFeature[]
+}
+
+export class VerifyAccessGuardGroupDto {
+  @IsString()
+  password!: string
 }

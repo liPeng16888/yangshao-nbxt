@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import type { SampleBlock } from '@/types/labSheet'
 import {
+  createLabReportFilename,
   createLabReportSmsText,
   createReportCanvasLayout,
   createReportDraft,
@@ -127,6 +128,17 @@ describe('lab report generation', () => {
 
     expect(recipientDraft.sampleUnit).toBe('李总')
     expect(fallbackDraft.sampleUnit).toBe('王总')
+  })
+
+  it('names the downloaded report from the payer and dotted report date', () => {
+    const firstBlock = makeBlock()
+    firstBlock.inputs.recipientCustomerText = '数据接收人'
+    const secondBlock = makeBlock()
+    secondBlock.id = 'block-2'
+    secondBlock.inputs.customerText = '李总'
+
+    expect(createLabReportFilename([firstBlock], '2026-08-02')).toBe('王总-2026.8.2.png')
+    expect(createLabReportFilename([firstBlock, secondBlock], '2026-08-02')).toBe('王总、李总-2026.8.2.png')
   })
 
   it('expands the exported report result grid beyond five sample rows', () => {

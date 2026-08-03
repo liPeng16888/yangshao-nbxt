@@ -19,6 +19,7 @@ export function createMonthlyBillDraft(
 ): MonthlyBillDraft {
   const entries = rows
     .filter((row) => row.customer === customer)
+    .sort((left, right) => compareMonthlyBillDates(left.date, right.date))
     .flatMap((row) => row.elementCounts
       .filter((item) => item.count > 0)
       .map((item) => ({
@@ -39,6 +40,38 @@ export function createMonthlyBillDraft(
     entries,
     elementTotals: [],
     totalAmount: 0
+  })
+}
+
+export function addMonthlyBillManualEntry(
+  draft: MonthlyBillDraft,
+  date: string,
+  elementLabel: string,
+  quantity = 0
+): MonthlyBillDraft {
+  const normalizedLabel = elementLabel.trim()
+  if (!normalizedLabel) return draft
+
+  const matchingEntry = draft.entries.find((entry) => normalizeElementLabel(entry.elementLabel) === normalizeElementLabel(normalizedLabel))
+  const sourceElementKey = matchingEntry?.sourceElementKey || `manual:${normalizedLabel}`
+  const existingEntry = draft.entries.find((entry) => entry.date === date && entry.sourceElementKey === sourceElementKey)
+  if (existingEntry) return updateMonthlyBillEntry(draft, existingEntry.id, { quantity })
+
+  const duplicateIndex = draft.entries.filter((entry) => entry.id.startsWith(`manual:${date}:${sourceElementKey}:`)).length
+  return recalculateMonthlyBillDraft({
+    ...draft,
+    entries: [
+      ...draft.entries,
+      {
+        id: `manual:${date}:${sourceElementKey}:${duplicateIndex + 1}`,
+        sourceElementKey,
+        date,
+        elementLabel: normalizedLabel,
+        quantity: isFiniteNumber(quantity) ? quantity : 0,
+        unitPrice: matchingEntry?.unitPrice ?? null,
+        subtotal: 0
+      }
+    ]
   })
 }
 
@@ -79,13 +112,14 @@ export function recalculateMonthlyBillDraft(draft: MonthlyBillDraft): MonthlyBil
   const totals = new Map<string, MonthlyBillElementTotal>()
 
   entries.forEach((entry) => {
-    const current = totals.get(entry.elementLabel)
+    const current = totals.get(entry.sourceElementKey)
     if (current) {
       current.quantity += numericOrZero(entry.quantity)
       current.amount = roundMonthlyBillMoney(current.amount + entry.subtotal)
       return
     }
-    totals.set(entry.elementLabel, {
+    totals.set(entry.sourceElementKey, {
+      sourceElementKey: entry.sourceElementKey,
       elementLabel: entry.elementLabel,
       quantity: numericOrZero(entry.quantity),
       amount: entry.subtotal
@@ -105,37 +139,46 @@ export function createMonthlyBillTableLayout(
   maxGroups = MAX_MONTHLY_BILL_ELEMENT_GROUPS
 ): MonthlyBillTableLayout {
   const groupLimit = normalizeGroupLimit(maxGroups)
-  const dateGroups = new Map<string, MonthlyBillEntry[]>()
+  const sortedEntries = draft.entries
+    .map((entry) => ({ ...entry }))
+    .sort((left, right) => compareMonthlyBillDates(left.date, right.date))
+  const columnKeys = Array.from(new Set(sortedEntries.map((entry) => entry.sourceElementKey)))
+  const columnChunks = chunk(columnKeys, groupLimit)
+  if (!columnChunks.length) columnChunks.push([])
+  columnChunks.forEach((keys) => {
+    while (keys.length < groupLimit) keys.push('')
+  })
 
-  draft.entries.forEach((entry) => {
-    const entries = dateGroups.get(entry.date) || []
-    entries.push({ ...entry })
+  const dateGroups = new Map<string, Map<string, MonthlyBillEntry>>()
+  sortedEntries.forEach((entry) => {
+    const entries = dateGroups.get(entry.date) || new Map<string, MonthlyBillEntry>()
+    entries.set(entry.sourceElementKey, entry)
     dateGroups.set(entry.date, entries)
   })
 
   const detailRows: MonthlyBillTableRow[] = []
-  dateGroups.forEach((entries, date) => {
-    const chunks = chunk(entries, groupLimit)
-    chunks.forEach((items, index) => {
-      detailRows.push({
-        id: `${date}__${index}`,
-        date,
-        dateRowSpan: index === 0 ? chunks.length : 0,
-        showDate: index === 0,
-        entries: items
+  Array.from(dateGroups.entries())
+    .sort(([left], [right]) => compareMonthlyBillDates(left, right))
+    .forEach(([date, entries]) => {
+      columnChunks.forEach((keys, index) => {
+        detailRows.push({
+          id: `${date}__${index}`,
+          date,
+          dateRowSpan: index === 0 ? columnChunks.length : 0,
+          showDate: index === 0,
+          entries: keys.map((key) => key ? entries.get(key) || null : null),
+          columnKeys: keys.map((key) => key || null)
+        })
       })
     })
-  })
 
-  const summaryRows = chunk(draft.elementTotals.map((total) => ({ ...total })), groupLimit)
-  const largestGroup = Math.max(
-    ...Array.from(dateGroups.values()).map((entries) => Math.min(entries.length, groupLimit)),
-    ...summaryRows.map((row) => row.length),
-    0
-  )
+  const totalByKey = new Map(draft.elementTotals.map((total) => [total.sourceElementKey, total]))
+  const summaryRows = columnKeys.length
+    ? columnChunks.map((keys) => keys.map((key) => key ? { ...totalByKey.get(key)! } : null))
+    : []
 
   return {
-    groupCount: largestGroup,
+    groupCount: groupLimit,
     detailRows,
     summaryRows
   }
@@ -217,6 +260,18 @@ function isFiniteNumber(value: number | null): value is number {
 
 function numericOrZero(value: number) {
   return isFiniteNumber(value) ? value : 0
+}
+
+function compareMonthlyBillDates(left: string, right: string) {
+  const leftIsIsoDate = /^\d{4}-\d{2}-\d{2}$/.test(left)
+  const rightIsIsoDate = /^\d{4}-\d{2}-\d{2}$/.test(right)
+  if (leftIsIsoDate && !rightIsIsoDate) return -1
+  if (!leftIsIsoDate && rightIsIsoDate) return 1
+  return left.localeCompare(right, 'zh-CN', { numeric: true })
+}
+
+function normalizeElementLabel(value: string) {
+  return value.trim().toLocaleLowerCase('zh-CN')
 }
 
 function sanitizeFilenamePart(value: string) {

@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Headers, Param, Post, Put, Query, UseGuards } from '@nestjs/common'
 import { UserRole } from '@prisma/client'
 import { AuthGuard } from '../auth/auth.guard'
+import { AuthService } from '../auth/auth.service'
 import { CurrentUserInfo } from '../auth/current-user.decorator'
 import type { CurrentUser } from '../auth/current-user'
 import { Roles } from '../auth/roles.decorator'
@@ -11,16 +12,18 @@ import { LabSheetsService } from './lab-sheets.service'
 @Roles(UserRole.FRONTEND_USER)
 @Controller('lab-sheets')
 export class LabSheetsController {
-  constructor(private readonly sheets: LabSheetsService) {}
+  constructor(private readonly sheets: LabSheetsService, private readonly auth: AuthService) {}
 
   @Get('current')
-  getCurrent(@CurrentUserInfo() user: CurrentUser) {
-    return this.sheets.getDefaultSheetForFrontendUser(user.id)
+  async getCurrent(@CurrentUserInfo() user: CurrentUser, @Headers('x-ys-access-grant') grant?: string) {
+    const protectedFeature = await this.auth.isFeatureProtected(user.id, 'COMPLETED_SAMPLE_DATA')
+    return this.sheets.getDefaultSheetForFrontendUser(user.id, !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA'))
   }
 
   @Get()
-  getByDate(@CurrentUserInfo() user: CurrentUser, @Query('date') date: string) {
-    return this.sheets.getSheetForFrontendUser(user.id, date)
+  async getByDate(@CurrentUserInfo() user: CurrentUser, @Query('date') date: string, @Headers('x-ys-access-grant') grant?: string) {
+    const protectedFeature = await this.auth.isFeatureProtected(user.id, 'COMPLETED_SAMPLE_DATA')
+    return this.sheets.getSheetForFrontendUser(user.id, date, !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA'))
   }
 
   @Get('parameters/current')
@@ -39,8 +42,9 @@ export class LabSheetsController {
   }
 
   @Put(':sheetId/cells')
-  saveBlock(@CurrentUserInfo() user: CurrentUser, @Param('sheetId') sheetId: string, @Body() block: Record<string, unknown>, @Headers('x-ys-client-id') sourceClientId?: string) {
-    return this.sheets.saveSampleBlock(user, sheetId, block, sourceClientId)
+  async saveBlock(@CurrentUserInfo() user: CurrentUser, @Param('sheetId') sheetId: string, @Body() block: Record<string, unknown>, @Headers('x-ys-client-id') sourceClientId?: string, @Headers('x-ys-access-grant') grant?: string) {
+    const protectedFeature = await this.auth.isFeatureProtected(user.id, 'COMPLETED_SAMPLE_DATA')
+    return this.sheets.saveSampleBlock(user, sheetId, block, sourceClientId, !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA'))
   }
 
   @Get('history')

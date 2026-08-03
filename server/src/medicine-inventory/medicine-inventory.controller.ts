@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common'
 import { UserRole } from '@prisma/client'
 import { AuthGuard } from '../auth/auth.guard'
 import type { CurrentUser } from '../auth/current-user'
@@ -37,6 +37,21 @@ export class MedicineInventoryController {
   @Get('items')
   items(@CurrentUserInfo() user: CurrentUser, @Query() query: MedicineInventoryQuery) {
     return this.medicineInventory.listItems([user.id], parseMedicineMultiValue(query.medicineItemIds))
+  }
+
+  @Get('common-names')
+  commonNames(@CurrentUserInfo() user: CurrentUser) {
+    return this.medicineInventory.listCommonNames([user.id])
+  }
+
+  @Post('common-names')
+  createCommonName(@CurrentUserInfo() user: CurrentUser, @Body('name') name: string) {
+    return this.medicineInventory.createCommonName(user.id, name)
+  }
+
+  @Delete('common-names/:id')
+  async deleteCommonName(@CurrentUserInfo() user: CurrentUser, @Param('id') commonNameId: string) {
+    await this.medicineInventory.deleteCommonName(user.id, commonNameId)
   }
 
   @Get('inbounds')

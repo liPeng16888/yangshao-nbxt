@@ -3,6 +3,7 @@ import type { MonthlySettlementDailyRow, MonthlySettlementElementCount } from '@
 import type { MonthlyBillDraft } from '@/types/monthlySettlementBill'
 import {
   applyMonthlyBillElementPrice,
+  addMonthlyBillManualEntry,
   createMonthlyBillDraft,
   createMonthlyBillFilename,
   createMonthlyBillTableLayout,
@@ -92,6 +93,60 @@ describe('monthly settlement bill calculations', () => {
     expect(rows).toEqual(snapshot)
   })
 
+  it('sorts bill dates from the first day of the month to the last day', () => {
+    const draft = createMonthlyBillDraft([
+      makeDailyRow('2026-08-31', '客户甲', [{ key: 'sulfur', label: '硫', count: 1 }]),
+      makeDailyRow('2026-08-01', '客户甲', [{ key: 'sulfur', label: '硫', count: 2 }]),
+      makeDailyRow('2026-08-09', '客户甲', [{ key: 'sulfur', label: '硫', count: 3 }])
+    ], '客户甲', '客户甲', '2026-08')
+
+    expect(createMonthlyBillTableLayout(draft).detailRows.map((row) => row.date)).toEqual([
+      '2026-08-01',
+      '2026-08-09',
+      '2026-08-31'
+    ])
+  })
+
+  it('keeps every element in a stable column and leaves missing date cells empty', () => {
+    const draft = createMonthlyBillDraft([
+      makeDailyRow('2026-08-02', '客户甲', [{ key: 'calcium', label: '钙', count: 2 }]),
+      makeDailyRow('2026-08-01', '客户甲', [
+        { key: 'sulfur', label: '硫', count: 1 },
+        { key: 'calcium', label: '钙', count: 1 }
+      ])
+    ], '客户甲', '客户甲', '2026-08')
+
+    const layout = createMonthlyBillTableLayout(draft)
+
+    expect(layout.groupCount).toBe(5)
+    expect(layout.detailRows.map((row) => row.entries.map((entry) => entry?.sourceElementKey || null))).toEqual([
+      ['sulfur', 'calcium', null, null, null],
+      [null, 'calcium', null, null, null]
+    ])
+  })
+
+  it('adds a temporary manual element to the export draft and includes it in totals', () => {
+    const sourceRows = [makeDailyRow('2026-08-01', '客户甲', [{ key: 'sulfur', label: '硫', count: 1 }])]
+    const snapshot = structuredClone(sourceRows)
+    let draft = createMonthlyBillDraft(sourceRows, '客户甲', '客户甲', '2026-08')
+    draft = addMonthlyBillManualEntry(draft, '2026-08-02', '临时检测', 2)
+    draft = applyMonthlyBillElementPrice(draft, 'manual:临时检测', 30)
+
+    expect(draft.entries).toContainEqual(expect.objectContaining({
+      sourceElementKey: 'manual:临时检测',
+      date: '2026-08-02',
+      elementLabel: '临时检测',
+      quantity: 2,
+      subtotal: 60
+    }))
+    expect(draft.elementTotals).toContainEqual(expect.objectContaining({
+      elementLabel: '临时检测',
+      quantity: 2,
+      amount: 60
+    }))
+    expect(sourceRows).toEqual(snapshot)
+  })
+
   it('creates an empty draft when the customer has no positive element detail', () => {
     const draft = createMonthlyBillDraft(
       [makeDailyRow('2026-08-01', '客户甲', [{ key: 'sulfur', label: '硫', count: 0 }])],
@@ -117,7 +172,7 @@ describe('monthly settlement bill calculations', () => {
     })
 
     expect(draft.entries[0].subtotal).toBe(70)
-    expect(draft.elementTotals).toContainEqual({ elementLabel: '全硫', quantity: 2, amount: 70 })
+    expect(draft.elementTotals).toContainEqual(expect.objectContaining({ elementLabel: '全硫', quantity: 2, amount: 70 }))
     expect(draft.totalAmount).toBe(70)
     expect(original.entries[0]).toMatchObject({ elementLabel: '硫', quantity: 1, unitPrice: null, subtotal: 0 })
   })
@@ -132,28 +187,30 @@ describe('monthly settlement bill calculations', () => {
 
     expect(pricedDraft.entries.map((entry) => entry.unitPrice)).toEqual([12.35, 12.35])
     expect(pricedDraft.entries.map((entry) => entry.subtotal)).toEqual([24.7, 37.05])
-    expect(pricedDraft.elementTotals).toEqual([{ elementLabel: '硫', quantity: 5, amount: 61.75 }])
+    expect(pricedDraft.elementTotals).toEqual([
+      { sourceElementKey: 'sulfur', elementLabel: '硫', quantity: 5, amount: 61.75 }
+    ])
     expect(pricedDraft.totalAmount).toBe(61.75)
   })
 
-  it('chunks each date and summary into at most five element groups', () => {
+  it('reserves five editable element groups in every bill row', () => {
     const layouts = [1, 2, 3, 4, 5].map((count) => createMonthlyBillTableLayout(makeDraftWithElementCount(count)))
 
-    expect(layouts.map((layout) => layout.groupCount)).toEqual([1, 2, 3, 4, 5])
-    expect(layouts.map((layout) => layout.detailRows[0].entries.length)).toEqual([1, 2, 3, 4, 5])
-    expect(layouts.map((layout) => layout.summaryRows[0].length)).toEqual([1, 2, 3, 4, 5])
+    expect(layouts.map((layout) => layout.groupCount)).toEqual([5, 5, 5, 5, 5])
+    expect(layouts.map((layout) => layout.detailRows[0].entries.length)).toEqual([5, 5, 5, 5, 5])
+    expect(layouts.map((layout) => layout.summaryRows[0].length)).toEqual([5, 5, 5, 5, 5])
   })
 
   it('chunks each date and summary into continuation rows after five groups', () => {
     const layout = createMonthlyBillTableLayout(makeDraftWithElementCount(7), 5)
 
     expect(layout.groupCount).toBe(5)
-    expect(layout.detailRows.map((row) => row.entries.length)).toEqual([5, 2])
+    expect(layout.detailRows.map((row) => row.entries.length)).toEqual([5, 5])
     expect(layout.detailRows.map((row) => [row.showDate, row.dateRowSpan])).toEqual([
       [true, 2],
       [false, 0]
     ])
-    expect(layout.summaryRows.map((row) => row.length)).toEqual([5, 2])
+    expect(layout.summaryRows.map((row) => row.length)).toEqual([5, 5])
   })
 
   it('keeps date groups in source order and sets row spans per date', () => {

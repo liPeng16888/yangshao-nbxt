@@ -22,7 +22,7 @@ const accessGuard = useAccessGuardStore()
 
 onMounted(() => {
   sidebarCollapsed.value = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'
-  void accessGuard.loadSettings()
+  void accessGuard.loadGroups()
 })
 
 watch(sidebarCollapsed, (collapsed) => {

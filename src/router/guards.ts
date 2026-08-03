@@ -4,6 +4,27 @@ export interface AuthRedirectInput {
   requiresAuth?: boolean
 }
 
+export const accessGuardFeatures = [
+  'FINANCE',
+  'REPORTS',
+  'BLACKLIST',
+  'HISTORICAL_DATES',
+  'MEDICINE_INVENTORY',
+  'CUSTOMER_OVERVIEW',
+  'COMPLETED_SAMPLE_DATA'
+] as const
+
+export type AccessGuardFeature = typeof accessGuardFeatures[number]
+
+export function featureForPath(path: string): AccessGuardFeature | null {
+  if (path.startsWith('/finance')) return 'FINANCE'
+  if (path.startsWith('/reports')) return 'REPORTS'
+  if (path.startsWith('/blacklist')) return 'BLACKLIST'
+  if (path.startsWith('/medicine-inventory')) return 'MEDICINE_INVENTORY'
+  if (path.startsWith('/customers-overview')) return 'CUSTOMER_OVERVIEW'
+  return null
+}
+
 export function resolveAuthRedirect(input: AuthRedirectInput) {
   if (input.requiresAuth && !input.isLoggedIn) return '/login'
   if (input.toPath === '/login' && input.isLoggedIn) return '/data'
@@ -11,9 +32,5 @@ export function resolveAuthRedirect(input: AuthRedirectInput) {
 }
 
 export function isSensitiveAccessPath(path: string) {
-  return path.startsWith('/finance') ||
-    path.startsWith('/medicine-inventory') ||
-    path.startsWith('/reports') ||
-    path.startsWith('/customers-overview') ||
-    path.startsWith('/blacklist')
+  return featureForPath(path) !== null
 }

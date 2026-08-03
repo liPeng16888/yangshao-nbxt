@@ -14,13 +14,13 @@ export class LabSheetsService {
     private readonly realtime: LabSheetRealtimeService
   ) {}
 
-  async getSheetForFrontendUser(frontendUserId: string, date = businessDateInBeijing()) {
+  async getSheetForFrontendUser(frontendUserId: string, date = businessDateInBeijing(), canViewCompletedSensitiveData = true) {
     const sheet = await this.ensureSheet(frontendUserId, date)
-    return this.toSheetDto(sheet)
+    return this.toSheetDto(sheet, canViewCompletedSensitiveData)
   }
 
-  async getDefaultSheetForFrontendUser(frontendUserId: string) {
-    return this.toSheetDto(await this.ensureSheet(frontendUserId, businessDateInBeijing()))
+  async getDefaultSheetForFrontendUser(frontendUserId: string, canViewCompletedSensitiveData = true) {
+    return this.toSheetDto(await this.ensureSheet(frontendUserId, businessDateInBeijing()), canViewCompletedSensitiveData)
   }
 
   async updateCurrentParameters(frontendUserId: string, parameters: Record<string, number>, sourceClientId?: string) {
@@ -73,7 +73,7 @@ export class LabSheetsService {
     return nextSheet
   }
 
-  async saveSampleBlock(user: CurrentUser, sheetId: string, blockPayload: Record<string, unknown>, sourceClientId?: string) {
+  async saveSampleBlock(user: CurrentUser, sheetId: string, blockPayload: Record<string, unknown>, sourceClientId?: string, canViewCompletedSensitiveData = true) {
     const sheet = await this.prisma.labSheet.findUnique({ where: { id: sheetId } })
     if (!sheet || sheet.frontendUserId !== user.id) throw new NotFoundException('未找到表格')
     this.assertSheetEditable(sheet)
@@ -82,12 +82,12 @@ export class LabSheetsService {
     if (!block || block.sheetId !== sheet.id) throw new NotFoundException('未找到样品')
     const oldInputs = (block.inputs || {}) as Record<string, unknown>
     const changedFields = this.normalizeChangedFields(blockPayload)
-    if (!Object.keys(changedFields).length) return this.toBlockDto(block)
+    if (!Object.keys(changedFields).length) return this.toBlockDto(block, false, canViewCompletedSensitiveData)
     const effectiveChangedFields = Object.entries(changedFields).reduce<Record<string, unknown>>((fields, [field, value]) => {
       if (!this.isJsonEqual(oldInputs[field] ?? null, value ?? null)) fields[field] = value
       return fields
     }, {})
-    if (!Object.keys(effectiveChangedFields).length) return this.toBlockDto(block)
+    if (!Object.keys(effectiveChangedFields).length) return this.toBlockDto(block, false, canViewCompletedSensitiveData)
     this.assertNoInputConflict(block, blockPayload, effectiveChangedFields)
     const nextInputs = { ...oldInputs, ...effectiveChangedFields }
     const sheetParameters = (sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
@@ -103,7 +103,7 @@ export class LabSheetsService {
       }
     })
     await this.recordInputChanges(sheet.id, block.id, sheet.frontendUserId, user.id, oldInputs, nextInputs, blockPayload.changeLogFields)
-    const savedDto = this.toBlockDto(saved)
+    const savedDto = this.toBlockDto(saved, false, canViewCompletedSensitiveData)
     this.realtime.publish({
       type: 'block-saved',
       frontendUserId: sheet.frontendUserId,
@@ -303,27 +303,41 @@ export class LabSheetsService {
     return collapseConsecutiveFieldChanges(rows, { windowMs: 2000 }).filter((row) => row.field === field).length
   }
 
-  private toSheetDto(sheet: Awaited<ReturnType<LabSheetsService['ensureSheet']>>) {
+  private toSheetDto(sheet: Awaited<ReturnType<LabSheetsService['ensureSheet']>>, canViewCompletedSensitiveData = false) {
     const readonly = this.isReadonlySheet(sheet)
     return {
       id: sheet.id,
       date: sheet.date,
       readonly,
       parameters: sheet.parameters,
-      sampleBlocks: sheet.sampleBlocks.map((block) => this.toBlockDto(block, readonly))
+      sampleBlocks: sheet.sampleBlocks.map((block) => this.toBlockDto(block, readonly, canViewCompletedSensitiveData))
     }
   }
 
-  private toBlockDto(block: { id: string; index: number; readonly: boolean; updatedAt?: Date; inputs: unknown; results: unknown; parameterSnapshot: unknown }, sheetReadonly = false) {
+  private toBlockDto(block: { id: string; index: number; readonly: boolean; updatedAt?: Date; inputs: unknown; results: unknown; parameterSnapshot: unknown }, sheetReadonly = false, canViewCompletedSensitiveData = false) {
+    const inputs = (block.inputs || {}) as Record<string, unknown>
+    const completed = Boolean(inputs.completed)
+    const hidden = completed && !canViewCompletedSensitiveData
     return {
       id: block.id,
       index: block.index,
       readonly: sheetReadonly,
       updatedAt: block.updatedAt?.toISOString(),
-      inputs: block.inputs,
-      results: block.results,
+      sensitiveFieldsHidden: hidden,
+      inputs: hidden ? this.redactCompletedInputs(inputs) : inputs,
+      results: hidden ? this.redactCompletedResults(block.results) : block.results,
       parameterSnapshot: block.parameterSnapshot
     }
+  }
+
+  private redactCompletedInputs(inputs: Record<string, unknown>) {
+    const redacted = { ...inputs }
+    for (const field of ['ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust', 'sulfur', 'densityRaw', 'whiteness', 'calciumRaw', 'magnesiumRaw', 'carbon', 'titaniumRaw', 'waterSample', 'bottleWater', 'bottleWaterSample', 'moisture', 'crucible', 'sampleWeight', 'burnedCrucibleSample', 'price', 'paymentStatus']) redacted[field] = null
+    return redacted
+  }
+
+  private redactCompletedResults(results: unknown) {
+    return Object.fromEntries(Object.keys((results || {}) as Record<string, unknown>).map((key) => [key, null]))
   }
 
   private assertSheetEditable(sheet: { date: string; readonly: boolean }) {

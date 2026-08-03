@@ -137,6 +137,30 @@ describe('MonthlySettlementBillExportDialog', () => {
     expect(wrapper.text()).toContain('合计：¥190.00')
   })
 
+  it('adds a temporary element from an empty table cell and prices it only in this draft', async () => {
+    const rows = makeRowsForTwoCustomers()
+    const snapshot = structuredClone(rows)
+    const wrapper = mountDialog({ rows })
+    await selectCustomer(wrapper, '客户甲')
+
+    const emptyElement = wrapper.get('[data-testid="bill-preview-empty-element-input"]')
+    await emptyElement.setValue('临时检测')
+    await emptyElement.trigger('change')
+    await nextTick()
+
+    wrapper.get('[data-element-key="manual:临时检测"]')
+    expect(wrapper.findAll('[data-testid="bill-preview-element-input"]')
+      .some((input) => (input.element as HTMLInputElement).value === '临时检测')).toBe(true)
+
+    const manualQuantity = wrapper.findAll('[data-testid="bill-preview-quantity-input"]')
+      .find((input) => input.findComponent({ name: 'ElInputNumber' }).props('modelValue') === 0)
+    manualQuantity?.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:modelValue', 2)
+    await setElementPrice(wrapper, 'manual:临时检测', 30)
+
+    expect(wrapper.text()).toContain('合计：¥60.00')
+    expect(rows).toEqual(snapshot)
+  })
+
   it('removes the middle editor and edits title, date, element and quantity directly in the compact bill', async () => {
     const wrapper = mountDialog()
     await selectCustomer(wrapper, '客户甲')

@@ -11,6 +11,7 @@ export interface MonthlyBillEntry {
 export type MonthlyBillEntryPatch = Partial<Pick<MonthlyBillEntry, 'date' | 'elementLabel' | 'quantity' | 'unitPrice'>>
 
 export interface MonthlyBillElementTotal {
+  sourceElementKey: string
   elementLabel: string
   quantity: number
   amount: number
@@ -31,13 +32,14 @@ export interface MonthlyBillTableRow {
   date: string
   dateRowSpan: number
   showDate: boolean
-  entries: MonthlyBillEntry[]
+  entries: Array<MonthlyBillEntry | null>
+  columnKeys: Array<string | null>
 }
 
 export interface MonthlyBillTableLayout {
   groupCount: number
   detailRows: MonthlyBillTableRow[]
-  summaryRows: MonthlyBillElementTotal[][]
+  summaryRows: Array<Array<MonthlyBillElementTotal | null>>
 }
 
 export interface MonthlyBillValidationError {

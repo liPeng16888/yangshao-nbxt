@@ -81,30 +81,46 @@
                   @update:model-value="updateDateGroup(row.date, $event)"
                 />
               </td>
-              <template v-for="groupIndex in tableLayout.groupCount" :key="groupIndex">
+              <template v-for="(entry, groupIndex) in row.entries" :key="groupIndex">
                 <td
                   class="monthly-bill-preview__editable-cell"
-                  :title="row.entries[groupIndex - 1]?.elementLabel || undefined"
+                  :title="entry?.elementLabel || undefined"
                 >
                   <el-input
-                    v-if="row.entries[groupIndex - 1]"
+                    v-if="entry"
                     data-testid="bill-preview-element-input"
-                    :model-value="row.entries[groupIndex - 1].elementLabel"
-                    :title="row.entries[groupIndex - 1].elementLabel"
-                    @update:model-value="updateEntry(row.entries[groupIndex - 1].id, { elementLabel: $event })"
+                    :model-value="entry.elementLabel"
+                    :title="entry.elementLabel"
+                    @update:model-value="updateEntry(entry.id, { elementLabel: $event })"
+                  />
+                  <el-input
+                    v-else
+                    data-testid="bill-preview-empty-element-input"
+                    :model-value="getEmptyElementDraft(row.id, groupIndex)"
+                    placeholder="补充元素"
+                    @update:model-value="updateEmptyElementDraft(row.id, groupIndex, $event)"
+                    @change="commitEmptyEntry(row.id, row.date, groupIndex)"
                   />
                 </td>
                 <td class="monthly-bill-preview__editable-cell">
                   <el-input-number
-                    v-if="row.entries[groupIndex - 1]"
+                    v-if="entry"
                     data-testid="bill-preview-quantity-input"
-                    :model-value="row.entries[groupIndex - 1].quantity"
+                    :model-value="entry.quantity"
                     :min="0"
                     controls-position="right"
-                    @update:model-value="updateEntry(row.entries[groupIndex - 1].id, { quantity: $event })"
+                    @update:model-value="updateEntry(entry.id, { quantity: $event })"
+                  />
+                  <el-input-number
+                    v-else
+                    data-testid="bill-preview-empty-quantity-input"
+                    :model-value="undefined"
+                    :min="0"
+                    disabled
+                    controls-position="right"
                   />
                 </td>
-                <td>{{ row.entries[groupIndex - 1] ? formatMonthlyBillMoney(row.entries[groupIndex - 1].subtotal) : '' }}</td>
+                <td>{{ entry ? formatMonthlyBillMoney(entry.subtotal) : '' }}</td>
               </template>
             </tr>
             <tr
@@ -113,15 +129,15 @@
               class="summary-row"
             >
               <td v-if="summaryIndex === 0" :rowspan="tableLayout.summaryRows.length">元素合计</td>
-              <template v-for="groupIndex in tableLayout.groupCount" :key="groupIndex">
+              <template v-for="(total, groupIndex) in summaryRow" :key="groupIndex">
                 <td
                   class="monthly-bill-preview__truncate"
-                  :title="summaryRow[groupIndex - 1]?.elementLabel || undefined"
+                  :title="total?.elementLabel || undefined"
                 >
-                  {{ summaryRow[groupIndex - 1]?.elementLabel || '' }}
+                  {{ total?.elementLabel || '' }}
                 </td>
-                <td>{{ summaryRow[groupIndex - 1]?.quantity ?? '' }}</td>
-                <td>{{ summaryRow[groupIndex - 1] ? formatMonthlyBillMoney(summaryRow[groupIndex - 1].amount) : '' }}</td>
+                <td>{{ total?.quantity ?? '' }}</td>
+                <td>{{ total ? formatMonthlyBillMoney(total.amount) : '' }}</td>
               </template>
             </tr>
             <tr class="grand-total-row">
@@ -145,6 +161,7 @@ import { ElMessage } from 'element-plus'
 import type { MonthlySettlementDailyRow } from '@/types/financeBills'
 import type { MonthlyBillDraft, MonthlyBillEntry } from '@/types/monthlySettlementBill'
 import {
+  addMonthlyBillManualEntry,
   applyMonthlyBillElementPrice,
   createMonthlyBillDraft,
   createMonthlyBillTableLayout,
@@ -169,6 +186,7 @@ const emit = defineEmits<{
 const selectedCustomer = ref('')
 const draft = ref<MonthlyBillDraft | null>(null)
 const exporting = ref(false)
+const emptyElementDrafts = ref<Record<string, string>>({})
 
 const customerOptions = computed(() => {
   const customers = new Map<string, string>()
@@ -207,6 +225,7 @@ function resetDraft() {
   selectedCustomer.value = ''
   draft.value = null
   exporting.value = false
+  emptyElementDrafts.value = {}
 }
 
 function selectCustomer(customer: string) {
@@ -241,6 +260,32 @@ function updateEntry(
 ) {
   if (!draft.value) return
   draft.value = updateMonthlyBillEntry(draft.value, entryId, patch)
+}
+
+function getEmptyElementDraft(rowId: string, groupIndex: number) {
+  return emptyElementDrafts.value[getEmptyCellKey(rowId, groupIndex)] || ''
+}
+
+function updateEmptyElementDraft(rowId: string, groupIndex: number, value: string) {
+  emptyElementDrafts.value = {
+    ...emptyElementDrafts.value,
+    [getEmptyCellKey(rowId, groupIndex)]: value
+  }
+}
+
+function commitEmptyEntry(rowId: string, date: string, groupIndex: number) {
+  if (!draft.value) return
+  const key = getEmptyCellKey(rowId, groupIndex)
+  const elementLabel = (emptyElementDrafts.value[key] || '').trim()
+  if (!elementLabel) return
+  draft.value = addMonthlyBillManualEntry(draft.value, date, elementLabel, 0)
+  const nextDrafts = { ...emptyElementDrafts.value }
+  delete nextDrafts[key]
+  emptyElementDrafts.value = nextDrafts
+}
+
+function getEmptyCellKey(rowId: string, groupIndex: number) {
+  return `${rowId}__${groupIndex}`
 }
 
 async function exportPng() {

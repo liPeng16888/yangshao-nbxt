@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isSensitiveAccessPath, resolveAuthRedirect } from './guards'
+import { featureForPath, isSensitiveAccessPath, resolveAuthRedirect } from './guards'
 
 describe('resolveAuthRedirect', () => {
   it('redirects protected pages to login when the user is not authenticated', () => {
@@ -14,7 +14,12 @@ describe('resolveAuthRedirect', () => {
     expect(resolveAuthRedirect({ isLoggedIn: true, toPath: '/finance', requiresAuth: true })).toBeNull()
   })
 
-  it('protects the customer overview with the shared sensitive access password', () => {
+  it('maps protected pages to independently groupable features', () => {
+    expect(featureForPath('/finance/income')).toBe('FINANCE')
+    expect(featureForPath('/reports')).toBe('REPORTS')
+    expect(featureForPath('/blacklist')).toBe('BLACKLIST')
+    expect(featureForPath('/medicine-inventory/stock')).toBe('MEDICINE_INVENTORY')
+    expect(featureForPath('/customers-overview')).toBe('CUSTOMER_OVERVIEW')
     expect(isSensitiveAccessPath('/customers-overview')).toBe(true)
     expect(isSensitiveAccessPath('/data')).toBe(false)
   })

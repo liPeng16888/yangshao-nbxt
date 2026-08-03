@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateResults, createEmptyInputs, defaultLabParameters, hasLabDetectionInput } from './lab'
+import { calculateResults, createEmptyInputs, defaultLabParameters, hasLabDetectionInput, hasVisibleSampleBlockInput } from './lab'
 
 describe('server lab helpers', () => {
   it('creates empty sample inputs with padded sequence', () => {
@@ -28,6 +28,14 @@ describe('server lab helpers', () => {
     expect(hasLabDetectionInput({ ironRaw: 0 })).toBe(true)
     expect(hasLabDetectionInput({ calciumRaw: '0.8' })).toBe(true)
     expect(hasLabDetectionInput({ moisture: 4.268 })).toBe(true)
+  })
+
+  it('keeps a sample visible in admin statistics when any saved sample field has content', () => {
+    expect(hasVisibleSampleBlockInput({ customerText: '客户甲' })).toBe(true)
+    expect(hasVisibleSampleBlockInput({ sampleNumber: 'A-001' })).toBe(true)
+    expect(hasVisibleSampleBlockInput({ price: 0 })).toBe(true)
+    expect(hasVisibleSampleBlockInput({ elementNote: '铝、硅' })).toBe(true)
+    expect(hasVisibleSampleBlockInput({ customerText: '   ', price: null })).toBe(false)
   })
 
   it('uses directly entered moisture instead of deriving it again', () => {

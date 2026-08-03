@@ -18,26 +18,26 @@
               <el-date-picker v-model="form.occurredOn" type="date" value-format="YYYY-MM-DD" />
             </el-form-item>
             <el-form-item label="药品名称" prop="name">
-              <el-select
-                v-model="form.medicineSelection"
+              <el-autocomplete
+                v-model="form.name"
                 data-testid="inbound-item"
-                filterable
-                allow-create
-                default-first-option
                 clearable
-                reserve-keyword
-                placeholder="选择已有药品或输入新名称"
-                @update:model-value="handleMedicineSelection"
+                :fetch-suggestions="queryMedicineSuggestions"
+                placeholder="输入药品名称或选择常用名称"
+                @input="handleMedicineNameInput"
+                @select="handleMedicineSuggestion"
               >
-                <el-option v-for="item in items" :key="item.id" :label="itemLabel(item)" :value="item.id" />
-              </el-select>
+                <template #default="{ item }">
+                  <span>{{ item.label }}</span>
+                </template>
+              </el-autocomplete>
             </el-form-item>
             <el-form-item label="单位" prop="unit">
               <el-select v-model="form.unit" data-testid="inbound-unit" :disabled="Boolean(selectedExistingItem)" placeholder="选择单位">
                 <el-option v-for="unit in medicineUnitOptions" :key="unit.value" :label="unit.label" :value="unit.value" />
               </el-select>
             </el-form-item>
-            <el-form-item label="数量" prop="quantity">
+            <el-form-item label="数量" prop="quantity" required>
               <el-input v-model="form.quantity" data-testid="inbound-quantity" inputmode="decimal" placeholder="输入入库数量" />
             </el-form-item>
             <el-form-item class="medicine-form-grid__wide" label="备注">
@@ -49,6 +49,21 @@
             <el-button :disabled="saving" @click="resetForm">重置</el-button>
           </div>
         </el-form>
+        <div class="medicine-common-names">
+          <div>
+            <h3>常用药品名称</h3>
+            <p class="muted">仅供当前登录账号使用；录入后可在上方药品名称中直接选择。</p>
+          </div>
+          <div class="medicine-common-names__entry">
+            <el-input v-model="commonNameInput" data-testid="common-name-input" maxlength="60" placeholder="录入常用药品名称" @keyup.enter="saveCommonName" />
+            <el-button data-testid="common-name-submit" type="primary" :loading="commonNamesSaving" @click="saveCommonName">添加</el-button>
+          </div>
+          <div v-if="commonNames.length" class="medicine-common-names__tags">
+            <el-tag v-for="commonName in commonNames" :key="commonName.id" closable @close="removeCommonName(commonName.id)">
+              {{ commonName.name }}
+            </el-tag>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -105,13 +120,14 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { correctMedicineMovement, createMedicineInbound, getMedicineItems, getMedicineMovements } from '@/api/medicineInventory'
-import type { MedicineInventoryItem, MedicineInventoryMovement, MedicineUnit } from '@/types/medicineInventory'
+import { correctMedicineMovement, createMedicineCommonName, createMedicineInbound, deleteMedicineCommonName, getMedicineCommonNames, getMedicineItems, getMedicineMovements } from '@/api/medicineInventory'
+import type { MedicineCommonName, MedicineInventoryItem, MedicineInventoryMovement, MedicineUnit } from '@/types/medicineInventory'
 import { formatDateTime, todayInBeijing } from '@/utils/date'
 import { formatMedicineQuantity, medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
 
 const formRef = ref<FormInstance>()
 const items = ref<MedicineInventoryItem[]>([])
+const commonNames = ref<MedicineCommonName[]>([])
 const movements = ref<MedicineInventoryMovement[]>([])
 const loading = ref(false)
 const historyLoading = ref(false)
@@ -122,38 +138,50 @@ const correctionVisible = ref(false)
 const correctionSaving = ref(false)
 const correctionMovementId = ref('')
 const correctionReason = ref('')
+const commonNameInput = ref('')
+const commonNamesSaving = ref(false)
+const selectedExistingItemId = ref('')
 const historyMedicineItemIds = ref<string[]>([])
 const historyDateRange = ref<string[] | undefined>()
 let historyRequestId = 0
 
 const form = reactive<{
   occurredOn: string
-  medicineSelection: string
   name: string
   unit: MedicineUnit | ''
   quantity: string
   remark: string
 }>({
   occurredOn: todayInBeijing(),
-  medicineSelection: '',
   name: '',
   unit: '',
   quantity: '',
   remark: ''
 })
 
-const selectedExistingItem = computed(() => items.value.find((item) => item.id === form.medicineSelection) || null)
+const selectedExistingItem = computed(() => items.value.find((item) => item.id === selectedExistingItemId.value) || null)
+const medicineSuggestions = computed(() => {
+  const existing = items.value.map((item) => ({ value: item.name, label: itemLabel(item), item }))
+  const existingNames = new Set(items.value.map((item) => item.name.trim().toLocaleLowerCase()))
+  const common = commonNames.value
+    .filter((commonName) => !existingNames.has(commonName.name.trim().toLocaleLowerCase()))
+    .map((commonName) => ({ value: commonName.name, label: commonName.name }))
+  return [...existing, ...common]
+})
 const correctedMovementIds = computed(() => new Set(movements.value.flatMap((movement) => movement.correctionOfId ? [movement.correctionOfId] : [])))
 
 const rules: FormRules<typeof form> = {
   occurredOn: [{ required: true, message: '请选择入库日期', trigger: 'change' }],
   name: [{ required: true, message: '请选择或填写药品名称', trigger: 'change' }],
   unit: [{ required: true, message: '请选择药品单位', trigger: 'change' }],
-  quantity: [{ validator: validateQuantity, trigger: 'change' }]
+  quantity: [
+    { required: true, message: '请输入数量', trigger: 'change' },
+    { validator: validateQuantity, trigger: 'change' }
+  ]
 }
 
 onMounted(() => {
-  void Promise.all([loadItems(), loadHistory()])
+  void Promise.all([loadItems(), loadCommonNames(), loadHistory()])
 })
 
 async function loadItems() {
@@ -167,6 +195,15 @@ async function loadItems() {
     ElMessage.error(itemsError.value)
   } finally {
     loading.value = false
+  }
+}
+
+async function loadCommonNames() {
+  try {
+    commonNames.value = await getMedicineCommonNames()
+  } catch (error) {
+    commonNames.value = []
+    ElMessage.error(errorMessage(error, '常用药品名称加载失败，请稍后重试'))
   }
 }
 
@@ -199,15 +236,50 @@ function handleHistoryDateRangeChange(value: string[] | undefined) {
   void loadHistory()
 }
 
-function handleMedicineSelection(value: string) {
-  const item = items.value.find((candidate) => candidate.id === value)
-  if (item) {
-    form.name = item.name
-    form.unit = item.unit
+function queryMedicineSuggestions(query: string, callback: (suggestions: Array<{ value: string; label: string; item?: MedicineInventoryItem }>) => void) {
+  const keyword = query.trim().toLocaleLowerCase()
+  callback(keyword ? medicineSuggestions.value.filter((suggestion) => suggestion.label.toLocaleLowerCase().includes(keyword)) : medicineSuggestions.value)
+}
+
+function handleMedicineNameInput() {
+  if (!selectedExistingItemId.value) return
+  selectedExistingItemId.value = ''
+  form.unit = ''
+}
+
+function handleMedicineSuggestion(suggestion: { value: string; item?: MedicineInventoryItem }) {
+  form.name = suggestion.value
+  selectedExistingItemId.value = suggestion.item?.id || ''
+  form.unit = suggestion.item?.unit || ''
+}
+
+async function saveCommonName() {
+  const name = commonNameInput.value.trim()
+  if (!name) {
+    ElMessage.warning('请填写常用药品名称')
     return
   }
-  form.name = value?.trim() || ''
-  form.unit = ''
+  commonNamesSaving.value = true
+  try {
+    await createMedicineCommonName({ name })
+    commonNameInput.value = ''
+    await loadCommonNames()
+    ElMessage.success('常用药品名称已添加')
+  } catch (error) {
+    ElMessage.error(errorMessage(error, '常用药品名称添加失败，请稍后重试'))
+  } finally {
+    commonNamesSaving.value = false
+  }
+}
+
+async function removeCommonName(commonNameId: string) {
+  try {
+    await deleteMedicineCommonName(commonNameId)
+    commonNames.value = commonNames.value.filter((commonName) => commonName.id !== commonNameId)
+    ElMessage.success('常用药品名称已移除')
+  } catch (error) {
+    ElMessage.error(errorMessage(error, '常用药品名称移除失败，请稍后重试'))
+  }
 }
 
 async function handleSubmit() {
@@ -247,7 +319,7 @@ async function handleSubmit() {
 }
 
 function resetForm() {
-  form.medicineSelection = ''
+  selectedExistingItemId.value = ''
   form.name = ''
   form.unit = ''
   form.quantity = ''
@@ -352,6 +424,35 @@ function errorMessage(error: unknown, fallback: string) {
 
 .medicine-load-error--table {
   margin: 0 16px 12px;
+}
+
+.medicine-common-names {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e4ebf3;
+
+  h3 {
+    margin: 0 0 4px;
+    font-size: 14px;
+  }
+
+  p {
+    margin: 0;
+  }
+}
+
+.medicine-common-names__entry {
+  display: flex;
+  max-width: 520px;
+  gap: 8px;
+}
+
+.medicine-common-names__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .medicine-history-header {

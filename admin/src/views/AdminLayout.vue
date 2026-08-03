@@ -20,12 +20,25 @@
         </el-tooltip>
       </div>
       <nav>
-        <el-tooltip v-for="item in navItems" :key="item.path" :disabled="!sidebarCollapsed" :content="item.label" placement="right">
-          <router-link :to="item.path" class="admin-nav-link">
-            <component :is="item.icon" class="admin-nav-link__icon" />
-            <span class="admin-nav-link__label">{{ item.label }}</span>
-          </router-link>
-        </el-tooltip>
+        <div v-for="item in navItems" :key="item.path" class="admin-nav-group">
+          <el-tooltip :disabled="!sidebarCollapsed" :content="item.label" placement="right">
+            <router-link :to="item.path" class="admin-nav-link" :class="{ 'router-link-active': isActive(item) }">
+              <component :is="item.icon" class="admin-nav-link__icon" />
+              <span class="admin-nav-link__label">{{ item.label }}</span>
+            </router-link>
+          </el-tooltip>
+          <div v-if="!sidebarCollapsed && item.children?.length && isActive(item)" class="admin-nav-children">
+            <router-link
+              v-for="child in item.children"
+              :key="child.path"
+              :to="child.path"
+              class="admin-nav-child"
+              :class="{ 'router-link-active': isChildActive(child) }"
+            >
+              {{ child.label }}
+            </router-link>
+          </div>
+        </div>
       </nav>
     </aside>
     <section class="admin-main">
@@ -79,9 +92,22 @@ import dayjs from 'dayjs'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Box, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, User } from '@element-plus/icons-vue'
+import { Box, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, List, User } from '@element-plus/icons-vue'
 import { adminMe, currentAdminUser, logoutAdmin, updateAdminProfile } from '../api'
 import type { AdminUser } from '../types'
+import { financeNavigationGroups } from '../config/financeNavigation'
+
+interface NavChild {
+  path: string
+  label: string
+}
+
+interface NavItem {
+  path: string
+  label: string
+  icon: Component
+  children?: NavChild[]
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -102,10 +128,11 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'ys_admin_sidebar_collapsed'
 
 const title = computed(() => String(route.meta.title || '后台管理'))
 const nowText = computed(() => now.value.format('YYYY-MM-DD HH:mm:ss'))
-const navItems = computed<Array<{ path: string; label: string; icon: Component }>>(() => {
+const navItems = computed<NavItem[]>(() => {
   const items = [
     { path: '/data', label: '数据统计', icon: DataAnalysis },
-    { path: '/finance', label: '财务报表', icon: Money },
+    { path: '/finance', label: '财务报表', icon: Money, children: financeNavigationGroups.map(({ path, label }) => ({ path, label })) },
+    { path: '/todos', label: '待办事项', icon: List },
     { path: '/customer-overview', label: '客户总览', icon: User },
     { path: '/medicine-inventory', label: '药品库存', icon: Box },
     { path: '/abnormal', label: '异常记录', icon: Memo },
@@ -114,6 +141,14 @@ const navItems = computed<Array<{ path: string; label: string; icon: Component }
   ]
   return items
 })
+
+function isActive(item: NavItem) {
+  return route.path === item.path || route.path.startsWith(`${item.path}/`)
+}
+
+function isChildActive(child: NavChild) {
+  return route.path === child.path
+}
 
 onMounted(async () => {
   sidebarCollapsed.value = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'
@@ -312,6 +347,28 @@ nav {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.admin-nav-children {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 2px 30px;
+}
+
+.admin-nav-child {
+  display: block;
+  padding: 8px 12px;
+  color: #9fb2ca;
+  font-size: 13px;
+  line-height: 1.3;
+  text-decoration: none;
+  border-radius: 5px;
+}
+
+.admin-nav-child:hover,
+.admin-nav-child.router-link-active {
+  color: #fff;
+  background: rgba(78, 113, 150, 0.42);
 }
 
 .admin-sidebar--collapsed {

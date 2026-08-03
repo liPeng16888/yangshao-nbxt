@@ -82,6 +82,7 @@ export interface SampleBlock {
   index: number
   readonly: boolean
   updatedAt?: string
+  sensitiveFieldsHidden?: boolean
   inputs: LabSampleInput
   results: LabFormulaResult
   parameterSnapshot: LabParameter

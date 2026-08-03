@@ -19,7 +19,7 @@ import MedicineInventoryInboundPage from '@/views/dashboard/MedicineInventoryInb
 import MedicineInventoryOutboundPage from '@/views/dashboard/MedicineInventoryOutboundPage.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
-import { resolveAuthRedirect } from './guards'
+import { featureForPath, resolveAuthRedirect } from './guards'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -123,9 +123,11 @@ router.beforeEach(async (to) => {
   if (redirect) return redirect
 
   const accessGuard = useAccessGuardStore()
-  if (accessGuard.isProtectedPath(to.path)) await accessGuard.loadSettings()
+  if (accessGuard.isProtectedPath(to.path)) await accessGuard.loadGroups()
   if (accessGuard.requiresAccessForPath(to.path)) {
-    accessGuard.requestAccess({
+    const feature = featureForPath(to.path)
+    if (!feature) return true
+    accessGuard.requestFeatureAccess(feature, {
       title: getAccessGuardTitle(to.path),
       message: '请输入访问密码后进入该功能，验证通过后在设置的时间内可免输密码切换。',
       onSuccess: () => {
