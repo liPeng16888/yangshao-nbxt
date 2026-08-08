@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import {
   createPrepaidRecharge,
   getIncomeBillReport,
@@ -8,6 +8,7 @@ import {
   getPrepaidReport,
   getUnsettledSamples,
   markSampleAsPaid,
+  markSamplesAsPaid,
   requestPrepaidRechargeDeletion,
   updateMonthlySettlementSummary,
   updatePrepaidCustomerRemark,
@@ -36,6 +37,8 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   const prepaidReport = ref<PrepaidReport | null>(null)
   const loading = ref(false)
   const settlingId = ref('')
+  const settlingBatch = ref(false)
+  const isSettling = computed(() => Boolean(settlingId.value) || settlingBatch.value)
   const monthlySavingId = ref('')
   const prepaidSaving = ref(false)
   const prepaidRemarkSavingId = ref('')
@@ -78,6 +81,23 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
       unsettledRows.value = unsettledRows.value.filter((item) => item.blockId !== row.blockId)
     } finally {
       settlingId.value = ''
+    }
+  }
+
+  async function settleRows(rows: UnsettledSampleRow[]) {
+    if (!rows.length) return
+    settlingBatch.value = true
+    try {
+      const savedBlocks = await markSamplesAsPaid(rows)
+      const savedById = new Map(savedBlocks.map((block) => [block.id, block]))
+      rows.forEach((row) => {
+        const savedBlock = savedById.get(row.blockId)
+        if (savedBlock) syncLoadedLabSheet(row, savedBlock)
+      })
+      const paidIds = new Set(rows.map((row) => row.blockId))
+      unsettledRows.value = unsettledRows.value.filter((item) => !paidIds.has(item.blockId))
+    } finally {
+      settlingBatch.value = false
     }
   }
 
@@ -175,6 +195,8 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     prepaidReport,
     loading,
     settlingId,
+    settlingBatch,
+    isSettling,
     monthlySavingId,
     prepaidSaving,
     prepaidRemarkSavingId,
@@ -183,6 +205,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     loadUnsettledRows,
     loadMonthlySettlementReport,
     settleRow,
+    settleRows,
     saveMonthlySettlementRow,
     loadPrepaidRecharges,
     addPrepaidRecharge,
