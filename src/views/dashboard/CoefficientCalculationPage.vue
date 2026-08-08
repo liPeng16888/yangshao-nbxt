@@ -322,7 +322,10 @@ async function openApplicationDialog() {
 async function handleApplyParameters(startIndex: number) {
   try {
     const applied = await labStore.applyParametersFromIndex({ ...parameters }, startIndex)
-    if (!applied) return
+    if (!applied) {
+      ElMessage.error('应用系数前的数据保存失败，请处理后重试')
+      return
+    }
     applicationDialogVisible.value = false
     ElMessage.success(`已从样品 ${String(startIndex).padStart(3, '0')} 开始应用新参数`)
   } catch {

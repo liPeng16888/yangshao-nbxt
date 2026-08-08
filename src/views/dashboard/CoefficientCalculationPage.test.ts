@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import { defineComponent, h, nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
+import { useLabSheetStore } from '@/stores/labSheet'
 import type { LabFormulaResult, LabSheet, SampleBlock } from '@/types/labSheet'
 import CoefficientCalculationPage from './CoefficientCalculationPage.vue'
 
@@ -10,7 +11,8 @@ const apiMocks = vi.hoisted(() => ({
   applyCurrentParametersFromIndex: vi.fn(),
   createLabSheetEventSource: vi.fn(),
   getCurrentLabSheet: vi.fn(),
-  getLabSheetClientId: vi.fn()
+  getLabSheetClientId: vi.fn(),
+  saveSampleBlock: vi.fn()
 }))
 
 const messageMocks = vi.hoisted(() => ({
@@ -84,9 +86,10 @@ const CoefficientApplicationDialogStub = defineComponent({
 })
 
 function mountPage() {
-  return mount(CoefficientCalculationPage, {
+  const pinia = createPinia()
+  const wrapper = mount(CoefficientCalculationPage, {
     global: {
-      plugins: [createPinia()],
+      plugins: [pinia],
       stubs: {
         CoefficientApplicationDialog: CoefficientApplicationDialogStub,
         ElButton: {
@@ -98,9 +101,10 @@ function mountPage() {
       }
     }
   })
+  return { wrapper, store: useLabSheetStore(pinia) }
 }
 
-async function openApplicationDialog(wrapper: ReturnType<typeof mountPage>) {
+async function openApplicationDialog(wrapper: ReturnType<typeof mountPage>['wrapper']) {
   await wrapper.findAll('button').find((button) => button.text() === '应用系数')!.trigger('click')
   await Promise.resolve()
   await nextTick()
@@ -120,6 +124,8 @@ describe('CoefficientCalculationPage coefficient application', () => {
     apiMocks.getLabSheetClientId.mockReturnValue('client-1')
     apiMocks.getCurrentLabSheet.mockImplementation(async () => makeSheet([4, 1, 3, 2]))
     apiMocks.applyCurrentParametersFromIndex.mockImplementation(async () => makeSheet([1, 2, 3, 4]))
+    apiMocks.saveSampleBlock.mockReset()
+    apiMocks.saveSampleBlock.mockImplementation(async () => makeBlock(1))
     messageMocks.error.mockReset()
     messageMocks.success.mockReset()
     messageMocks.warning.mockReset()
@@ -131,7 +137,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
   })
 
   it('loads samples and displays their sorted range before applying', async () => {
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
 
     await openApplicationDialog(wrapper)
 
@@ -140,7 +146,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
   })
 
   it('applies the current parameters from the selected sample and confirms success', async () => {
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
 
     await openApplicationDialog(wrapper)
     await wrapper.get('[data-testid="dialog-confirm"]').trigger('click')
@@ -155,7 +161,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
   })
 
   it('does not apply parameters after cancelling', async () => {
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
 
     await openApplicationDialog(wrapper)
     await wrapper.get('[data-testid="dialog-cancel"]').trigger('click')
@@ -165,11 +171,31 @@ describe('CoefficientCalculationPage coefficient application', () => {
 
   it('warns without opening the dialog when there are no samples', async () => {
     apiMocks.getCurrentLabSheet.mockImplementation(async () => makeSheet([]))
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
 
     await openApplicationDialog(wrapper)
 
     expect(messageMocks.warning).toHaveBeenCalledWith('当天暂无可应用的样品')
     expect(wrapper.find('[data-testid="coefficient-application-dialog"]').exists()).toBe(false)
+  })
+
+  it('keeps the dialog open and explains when saving samples before application fails', async () => {
+    vi.useFakeTimers()
+    const { wrapper, store } = mountPage()
+
+    await openApplicationDialog(wrapper)
+    apiMocks.saveSampleBlock.mockRejectedValueOnce({ response: { status: 400 } })
+    store.patchBlock('block-1', { sampleNumber: 'DIRTY-001' })
+    await wrapper.get('[data-testid="dialog-confirm"]').trigger('click')
+    await vi.runAllTimersAsync()
+    await Promise.resolve()
+    await Promise.resolve()
+    await nextTick()
+
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="coefficient-application-dialog"]').exists()).toBe(true)
+    expect(messageMocks.success).not.toHaveBeenCalled()
+    expect(messageMocks.error).toHaveBeenCalledWith('应用系数前的数据保存失败，请处理后重试')
+    vi.useRealTimers()
   })
 })
