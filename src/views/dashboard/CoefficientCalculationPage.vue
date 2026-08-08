@@ -46,7 +46,7 @@
         <div>
           <h2>标样系数计算</h2>
         </div>
-        <el-button type="primary" :loading="labStore.saving || labStore.loading" @click="handleApplyParameters">应用系数</el-button>
+        <el-button type="primary" :loading="labStore.saving || labStore.loading" @click="openApplicationDialog">应用系数</el-button>
       </div>
 
       <div class="parameter-grid">
@@ -92,17 +92,26 @@
         </table>
       </div>
     </section>
+
+    <CoefficientApplicationDialog
+      :visible="applicationDialogVisible"
+      :sample-indices="labStore.sampleBlocks.map((block) => block.index).sort((a, b) => a - b)"
+      :loading="labStore.saving"
+      @cancel="applicationDialogVisible = false"
+      @confirm="handleApplyParameters"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import type { LabFormulaResult, LabParameter } from '@/types/labSheet'
 import type { AuthUser } from '@/types/auth'
 import { defaultLabParameters, labParameterLabels } from '@/constants/labSheetTemplate'
 import { useLabSheetStore } from '@/stores/labSheet'
 import { calculateSampleResults, formatFormulaValue } from '@/utils/formulaEngine'
+import CoefficientApplicationDialog from '@/components/lab-sheet/CoefficientApplicationDialog.vue'
 
 type ContentElementKey = 'aluminum' | 'silicon' | 'iron' | 'calcium' | 'magnesium' | 'titanium'
 type CalculationInputKey = 'ironRaw' | 'siliconRaw' | 'aluminumRaw' | 'calciumRaw' | 'magnesiumRaw' | 'titaniumRaw'
@@ -134,6 +143,7 @@ type StoredCalculationRow = NonNullable<CoefficientCalculationStorage['calculati
 
 const labStore = useLabSheetStore()
 const STORAGE_KEY_PREFIX = 'ys_coefficient_calculation_inputs'
+const applicationDialogVisible = ref(false)
 
 const contentElements: Array<{ key: ContentElementKey; label: string }> = [
   { key: 'aluminum', label: '铝' },
@@ -299,17 +309,23 @@ function getCalculatedResult(row: CalculationRow, key: CalculationResultKey) {
   return result[key]
 }
 
-async function handleApplyParameters() {
+async function openApplicationDialog() {
+  const loaded = await labStore.loadCurrentSheet()
+  if (!loaded) return
+  if (!labStore.sampleBlocks.length) {
+    ElMessage.warning('当天暂无可应用的样品')
+    return
+  }
+  applicationDialogVisible.value = true
+}
+
+async function handleApplyParameters(startIndex: number) {
   try {
-    await ElMessageBox.confirm('确认把当前空白和系数应用到数据计算页面吗？确认后会更新数据计算页面顶部对应的空白和系数。', '应用系数确认', {
-      confirmButtonText: '确认应用',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-    if (!labStore.sheet) await labStore.loadCurrentSheet()
-    await labStore.saveParameters({ ...parameters })
-  } catch (error) {
-    if (error === 'cancel' || error === 'close') return
+    const applied = await labStore.applyParametersFromIndex({ ...parameters }, startIndex)
+    if (!applied) return
+    applicationDialogVisible.value = false
+    ElMessage.success(`已从样品 ${String(startIndex).padStart(3, '0')} 开始应用新参数`)
+  } catch {
     ElMessage.error('应用系数失败，请稍后重试')
   }
 }
