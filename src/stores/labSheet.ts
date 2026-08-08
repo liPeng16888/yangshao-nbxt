@@ -74,6 +74,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   const sheet = ref<LabSheet | null>(null)
   const loading = ref(false)
   const saving = ref(false)
+  const applyingParameters = ref(false)
   const adding = ref(false)
   const autoSaving = ref(false)
   const autoSaveStatus = ref<AutoSaveStatus>('idle')
@@ -155,22 +156,26 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   }
 
   async function applyParametersFromIndex(parameters: LabParameter, startIndex: number) {
-    if (!sheet.value || sheet.value.readonly) return false
-    const persisted = await persistAllBlocks()
-    if (!persisted.success) return false
-    saving.value = true
+    if (!sheet.value || sheet.value.readonly || applyingParameters.value) return false
+    const targetSheetId = sheet.value.id
+    applyingParameters.value = true
     try {
-      sheet.value = await applyCurrentParametersFromIndexApi(parameters, startIndex)
-      resetLocalSaveState()
+      const persisted = await persistAllBlocks()
+      if (!persisted.success) return false
+      saving.value = true
+      const response = await applyCurrentParametersFromIndexApi(parameters, startIndex)
+      if (sheet.value?.id !== targetSheetId) return false
+      applyRemoteSheet(response)
       syncRealtimeForLoadedSheet()
       return true
     } finally {
       saving.value = false
+      applyingParameters.value = false
     }
   }
 
   function patchBlock(blockId: string, patch: Partial<LabSampleInput>) {
-    if (!sheet.value) return
+    if (!sheet.value || applyingParameters.value) return
     const block = sheet.value.sampleBlocks.find((item) => item.id === blockId)
     if (!block || block.readonly || sheet.value.readonly) return
     const nextVersion = (blockVersions.get(blockId) || 0) + 1
@@ -178,8 +183,8 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (!dirtyState.changed) return
     const hadDetectionInput = hasLabDetectionInput(block.inputs)
     block.inputs = { ...block.inputs, ...patch }
-    if (!hadDetectionInput && hasLabDetectionInput(block.inputs)) {
-      block.parameterSnapshot = sheet.value.parameters
+    if (!hadDetectionInput && hasLabDetectionInput(block.inputs) && !block.parameterSnapshot.segmentedApplication) {
+      block.parameterSnapshot = { ...sheet.value.parameters }
     }
     block.results = calculateSampleResults(block.inputs, block.parameterSnapshot)
     blockVersions.set(blockId, nextVersion)
@@ -198,7 +203,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   }
 
   function commitBlockFieldChange(blockId: string, field: keyof LabSampleInput, oldValue: unknown, newValue: unknown) {
-    if (!sheet.value || sheet.value.readonly) return
+    if (!sheet.value || sheet.value.readonly || applyingParameters.value) return
     const block = sheet.value.sampleBlocks.find((item) => item.id === blockId)
     if (!block || block.readonly) return
     if (JSON.stringify(oldValue ?? null) === JSON.stringify(newValue ?? null)) return
@@ -852,7 +857,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (!sheet.value || payload.sheetId !== sheet.value.id || payload.date !== sheet.value.date) return
 
     if (payload.type === 'block-saved') {
-      applyRemoteBlock(payload.block)
+      void refreshLoadedSheetFromServer()
       return
     }
     if (payload.type === 'parameters-updated') {
@@ -860,22 +865,8 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       return
     }
     if (payload.type === 'sheet-reloaded') {
-      applyRemoteSheet(payload.sheet)
+      void refreshLoadedSheetFromServer()
     }
-  }
-
-  function applyRemoteBlock(block: SampleBlock) {
-    if (!sheet.value) return
-    const nextBlock = cloneBlock(block)
-    const index = sheet.value.sampleBlocks.findIndex((item) => item.id === nextBlock.id)
-    if (index >= 0) {
-      sheet.value.sampleBlocks[index] = mergeRemoteBlockState(nextBlock, sheet.value.sampleBlocks[index])
-    } else {
-      sheet.value.sampleBlocks.push(nextBlock)
-      sheet.value.sampleBlocks.sort((a, b) => a.index - b.index)
-    }
-    persistLocalDraft()
-    syncAutoSaveStatus()
   }
 
   function applyRemoteParameters(parameters: LabParameter) {
@@ -995,6 +986,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     sheet,
     loading,
     saving,
+    applyingParameters,
     adding,
     autoSaving,
     autoSaveStatus,

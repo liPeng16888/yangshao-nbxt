@@ -4,7 +4,10 @@
     title="选择应用起始样品"
     width="460px"
     :close-on-click-modal="false"
-    @close="emit('cancel')"
+    :close-on-press-escape="!loading"
+    :show-close="!loading"
+    :before-close="handleBeforeClose"
+    @close="requestCancel"
   >
     <el-form label-position="top">
       <el-form-item label="从哪个样品开始应用">
@@ -17,13 +20,13 @@
     <p v-if="selectedStartIndex" class="application-impact">{{ impactMessage }}</p>
 
     <template #footer>
-      <el-button @click="emit('cancel')">取消</el-button>
+      <el-button :disabled="loading" @click="requestCancel">取消</el-button>
       <el-button
         data-testid="confirm-coefficient-application"
         type="primary"
         :loading="loading"
-        :disabled="!selectedStartIndex"
-        @click="emit('confirm', selectedStartIndex!)"
+        :disabled="loading || !selectedStartIndex"
+        @click="confirmApplication"
       >确认应用</el-button>
     </template>
   </el-dialog>
@@ -49,9 +52,10 @@ const impactMessage = computed(() => {
   if (!selectedStartIndex.value) return ''
   const start = selectedStartIndex.value
   const first = Math.min(...props.sampleIndices)
-  const appliesFrom = `${formatIndex(start)}（含）及后续样品开始应用新参数`
-  if (start === first) return `从样品 ${formatIndex(start)} 及后续样品开始应用新参数。`
-  return `从样品 ${appliesFrom}，${formatIndex(first)}～${formatIndex(start - 1)} 保持不变。`
+  const selected = formatIndex(start)
+  const impact = `将从样品 ${selected}（含）开始应用新的空白和系数，并立即重新计算 ${selected} 及后续已有样品`
+  if (start === first) return `${impact}。`
+  return `${impact}；${formatIndex(first)}～${formatIndex(start - 1)} 保持不变。`
 })
 
 watch(
@@ -63,6 +67,19 @@ watch(
 
 function formatIndex(index: number) {
   return String(index).padStart(3, '0')
+}
+
+function requestCancel() {
+  if (!props.loading) emit('cancel')
+}
+
+function handleBeforeClose(done: () => void) {
+  if (!props.loading) done()
+}
+
+function confirmApplication() {
+  if (props.loading || !selectedStartIndex.value) return
+  emit('confirm', selectedStartIndex.value)
 }
 </script>
 

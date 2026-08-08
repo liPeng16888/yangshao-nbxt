@@ -31,6 +31,7 @@ describe('FinanceService monthly element counts', () => {
 
 describe('FinanceService batch sample payment', () => {
   const transaction = {
+    $queryRaw: vi.fn(),
     sampleBlock: {
       findMany: vi.fn(),
       update: vi.fn()
@@ -64,6 +65,7 @@ describe('FinanceService batch sample payment', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     service = new FinanceService(prisma as never, {} as never, {} as never)
+    transaction.$queryRaw.mockResolvedValue([])
     transaction.sampleBlock.update.mockImplementation(async ({ where, data }: any) => {
       const block = [makeBlock('block-1'), makeBlock('block-2')].find((item) => item.id === where.id)!
       return { ...block, ...data }
@@ -85,6 +87,35 @@ describe('FinanceService batch sample payment', () => {
     expect(transaction.cellChangeLog.create).toHaveBeenCalledTimes(2)
     expect(result.map((block) => block.id)).toEqual(['block-1', 'block-2'])
     expect(result.every((block) => (block.inputs as Record<string, unknown>).paymentStatus === '已结款')).toBe(true)
+  })
+
+  it('locks owning sheets before rereading blocks and calculates from the latest snapshot', async () => {
+    const stale = {
+      ...makeBlock('block-1'),
+      inputs: { paymentStatus: '未结款', ironRaw: 2 },
+      parameterSnapshot: { ...defaultLabParameters, ironBlank: 0, ironFactor: 10 }
+    }
+    const latest = {
+      ...stale,
+      parameterSnapshot: { ...defaultLabParameters, ironBlank: 0, ironFactor: 25 }
+    }
+    let visibleBlock = stale
+    transaction.$queryRaw.mockImplementation(async () => {
+      visibleBlock = latest
+      return [{ id: 'sheet-1' }]
+    })
+    transaction.sampleBlock.findMany.mockImplementation(async () => [visibleBlock])
+
+    await service.markFrontendSamplesPaid('front-1', ['block-1'])
+
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1)
+    expect(transaction.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      transaction.sampleBlock.findMany.mock.invocationCallOrder[0]
+    )
+    expect(transaction.sampleBlock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'block-1' },
+      data: expect.objectContaining({ results: expect.objectContaining({ iron: 50 }) })
+    }))
   })
 
   it('rejects an empty batch before opening a transaction', async () => {

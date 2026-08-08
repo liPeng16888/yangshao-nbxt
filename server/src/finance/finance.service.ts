@@ -138,6 +138,14 @@ export class FinanceService {
     if (!blockIds.length) throw new BadRequestException('请选择需要结款的样品')
 
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id" FROM "LabSheet"
+        WHERE "id" IN (
+          SELECT "sheetId" FROM "SampleBlock" WHERE "id" IN (${Prisma.join(blockIds)})
+        )
+        ORDER BY "id"
+        FOR UPDATE
+      `)
       const blocks = await transaction.sampleBlock.findMany({
         where: { id: { in: blockIds } },
         include: { sheet: true }

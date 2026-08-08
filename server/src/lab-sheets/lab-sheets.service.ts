@@ -41,11 +41,13 @@ export class LabSheetsService {
 
   async applyCurrentParametersFromIndex(
     frontendUserId: string,
-    payload: Record<string, unknown>,
-    sourceClientId?: string
+    payload: unknown,
+    sourceClientId?: string,
+    canViewCompletedSensitiveData = false
   ) {
-    const startIndex = Number(payload.startIndex)
-    if (!Number.isInteger(startIndex) || startIndex <= 0) {
+    if (!this.isPlainObject(payload)) throw new BadRequestException('请求格式不正确')
+    const startIndex = payload.startIndex
+    if (typeof startIndex !== 'number' || !Number.isInteger(startIndex) || startIndex <= 0) {
       throw new BadRequestException('起始样品编号必须是正整数')
     }
     const parameters = this.requireCompleteLabParameters(payload.parameters)
@@ -53,15 +55,17 @@ export class LabSheetsService {
     this.assertSheetEditable(current)
     const nextParameters = { ...parameters, savedAt: new Date().toISOString() }
 
-    const updatedSheet = await this.prisma.$transaction(async (tx) => {
+    const updatedSheet = await this.withSheetWriteLock(current.id, async (tx) => {
       const sheet = await tx.labSheet.findUnique({
         where: { id: current.id },
         include: { sampleBlocks: { orderBy: { index: 'asc' } } }
       })
-      if (!sheet) throw new NotFoundException('未找到表格')
+      if (!sheet || sheet.frontendUserId !== frontendUserId) throw new NotFoundException('未找到表格')
+      this.assertSheetEditable(sheet)
       if (!sheet.sampleBlocks.some((block) => block.index === startIndex)) {
         throw new BadRequestException('起始样品不存在，请刷新后重新选择')
       }
+      const segmentedSnapshot = { ...nextParameters, segmentedApplication: true }
       await tx.labSheet.update({
         where: { id: sheet.id },
         data: { parameters: nextParameters as Prisma.InputJsonValue }
@@ -70,7 +74,7 @@ export class LabSheetsService {
         await tx.sampleBlock.update({
           where: { id: block.id },
           data: {
-            parameterSnapshot: nextParameters as Prisma.InputJsonValue,
+            parameterSnapshot: segmentedSnapshot as Prisma.InputJsonValue,
             results: calculateResults(block.inputs as Record<string, unknown>, nextParameters) as Prisma.InputJsonValue
           }
         })
@@ -83,47 +87,62 @@ export class LabSheetsService {
       return reloaded
     })
 
-    const dto = this.toSheetDto(updatedSheet, true)
+    const dto = this.toSheetDto(updatedSheet, canViewCompletedSensitiveData)
     this.realtime.publish({
       type: 'sheet-reloaded',
       frontendUserId,
       date: dto.date,
       sheetId: dto.id,
-      sheet: dto,
       sourceClientId,
       updatedAt: new Date().toISOString()
     })
     return dto
   }
 
-  async addSampleBlocks(frontendUserId: string, sheetId: string, count: number, sourceClientId?: string) {
+  async addSampleBlocks(
+    frontendUserId: string,
+    sheetId: string,
+    count: number,
+    sourceClientId?: string,
+    canViewCompletedSensitiveData = false
+  ) {
     if (!Number.isInteger(count) || count <= 0) throw new ForbiddenException('新增数量必须是正整数')
-    const sheet = await this.prisma.labSheet.findUnique({ where: { id: sheetId }, include: { sampleBlocks: true } })
-    if (!sheet || sheet.frontendUserId !== frontendUserId) throw new NotFoundException('未找到表格')
-    this.assertSheetEditable(sheet)
-    const parameters = sheet.parameters as typeof defaultLabParameters
-    const start = sheet.sampleBlocks.length + 1
-    await this.prisma.sampleBlock.createMany({
-      data: Array.from({ length: count }, (_, idx) => {
-        const index = start + idx
-        const inputs = createEmptyInputs(index)
-        return {
-          sheetId: sheet.id,
-          index,
-          readonly: false,
-          inputs: inputs as Prisma.InputJsonValue,
-          results: calculateResults(inputs, parameters) as Prisma.InputJsonValue,
-          parameterSnapshot: parameters as Prisma.InputJsonValue
-        }
+    const updatedSheet = await this.withSheetWriteLock(sheetId, async (tx) => {
+      const sheet = await tx.labSheet.findUnique({
+        where: { id: sheetId },
+        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
       })
+      if (!sheet || sheet.frontendUserId !== frontendUserId) throw new NotFoundException('未找到表格')
+      this.assertSheetEditable(sheet)
+      const parameters = sheet.parameters as typeof defaultLabParameters
+      const start = Math.max(0, ...sheet.sampleBlocks.map((block) => block.index)) + 1
+      await tx.sampleBlock.createMany({
+        data: Array.from({ length: count }, (_, idx) => {
+          const index = start + idx
+          const inputs = createEmptyInputs(index)
+          return {
+            sheetId: sheet.id,
+            index,
+            readonly: false,
+            inputs: inputs as Prisma.InputJsonValue,
+            results: calculateResults(inputs, parameters) as Prisma.InputJsonValue,
+            parameterSnapshot: parameters as Prisma.InputJsonValue
+          }
+        })
+      })
+      const reloaded = await tx.labSheet.findUnique({
+        where: { id: sheet.id },
+        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+      })
+      if (!reloaded) throw new NotFoundException('未找到表格')
+      return reloaded
     })
-    const nextSheet = await this.getSheetForFrontendUser(frontendUserId, sheet.date)
+    const nextSheet = this.toSheetDto(updatedSheet, canViewCompletedSensitiveData)
     this.realtime.publish({
       type: 'sheet-reloaded',
       frontendUserId,
-      date: sheet.date,
-      sheetId: sheet.id,
-      sheet: nextSheet,
+      date: nextSheet.date,
+      sheetId: nextSheet.id,
       sourceClientId,
       updatedAt: new Date().toISOString()
     })
@@ -131,46 +150,69 @@ export class LabSheetsService {
   }
 
   async saveSampleBlock(user: CurrentUser, sheetId: string, blockPayload: Record<string, unknown>, sourceClientId?: string, canViewCompletedSensitiveData = true) {
-    const sheet = await this.prisma.labSheet.findUnique({ where: { id: sheetId } })
-    if (!sheet || sheet.frontendUserId !== user.id) throw new NotFoundException('未找到表格')
-    this.assertSheetEditable(sheet)
     const blockId = String(blockPayload.id || '')
-    const block = await this.prisma.sampleBlock.findUnique({ where: { id: blockId } })
-    if (!block || block.sheetId !== sheet.id) throw new NotFoundException('未找到样品')
-    const oldInputs = (block.inputs || {}) as Record<string, unknown>
-    const changedFields = this.normalizeChangedFields(blockPayload)
-    if (!Object.keys(changedFields).length) return this.toBlockDto(block, false, canViewCompletedSensitiveData)
-    const effectiveChangedFields = Object.entries(changedFields).reduce<Record<string, unknown>>((fields, [field, value]) => {
-      if (!this.isJsonEqual(oldInputs[field] ?? null, value ?? null)) fields[field] = value
-      return fields
-    }, {})
-    if (!Object.keys(effectiveChangedFields).length) return this.toBlockDto(block, false, canViewCompletedSensitiveData)
-    this.assertNoInputConflict(block, blockPayload, effectiveChangedFields)
-    const nextInputs = { ...oldInputs, ...effectiveChangedFields }
-    const sheetParameters = (sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
-    const existingSnapshot = (block.parameterSnapshot || sheetParameters) as typeof defaultLabParameters
-    const parameters = !hasLabDetectionInput(oldInputs) && hasLabDetectionInput(nextInputs) ? sheetParameters : existingSnapshot
-    const results = calculateResults(nextInputs, parameters)
-    const saved = await this.prisma.sampleBlock.update({
-      where: { id: block.id },
-      data: {
-        inputs: nextInputs as Prisma.InputJsonValue,
-        results: results as Prisma.InputJsonValue,
-        parameterSnapshot: parameters as Prisma.InputJsonValue
-      }
+    const outcome = await this.withSheetWriteLock(sheetId, async (tx) => {
+      const sheet = await tx.labSheet.findUnique({ where: { id: sheetId } })
+      if (!sheet || sheet.frontendUserId !== user.id) throw new NotFoundException('未找到表格')
+      this.assertSheetEditable(sheet)
+      const block = await tx.sampleBlock.findUnique({ where: { id: blockId } })
+      if (!block || block.sheetId !== sheet.id) throw new NotFoundException('未找到样品')
+      const oldInputs = (block.inputs || {}) as Record<string, unknown>
+      const changedFields = this.normalizeChangedFields(blockPayload)
+      if (!Object.keys(changedFields).length) return { block, sheet, changed: false }
+      const effectiveChangedFields = Object.entries(changedFields).reduce<Record<string, unknown>>((fields, [field, value]) => {
+        if (!this.isJsonEqual(oldInputs[field] ?? null, value ?? null)) fields[field] = value
+        return fields
+      }, {})
+      if (!Object.keys(effectiveChangedFields).length) return { block, sheet, changed: false }
+      this.assertNoInputConflict(block, blockPayload, effectiveChangedFields)
+      const nextInputs = { ...oldInputs, ...effectiveChangedFields }
+      const sheetParameters = (sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
+      const existingSnapshot = (block.parameterSnapshot || sheetParameters) as typeof defaultLabParameters
+      const firstDetectionInput = !hasLabDetectionInput(oldInputs) && hasLabDetectionInput(nextInputs)
+      const parameters = firstDetectionInput && !this.isSegmentedSnapshot(existingSnapshot)
+        ? sheetParameters
+        : existingSnapshot
+      const results = calculateResults(nextInputs, parameters)
+      const saved = await tx.sampleBlock.update({
+        where: { id: block.id },
+        data: {
+          inputs: nextInputs as Prisma.InputJsonValue,
+          results: results as Prisma.InputJsonValue,
+          parameterSnapshot: parameters as Prisma.InputJsonValue
+        }
+      })
+      await this.recordInputChanges(tx, sheet.id, block.id, sheet.frontendUserId, user.id, oldInputs, nextInputs, blockPayload.changeLogFields)
+      return { block: saved, sheet, changed: true }
     })
-    await this.recordInputChanges(sheet.id, block.id, sheet.frontendUserId, user.id, oldInputs, nextInputs, blockPayload.changeLogFields)
-    const savedDto = this.toBlockDto(saved, false, canViewCompletedSensitiveData)
-    this.realtime.publish({
-      type: 'block-saved',
-      frontendUserId: sheet.frontendUserId,
-      date: sheet.date,
-      sheetId: sheet.id,
-      block: savedDto,
-      sourceClientId,
-      updatedAt: new Date().toISOString()
-    })
+    const savedDto = this.toBlockDto(outcome.block, false, canViewCompletedSensitiveData)
+    if (outcome.changed) {
+      this.realtime.publish({
+        type: 'block-saved',
+        frontendUserId: outcome.sheet.frontendUserId,
+        date: outcome.sheet.date,
+        sheetId: outcome.sheet.id,
+        sourceClientId,
+        updatedAt: new Date().toISOString()
+      })
+    }
     return savedDto
+  }
+
+  private async withSheetWriteLock<T>(
+    sheetId: string,
+    operation: (tx: Prisma.TransactionClient) => Promise<T>
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id" FROM "LabSheet" WHERE "id" = ${sheetId} FOR UPDATE
+      `)
+      return operation(tx)
+    })
+  }
+
+  private isSegmentedSnapshot(value: unknown) {
+    return this.isPlainObject(value) && value.segmentedApplication === true
   }
 
   async getHistory(frontendUserId: string) {
@@ -282,6 +324,7 @@ export class LabSheetsService {
   }
 
   private async recordInputChanges(
+    db: Prisma.TransactionClient,
     sheetId: string,
     blockId: string,
     frontendUserId: string,
@@ -294,9 +337,9 @@ export class LabSheetsService {
     const fields = this.normalizeCommittedFields(committedFields, oldInputs, nextInputs)
     for (const { field, oldValue, newValue } of fields) {
       if (JSON.stringify(oldValue) === JSON.stringify(newValue)) continue
-      const lastLog = await this.prisma.cellChangeLog.findFirst({ where: { blockId }, orderBy: { changedAt: 'desc' } })
+      const lastLog = await db.cellChangeLog.findFirst({ where: { blockId }, orderBy: { changedAt: 'desc' } })
       if (!hasCommittedFields && lastLog && lastLog.field === field) {
-        await this.prisma.cellChangeLog.update({
+        await db.cellChangeLog.update({
           where: { id: lastLog.id },
           data: {
             newValue: this.toJsonValue(newValue),
@@ -304,7 +347,7 @@ export class LabSheetsService {
           }
         })
       } else {
-        await this.prisma.cellChangeLog.create({
+        await db.cellChangeLog.create({
           data: {
             sheetId,
             blockId,
@@ -316,13 +359,13 @@ export class LabSheetsService {
           }
         })
       }
-      const changeCount = await this.countEffectiveFieldChanges(blockId, field)
+      const changeCount = await this.countEffectiveFieldChanges(db, blockId, field)
       if (changeCount < 3) {
-        await this.prisma.abnormalRecord.deleteMany({ where: { blockId, field } })
+        await db.abnormalRecord.deleteMany({ where: { blockId, field } })
         continue
       }
-      const sheet = await this.prisma.labSheet.findUnique({ where: { id: sheetId } })
-      await this.prisma.abnormalRecord.upsert({
+      const sheet = await db.labSheet.findUnique({ where: { id: sheetId } })
+      await db.abnormalRecord.upsert({
         where: { blockId_field: { blockId, field } },
         create: {
           sheetId,
@@ -363,8 +406,8 @@ export class LabSheetsService {
     }))
   }
 
-  private async countEffectiveFieldChanges(blockId: string, field: string) {
-    const rows = await this.prisma.cellChangeLog.findMany({
+  private async countEffectiveFieldChanges(db: Prisma.TransactionClient, blockId: string, field: string) {
+    const rows = await db.cellChangeLog.findMany({
       where: { blockId },
       orderBy: { changedAt: 'asc' },
       select: { field: true, oldValue: true, newValue: true, changedAt: true }

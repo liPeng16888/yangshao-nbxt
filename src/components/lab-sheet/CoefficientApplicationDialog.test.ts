@@ -45,9 +45,36 @@ describe('CoefficientApplicationDialog', () => {
     expect(dialogElement('[data-testid="confirm-coefficient-application"]').hasAttribute('disabled')).toBe(true)
     await selectStartSample(3)
     expect(document.body.textContent).toContain('003（含）')
+    expect(document.body.textContent).toContain('并立即重新计算 003 及后续已有样品')
     expect(document.body.textContent).toContain('001～002 保持不变')
     dialogElement('[data-testid="confirm-coefficient-application"]').click()
     expect(wrapper.emitted('confirm')).toEqual([[3]])
+  })
+
+  it('states that the first selected sample is included and existing samples are recalculated', async () => {
+    mountDialog()
+    await nextTick()
+
+    await selectStartSample(1)
+
+    expect(document.body.textContent).toContain('001（含）')
+    expect(document.body.textContent).toContain('并立即重新计算 001 及后续已有样品')
+  })
+
+  it('prevents cancel, close, and Escape while the application request is loading', async () => {
+    const wrapper = mountDialog({ loading: true })
+    await nextTick()
+
+    const cancel = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === '取消')!
+    expect(cancel.disabled).toBe(true)
+    cancel.click()
+    document.body.querySelector<HTMLButtonElement>('.el-dialog__headerbtn')?.click()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+
+    expect(document.body.querySelector('.el-dialog__headerbtn')).toBeNull()
+    expect(wrapper.emitted('cancel')).toBeUndefined()
   })
 
   it('cancels without submitting', async () => {

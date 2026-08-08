@@ -13,9 +13,7 @@ export interface LabSheetRealtimeEvent {
   sheetId?: string
   sourceClientId?: string
   updatedAt: string
-  block?: unknown
   parameters?: typeof defaultLabParameters & { savedAt?: string }
-  sheet?: unknown
 }
 
 @Injectable()

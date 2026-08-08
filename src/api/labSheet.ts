@@ -27,7 +27,6 @@ export type LabSheetRealtimeEvent =
       sheetId: string
       sourceClientId?: string
       updatedAt: string
-      block: SampleBlock
     }
   | {
       type: 'parameters-updated'
@@ -45,7 +44,6 @@ export type LabSheetRealtimeEvent =
       sheetId: string
       sourceClientId?: string
       updatedAt: string
-      sheet: LabSheet
     }
   | {
       type: 'heartbeat'
@@ -113,13 +111,17 @@ export async function applyCurrentParametersFromIndex(
   return request.put(
     '/lab-sheets/parameters/current/apply',
     { parameters, startIndex },
-    clientHeaders()
+    { headers: { ...clientHeaders().headers, ...(accessGrantHeaders()?.headers || {}) } }
   )
 }
 
 export async function addSampleBlocks(sheetId: string, count: number): Promise<LabSheet> {
   if (useMocks) return mockAddSampleBlocks(sheetId, count)
-  return request.post(`/lab-sheets/${sheetId}/sample-blocks`, { count }, clientHeaders())
+  return request.post(
+    `/lab-sheets/${sheetId}/sample-blocks`,
+    { count },
+    { headers: { ...clientHeaders().headers, ...(accessGrantHeaders()?.headers || {}) } }
+  )
 }
 
 export async function saveSampleBlock(sheetId: string, block: SampleBlockSavePayload): Promise<SampleBlock> {

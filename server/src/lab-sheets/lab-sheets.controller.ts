@@ -37,17 +37,37 @@ export class LabSheetsController {
   }
 
   @Put('parameters/current/apply')
-  applyCurrentParameters(
+  async applyCurrentParameters(
     @CurrentUserInfo() user: CurrentUser,
-    @Body() payload: Record<string, unknown>,
-    @Headers('x-ys-client-id') sourceClientId?: string
+    @Body() payload: unknown,
+    @Headers('x-ys-client-id') sourceClientId?: string,
+    @Headers('x-ys-access-grant') grant?: string
   ) {
-    return this.sheets.applyCurrentParametersFromIndex(user.id, payload, sourceClientId)
+    const protectedFeature = await this.auth.isFeatureProtected(user.id, 'COMPLETED_SAMPLE_DATA')
+    return this.sheets.applyCurrentParametersFromIndex(
+      user.id,
+      payload,
+      sourceClientId,
+      !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA')
+    )
   }
 
   @Post(':sheetId/sample-blocks')
-  addBlocks(@CurrentUserInfo() user: CurrentUser, @Param('sheetId') sheetId: string, @Body('count') count: number, @Headers('x-ys-client-id') sourceClientId?: string) {
-    return this.sheets.addSampleBlocks(user.id, sheetId, Number(count || 0), sourceClientId)
+  async addBlocks(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param('sheetId') sheetId: string,
+    @Body('count') count: number,
+    @Headers('x-ys-client-id') sourceClientId?: string,
+    @Headers('x-ys-access-grant') grant?: string
+  ) {
+    const protectedFeature = await this.auth.isFeatureProtected(user.id, 'COMPLETED_SAMPLE_DATA')
+    return this.sheets.addSampleBlocks(
+      user.id,
+      sheetId,
+      Number(count || 0),
+      sourceClientId,
+      !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA')
+    )
   }
 
   @Put(':sheetId/cells')

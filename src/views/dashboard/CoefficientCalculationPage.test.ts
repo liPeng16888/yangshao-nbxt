@@ -198,4 +198,27 @@ describe('CoefficientCalculationPage coefficient application', () => {
     expect(messageMocks.error).toHaveBeenCalledWith('应用系数前的数据保存失败，请处理后重试')
     vi.useRealTimers()
   })
+
+  it('refreshes the current sheet and requires reselection when the chosen boundary no longer exists', async () => {
+    apiMocks.getCurrentLabSheet
+      .mockResolvedValueOnce(makeSheet([1, 2, 3, 4]))
+      .mockResolvedValueOnce(makeSheet([1, 2]))
+    apiMocks.applyCurrentParametersFromIndex.mockRejectedValueOnce({
+      response: { data: { message: '起始样品不存在，请刷新后重新选择' } }
+    })
+    const { wrapper } = mountPage()
+
+    await openApplicationDialog(wrapper)
+    await wrapper.get('[data-testid="dialog-confirm"]').trigger('click')
+    await Promise.resolve()
+    await Promise.resolve()
+    await nextTick()
+
+    await vi.waitFor(() => expect(apiMocks.getCurrentLabSheet).toHaveBeenCalledTimes(2))
+    await nextTick()
+    expect(wrapper.get('[data-testid="sample-range"]').text()).toBe('001～002')
+    expect(wrapper.find('[data-testid="coefficient-application-dialog"]').exists()).toBe(true)
+    expect(messageMocks.success).not.toHaveBeenCalled()
+    expect(messageMocks.error).toHaveBeenCalledWith('起始样品已不存在，已刷新当天数据，请重新选择')
+  })
 })

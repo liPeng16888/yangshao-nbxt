@@ -147,7 +147,9 @@ const smsTemplate = ref<LabReportSmsTemplate>(loadLabReportSmsTemplate())
 let businessDayBoundaryTimer: number | undefined
 let businessDayPreflushTimer: number | undefined
 
-const isPageReadonly = computed(() => Boolean(labStore.sheet?.readonly || switchingBusinessDay.value))
+const isPageReadonly = computed(() => Boolean(
+  labStore.sheet?.readonly || switchingBusinessDay.value || labStore.applyingParameters
+))
 const canViewCompletedSensitiveData = computed(() => {
   accessGuard.accessSessionRevision
   return accessGuard.hasFeatureAccess('COMPLETED_SAMPLE_DATA')

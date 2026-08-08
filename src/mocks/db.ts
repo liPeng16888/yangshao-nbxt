@@ -16,13 +16,14 @@ import type {
 } from '@/types/medicineInventory'
 import type { DateRange, FinanceReport, SampleDetectionReport } from '@/types/report'
 import type { PrepaidRechargeRow } from '@/types/financeBills'
-import type { LabParameter, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
+import type { LabParameter, LabParameterKey, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
 import { defaultLabParameters, DEFAULT_SAMPLE_BLOCK_COUNT } from '@/constants/labSheetTemplate'
 import { financeCategoryRules } from '@/constants/reportCategories'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
 import { businessDateInBeijing, getReportRange, todayInBeijing } from '@/utils/date'
 import { medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
+import { hasLabDetectionInput } from '@/utils/sampleReport'
 
 const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
 const MEDICINE_COMMON_NAME_STORAGE_KEY = 'ys_medicine_common_names'
@@ -230,13 +231,20 @@ export async function mockUpdateParameters(parameters: LabParameter) {
 }
 
 export async function mockApplyParametersFromIndex(parameters: LabParameter, startIndex: number) {
+  if (typeof startIndex !== 'number' || !Number.isInteger(startIndex) || startIndex <= 0) {
+    throw new Error('起始样品编号必须是正整数')
+  }
+  const validatedParameters = requireCompleteLabParameters(parameters)
   const sheet = ensureSheet()
   if (sheet.readonly) throw new Error('历史日期表格仅支持查看，不能修改')
-  labParameters = { ...parameters, savedAt: dayjs().toISOString() }
+  if (!sheet.sampleBlocks.some((block) => block.index === startIndex)) {
+    throw new Error('起始样品不存在，请刷新后重新选择')
+  }
+  labParameters = { ...validatedParameters, savedAt: dayjs().toISOString() }
   sheet.parameters = clone(labParameters)
   sheet.sampleBlocks = sheet.sampleBlocks.map((block) => {
     if (block.index < startIndex) return block
-    const parameterSnapshot = clone(labParameters)
+    const parameterSnapshot = { ...clone(labParameters), segmentedApplication: true as const }
     return {
       ...block,
       parameterSnapshot,
@@ -265,15 +273,34 @@ export async function mockSaveSampleBlock(sheetId: string, block: SampleBlockSav
     ...currentBlock.inputs,
     ...(block.changedFields || block.inputs || {})
   }
+  const firstDetectionInput = !hasLabDetectionInput(currentBlock.inputs) && hasLabDetectionInput(inputs)
+  const parameterSnapshot = firstDetectionInput && !currentBlock.parameterSnapshot.segmentedApplication
+    ? clone(sheet.parameters)
+    : currentBlock.parameterSnapshot
   const nextBlock = {
     ...currentBlock,
     inputs,
     updatedAt: dayjs().toISOString(),
-    results: calculateSampleResults(inputs, currentBlock.parameterSnapshot)
+    parameterSnapshot,
+    results: calculateSampleResults(inputs, parameterSnapshot)
   }
   if (index >= 0) sheet.sampleBlocks[index] = nextBlock
   else sheet.sampleBlocks.push(nextBlock)
   return delay(nextBlock)
+}
+
+function requireCompleteLabParameters(parameters: unknown): LabParameter {
+  if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
+    throw new Error('参数必须是有限数值')
+  }
+  return Object.keys(defaultLabParameters).reduce<LabParameter>((next, key) => {
+    const value = (parameters as Record<string, unknown>)[key]
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error('参数必须是有限数值')
+    }
+    next[key as LabParameterKey] = value
+    return next
+  }, { ...defaultLabParameters })
 }
 
 export async function mockLabHistory() {

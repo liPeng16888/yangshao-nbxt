@@ -28,12 +28,25 @@ function makeSheet(date: string, blocks = [makeBlock(1)], parameters = defaultLa
 
 describe('LabSheetsService default sheet selection', () => {
   const transaction = {
+    $queryRaw: vi.fn(),
     labSheet: {
       findUnique: vi.fn(),
       update: vi.fn()
     },
     sampleBlock: {
-      update: vi.fn()
+      findUnique: vi.fn(),
+      update: vi.fn(),
+      createMany: vi.fn()
+    },
+    cellChangeLog: {
+      findFirst: vi.fn(),
+      update: vi.fn(),
+      create: vi.fn(),
+      findMany: vi.fn()
+    },
+    abnormalRecord: {
+      deleteMany: vi.fn(),
+      upsert: vi.fn()
     }
   }
   const prisma = {
@@ -68,14 +81,34 @@ describe('LabSheetsService default sheet selection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     transaction.labSheet.findUnique.mockReset()
+    transaction.labSheet.findUnique.mockImplementation((argument) => prisma.labSheet.findUnique(argument))
     transaction.labSheet.update.mockReset()
+    transaction.$queryRaw.mockReset()
+    transaction.$queryRaw.mockResolvedValue([])
+    transaction.sampleBlock.findUnique.mockReset()
+    transaction.sampleBlock.findUnique.mockImplementation((argument) => prisma.sampleBlock.findUnique(argument))
     transaction.sampleBlock.update.mockReset()
+    transaction.sampleBlock.update.mockImplementation((argument) => prisma.sampleBlock.update(argument))
+    transaction.sampleBlock.createMany.mockReset()
+    transaction.sampleBlock.createMany.mockImplementation((argument) => prisma.sampleBlock.createMany(argument))
+    transaction.cellChangeLog.findFirst.mockReset()
+    transaction.cellChangeLog.findFirst.mockImplementation((argument) => prisma.cellChangeLog.findFirst(argument))
+    transaction.cellChangeLog.update.mockReset()
+    transaction.cellChangeLog.update.mockImplementation((argument) => prisma.cellChangeLog.update(argument))
+    transaction.cellChangeLog.create.mockReset()
+    transaction.cellChangeLog.create.mockImplementation((argument) => prisma.cellChangeLog.create(argument))
+    transaction.cellChangeLog.findMany.mockReset()
+    transaction.cellChangeLog.findMany.mockImplementation((argument) => prisma.cellChangeLog.findMany(argument))
+    transaction.abnormalRecord.deleteMany.mockReset()
+    transaction.abnormalRecord.deleteMany.mockImplementation((argument) => prisma.abnormalRecord.deleteMany(argument))
+    transaction.abnormalRecord.upsert.mockReset()
+    transaction.abnormalRecord.upsert.mockImplementation((argument) => prisma.abnormalRecord.upsert(argument))
     transaction.labSheet.update.mockImplementation(async ({ data }) => {
       const sheet = await transaction.labSheet.findUnique.mock.results[0]?.value
       if (sheet) Object.assign(sheet, data)
       return sheet
     })
-    transaction.sampleBlock.update.mockImplementation(async ({ where, data }) => {
+    prisma.sampleBlock.update.mockImplementation(async ({ where, data }) => {
       const sheet = await transaction.labSheet.findUnique.mock.results[0]?.value
       const block = sheet?.sampleBlocks.find((item: { id: string }) => item.id === where.id)
       if (block) Object.assign(block, data)
@@ -87,6 +120,10 @@ describe('LabSheetsService default sheet selection', () => {
     prisma.cellChangeLog.findFirst.mockResolvedValue(null)
     prisma.cellChangeLog.create.mockResolvedValue({})
     prisma.abnormalRecord.deleteMany.mockResolvedValue({})
+    transaction.cellChangeLog.findMany.mockResolvedValue([])
+    transaction.cellChangeLog.findFirst.mockResolvedValue(null)
+    transaction.cellChangeLog.create.mockResolvedValue({})
+    transaction.abnormalRecord.deleteMany.mockResolvedValue({})
   })
 
   afterEach(() => {
@@ -332,6 +369,29 @@ describe('LabSheetsService default sheet selection', () => {
     }))
   })
 
+  it('redacts completed samples in add-block responses when the caller has no grant', async () => {
+    const today = businessDateInBeijing()
+    const completed = makeBlock(1, {
+      completed: true,
+      ironRaw: 1,
+      price: 88,
+      paymentStatus: '已结款'
+    })
+    const before = makeSheet(today, [completed])
+    const after = makeSheet(today, [completed, makeBlock(2)])
+    prisma.labSheet.findUnique.mockResolvedValueOnce(before).mockResolvedValueOnce(after)
+    prisma.sampleBlock.createMany.mockResolvedValue({})
+
+    const result = await service.addSampleBlocks('front-1', before.id, 1, 'client-1', false)
+
+    expect(result.sampleBlocks[0].sensitiveFieldsHidden).toBe(true)
+    expect((result.sampleBlocks[0].inputs as Record<string, unknown>)).toMatchObject({
+      ironRaw: null,
+      price: null,
+      paymentStatus: null
+    })
+  })
+
   it('merges only changed fields when saving a sample block', async () => {
     const today = businessDateInBeijing()
     const updatedAt = new Date('2026-07-03T00:00:00.000Z')
@@ -378,6 +438,47 @@ describe('LabSheetsService default sheet selection', () => {
     expect((result.inputs as Record<string, unknown>).sampleNumber).toBe('NEW')
     expect((result.inputs as Record<string, unknown>).moisture).toBe(4.268)
     expect((result.inputs as Record<string, unknown>).completed).toBe(true)
+  })
+
+  it('returns granted saved data to the caller but publishes only a metadata refresh signal', async () => {
+    const today = businessDateInBeijing()
+    const updatedAt = new Date('2026-08-08T00:00:00.000Z')
+    const block = {
+      ...makeBlock(1, { completed: true, ironRaw: 2, price: 88, paymentStatus: '已结款' }),
+      sheetId: `sheet-${today}`,
+      updatedAt
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-08-08T00:00:01.000Z')
+    }))
+
+    const result = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        baseUpdatedAt: updatedAt.toISOString(),
+        baseInputs: { note: null },
+        changedFields: { note: '已复核' }
+      },
+      'client-1',
+      true
+    )
+
+    expect((result.inputs as Record<string, unknown>)).toMatchObject({
+      ironRaw: 2,
+      price: 88,
+      paymentStatus: '已结款'
+    })
+    expect(realtime.publish).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'block-saved',
+      sheetId: `sheet-${today}`
+    }))
+    expect(realtime.publish).toHaveBeenCalledWith(expect.not.objectContaining({ block: expect.anything() }))
   })
 
   it('saves every recipient customer field through the field-level payload', async () => {
@@ -534,6 +635,63 @@ describe('LabSheetsService default sheet selection', () => {
     expect(realtime.publish).toHaveBeenCalledTimes(1)
   })
 
+  it('redacts completed sample data in apply responses without a grant and publishes only a safe refresh signal', async () => {
+    const today = businessDateInBeijing()
+    const completed = makeBlock(1, {
+      completed: true,
+      ironRaw: 1,
+      price: 88,
+      paymentStatus: '已结款'
+    })
+    const current = makeSheet(today, [completed])
+    prisma.labSheet.findUnique.mockResolvedValue(current)
+    transaction.labSheet.findUnique.mockResolvedValue(current)
+
+    const result = await service.applyCurrentParametersFromIndex(
+      'front-1',
+      { parameters: defaultLabParameters, startIndex: 1 },
+      'client-1',
+      false
+    )
+
+    expect(result.sampleBlocks[0].sensitiveFieldsHidden).toBe(true)
+    expect((result.sampleBlocks[0].inputs as Record<string, unknown>)).toMatchObject({
+      ironRaw: null,
+      price: null,
+      paymentStatus: null
+    })
+    expect((result.sampleBlocks[0].results as Record<string, unknown>).iron).toBeNull()
+    expect(realtime.publish).toHaveBeenCalledTimes(1)
+    expect(realtime.publish).toHaveBeenCalledWith(expect.not.objectContaining({ sheet: expect.anything() }))
+  })
+
+  it('returns completed sample data in apply responses when the grant is accepted', async () => {
+    const today = businessDateInBeijing()
+    const completed = makeBlock(1, {
+      completed: true,
+      ironRaw: 1,
+      price: 88,
+      paymentStatus: '已结款'
+    })
+    const current = makeSheet(today, [completed])
+    prisma.labSheet.findUnique.mockResolvedValue(current)
+    transaction.labSheet.findUnique.mockResolvedValue(current)
+
+    const result = await service.applyCurrentParametersFromIndex(
+      'front-1',
+      { parameters: defaultLabParameters, startIndex: 1 },
+      'client-1',
+      true
+    )
+
+    expect(result.sampleBlocks[0].sensitiveFieldsHidden).toBe(false)
+    expect((result.sampleBlocks[0].inputs as Record<string, unknown>)).toMatchObject({
+      ironRaw: 1,
+      price: 88,
+      paymentStatus: '已结款'
+    })
+  })
+
   it('overwrites every snapshot from a later boundary including empty blocks', async () => {
     const today = businessDateInBeijing()
     const parametersA = { ...defaultLabParameters, ironFactor: 10 }
@@ -561,17 +719,184 @@ describe('LabSheetsService default sheet selection', () => {
     expect(transaction.sampleBlock.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'block-10' },
       data: expect.objectContaining({
-        parameterSnapshot: expect.objectContaining({ ironFactor: 25 })
+        parameterSnapshot: expect.objectContaining({
+          ironFactor: 25,
+          segmentedApplication: true
+        })
       })
+    }))
+  })
+
+  it('keeps an explicitly segmented blank snapshot when that older segment receives its first detection input', async () => {
+    const today = businessDateInBeijing()
+    const parametersA = { ...defaultLabParameters, ironBlank: 0, ironFactor: 10 }
+    const parametersB = { ...defaultLabParameters, ironBlank: 0, ironFactor: 25 }
+    const segmentedSnapshot = { ...parametersA, segmentedApplication: true }
+    const block = {
+      ...makeBlock(5, {}, segmentedSnapshot),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-08T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block], parametersB))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-08-08T00:00:01.000Z')
+    }))
+
+    const result = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        baseUpdatedAt: block.updatedAt.toISOString(),
+        baseInputs: { ironRaw: null },
+        changedFields: { ironRaw: 2 }
+      }
+    )
+
+    expect((result.parameterSnapshot as Record<string, unknown>)).toMatchObject({
+      ironFactor: 10,
+      segmentedApplication: true
+    })
+    expect((result.results as Record<string, unknown>).iron).toBe(20)
+  })
+
+  it('uses the latest sheet parameters for an ordinary unmarked blank snapshot on first detection input', async () => {
+    const today = businessDateInBeijing()
+    const ordinarySnapshot = { ...defaultLabParameters, ironBlank: 0, ironFactor: 10 }
+    const latestParameters = { ...defaultLabParameters, ironBlank: 0, ironFactor: 25 }
+    const block = {
+      ...makeBlock(5, {}, ordinarySnapshot),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-08T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block], latestParameters))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-08-08T00:00:01.000Z')
+    }))
+
+    const result = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        baseUpdatedAt: block.updatedAt.toISOString(),
+        baseInputs: { ironRaw: null },
+        changedFields: { ironRaw: 2 }
+      }
+    )
+
+    expect((result.parameterSnapshot as Record<string, unknown>)).toMatchObject({
+      ironFactor: 25
+    })
+    expect((result.parameterSnapshot as Record<string, unknown>)).not.toHaveProperty('segmentedApplication')
+    expect((result.results as Record<string, unknown>).iron).toBe(50)
+  })
+
+  it('locks before apply rereads and calculates from the latest sample inputs', async () => {
+    const today = businessDateInBeijing()
+    const parameters = { ...defaultLabParameters, ironBlank: 0, ironFactor: 10 }
+    const stale = makeSheet(today, [makeBlock(1, { ironRaw: 1 })])
+    const latest = makeSheet(today, [makeBlock(1, { ironRaw: 2 })])
+    prisma.labSheet.findUnique.mockResolvedValue(stale)
+    transaction.$queryRaw.mockResolvedValue([{ id: stale.id }])
+    transaction.labSheet.findUnique.mockResolvedValue(latest)
+
+    await service.applyCurrentParametersFromIndex('front-1', { parameters, startIndex: 1 })
+
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1)
+    expect(transaction.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      transaction.labSheet.findUnique.mock.invocationCallOrder[0]
+    )
+    expect(transaction.sampleBlock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'block-1' },
+      data: expect.objectContaining({ results: expect.objectContaining({ iron: 20 }) })
+    }))
+  })
+
+  it('locks before save rereads and preserves the latest segmented snapshot', async () => {
+    const today = businessDateInBeijing()
+    const staleParameters = { ...defaultLabParameters, ironBlank: 0, ironFactor: 25 }
+    const latestSnapshot = { ...defaultLabParameters, ironBlank: 0, ironFactor: 10, segmentedApplication: true }
+    const staleBlock = {
+      ...makeBlock(1, {}, staleParameters),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-08T00:00:00.000Z')
+    }
+    const latestBlock = { ...staleBlock, parameterSnapshot: latestSnapshot }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [staleBlock], staleParameters))
+    prisma.sampleBlock.findUnique.mockResolvedValue(staleBlock)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...staleBlock, ...data }))
+    transaction.$queryRaw.mockResolvedValue([{ id: `sheet-${today}` }])
+    transaction.labSheet.findUnique.mockResolvedValue(makeSheet(today, [latestBlock], staleParameters))
+    transaction.sampleBlock.findUnique.mockResolvedValue(latestBlock)
+    transaction.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...latestBlock, ...data }))
+
+    const result = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: latestBlock.id,
+        baseUpdatedAt: latestBlock.updatedAt.toISOString(),
+        baseInputs: { ironRaw: null },
+        changedFields: { ironRaw: 2 }
+      }
+    )
+
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1)
+    expect(transaction.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      transaction.sampleBlock.findUnique.mock.invocationCallOrder[0]
+    )
+    expect((result.parameterSnapshot as Record<string, unknown>).ironFactor).toBe(10)
+    expect((result.results as Record<string, unknown>).iron).toBe(20)
+  })
+
+  it('locks before add rereads the latest parameters and highest sample index', async () => {
+    const today = businessDateInBeijing()
+    const staleParameters = { ...defaultLabParameters, ironFactor: 10 }
+    const latestParameters = { ...defaultLabParameters, ironFactor: 25 }
+    const stale = makeSheet(today, [makeBlock(1)], staleParameters)
+    const latest = makeSheet(today, [makeBlock(1), makeBlock(2)], latestParameters)
+    prisma.labSheet.findUnique.mockResolvedValue(stale)
+    prisma.sampleBlock.createMany.mockResolvedValue({})
+    transaction.$queryRaw.mockResolvedValue([{ id: stale.id }])
+    transaction.labSheet.findUnique.mockResolvedValue(latest)
+    transaction.sampleBlock.createMany.mockResolvedValue({})
+
+    await service.addSampleBlocks('front-1', stale.id, 1)
+
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1)
+    expect(transaction.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      transaction.labSheet.findUnique.mock.invocationCallOrder[0]
+    )
+    expect(transaction.sampleBlock.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: [expect.objectContaining({
+        index: 3,
+        parameterSnapshot: expect.objectContaining({ ironFactor: 25 })
+      })]
     }))
   })
 
   it.each([
     [{ ...defaultLabParameters }, 0, '起始样品编号必须是正整数'],
+    [{ ...defaultLabParameters }, '1', '起始样品编号必须是正整数'],
+    [{ ...defaultLabParameters }, true, '起始样品编号必须是正整数'],
+    [{ ...defaultLabParameters }, [1], '起始样品编号必须是正整数'],
     [{ ...defaultLabParameters, ironFactor: Number.NaN }, 1, '参数必须是有限数值']
-  ])('rejects invalid segmented parameter applications', async (parameters, startIndex, message) => {
+  ] as Array<[Record<string, unknown>, unknown, string]>)('rejects invalid segmented parameter applications', async (parameters, startIndex, message) => {
     await expect(service.applyCurrentParametersFromIndex('front-1', { parameters, startIndex }))
       .rejects.toThrow(message)
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it.each([null, [], 'invalid'])('rejects a non-object segmented parameter payload with a controlled bad request', async (payload) => {
+    await expect(service.applyCurrentParametersFromIndex('front-1', payload as never))
+      .rejects.toThrow('请求格式不正确')
     expect(prisma.$transaction).not.toHaveBeenCalled()
   })
 

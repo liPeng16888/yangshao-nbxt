@@ -128,6 +128,8 @@ describe('labSheet store auto save', () => {
     apiMocks.getLabSheetClientId.mockReturnValue('client-1')
     apiMocks.getCurrentLabSheet.mockImplementation(async () => makeSheet())
     apiMocks.getLabSheetByDate.mockImplementation(async () => makeSheet())
+    apiMocks.applyCurrentParametersFromIndex.mockReset()
+    apiMocks.applyCurrentParametersFromIndex.mockImplementation(async () => makeSheet())
     apiMocks.updateCurrentParameters.mockResolvedValue(defaultLabParameters)
     apiMocks.addSampleBlocks.mockImplementation(async (_sheetId: string, count: number) => {
       const sheet = makeSheet()
@@ -347,9 +349,43 @@ describe('labSheet store auto save', () => {
     expect(store.sampleBlocks[0].inputs.ironRaw).toBe(1)
   })
 
-  it('applies a remote saved block event when the local block is clean', async () => {
+  it('keeps apply mutually exclusive and blocks new sample edits until the response settles', async () => {
+    let resolveApply!: (sheet: LabSheet) => void
+    const deferredApply = new Promise<LabSheet>((resolve) => {
+      resolveApply = resolve
+    })
+    apiMocks.applyCurrentParametersFromIndex.mockReturnValue(deferredApply)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    const firstApply = store.applyParametersFromIndex(defaultLabParameters, 1)
+    await Promise.resolve()
+    await Promise.resolve()
+    const applyingDuringRequest = store.applyingParameters
+    const originalSampleNumber = store.sampleBlocks[0].inputs.sampleNumber
+    store.patchBlock('block-1', { sampleNumber: 'MUST-NOT-BE-EDITED' })
+    const secondApply = store.applyParametersFromIndex(defaultLabParameters, 1)
+    await Promise.resolve()
+    const callsDuringRequest = apiMocks.applyCurrentParametersFromIndex.mock.calls.length
+
+    resolveApply(makeSheet())
+    const [firstResult, secondResult] = await Promise.all([firstApply, secondApply])
+
+    expect(applyingDuringRequest).toBe(true)
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe(originalSampleNumber)
+    expect(callsDuringRequest).toBe(1)
+    expect(firstResult).toBe(true)
+    expect(secondResult).toBe(false)
+    expect(store.applyingParameters).toBe(false)
+  })
+
+  it('refreshes a clean block after a remote save signal', async () => {
     const source = makeEventSource()
     apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getLabSheetByDate.mockResolvedValue({
+      ...makeSheet(),
+      sampleBlocks: [makeBlock({ sampleNumber: 'REMOTE-001' })]
+    })
     const store = useLabSheetStore()
     await store.loadCurrentSheet()
 
@@ -359,12 +395,13 @@ describe('labSheet store auto save', () => {
         date: '2026-06-25',
         sheetId: 'sheet-1',
         sourceClientId: 'client-2',
-        updatedAt: new Date().toISOString(),
-        block: makeBlock({ sampleNumber: 'REMOTE-001' })
+        updatedAt: new Date().toISOString()
       })
     } as MessageEvent)
 
-    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('REMOTE-001')
+    await vi.waitFor(() => {
+      expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('REMOTE-001')
+    })
   })
 
   it('refreshes the loaded sheet when realtime connection is established', async () => {
@@ -392,9 +429,69 @@ describe('labSheet store auto save', () => {
     expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('PULLED-001')
   })
 
+  it('treats sheet-reloaded as an untrusted signal and pulls with this client access context', async () => {
+    const source = makeEventSource()
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getLabSheetByDate.mockResolvedValue({
+      ...makeSheet(),
+      sampleBlocks: [makeBlock({ sampleNumber: 'GRANT-FILTERED-PULL' })]
+    })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    apiMocks.getLabSheetByDate.mockClear()
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'sheet-reloaded',
+        date: '2026-06-25',
+        sheetId: 'sheet-1',
+        sourceClientId: 'client-2',
+        updatedAt: new Date().toISOString(),
+        sheet: {
+          ...makeSheet(),
+          sampleBlocks: [makeBlock({ sampleNumber: 'UNTRUSTED-SSE-SNAPSHOT' })]
+        }
+      })
+    } as MessageEvent)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(apiMocks.getLabSheetByDate).toHaveBeenCalledWith('2026-06-25')
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('GRANT-FILTERED-PULL')
+  })
+
+  it('treats block-saved as an untrusted signal and pulls with this client access context', async () => {
+    const source = makeEventSource()
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getLabSheetByDate.mockResolvedValue({
+      ...makeSheet(),
+      sampleBlocks: [makeBlock({ sampleNumber: 'GRANT-FILTERED-BLOCK-PULL' })]
+    })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    apiMocks.getLabSheetByDate.mockClear()
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'block-saved',
+        date: '2026-06-25',
+        sheetId: 'sheet-1',
+        sourceClientId: 'client-2',
+        updatedAt: new Date().toISOString(),
+        block: makeBlock({ sampleNumber: 'UNTRUSTED-SSE-BLOCK' })
+      })
+    } as MessageEvent)
+
+    await vi.waitFor(() => {
+      expect(apiMocks.getLabSheetByDate).toHaveBeenCalledWith('2026-06-25')
+      expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('GRANT-FILTERED-BLOCK-PULL')
+    })
+  })
+
   it('keeps local edits when a remote saved block arrives during pending auto save', async () => {
     const source = makeEventSource()
     apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getLabSheetByDate.mockResolvedValue(makeSheet())
     const store = useLabSheetStore()
     await store.loadCurrentSheet()
 
@@ -405,17 +502,23 @@ describe('labSheet store auto save', () => {
         date: '2026-06-25',
         sheetId: 'sheet-1',
         sourceClientId: 'client-2',
-        updatedAt: new Date().toISOString(),
-        block: makeBlock({ sampleNumber: 'REMOTE-001' })
+        updatedAt: new Date().toISOString()
       })
     } as MessageEvent)
 
-    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
+    await vi.waitFor(() => {
+      expect(apiMocks.getLabSheetByDate).toHaveBeenCalledWith('2026-06-25')
+      expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
+    })
   })
 
   it('merges remote changes to clean fields while preserving local dirty fields', async () => {
     const source = makeEventSource()
     apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getLabSheetByDate.mockResolvedValue({
+      ...makeSheet(),
+      sampleBlocks: [makeBlock({ price: 88 })]
+    })
     const store = useLabSheetStore()
     await store.loadCurrentSheet()
     store.patchBlock('block-1', { sampleNumber: 'LOCAL-001' })
@@ -426,19 +529,24 @@ describe('labSheet store auto save', () => {
         date: '2026-06-25',
         sheetId: 'sheet-1',
         sourceClientId: 'client-2',
-        updatedAt: new Date().toISOString(),
-        block: makeBlock({ price: 88 })
+        updatedAt: new Date().toISOString()
       })
     } as MessageEvent)
 
-    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
-    expect(store.sampleBlocks[0].inputs.price).toBe(88)
-    expect(store.autoSaveStatus).toBe('pending')
+    await vi.waitFor(() => {
+      expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
+      expect(store.sampleBlocks[0].inputs.price).toBe(88)
+      expect(store.autoSaveStatus).toBe('pending')
+    })
   })
 
   it('keeps the local value and marks a true same-field remote conflict', async () => {
     const source = makeEventSource()
     apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getLabSheetByDate.mockResolvedValue({
+      ...makeSheet(),
+      sampleBlocks: [makeBlock({ sampleNumber: 'REMOTE-001' })]
+    })
     const store = useLabSheetStore()
     await store.loadCurrentSheet()
     store.patchBlock('block-1', { sampleNumber: 'LOCAL-001' })
@@ -449,14 +557,15 @@ describe('labSheet store auto save', () => {
         date: '2026-06-25',
         sheetId: 'sheet-1',
         sourceClientId: 'client-2',
-        updatedAt: new Date().toISOString(),
-        block: makeBlock({ sampleNumber: 'REMOTE-001' })
+        updatedAt: new Date().toISOString()
       })
     } as MessageEvent)
 
-    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
-    expect(store.autoSaveStatus).toBe('conflict')
-    expect(store.conflictBlockIds).toEqual(['block-1'])
+    await vi.waitFor(() => {
+      expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-001')
+      expect(store.autoSaveStatus).toBe('conflict')
+      expect(store.conflictBlockIds).toEqual(['block-1'])
+    })
   })
 
   it('keeps old parameter snapshots for filled blocks and applies new parameters to newly filled blocks', async () => {
@@ -488,6 +597,28 @@ describe('labSheet store auto save', () => {
     expect(store.sampleBlocks[0].results.iron).toBe(19.6)
     expect(store.sampleBlocks[1].parameterSnapshot.ironFactor).toBe(20)
     expect(store.sampleBlocks[1].results.iron).toBe(39.2)
+  })
+
+  it('keeps an explicitly segmented blank snapshot when it receives its first detection input', async () => {
+    const parametersA = { ...defaultLabParameters, ironBlank: 0, ironFactor: 10 }
+    const parametersB = { ...defaultLabParameters, ironBlank: 0, ironFactor: 25 }
+    const emptySegmentedBlock = makeBlock()
+    emptySegmentedBlock.parameterSnapshot = { ...parametersA, segmentedApplication: true }
+    apiMocks.getCurrentLabSheet.mockResolvedValue({
+      ...makeSheet(),
+      parameters: parametersB,
+      sampleBlocks: [emptySegmentedBlock]
+    })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    store.patchBlock('block-1', { ironRaw: 2 })
+
+    expect(store.sampleBlocks[0].parameterSnapshot).toMatchObject({
+      ironFactor: 10,
+      segmentedApplication: true
+    })
+    expect(store.sampleBlocks[0].results.iron).toBe(20)
   })
 
   it('does not recalculate existing blocks when remote parameters are updated', async () => {

@@ -26,6 +26,10 @@ export interface LabParameter {
   savedAt?: string
 }
 
+export interface LabParameterSnapshot extends LabParameter {
+  segmentedApplication?: true
+}
+
 export interface LabSampleInput {
   sequence?: string
   completed?: boolean
@@ -86,7 +90,7 @@ export interface SampleBlock {
   sensitiveFieldsHidden?: boolean
   inputs: LabSampleInput
   results: LabFormulaResult
-  parameterSnapshot: LabParameter
+  parameterSnapshot: LabParameterSnapshot
 }
 
 export interface LabChangeLogField {

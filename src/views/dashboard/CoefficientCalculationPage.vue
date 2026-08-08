@@ -46,7 +46,7 @@
         <div>
           <h2>标样系数计算</h2>
         </div>
-        <el-button type="primary" :loading="labStore.saving || labStore.loading" @click="openApplicationDialog">应用系数</el-button>
+        <el-button type="primary" :loading="labStore.applyingParameters || labStore.loading" @click="openApplicationDialog">应用系数</el-button>
       </div>
 
       <div class="parameter-grid">
@@ -94,10 +94,11 @@
     </section>
 
     <CoefficientApplicationDialog
+      :key="applicationDialogKey"
       :visible="applicationDialogVisible"
       :sample-indices="labStore.sampleBlocks.map((block) => block.index).sort((a, b) => a - b)"
-      :loading="labStore.saving"
-      @cancel="applicationDialogVisible = false"
+      :loading="labStore.applyingParameters"
+      @cancel="closeApplicationDialog"
       @confirm="handleApplyParameters"
     />
   </div>
@@ -144,6 +145,7 @@ type StoredCalculationRow = NonNullable<CoefficientCalculationStorage['calculati
 const labStore = useLabSheetStore()
 const STORAGE_KEY_PREFIX = 'ys_coefficient_calculation_inputs'
 const applicationDialogVisible = ref(false)
+const applicationDialogKey = ref(0)
 
 const contentElements: Array<{ key: ContentElementKey; label: string }> = [
   { key: 'aluminum', label: '铝' },
@@ -328,9 +330,40 @@ async function handleApplyParameters(startIndex: number) {
     }
     applicationDialogVisible.value = false
     ElMessage.success(`已从样品 ${String(startIndex).padStart(3, '0')} 开始应用新参数`)
-  } catch {
+  } catch (error) {
+    if (isMissingStartBoundaryError(error)) {
+      const loaded = await labStore.loadCurrentSheet()
+      applicationDialogKey.value += 1
+      if (loaded === false) {
+        ElMessage.error('起始样品已不存在，但当天数据刷新失败，请稍后重试')
+        return
+      }
+      if (!labStore.sampleBlocks.length) {
+        applicationDialogVisible.value = false
+        ElMessage.warning('当天暂无可应用的样品')
+        return
+      }
+      applicationDialogVisible.value = true
+      ElMessage.error('起始样品已不存在，已刷新当天数据，请重新选择')
+      return
+    }
     ElMessage.error('应用系数失败，请稍后重试')
   }
+}
+
+function closeApplicationDialog() {
+  if (!labStore.applyingParameters) applicationDialogVisible.value = false
+}
+
+function isMissingStartBoundaryError(error: unknown) {
+  const data = (error as { response?: { data?: { message?: unknown } } })?.response?.data
+  const raw = data?.message
+  const message = typeof raw === 'string'
+    ? raw
+    : raw && typeof raw === 'object' && typeof (raw as { message?: unknown }).message === 'string'
+      ? (raw as { message: string }).message
+      : ''
+  return message.includes('起始样品不存在')
 }
 </script>
 
