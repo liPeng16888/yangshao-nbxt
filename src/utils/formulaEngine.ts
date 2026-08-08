@@ -10,6 +10,7 @@ const ZERO_RESULTS: LabFormulaResult = {
   calcium: 0,
   magnesium: 0,
   titanium: 0,
+  bottleDensity: 0,
   moisture: 0,
   burnLoss: 0
 }
@@ -65,6 +66,11 @@ export function calculateSampleResults(inputs: LabSampleInput, parameters: LabPa
 
   if (hasNumber(inputs.titaniumRaw)) {
     result.titanium = safeRound(inputs.titaniumRaw * parameters.titaniumFactor)
+  }
+
+  if (hasNumber(inputs.waterSample) && hasNumber(inputs.bottleWater) && hasNumber(inputs.bottleWaterSample)) {
+    const denominator = inputs.waterSample + inputs.bottleWater - inputs.bottleWaterSample
+    result.bottleDensity = safeRound(safeDivide(inputs.waterSample, denominator) * 0.99823)
   }
 
   if (hasNumber(inputs.moisture)) {

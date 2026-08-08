@@ -154,7 +154,7 @@
               <FormulaCell :value="block.results.calcium" />
               <FormulaCell :value="block.results.magnesium" />
               <FormulaCell :value="block.results.titanium" />
-              <FormulaCell class="cell--span-3" :value="block.results.moisture" />
+              <FormulaCell class="cell--span-3" :value="block.results.bottleDensity" />
               <FormulaCell class="cell--span-3" :value="block.results.burnLoss" />
             </template>
 

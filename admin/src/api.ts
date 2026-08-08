@@ -248,6 +248,7 @@ const mockSheet = {
         waterSample: 10,
         bottleWater: 50,
         bottleWaterSample: 55,
+        moisture: 2,
         crucible: 20,
         sampleWeight: 5,
         burnedCrucibleSample: 24.1
@@ -262,6 +263,7 @@ const mockSheet = {
         calcium: 1.15,
         magnesium: 1.11,
         titanium: 1.14,
+        bottleDensity: 1.9965,
         moisture: 2,
         burnLoss: 18
       }

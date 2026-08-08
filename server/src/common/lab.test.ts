@@ -47,6 +47,16 @@ describe('server lab helpers', () => {
     expect(result.moisture).toBe(4.268)
   })
 
+  it('calculates bottle density independently from directly entered moisture', () => {
+    const result = calculateResults(
+      { moisture: 4.268, waterSample: 1, bottleWater: 2, bottleWaterSample: 2.5 },
+      defaultLabParameters
+    )
+
+    expect(result.moisture).toBe(4.268)
+    expect(result.bottleDensity).toBe(1.9965)
+  })
+
   it('does not calculate moisture from sample and bottle measurements', () => {
     const result = calculateResults(
       { waterSample: 0.5, bottleWater: 1, bottleWaterSample: 1.4 },

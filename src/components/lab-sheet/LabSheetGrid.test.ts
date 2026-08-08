@@ -198,6 +198,19 @@ describe('LabSheetGrid', () => {
     expect(wrapper.emitted('update')).toContainEqual(['block-1', { moisture: 4.268 }])
   })
 
+  it('shows bottle density rather than direct moisture in the three-column formula result', () => {
+    const block = makeBlock({ moisture: 4.268 })
+    Object.assign(block.results, { bottleDensity: 1.9965 })
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [block] },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    const groupedFormulaCells = wrapper.findAll('.cell--formula.cell--span-3')
+    expect(groupedFormulaCells).toHaveLength(2)
+    expect(groupedFormulaCells[0].text()).toBe('2.00')
+  })
+
   it('keeps blank sample data inputs empty when focused and blurred without typing', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {

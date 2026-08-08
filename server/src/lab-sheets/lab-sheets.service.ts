@@ -316,6 +316,7 @@ export class LabSheetsService {
 
   private toBlockDto(block: { id: string; index: number; readonly: boolean; updatedAt?: Date; inputs: unknown; results: unknown; parameterSnapshot: unknown }, sheetReadonly = false, canViewCompletedSensitiveData = false) {
     const inputs = (block.inputs || {}) as Record<string, unknown>
+    const results = calculateResults(inputs, this.normalizeLabParameters(block.parameterSnapshot))
     const completed = Boolean(inputs.completed)
     const hidden = completed && !canViewCompletedSensitiveData
     return {
@@ -325,7 +326,7 @@ export class LabSheetsService {
       updatedAt: block.updatedAt?.toISOString(),
       sensitiveFieldsHidden: hidden,
       inputs: hidden ? this.redactCompletedInputs(inputs) : inputs,
-      results: hidden ? this.redactCompletedResults(block.results) : block.results,
+      results: hidden ? this.redactCompletedResults(results) : results,
       parameterSnapshot: block.parameterSnapshot
     }
   }

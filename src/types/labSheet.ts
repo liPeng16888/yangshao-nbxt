@@ -73,6 +73,7 @@ export interface LabFormulaResult {
   calcium: number
   magnesium: number
   titanium: number
+  bottleDensity: number
   moisture: number
   burnLoss: number
 }

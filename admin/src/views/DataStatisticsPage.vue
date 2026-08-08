@@ -168,16 +168,15 @@ const elementColumns: ElementColumn[] = [
     key: 'bottleDensity',
     label: '比重(瓶法)',
     source: 'result',
-    field: 'moisture',
+    field: 'bottleDensity',
     requiredFields: ['waterSample', 'bottleWater', 'bottleWaterSample'],
     minWidth: 122
   },
   {
     key: 'moisture',
     label: '水份',
-    source: 'result',
-    field: 'moisture',
-    requiredFields: ['waterSample', 'bottleWater', 'bottleWaterSample']
+    source: 'input',
+    field: 'moisture'
   },
   {
     key: 'burnLoss',

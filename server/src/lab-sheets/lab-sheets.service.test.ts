@@ -112,6 +112,23 @@ describe('LabSheetsService default sheet selection', () => {
     expect(prisma.labSheet.findMany).not.toHaveBeenCalled()
   })
 
+  it('recalculates bottle density when reading records saved before that result field existed', async () => {
+    const today = businessDateInBeijing()
+    const block = makeBlock(1, {
+      moisture: 4.268,
+      waterSample: 1,
+      bottleWater: 2,
+      bottleWaterSample: 2.5
+    })
+    block.results = { moisture: 4.268 }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+
+    const result = await service.getSheetForFrontendUser('front-1', today, true)
+
+    expect((result.sampleBlocks[0].results as Record<string, unknown>).moisture).toBe(4.268)
+    expect((result.sampleBlocks[0].results as Record<string, unknown>).bottleDensity).toBe(1.9965)
+  })
+
   it('returns today sheet when today is empty even if history has data', async () => {
     const today = businessDateInBeijing()
     const emptyTodaySheet = makeSheet(today, [makeBlock(1)])
