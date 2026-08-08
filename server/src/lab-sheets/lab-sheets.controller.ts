@@ -36,6 +36,15 @@ export class LabSheetsController {
     return this.sheets.updateCurrentParameters(user.id, parameters, sourceClientId)
   }
 
+  @Put('parameters/current/apply')
+  applyCurrentParameters(
+    @CurrentUserInfo() user: CurrentUser,
+    @Body() payload: Record<string, unknown>,
+    @Headers('x-ys-client-id') sourceClientId?: string
+  ) {
+    return this.sheets.applyCurrentParametersFromIndex(user.id, payload, sourceClientId)
+  }
+
   @Post(':sheetId/sample-blocks')
   addBlocks(@CurrentUserInfo() user: CurrentUser, @Param('sheetId') sheetId: string, @Body('count') count: number, @Headers('x-ys-client-id') sourceClientId?: string) {
     return this.sheets.addSampleBlocks(user.id, sheetId, Number(count || 0), sourceClientId)

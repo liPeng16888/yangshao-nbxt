@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CurrentUser } from '../auth/current-user'
@@ -37,6 +37,63 @@ export class LabSheetsService {
       updatedAt: new Date().toISOString()
     })
     return nextParameters
+  }
+
+  async applyCurrentParametersFromIndex(
+    frontendUserId: string,
+    payload: Record<string, unknown>,
+    sourceClientId?: string
+  ) {
+    const startIndex = Number(payload.startIndex)
+    if (!Number.isInteger(startIndex) || startIndex <= 0) {
+      throw new BadRequestException('起始样品编号必须是正整数')
+    }
+    const parameters = this.requireCompleteLabParameters(payload.parameters)
+    const current = await this.ensureSheet(frontendUserId, businessDateInBeijing())
+    this.assertSheetEditable(current)
+    const nextParameters = { ...parameters, savedAt: new Date().toISOString() }
+
+    const updatedSheet = await this.prisma.$transaction(async (tx) => {
+      const sheet = await tx.labSheet.findUnique({
+        where: { id: current.id },
+        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+      })
+      if (!sheet) throw new NotFoundException('未找到表格')
+      if (!sheet.sampleBlocks.some((block) => block.index === startIndex)) {
+        throw new BadRequestException('起始样品不存在，请刷新后重新选择')
+      }
+      await tx.labSheet.update({
+        where: { id: sheet.id },
+        data: { parameters: nextParameters as Prisma.InputJsonValue }
+      })
+      for (const block of sheet.sampleBlocks.filter((item) => item.index >= startIndex)) {
+        await tx.sampleBlock.update({
+          where: { id: block.id },
+          data: {
+            parameterSnapshot: nextParameters as Prisma.InputJsonValue,
+            results: calculateResults(block.inputs as Record<string, unknown>, nextParameters) as Prisma.InputJsonValue
+          }
+        })
+      }
+      const reloaded = await tx.labSheet.findUnique({
+        where: { id: sheet.id },
+        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+      })
+      if (!reloaded) throw new NotFoundException('未找到表格')
+      return reloaded
+    })
+
+    const dto = this.toSheetDto(updatedSheet, true)
+    this.realtime.publish({
+      type: 'sheet-reloaded',
+      frontendUserId,
+      date: dto.date,
+      sheetId: dto.id,
+      sheet: dto,
+      sourceClientId,
+      updatedAt: new Date().toISOString()
+    })
+    return dto
   }
 
   async addSampleBlocks(frontendUserId: string, sheetId: string, count: number, sourceClientId?: string) {
@@ -173,6 +230,18 @@ export class LabSheetsService {
     return Object.entries(defaultLabParameters).reduce<typeof defaultLabParameters>((next, [key, defaultValue]) => {
       const value = parameters[key]
       next[key as keyof typeof defaultLabParameters] = typeof value === 'number' && Number.isFinite(value) ? value : defaultValue
+      return next
+    }, { ...defaultLabParameters })
+  }
+
+  private requireCompleteLabParameters(parameters: unknown) {
+    if (!this.isPlainObject(parameters)) throw new BadRequestException('参数必须是有限数值')
+    return Object.keys(defaultLabParameters).reduce<typeof defaultLabParameters>((next, key) => {
+      const value = parameters[key]
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new BadRequestException('参数必须是有限数值')
+      }
+      next[key as keyof typeof defaultLabParameters] = value
       return next
     }, { ...defaultLabParameters })
   }
