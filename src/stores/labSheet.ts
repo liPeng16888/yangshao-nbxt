@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   addSampleBlocks,
+  applyCurrentParametersFromIndex as applyCurrentParametersFromIndexApi,
   createLabSheetEventSource,
   getCurrentLabSheet,
   getLabSheetByDate,
@@ -148,6 +149,21 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       const saved = await updateCurrentParameters(parameters)
       sheet.value.parameters = saved
       ElMessage.success('参数已保存')
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function applyParametersFromIndex(parameters: LabParameter, startIndex: number) {
+    if (!sheet.value || sheet.value.readonly) return false
+    const persisted = await persistAllBlocks()
+    if (!persisted.success) return false
+    saving.value = true
+    try {
+      sheet.value = await applyCurrentParametersFromIndexApi(parameters, startIndex)
+      resetLocalSaveState()
+      syncRealtimeForLoadedSheet()
+      return true
     } finally {
       saving.value = false
     }
@@ -993,6 +1009,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     loadCurrentSheet,
     loadSheetByDate,
     saveParameters,
+    applyParametersFromIndex,
     patchBlock,
     commitBlockFieldChange,
     persistBlock,

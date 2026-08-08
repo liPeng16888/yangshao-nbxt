@@ -229,6 +229,23 @@ export async function mockUpdateParameters(parameters: LabParameter) {
   return delay(labParameters)
 }
 
+export async function mockApplyParametersFromIndex(parameters: LabParameter, startIndex: number) {
+  const sheet = ensureSheet()
+  if (sheet.readonly) throw new Error('历史日期表格仅支持查看，不能修改')
+  labParameters = { ...parameters, savedAt: dayjs().toISOString() }
+  sheet.parameters = clone(labParameters)
+  sheet.sampleBlocks = sheet.sampleBlocks.map((block) => {
+    if (block.index < startIndex) return block
+    const parameterSnapshot = clone(labParameters)
+    return {
+      ...block,
+      parameterSnapshot,
+      results: calculateSampleResults(block.inputs, parameterSnapshot)
+    }
+  })
+  return delay(sheet)
+}
+
 export async function mockAddSampleBlocks(sheetId: string, count: number) {
   const sheet = Array.from(labSheets.values()).find((item) => item.id === sheetId) || ensureSheet()
   if (sheet.readonly) throw new Error('历史日期表格仅支持查看，不能修改')

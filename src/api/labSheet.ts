@@ -4,6 +4,7 @@ import {
   mockAddSampleBlocks,
   mockCurrentLabSheet,
   mockCurrentParameters,
+  mockApplyParametersFromIndex,
   mockLabHistory,
   mockLabSheetByDate,
   mockSaveSampleBlock,
@@ -102,6 +103,18 @@ export async function getCurrentParameters(): Promise<LabParameter> {
 export async function updateCurrentParameters(parameters: LabParameter): Promise<LabParameter> {
   if (useMocks) return mockUpdateParameters(parameters)
   return request.put('/lab-sheets/parameters/current', parameters, clientHeaders())
+}
+
+export async function applyCurrentParametersFromIndex(
+  parameters: LabParameter,
+  startIndex: number
+): Promise<LabSheet> {
+  if (useMocks) return mockApplyParametersFromIndex(parameters, startIndex)
+  return request.put(
+    '/lab-sheets/parameters/current/apply',
+    { parameters, startIndex },
+    clientHeaders()
+  )
 }
 
 export async function addSampleBlocks(sheetId: string, count: number): Promise<LabSheet> {

@@ -8,6 +8,7 @@ import { useLabSheetStore } from './labSheet'
 
 const apiMocks = vi.hoisted(() => ({
   addSampleBlocks: vi.fn(),
+  applyCurrentParametersFromIndex: vi.fn(),
   createLabSheetEventSource: vi.fn(),
   getCurrentLabSheet: vi.fn(),
   getLabSheetByDate: vi.fn(),
@@ -88,6 +89,28 @@ function makeSheet(): LabSheet {
     readonly: false,
     parameters: defaultLabParameters,
     sampleBlocks: [makeBlock()]
+  }
+}
+
+function makeSegmentedSheet(startIndex: number): LabSheet {
+  const oldParameters = { ...defaultLabParameters, ironFactor: 10 }
+  const newParameters = { ...defaultLabParameters, ironFactor: 20 }
+  const firstBlock = makeBlock({ ironRaw: 1 })
+  firstBlock.parameterSnapshot = oldParameters
+  firstBlock.results = calculateSampleResults(firstBlock.inputs, oldParameters)
+  const secondBlock = makeBlock({ ironRaw: 2 })
+  secondBlock.id = 'block-2'
+  secondBlock.index = startIndex
+  secondBlock.inputs.sequence = String(startIndex).padStart(3, '0')
+  secondBlock.parameterSnapshot = newParameters
+  secondBlock.results = calculateSampleResults(secondBlock.inputs, newParameters)
+
+  return {
+    id: 'sheet-1',
+    date: '2026-06-25',
+    readonly: false,
+    parameters: newParameters,
+    sampleBlocks: [firstBlock, secondBlock]
   }
 }
 
@@ -292,6 +315,36 @@ describe('labSheet store auto save', () => {
     await store.persistAllBlocks({ silent: true })
 
     expect(apiMocks.saveSampleBlock).not.toHaveBeenCalled()
+  })
+
+  it('flushes pending edits before replacing the sheet with segmented parameters', async () => {
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { ironRaw: 1 })
+    const newSheet = makeSegmentedSheet(2)
+    apiMocks.applyCurrentParametersFromIndex.mockResolvedValue(newSheet)
+
+    const applied = await store.applyParametersFromIndex(newSheet.parameters, 2)
+
+    expect(applied).toBe(true)
+    expect(apiMocks.saveSampleBlock.mock.invocationCallOrder[0]).toBeLessThan(
+      apiMocks.applyCurrentParametersFromIndex.mock.invocationCallOrder[0]
+    )
+    expect(store.sheet).toEqual(newSheet)
+    expect(store.pendingAutoSaveCount).toBe(0)
+  })
+
+  it('does not apply parameters when pending sample edits cannot be saved', async () => {
+    apiMocks.saveSampleBlock.mockRejectedValue({ response: { status: 400 }, message: 'bad request' })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { ironRaw: 1 })
+
+    const applied = await store.applyParametersFromIndex(defaultLabParameters, 1)
+
+    expect(applied).toBe(false)
+    expect(apiMocks.applyCurrentParametersFromIndex).not.toHaveBeenCalled()
+    expect(store.sampleBlocks[0].inputs.ironRaw).toBe(1)
   })
 
   it('applies a remote saved block event when the local block is clean', async () => {
