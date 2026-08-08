@@ -43,6 +43,12 @@ export class FinanceController {
     return this.finance.getFrontendUnsettledSamples(user.id)
   }
 
+  @Put('finance/unsettled-samples/paid')
+  @Roles(UserRole.FRONTEND_USER)
+  markSamplesPaid(@CurrentUserInfo() user: CurrentUser, @Body() body: { blockIds?: string[] }) {
+    return this.finance.markFrontendSamplesPaid(user.id, body?.blockIds || [])
+  }
+
   @Put('finance/unsettled-samples/:blockId/paid')
   @Roles(UserRole.FRONTEND_USER)
   markPaid(@CurrentUserInfo() user: CurrentUser, @Param('blockId') blockId: string) {

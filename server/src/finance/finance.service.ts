@@ -127,29 +127,58 @@ export class FinanceService {
   }
 
   async markFrontendSamplePaid(frontendUserId: string, blockId: string) {
-    const block = await this.prisma.sampleBlock.findUnique({ where: { id: blockId }, include: { sheet: true } })
-    if (!block || block.sheet.frontendUserId !== frontendUserId) throw new NotFoundException('未找到样品')
-    const inputs = { ...((block.inputs || {}) as Record<string, unknown>), paymentStatus: '已结款' }
-    const parameters = (block.parameterSnapshot || block.sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
-    const saved = await this.prisma.sampleBlock.update({
-      where: { id: block.id },
-      data: {
-        inputs,
-        results: calculateResults(inputs, parameters)
+    const [saved] = await this.markFrontendSamplesPaid(frontendUserId, [blockId])
+    return saved
+  }
+
+  async markFrontendSamplesPaid(frontendUserId: string, rawBlockIds: string[]) {
+    const blockIds = Array.from(new Set((Array.isArray(rawBlockIds) ? rawBlockIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)))
+    if (!blockIds.length) throw new BadRequestException('请选择需要结款的样品')
+
+    return this.prisma.$transaction(async (transaction) => {
+      const blocks = await transaction.sampleBlock.findMany({
+        where: { id: { in: blockIds } },
+        include: { sheet: true }
+      })
+      if (blocks.length !== blockIds.length || blocks.some((block) => block.sheet.frontendUserId !== frontendUserId)) {
+        throw new NotFoundException('部分样品不存在或无权操作')
       }
-    })
-    await this.prisma.cellChangeLog.create({
-      data: {
-        sheetId: block.sheetId,
-        blockId: block.id,
-        frontendUserId,
-        changedById: frontendUserId,
-        field: 'paymentStatus',
-        oldValue: this.jsonValue((block.inputs as Record<string, unknown>)?.paymentStatus ?? null),
-        newValue: '已结款'
+
+      const blocksById = new Map(blocks.map((block) => [block.id, block]))
+      const orderedBlocks = blockIds.map((id) => blocksById.get(id)!)
+      if (orderedBlocks.some((block) => ((block.inputs || {}) as Record<string, unknown>).paymentStatus !== '未结款')) {
+        throw new BadRequestException('部分样品已不是未结款状态，请刷新后重试')
       }
+
+      const savedBlocks = []
+      for (const block of orderedBlocks) {
+        const oldInputs = (block.inputs || {}) as Record<string, unknown>
+        const inputs = { ...oldInputs, paymentStatus: '已结款' }
+        const parameters = (block.parameterSnapshot || block.sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
+        const saved = await transaction.sampleBlock.update({
+          where: { id: block.id },
+          data: {
+            inputs,
+            results: calculateResults(inputs, parameters)
+          }
+        })
+        await transaction.cellChangeLog.create({
+          data: {
+            sheetId: block.sheetId,
+            blockId: block.id,
+            frontendUserId,
+            changedById: frontendUserId,
+            field: 'paymentStatus',
+            oldValue: this.jsonValue(oldInputs.paymentStatus ?? null),
+            newValue: '已结款'
+          }
+        })
+        savedBlocks.push(saved)
+      }
+      return savedBlocks.map((block) => this.blockDto(block))
     })
-    return this.blockDto(saved)
   }
 
   async getFrontendMonthlySettlementReport(frontendUserId: string, month = currentMonthInBeijing()) {
