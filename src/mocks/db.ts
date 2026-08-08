@@ -243,7 +243,13 @@ export async function mockApplyParametersFromIndex(parameters: LabParameter, sta
   labParameters = { ...validatedParameters, savedAt: dayjs().toISOString() }
   sheet.parameters = clone(labParameters)
   sheet.sampleBlocks = sheet.sampleBlocks.map((block) => {
-    if (block.index < startIndex) return block
+    if (block.index < startIndex) {
+      if (hasLabDetectionInput(block.inputs)) return block
+      return {
+        ...block,
+        parameterSnapshot: { ...clone(block.parameterSnapshot), segmentedApplication: true as const }
+      }
+    }
     const parameterSnapshot = { ...clone(labParameters), segmentedApplication: true as const }
     return {
       ...block,

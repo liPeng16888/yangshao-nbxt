@@ -70,6 +70,17 @@ export class LabSheetsService {
         where: { id: sheet.id },
         data: { parameters: nextParameters as Prisma.InputJsonValue }
       })
+      for (const block of sheet.sampleBlocks.filter((item) => item.index < startIndex && !hasLabDetectionInput(item.inputs as Record<string, unknown>))) {
+        await tx.sampleBlock.update({
+          where: { id: block.id },
+          data: {
+            parameterSnapshot: {
+              ...((block.parameterSnapshot || sheet.parameters) as Record<string, unknown>),
+              segmentedApplication: true
+            } as Prisma.InputJsonValue
+          }
+        })
+      }
       for (const block of sheet.sampleBlocks.filter((item) => item.index >= startIndex)) {
         await tx.sampleBlock.update({
           where: { id: block.id },

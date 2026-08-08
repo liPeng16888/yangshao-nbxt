@@ -692,6 +692,91 @@ describe('LabSheetsService default sheet selection', () => {
     })
   })
 
+  it('fixes blank snapshots before the first boundary without recalculating them', async () => {
+    const today = businessDateInBeijing()
+    const originalParameters = { ...defaultLabParameters, ironBlank: 0, ironFactor: 10 }
+    const parametersA = { ...defaultLabParameters, ironBlank: 0, ironFactor: 25 }
+    const before = makeSheet(today, [1, 2, 3, 4].map((index) => ({
+      ...makeBlock(index, index >= 3 ? { ironRaw: 2 } : {}, originalParameters),
+      sheetId: `sheet-${today}`
+    })), originalParameters)
+    prisma.labSheet.findUnique.mockResolvedValue(before)
+    prisma.sampleBlock.findUnique.mockImplementation(async ({ where }) => before.sampleBlocks.find((block) => block.id === where.id))
+
+    await service.applyCurrentParametersFromIndex(
+      'front-1',
+      { parameters: parametersA, startIndex: 3 },
+      'client-1'
+    )
+
+    const applyUpdates = transaction.sampleBlock.update.mock.calls.map(([argument]) => argument)
+    expect(applyUpdates.map((argument) => argument.where.id)).toEqual(['block-1', 'block-2', 'block-3', 'block-4'])
+    expect(applyUpdates[0].data).toEqual({
+      parameterSnapshot: { ...originalParameters, segmentedApplication: true }
+    })
+    expect(applyUpdates[1].data).toEqual({
+      parameterSnapshot: { ...originalParameters, segmentedApplication: true }
+    })
+    applyUpdates.slice(2).forEach((argument) => {
+      expect(argument.data).toEqual(expect.objectContaining({
+        parameterSnapshot: expect.objectContaining({ ironFactor: 25, segmentedApplication: true }),
+        results: expect.any(Object)
+      }))
+    })
+
+    const saved = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      before.id,
+      { id: 'block-2', changedFields: { ironRaw: 2 } }
+    )
+
+    expect((saved.parameterSnapshot as Record<string, unknown>)).toMatchObject({
+      ironFactor: 10,
+      segmentedApplication: true
+    })
+    expect((saved.results as Record<string, unknown>).iron).toBe(20)
+  })
+
+  it('fixes a newly added blank block from an older segment before a later boundary', async () => {
+    const today = businessDateInBeijing()
+    const parametersA = { ...defaultLabParameters, ironBlank: 0, ironFactor: 10 }
+    const parametersB = { ...defaultLabParameters, ironBlank: 0, ironFactor: 25 }
+    const before = makeSheet(today, Array.from({ length: 10 }, (_, offset) => makeBlock(offset + 1, { ironRaw: 2 })), defaultLabParameters)
+    prisma.labSheet.findUnique.mockResolvedValue(before)
+    prisma.sampleBlock.findUnique.mockImplementation(async ({ where }) => before.sampleBlocks.find((block) => block.id === where.id))
+    prisma.sampleBlock.createMany.mockImplementation(async ({ data }) => {
+      before.sampleBlocks.push(...data.map((block: Record<string, unknown>) => ({ ...block, id: `block-${block.index}` })))
+    })
+
+    await service.applyCurrentParametersFromIndex('front-1', { parameters: parametersA, startIndex: 3 })
+    await service.addSampleBlocks('front-1', before.id, 2)
+    transaction.sampleBlock.update.mockClear()
+
+    await service.applyCurrentParametersFromIndex('front-1', { parameters: parametersB, startIndex: 12 })
+
+    const boundaryUpdates = transaction.sampleBlock.update.mock.calls.map(([argument]) => argument)
+    expect(boundaryUpdates.map((argument) => argument.where.id)).toEqual(['block-11', 'block-12'])
+    expect(boundaryUpdates[0].data).toEqual({
+      parameterSnapshot: expect.objectContaining({ ironFactor: 10, segmentedApplication: true })
+    })
+    expect(boundaryUpdates[1].data).toEqual(expect.objectContaining({
+      parameterSnapshot: expect.objectContaining({ ironFactor: 25, segmentedApplication: true }),
+      results: expect.any(Object)
+    }))
+
+    const saved = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      before.id,
+      { id: 'block-11', changedFields: { ironRaw: 2 } }
+    )
+
+    expect((saved.parameterSnapshot as Record<string, unknown>)).toMatchObject({
+      ironFactor: 10,
+      segmentedApplication: true
+    })
+    expect((saved.results as Record<string, unknown>).iron).toBe(20)
+  })
+
   it('overwrites every snapshot from a later boundary including empty blocks', async () => {
     const today = businessDateInBeijing()
     const parametersA = { ...defaultLabParameters, ironFactor: 10 }
