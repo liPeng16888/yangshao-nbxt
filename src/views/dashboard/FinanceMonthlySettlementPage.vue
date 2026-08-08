@@ -42,11 +42,30 @@
             <span class="customer-info">{{ getCustomerDisplay(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="金额" width="130">
+        <el-table-column
+          prop="amount"
+          label="金额"
+          width="130"
+          sortable
+          :sort-orders="settlementSortOrders"
+        >
           <template #default="{ row }">¥{{ money(row.amount) }}</template>
         </el-table-column>
-        <el-table-column prop="sampleCount" label="样品数量" width="110" />
-        <el-table-column label="结款状态" width="150">
+        <el-table-column
+          prop="sampleCount"
+          label="样品数量"
+          width="110"
+          sortable
+          :sort-orders="settlementSortOrders"
+        />
+        <el-table-column
+          prop="settlementStatus"
+          label="结款状态"
+          width="150"
+          sortable
+          :sort-orders="settlementSortOrders"
+          :sort-method="compareMonthlySettlementStatusRows"
+        >
           <template #default="{ row }">
             <el-select
               :model-value="row.settlementStatus"
@@ -141,12 +160,14 @@ import MonthlySettlementBillExportDialog from '@/components/finance/MonthlySettl
 import type { MonthlySettlementDailyRow, MonthlySettlementElementCount, MonthlySettlementStatus, MonthlySettlementSummaryRow } from '@/types/financeBills'
 import { useFinanceBillsStore } from '@/stores/financeBills'
 import { createPaidSettlementRemark, createPartialSettlementRemark, filterMonthlySettlementDailyRows, roundMoney } from '@/utils/financeBills'
+import { compareMonthlySettlementStatusRows } from '@/utils/monthlySettlementSorting'
 
 const store = useFinanceBillsStore()
 const report = computed(() => store.monthlySettlementReport)
 const selectedDailyCustomers = ref<string[]>([])
 const billExportVisible = ref(false)
 const settlementStatusOptions: MonthlySettlementStatus[] = ['已结款', '未结款', '部分结款']
+const settlementSortOrders: Array<'ascending' | 'descending' | null> = ['ascending', 'descending', null]
 
 const dailyCustomerOptions = computed(() => {
   const map = new Map<string, string>()
