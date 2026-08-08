@@ -7,6 +7,15 @@
           <p class="muted">费用状态为“未结款”的样品会显示在这里。</p>
         </div>
         <div class="panel-actions">
+          <el-button
+            class="batch-settle-button"
+            type="primary"
+            :disabled="!selectedRows.length || store.isSettling"
+            :loading="store.settlingBatch"
+            @click="handleBatchSettle"
+          >
+            批量确认已结款<span v-if="selectedRows.length">（{{ selectedRows.length }}）</span>
+          </el-button>
           <el-select
             v-model="selectedCustomers"
             class="customer-filter"
@@ -24,7 +33,16 @@
           <el-button :loading="store.loading" @click="store.loadUnsettledRows()">刷新</el-button>
         </div>
       </div>
-      <el-table :data="filteredRows" border v-loading="store.loading" empty-text="暂无未结款样品">
+      <el-table
+        ref="tableRef"
+        :data="filteredRows"
+        row-key="blockId"
+        border
+        v-loading="store.loading"
+        empty-text="暂无未结款样品"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="52" />
         <el-table-column prop="date" label="日期" width="130" />
         <el-table-column prop="sequence" label="编号" width="90" />
         <el-table-column prop="sampleNumber" label="样品编号" min-width="150" />
@@ -36,7 +54,7 @@
           <template #default="{ row }">
             <el-checkbox
               :model-value="false"
-              :disabled="Boolean(store.settlingId)"
+              :disabled="store.isSettling"
               @change="(checked: string | number | boolean) => handleSettle(row, checked)"
             />
           </template>
@@ -52,7 +70,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UnsettledSampleRow } from '@/types/financeBills'
@@ -62,12 +80,20 @@ import { filterUnsettledRows } from '@/utils/financeBills'
 const router = useRouter()
 const store = useFinanceBillsStore()
 const selectedCustomers = ref<string[]>([])
+const selectedRows = ref<UnsettledSampleRow[]>([])
+const tableRef = ref<{ clearSelection: () => void }>()
 
 const customerOptions = computed(() => {
   return Array.from(new Set(store.unsettledRows.map((row) => row.customer))).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
 })
 
 const filteredRows = computed(() => filterUnsettledRows(store.unsettledRows, selectedCustomers.value))
+
+watch(selectedCustomers, async () => {
+  selectedRows.value = []
+  await nextTick()
+  tableRef.value?.clearSelection()
+})
 
 onMounted(() => {
   store.loadUnsettledRows()
@@ -84,6 +110,29 @@ async function handleSettle(row: UnsettledSampleRow, checked: string | number | 
   ElMessage.success('已同步为已结款')
 }
 
+function handleSelectionChange(rows: UnsettledSampleRow[]) {
+  selectedRows.value = rows
+}
+
+async function handleBatchSettle() {
+  if (!selectedRows.value.length) return
+  const rows = [...selectedRows.value]
+  const total = rows.reduce((sum, row) => sum + row.amount, 0)
+  await ElMessageBox.confirm(
+    `确认将选中的 ${rows.length} 个样品标记为已结款？合计金额 ¥${total.toFixed(2)}。`,
+    '批量确认结款',
+    {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  )
+  await store.settleRows(rows)
+  selectedRows.value = []
+  tableRef.value?.clearSelection()
+  ElMessage.success(`已将 ${rows.length} 个样品同步为已结款`)
+}
+
 function jumpToSample(row: UnsettledSampleRow) {
   router.push({ path: '/data', query: { date: row.date, block: row.blockId } })
 }
@@ -93,6 +142,7 @@ function jumpToSample(row: UnsettledSampleRow) {
 .panel-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
