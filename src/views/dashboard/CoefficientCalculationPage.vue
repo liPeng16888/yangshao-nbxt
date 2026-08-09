@@ -16,7 +16,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in standardRows" :key="row.id">
+            <tr v-for="row in standardRows" :key="row.id" data-testid="standard-row">
               <td>
                 <el-input v-model="row.code" placeholder="填写编号" />
               </td>
@@ -36,8 +36,8 @@
 
       <div class="add-standard-row">
         <span>增加标样</span>
-        <el-input-number v-model="addCount" :min="1" :max="50" :step="1" :precision="0" controls-position="right" />
-        <el-button type="primary" @click="addStandards">确认增加</el-button>
+        <el-input-number v-model="standardAddCount" :min="1" :max="50" :step="1" :precision="0" controls-position="right" />
+        <el-button type="primary" data-testid="add-standard-rows" @click="addStandardRows">确认增加</el-button>
       </div>
     </section>
 
@@ -71,7 +71,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in calculationRows" :key="row.id">
+            <tr v-for="row in calculationRows" :key="row.id" data-testid="calculation-row">
               <td>
                 <el-input v-model="row.code" placeholder="填写编号" />
               </td>
@@ -90,6 +90,11 @@
             </tr>
           </tbody>
         </table>
+      </div>
+      <div class="add-standard-row">
+        <span>增加标样</span>
+        <el-input-number v-model="calculationAddCount" :min="1" :max="50" :step="1" :precision="0" controls-position="right" />
+        <el-button type="primary" data-testid="add-calculation-rows" @click="addCalculationRows">确认增加</el-button>
       </div>
     </section>
 
@@ -112,6 +117,7 @@ import type { AuthUser } from '@/types/auth'
 import { defaultLabParameters, labParameterLabels } from '@/constants/labSheetTemplate'
 import { useLabSheetStore } from '@/stores/labSheet'
 import { calculateSampleResults, formatFormulaValue } from '@/utils/formulaEngine'
+import { formatCoefficientRowCode, inferCoefficientRowAutoCode } from '@/utils/coefficientRows'
 import CoefficientApplicationDialog from '@/components/lab-sheet/CoefficientApplicationDialog.vue'
 
 type ContentElementKey = 'aluminum' | 'silicon' | 'iron' | 'calcium' | 'magnesium' | 'titanium'
@@ -122,21 +128,25 @@ type NumericLabParameterKey = Exclude<keyof LabParameter, 'savedAt'>
 type StandardContentRow = Record<ContentElementKey, number | null> & {
   id: string
   code: string
+  autoCode: boolean
 }
 
 interface CalculationRow {
   id: string
   code: string
+  autoCode: boolean
   inputs: Record<CalculationInputKey, number | null>
 }
 
+type StoredRowIdentity = { id?: string; code?: string; autoCode?: boolean }
+
 interface CoefficientCalculationStorage {
   parameters?: Partial<LabParameter>
-  addCount?: number
-  standardRows?: Array<Partial<Record<ContentElementKey, number | null>> & { id?: string; code?: string }>
-  calculationRows?: Array<{
-    id?: string
-    code?: string
+  addCount?: number // 只兼容读取旧数据
+  standardAddCount?: number
+  calculationAddCount?: number
+  standardRows?: Array<Partial<Record<ContentElementKey, number | null>> & StoredRowIdentity>
+  calculationRows?: Array<StoredRowIdentity & {
     inputs?: Partial<Record<CalculationInputKey, number | null>>
   }>
 }
@@ -171,14 +181,17 @@ const calculationElements: Array<{
 
 const savedState = readSavedState()
 const parameters = reactive<LabParameter>({ ...defaultLabParameters, ...savedState.parameters })
-const addCount = ref(savedState.addCount || 1)
+const legacyAddCount = normalizePositiveInteger(savedState.addCount) || 1
+const standardAddCount = ref(savedState.standardAddCount || legacyAddCount)
+const calculationAddCount = ref(savedState.calculationAddCount || legacyAddCount)
 const standardRows = reactive<StandardContentRow[]>(normalizeStandardRows(savedState.standardRows))
-const calculationRows = reactive<CalculationRow[]>(normalizeCalculationRows(savedState.calculationRows, standardRows.length))
+const calculationRows = reactive<CalculationRow[]>(normalizeCalculationRows(savedState.calculationRows))
 
 function createStandardRow(index: number): StandardContentRow {
   return {
     id: `standard-${Date.now()}-${index}`,
-    code: String(index).padStart(3, '0'),
+    code: formatCoefficientRowCode(index),
+    autoCode: true,
     aluminum: null,
     silicon: null,
     iron: null,
@@ -194,6 +207,7 @@ function normalizeStandardRows(rows: CoefficientCalculationStorage['standardRows
     const next = createStandardRow(index + 1)
     next.id = typeof row.id === 'string' && row.id.trim() ? row.id : next.id
     next.code = typeof row.code === 'string' ? row.code : next.code
+    next.autoCode = inferCoefficientRowAutoCode(next.code, index + 1, row.autoCode)
     contentElements.forEach((element) => {
       next[element.key] = normalizeNullableNumber(row[element.key])
     })
@@ -204,7 +218,8 @@ function normalizeStandardRows(rows: CoefficientCalculationStorage['standardRows
 function createCalculationRow(index: number): CalculationRow {
   return {
     id: `calculation-${Date.now()}-${index}`,
-    code: String(index).padStart(3, '0'),
+    code: formatCoefficientRowCode(index),
+    autoCode: true,
     inputs: {
       ironRaw: null,
       siliconRaw: null,
@@ -216,19 +231,18 @@ function createCalculationRow(index: number): CalculationRow {
   }
 }
 
-function normalizeCalculationRows(rows: CoefficientCalculationStorage['calculationRows'], minCount: number) {
-  const source: StoredCalculationRow[] = rows?.length ? rows : Array.from({ length: minCount || 3 }, () => ({}))
-  const normalized = source.map((row, index) => {
+function normalizeCalculationRows(rows: CoefficientCalculationStorage['calculationRows']) {
+  const source: StoredCalculationRow[] = rows?.length ? rows : [{}, {}, {}]
+  return source.map((row, index) => {
     const next = createCalculationRow(index + 1)
     next.id = typeof row.id === 'string' && row.id.trim() ? row.id : next.id
     next.code = typeof row.code === 'string' ? row.code : next.code
+    next.autoCode = inferCoefficientRowAutoCode(next.code, index + 1, row.autoCode)
     calculationElements.forEach((element) => {
       next.inputs[element.inputField] = normalizeNullableNumber(row.inputs?.[element.inputField])
     })
     return next
   })
-  while (normalized.length < minCount) normalized.push(createCalculationRow(normalized.length + 1))
-  return normalized
 }
 
 function normalizeNullableNumber(value: unknown) {
@@ -236,12 +250,15 @@ function normalizeNullableNumber(value: unknown) {
   return null
 }
 
-function addStandards() {
-  const count = Number(addCount.value) || 1
-  for (let index = 0; index < count; index += 1) {
-    const nextIndex = standardRows.length + 1
-    standardRows.push(createStandardRow(nextIndex))
-    calculationRows.push(createCalculationRow(nextIndex))
+function addStandardRows() {
+  for (let offset = 0; offset < standardAddCount.value; offset += 1) {
+    standardRows.push(createStandardRow(standardRows.length + 1))
+  }
+}
+
+function addCalculationRows() {
+  for (let offset = 0; offset < calculationAddCount.value; offset += 1) {
+    calculationRows.push(createCalculationRow(calculationRows.length + 1))
   }
 }
 
@@ -266,6 +283,8 @@ function readSavedState(): CoefficientCalculationStorage {
     return {
       parameters: normalizeParameters(parsed.parameters),
       addCount: normalizePositiveInteger(parsed.addCount),
+      standardAddCount: normalizePositiveInteger(parsed.standardAddCount),
+      calculationAddCount: normalizePositiveInteger(parsed.calculationAddCount),
       standardRows: parsed.standardRows,
       calculationRows: parsed.calculationRows
     }
@@ -293,18 +312,20 @@ function saveState() {
   if (typeof window === 'undefined') return
   const payload: CoefficientCalculationStorage = {
     parameters: { ...parameters },
-    addCount: addCount.value,
+    standardAddCount: standardAddCount.value,
+    calculationAddCount: calculationAddCount.value,
     standardRows: standardRows.map((row) => ({ ...row })),
     calculationRows: calculationRows.map((row) => ({
       id: row.id,
       code: row.code,
+      autoCode: row.autoCode,
       inputs: { ...row.inputs }
     }))
   }
   window.localStorage.setItem(currentStorageKey(), JSON.stringify(payload))
 }
 
-watch([parameters, standardRows, calculationRows, addCount], saveState, { deep: true })
+watch([parameters, standardRows, calculationRows, standardAddCount, calculationAddCount], saveState, { deep: true })
 
 function getCalculatedResult(row: CalculationRow, key: CalculationResultKey) {
   const result: LabFormulaResult = calculateSampleResults(row.inputs, parameters)

@@ -136,6 +136,42 @@ describe('CoefficientCalculationPage coefficient application', () => {
     window.localStorage.clear()
   })
 
+  it('keeps different stored row counts independent', () => {
+    window.localStorage.setItem('ys_coefficient_calculation_inputs:guest', JSON.stringify({
+      addCount: 2,
+      standardRows: [{ code: '001' }, { code: '002' }],
+      calculationRows: [{ code: '001', inputs: {} }]
+    }))
+    const { wrapper } = mountPage()
+    expect(wrapper.findAll('[data-testid="standard-row"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="calculation-row"]')).toHaveLength(1)
+  })
+
+  it('migrates the legacy add count into two independent persisted counts', async () => {
+    window.localStorage.setItem('ys_coefficient_calculation_inputs:guest', JSON.stringify({
+      addCount: 2,
+      standardRows: [{ code: '001' }],
+      calculationRows: [{ code: '001', inputs: {} }]
+    }))
+    const { wrapper } = mountPage()
+    await wrapper.get('[data-testid="add-standard-rows"]').trigger('click')
+    await nextTick()
+    const stored = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:guest')!)
+    expect(stored.standardAddCount).toBe(2)
+    expect(stored.calculationAddCount).toBe(2)
+    expect(stored).not.toHaveProperty('addCount')
+  })
+
+  it('adds rows to each table independently', async () => {
+    const { wrapper } = mountPage()
+    const calculationBefore = wrapper.findAll('[data-testid="calculation-row"]').length
+    await wrapper.get('[data-testid="add-standard-rows"]').trigger('click')
+    expect(wrapper.findAll('[data-testid="standard-row"]')).toHaveLength(4)
+    expect(wrapper.findAll('[data-testid="calculation-row"]')).toHaveLength(calculationBefore)
+    await wrapper.get('[data-testid="add-calculation-rows"]').trigger('click')
+    expect(wrapper.findAll('[data-testid="calculation-row"]')).toHaveLength(calculationBefore + 1)
+  })
+
   it('loads samples and displays their sorted range before applying', async () => {
     const { wrapper } = mountPage()
 
