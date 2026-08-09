@@ -5,7 +5,6 @@
         <div>
           <h2>标样含量</h2>
         </div>
-        <el-button type="danger" plain data-testid="delete-standard-rows" @click="standardDeleteMode = true">批量删除</el-button>
       </div>
 
       <div class="coefficient-table-wrap">
@@ -15,6 +14,7 @@
               <th v-if="standardDeleteMode" class="coefficient-selection-cell">
                 <el-checkbox
                   :model-value="selectedStandardRowIds.length === standardRows.length"
+                  aria-label="全选标样含量样品"
                   data-testid="select-all-standard-rows"
                   @change="toggleStandardAll(Boolean($event))"
                 />
@@ -28,6 +28,7 @@
               <td v-if="standardDeleteMode" class="coefficient-selection-cell">
                 <el-checkbox
                   :model-value="selectedStandardRowIds.includes(row.id)"
+                  :aria-label="`选择标样含量样品 ${row.code}`"
                   :data-testid="`select-standard-row-${row.id}`"
                   @change="toggleStandardRow(row.id, Boolean($event))"
                 />
@@ -60,10 +61,20 @@
         >确认删除</el-button>
         <span v-if="selectedStandardRowIds.length >= standardRows.length">至少保留一个样品</span>
       </div>
-      <div class="add-standard-row">
+      <div class="add-standard-row" data-testid="standard-bottom-actions">
         <span>增加标样</span>
-        <el-input-number v-model="standardAddCount" :min="1" :max="50" :step="1" :precision="0" controls-position="right" />
+        <el-input-number
+          v-model="standardAddCount"
+          :min="1"
+          :max="50"
+          :step="1"
+          :precision="0"
+          value-on-clear="min"
+          controls-position="right"
+          data-testid="standard-add-count"
+        />
         <el-button type="primary" data-testid="add-standard-rows" @click="addStandardRows">确认增加</el-button>
+        <el-button class="coefficient-delete-entry" type="danger" plain data-testid="delete-standard-rows" @click="standardDeleteMode = true">删除样品</el-button>
       </div>
     </section>
 
@@ -72,10 +83,7 @@
         <div>
           <h2>标样系数计算</h2>
         </div>
-        <div class="coefficient-section__header-actions">
-          <el-button type="danger" plain data-testid="delete-calculation-rows" @click="calculationDeleteMode = true">批量删除</el-button>
-          <el-button type="primary" :loading="labStore.applyingParameters || labStore.loading" @click="openApplicationDialog">应用系数</el-button>
-        </div>
+        <el-button type="primary" :loading="labStore.applyingParameters || labStore.loading" @click="openApplicationDialog">应用系数</el-button>
       </div>
 
       <div class="parameter-grid">
@@ -98,6 +106,7 @@
               <th v-if="calculationDeleteMode" class="coefficient-selection-cell">
                 <el-checkbox
                   :model-value="selectedCalculationRowIds.length === calculationRows.length"
+                  aria-label="全选标样系数计算样品"
                   data-testid="select-all-calculation-rows"
                   @change="toggleCalculationAll(Boolean($event))"
                 />
@@ -111,6 +120,7 @@
               <td v-if="calculationDeleteMode" class="coefficient-selection-cell">
                 <el-checkbox
                   :model-value="selectedCalculationRowIds.includes(row.id)"
+                  :aria-label="`选择标样系数计算样品 ${row.code}`"
                   :data-testid="`select-calculation-row-${row.id}`"
                   @change="toggleCalculationRow(row.id, Boolean($event))"
                 />
@@ -145,10 +155,20 @@
         >确认删除</el-button>
         <span v-if="selectedCalculationRowIds.length >= calculationRows.length">至少保留一个样品</span>
       </div>
-      <div class="add-standard-row">
+      <div class="add-standard-row" data-testid="calculation-bottom-actions">
         <span>增加标样</span>
-        <el-input-number v-model="calculationAddCount" :min="1" :max="50" :step="1" :precision="0" controls-position="right" />
+        <el-input-number
+          v-model="calculationAddCount"
+          :min="1"
+          :max="50"
+          :step="1"
+          :precision="0"
+          value-on-clear="min"
+          controls-position="right"
+          data-testid="calculation-add-count"
+        />
         <el-button type="primary" data-testid="add-calculation-rows" @click="addCalculationRows">确认增加</el-button>
+        <el-button class="coefficient-delete-entry" type="danger" plain data-testid="delete-calculation-rows" @click="calculationDeleteMode = true">删除样品</el-button>
       </div>
     </section>
 
@@ -171,7 +191,13 @@ import type { AuthUser } from '@/types/auth'
 import { defaultLabParameters, labParameterLabels } from '@/constants/labSheetTemplate'
 import { useLabSheetStore } from '@/stores/labSheet'
 import { calculateSampleResults, formatFormulaValue } from '@/utils/formulaEngine'
-import { deleteCoefficientRows, formatCoefficientRowCode, inferCoefficientRowAutoCode } from '@/utils/coefficientRows'
+import {
+  deleteCoefficientRows,
+  formatCoefficientRowCode,
+  inferCoefficientRowAutoCode,
+  normalizeCoefficientAddCount,
+  normalizeCoefficientRowId
+} from '@/utils/coefficientRows'
 import CoefficientApplicationDialog from '@/components/lab-sheet/CoefficientApplicationDialog.vue'
 
 type ContentElementKey = 'aluminum' | 'silicon' | 'iron' | 'calcium' | 'magnesium' | 'titanium'
@@ -192,19 +218,22 @@ interface CalculationRow {
   inputs: Record<CalculationInputKey, number | null>
 }
 
-type StoredRowIdentity = { id?: string; code?: string; autoCode?: boolean }
-
-interface CoefficientCalculationStorage {
+interface CoefficientCalculationSavedState {
   parameters?: Partial<LabParameter>
-  addCount?: number // 只兼容读取旧数据
-  standardAddCount?: number
-  calculationAddCount?: number
-  standardRows?: Array<Partial<Record<ContentElementKey, number | null>> & StoredRowIdentity>
-  calculationRows?: Array<StoredRowIdentity & {
-    inputs?: Partial<Record<CalculationInputKey, number | null>>
-  }>
+  addCount?: unknown // 只兼容读取旧数据
+  standardAddCount?: unknown
+  calculationAddCount?: unknown
+  standardRows?: unknown
+  calculationRows?: unknown
 }
-type StoredCalculationRow = NonNullable<CoefficientCalculationStorage['calculationRows']>[number]
+
+interface CoefficientCalculationStoragePayload {
+  parameters: LabParameter
+  standardAddCount: number
+  calculationAddCount: number
+  standardRows: StandardContentRow[]
+  calculationRows: CalculationRow[]
+}
 
 const labStore = useLabSheetStore()
 const STORAGE_KEY_PREFIX = 'ys_coefficient_calculation_inputs'
@@ -235,9 +264,13 @@ const calculationElements: Array<{
 
 const savedState = readSavedState()
 const parameters = reactive<LabParameter>({ ...defaultLabParameters, ...savedState.parameters })
-const legacyAddCount = normalizePositiveInteger(savedState.addCount) || 1
-const standardAddCount = ref(savedState.standardAddCount || legacyAddCount)
-const calculationAddCount = ref(savedState.calculationAddCount || legacyAddCount)
+const legacyAddCount = normalizeCoefficientAddCount(savedState.addCount)
+const standardAddCount = ref(savedState.standardAddCount === undefined
+  ? legacyAddCount
+  : normalizeCoefficientAddCount(savedState.standardAddCount))
+const calculationAddCount = ref(savedState.calculationAddCount === undefined
+  ? legacyAddCount
+  : normalizeCoefficientAddCount(savedState.calculationAddCount))
 const standardRows = reactive<StandardContentRow[]>(normalizeStandardRows(savedState.standardRows))
 const calculationRows = reactive<CalculationRow[]>(normalizeCalculationRows(savedState.calculationRows))
 const standardDeleteMode = ref(false)
@@ -259,11 +292,12 @@ function createStandardRow(index: number): StandardContentRow {
   }
 }
 
-function normalizeStandardRows(rows: CoefficientCalculationStorage['standardRows']) {
-  const source = rows?.length ? rows : [{}, {}, {}]
+function normalizeStandardRows(rows: unknown) {
+  const source = normalizeStoredRowCollection(rows)
+  const usedIds = new Set<string>()
   return source.map((row, index) => {
     const next = createStandardRow(index + 1)
-    next.id = typeof row.id === 'string' && row.id.trim() ? row.id : next.id
+    next.id = normalizeCoefficientRowId(row.id, usedIds, () => next.id)
     next.code = typeof row.code === 'string' ? row.code : next.code
     next.autoCode = inferCoefficientRowAutoCode(next.code, index + 1, row.autoCode)
     contentElements.forEach((element) => {
@@ -289,18 +323,29 @@ function createCalculationRow(index: number): CalculationRow {
   }
 }
 
-function normalizeCalculationRows(rows: CoefficientCalculationStorage['calculationRows']) {
-  const source: StoredCalculationRow[] = rows?.length ? rows : [{}, {}, {}]
+function normalizeCalculationRows(rows: unknown) {
+  const source = normalizeStoredRowCollection(rows)
+  const usedIds = new Set<string>()
   return source.map((row, index) => {
     const next = createCalculationRow(index + 1)
-    next.id = typeof row.id === 'string' && row.id.trim() ? row.id : next.id
+    next.id = normalizeCoefficientRowId(row.id, usedIds, () => next.id)
     next.code = typeof row.code === 'string' ? row.code : next.code
     next.autoCode = inferCoefficientRowAutoCode(next.code, index + 1, row.autoCode)
+    const inputs = isNonArrayObject(row.inputs) ? row.inputs : {}
     calculationElements.forEach((element) => {
-      next.inputs[element.inputField] = normalizeNullableNumber(row.inputs?.[element.inputField])
+      next.inputs[element.inputField] = normalizeNullableNumber(inputs[element.inputField])
     })
     return next
   })
+}
+
+function normalizeStoredRowCollection(rows: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(rows) || !rows.length || !rows.every(isNonArrayObject)) return [{}, {}, {}]
+  return rows
+}
+
+function isNonArrayObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function normalizeNullableNumber(value: unknown) {
@@ -309,13 +354,17 @@ function normalizeNullableNumber(value: unknown) {
 }
 
 function addStandardRows() {
-  for (let offset = 0; offset < standardAddCount.value; offset += 1) {
+  const count = normalizeCoefficientAddCount(standardAddCount.value)
+  standardAddCount.value = count
+  for (let offset = 0; offset < count; offset += 1) {
     standardRows.push(createStandardRow(standardRows.length + 1))
   }
 }
 
 function addCalculationRows() {
-  for (let offset = 0; offset < calculationAddCount.value; offset += 1) {
+  const count = normalizeCoefficientAddCount(calculationAddCount.value)
+  calculationAddCount.value = count
+  for (let offset = 0; offset < count; offset += 1) {
     calculationRows.push(createCalculationRow(calculationRows.length + 1))
   }
 }
@@ -408,17 +457,18 @@ function currentStorageKey() {
   }
 }
 
-function readSavedState(): CoefficientCalculationStorage {
+function readSavedState(): CoefficientCalculationSavedState {
   if (typeof window === 'undefined') return {}
   const raw = window.localStorage.getItem(currentStorageKey())
   if (!raw) return {}
   try {
-    const parsed = JSON.parse(raw) as CoefficientCalculationStorage
+    const parsed: unknown = JSON.parse(raw)
+    if (!isNonArrayObject(parsed)) return {}
     return {
       parameters: normalizeParameters(parsed.parameters),
-      addCount: normalizePositiveInteger(parsed.addCount),
-      standardAddCount: normalizePositiveInteger(parsed.standardAddCount),
-      calculationAddCount: normalizePositiveInteger(parsed.calculationAddCount),
+      addCount: parsed.addCount,
+      standardAddCount: parsed.standardAddCount,
+      calculationAddCount: parsed.calculationAddCount,
       standardRows: parsed.standardRows,
       calculationRows: parsed.calculationRows
     }
@@ -438,16 +488,12 @@ function normalizeParameters(source: unknown) {
   }, {})
 }
 
-function normalizePositiveInteger(value: unknown) {
-  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined
-}
-
 function saveState() {
   if (typeof window === 'undefined') return
-  const payload: CoefficientCalculationStorage = {
+  const payload: CoefficientCalculationStoragePayload = {
     parameters: { ...parameters },
-    standardAddCount: standardAddCount.value,
-    calculationAddCount: calculationAddCount.value,
+    standardAddCount: normalizeCoefficientAddCount(standardAddCount.value),
+    calculationAddCount: normalizeCoefficientAddCount(calculationAddCount.value),
     standardRows: standardRows.map((row) => ({ ...row })),
     calculationRows: calculationRows.map((row) => ({
       id: row.id,
@@ -546,12 +592,6 @@ function isMissingStartBoundaryError(error: unknown) {
     font-size: 18px;
     line-height: 1.25;
   }
-}
-
-.coefficient-section__header-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 .coefficient-table-wrap {
@@ -653,6 +693,10 @@ function isMissingStartBoundaryError(error: unknown) {
   }
 }
 
+.coefficient-delete-entry {
+  margin-left: auto;
+}
+
 .coefficient-row-actions {
   display: flex;
   align-items: center;
@@ -705,10 +749,13 @@ function isMissingStartBoundaryError(error: unknown) {
 
 @media (max-width: 720px) {
   .add-standard-row,
-  .coefficient-row-actions,
-  .coefficient-section__header-actions {
+  .coefficient-row-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .coefficient-delete-entry {
+    margin-left: 0;
   }
 }
 </style>

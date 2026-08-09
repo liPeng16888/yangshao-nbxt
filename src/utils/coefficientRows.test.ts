@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   deleteCoefficientRows,
   inferCoefficientRowAutoCode,
+  normalizeCoefficientAddCount,
+  normalizeCoefficientRowId,
   renumberAutomaticCoefficientRows
 } from './coefficientRows'
 
@@ -31,5 +33,23 @@ describe('coefficient row identity', () => {
     ]
     expect(deleteCoefficientRows(rows, new Set(['2']))).toHaveLength(2)
     expect(() => deleteCoefficientRows(rows, new Set(['1', '2', '3']))).toThrow('至少保留一个样品')
+  })
+
+  it.each([
+    [null, 1],
+    [0, 1],
+    [-3, 1],
+    [2.8, 2],
+    [75, 50]
+  ])('normalizes add count %s into the supported integer range', (value, expected) => {
+    expect(normalizeCoefficientAddCount(value)).toBe(expected)
+  })
+
+  it('keeps a valid unique ID and regenerates blank or duplicate IDs', () => {
+    const used = new Set<string>()
+    expect(normalizeCoefficientRowId('stored-1', used, () => 'generated-1')).toBe('stored-1')
+    expect(normalizeCoefficientRowId('stored-1', used, () => 'generated-2')).toBe('generated-2')
+    expect(normalizeCoefficientRowId('   ', used, () => 'generated-3')).toBe('generated-3')
+    expect([...used]).toEqual(['stored-1', 'generated-2', 'generated-3'])
   })
 })
