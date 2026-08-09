@@ -5,20 +5,35 @@
         <div>
           <h2>标样含量</h2>
         </div>
+        <el-button type="danger" plain data-testid="delete-standard-rows" @click="standardDeleteMode = true">批量删除</el-button>
       </div>
 
       <div class="coefficient-table-wrap">
         <table class="coefficient-table coefficient-table--content">
           <thead>
             <tr>
+              <th v-if="standardDeleteMode" class="coefficient-selection-cell">
+                <el-checkbox
+                  :model-value="selectedStandardRowIds.length === standardRows.length"
+                  data-testid="select-all-standard-rows"
+                  @change="toggleStandardAll(Boolean($event))"
+                />
+              </th>
               <th>编号</th>
               <th v-for="element in contentElements" :key="element.key">{{ element.label }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in standardRows" :key="row.id" data-testid="standard-row">
+            <tr v-for="row in standardRows" :key="row.id" :data-code="row.code" data-testid="standard-row">
+              <td v-if="standardDeleteMode" class="coefficient-selection-cell">
+                <el-checkbox
+                  :model-value="selectedStandardRowIds.includes(row.id)"
+                  :data-testid="`select-standard-row-${row.id}`"
+                  @change="toggleStandardRow(row.id, Boolean($event))"
+                />
+              </td>
               <td>
-                <el-input v-model="row.code" placeholder="填写编号" />
+                <el-input v-model="row.code" placeholder="填写编号" @input="row.autoCode = false" />
               </td>
               <td v-for="element in contentElements" :key="element.key">
                 <el-input-number
@@ -34,6 +49,17 @@
         </table>
       </div>
 
+      <div v-if="standardDeleteMode" class="coefficient-row-actions">
+        <span data-testid="standard-selection-count">已选择 {{ selectedStandardRowIds.length }} 个</span>
+        <el-button @click="cancelStandardDeletion">取消</el-button>
+        <el-button
+          type="danger"
+          data-testid="confirm-delete-standard-rows"
+          :disabled="!selectedStandardRowIds.length || selectedStandardRowIds.length >= standardRows.length"
+          @click="confirmStandardDeletion"
+        >确认删除</el-button>
+        <span v-if="selectedStandardRowIds.length >= standardRows.length">至少保留一个样品</span>
+      </div>
       <div class="add-standard-row">
         <span>增加标样</span>
         <el-input-number v-model="standardAddCount" :min="1" :max="50" :step="1" :precision="0" controls-position="right" />
@@ -46,7 +72,10 @@
         <div>
           <h2>标样系数计算</h2>
         </div>
-        <el-button type="primary" :loading="labStore.applyingParameters || labStore.loading" @click="openApplicationDialog">应用系数</el-button>
+        <div class="coefficient-section__header-actions">
+          <el-button type="danger" plain data-testid="delete-calculation-rows" @click="calculationDeleteMode = true">批量删除</el-button>
+          <el-button type="primary" :loading="labStore.applyingParameters || labStore.loading" @click="openApplicationDialog">应用系数</el-button>
+        </div>
       </div>
 
       <div class="parameter-grid">
@@ -66,14 +95,28 @@
         <table class="coefficient-table coefficient-table--calculation">
           <thead>
             <tr>
+              <th v-if="calculationDeleteMode" class="coefficient-selection-cell">
+                <el-checkbox
+                  :model-value="selectedCalculationRowIds.length === calculationRows.length"
+                  data-testid="select-all-calculation-rows"
+                  @change="toggleCalculationAll(Boolean($event))"
+                />
+              </th>
               <th>元素编号</th>
               <th v-for="element in calculationElements" :key="element.inputField">{{ element.label }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in calculationRows" :key="row.id" data-testid="calculation-row">
+            <tr v-for="row in calculationRows" :key="row.id" :data-code="row.code" data-testid="calculation-row">
+              <td v-if="calculationDeleteMode" class="coefficient-selection-cell">
+                <el-checkbox
+                  :model-value="selectedCalculationRowIds.includes(row.id)"
+                  :data-testid="`select-calculation-row-${row.id}`"
+                  @change="toggleCalculationRow(row.id, Boolean($event))"
+                />
+              </td>
               <td>
-                <el-input v-model="row.code" placeholder="填写编号" />
+                <el-input v-model="row.code" placeholder="填写编号" @input="row.autoCode = false" />
               </td>
               <td v-for="element in calculationElements" :key="element.inputField" class="calculation-cell">
                 <div class="calculation-cell__stack">
@@ -90,6 +133,17 @@
             </tr>
           </tbody>
         </table>
+      </div>
+      <div v-if="calculationDeleteMode" class="coefficient-row-actions">
+        <span data-testid="calculation-selection-count">已选择 {{ selectedCalculationRowIds.length }} 个</span>
+        <el-button @click="cancelCalculationDeletion">取消</el-button>
+        <el-button
+          type="danger"
+          data-testid="confirm-delete-calculation-rows"
+          :disabled="!selectedCalculationRowIds.length || selectedCalculationRowIds.length >= calculationRows.length"
+          @click="confirmCalculationDeletion"
+        >确认删除</el-button>
+        <span v-if="selectedCalculationRowIds.length >= calculationRows.length">至少保留一个样品</span>
       </div>
       <div class="add-standard-row">
         <span>增加标样</span>
@@ -111,13 +165,13 @@
 
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { LabFormulaResult, LabParameter } from '@/types/labSheet'
 import type { AuthUser } from '@/types/auth'
 import { defaultLabParameters, labParameterLabels } from '@/constants/labSheetTemplate'
 import { useLabSheetStore } from '@/stores/labSheet'
 import { calculateSampleResults, formatFormulaValue } from '@/utils/formulaEngine'
-import { formatCoefficientRowCode, inferCoefficientRowAutoCode } from '@/utils/coefficientRows'
+import { deleteCoefficientRows, formatCoefficientRowCode, inferCoefficientRowAutoCode } from '@/utils/coefficientRows'
 import CoefficientApplicationDialog from '@/components/lab-sheet/CoefficientApplicationDialog.vue'
 
 type ContentElementKey = 'aluminum' | 'silicon' | 'iron' | 'calcium' | 'magnesium' | 'titanium'
@@ -186,6 +240,10 @@ const standardAddCount = ref(savedState.standardAddCount || legacyAddCount)
 const calculationAddCount = ref(savedState.calculationAddCount || legacyAddCount)
 const standardRows = reactive<StandardContentRow[]>(normalizeStandardRows(savedState.standardRows))
 const calculationRows = reactive<CalculationRow[]>(normalizeCalculationRows(savedState.calculationRows))
+const standardDeleteMode = ref(false)
+const calculationDeleteMode = ref(false)
+const selectedStandardRowIds = ref<string[]>([])
+const selectedCalculationRowIds = ref<string[]>([])
 
 function createStandardRow(index: number): StandardContentRow {
   return {
@@ -260,6 +318,82 @@ function addCalculationRows() {
   for (let offset = 0; offset < calculationAddCount.value; offset += 1) {
     calculationRows.push(createCalculationRow(calculationRows.length + 1))
   }
+}
+
+function toggleStandardRow(id: string, checked: boolean) {
+  selectedStandardRowIds.value = checked
+    ? [...new Set([...selectedStandardRowIds.value, id])]
+    : selectedStandardRowIds.value.filter((selectedId) => selectedId !== id)
+}
+
+function toggleCalculationRow(id: string, checked: boolean) {
+  selectedCalculationRowIds.value = checked
+    ? [...new Set([...selectedCalculationRowIds.value, id])]
+    : selectedCalculationRowIds.value.filter((selectedId) => selectedId !== id)
+}
+
+function toggleStandardAll(checked: boolean) {
+  selectedStandardRowIds.value = checked ? standardRows.map((row) => row.id) : []
+}
+
+function toggleCalculationAll(checked: boolean) {
+  selectedCalculationRowIds.value = checked ? calculationRows.map((row) => row.id) : []
+}
+
+function cancelStandardDeletion() {
+  standardDeleteMode.value = false
+  selectedStandardRowIds.value = []
+}
+
+function cancelCalculationDeletion() {
+  calculationDeleteMode.value = false
+  selectedCalculationRowIds.value = []
+}
+
+async function confirmStandardDeletion() {
+  if (!selectedStandardRowIds.value.length) return
+  if (selectedStandardRowIds.value.length >= standardRows.length) {
+    ElMessage.warning('标样含量至少保留一个样品')
+    return
+  }
+  const selected = new Set(selectedStandardRowIds.value)
+  const codes = standardRows.filter((row) => selected.has(row.id)).map((row) => row.code)
+  try {
+    await ElMessageBox.confirm(
+      `将删除 ${codes.join('、')}，共 ${codes.length} 个样品。删除后无法撤销，是否继续？`,
+      '确认删除标样含量',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  const remaining = deleteCoefficientRows(standardRows, selected)
+  standardRows.splice(0, standardRows.length, ...remaining)
+  cancelStandardDeletion()
+  ElMessage.success(`已删除 ${codes.length} 个标样含量样品`)
+}
+
+async function confirmCalculationDeletion() {
+  if (!selectedCalculationRowIds.value.length) return
+  if (selectedCalculationRowIds.value.length >= calculationRows.length) {
+    ElMessage.warning('标样系数计算至少保留一个样品')
+    return
+  }
+  const selected = new Set(selectedCalculationRowIds.value)
+  const codes = calculationRows.filter((row) => selected.has(row.id)).map((row) => row.code)
+  try {
+    await ElMessageBox.confirm(
+      `将删除 ${codes.join('、')}，共 ${codes.length} 个样品。删除后无法撤销，是否继续？`,
+      '确认删除标样系数计算',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  const remaining = deleteCoefficientRows(calculationRows, selected)
+  calculationRows.splice(0, calculationRows.length, ...remaining)
+  cancelCalculationDeletion()
+  ElMessage.success(`已删除 ${codes.length} 个标样系数计算样品`)
 }
 
 function currentStorageKey() {
@@ -414,6 +548,12 @@ function isMissingStartBoundaryError(error: unknown) {
   }
 }
 
+.coefficient-section__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .coefficient-table-wrap {
   overflow-x: auto;
   padding: 14px;
@@ -449,6 +589,11 @@ function isMissingStartBoundaryError(error: unknown) {
     min-height: 34px;
     box-shadow: none;
   }
+}
+
+.coefficient-selection-cell {
+  width: 48px;
+  min-width: 48px;
 }
 
 .coefficient-table--content {
@@ -508,6 +653,16 @@ function isMissingStartBoundaryError(error: unknown) {
   }
 }
 
+.coefficient-row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 14px 12px;
+  color: #10233f;
+  font-weight: 700;
+}
+
 .parameter-grid {
   display: grid;
   grid-template-columns: repeat(9, minmax(116px, 1fr));
@@ -549,7 +704,9 @@ function isMissingStartBoundaryError(error: unknown) {
 }
 
 @media (max-width: 720px) {
-  .add-standard-row {
+  .add-standard-row,
+  .coefficient-row-actions,
+  .coefficient-section__header-actions {
     align-items: stretch;
     flex-direction: column;
   }

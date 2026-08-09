@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { defineComponent, h, nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -21,6 +21,8 @@ const messageMocks = vi.hoisted(() => ({
   warning: vi.fn()
 }))
 
+const messageBoxMocks = vi.hoisted(() => ({ confirm: vi.fn() }))
+
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>()
   return {
@@ -40,8 +42,23 @@ vi.mock('@/api/labSheet', async (importOriginal) => ({
 
 vi.mock('element-plus', async (importOriginal) => ({
   ...(await importOriginal<typeof import('element-plus')>()),
-  ElMessage: messageMocks
+  ElMessage: messageMocks,
+  ElMessageBox: messageBoxMocks
 }))
+
+const ElCheckboxStub = defineComponent({
+  inheritAttrs: false,
+  props: { modelValue: Boolean },
+  emits: ['change'],
+  setup(props, { attrs, emit }) {
+    return () => h('button', {
+      ...attrs,
+      type: 'button',
+      'aria-pressed': String(props.modelValue),
+      onClick: () => emit('change', !props.modelValue)
+    })
+  }
+})
 
 function makeBlock(index: number): SampleBlock {
   return {
@@ -97,11 +114,32 @@ function mountPage() {
           template: '<button type="button" @click="$emit(\'click\')"><slot /></button>'
         },
         ElInput: true,
-        ElInputNumber: true
+        ElInputNumber: true,
+        ElCheckbox: ElCheckboxStub
       }
     }
   })
   return { wrapper, store: useLabSheetStore(pinia) }
+}
+
+function seedIndependentRows(options: {
+  standardRows?: Array<{ id: string; code: string; autoCode: boolean }>
+  calculationRows?: Array<{ id: string; code: string; autoCode: boolean; inputs?: Record<string, null> }>
+}) {
+  window.localStorage.setItem('ys_coefficient_calculation_inputs:guest', JSON.stringify({
+    parameters: { ironBlank: 0.123, ironFactor: 29.1 },
+    standardRows: options.standardRows,
+    calculationRows: options.calculationRows
+  }))
+}
+
+function rowCodes(wrapper: VueWrapper, kind: 'standard' | 'calculation') {
+  return wrapper.findAll(`[data-testid="${kind}-row"]`).map((row) => row.attributes('data-code'))
+}
+
+async function selectRow(wrapper: VueWrapper, kind: 'standard' | 'calculation', id: string) {
+  await wrapper.get(`[data-testid="select-${kind}-row-${id}"]`).trigger('click')
+  await nextTick()
 }
 
 async function openApplicationDialog(wrapper: ReturnType<typeof mountPage>['wrapper']) {
@@ -170,6 +208,94 @@ describe('CoefficientCalculationPage coefficient application', () => {
     expect(wrapper.findAll('[data-testid="calculation-row"]')).toHaveLength(calculationBefore)
     await wrapper.get('[data-testid="add-calculation-rows"]').trigger('click')
     expect(wrapper.findAll('[data-testid="calculation-row"]')).toHaveLength(calculationBefore + 1)
+  })
+
+  it('deletes selected standard rows without touching calculation rows', async () => {
+    seedIndependentRows({
+      standardRows: [
+        { id: 'standard-1', code: '001', autoCode: true },
+        { id: 'standard-2', code: '002', autoCode: true },
+        { id: 'standard-3', code: '003', autoCode: true }
+      ],
+      calculationRows: [
+        { id: 'calculation-1', code: '001', autoCode: true, inputs: {} },
+        { id: 'calculation-2', code: '002', autoCode: true, inputs: {} }
+      ]
+    })
+    messageBoxMocks.confirm.mockResolvedValueOnce('confirm')
+    const { wrapper } = mountPage()
+    const calculationCodesBefore = rowCodes(wrapper, 'calculation')
+
+    await wrapper.get('[data-testid="delete-standard-rows"]').trigger('click')
+    await selectRow(wrapper, 'standard', 'standard-2')
+    await wrapper.get('[data-testid="confirm-delete-standard-rows"]').trigger('click')
+    await flushPromises()
+
+    expect(rowCodes(wrapper, 'standard')).toEqual(['001', '002'])
+    expect(rowCodes(wrapper, 'calculation')).toEqual(calculationCodesBefore)
+    expect(messageBoxMocks.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('002'),
+      expect.stringContaining('标样含量'),
+      expect.any(Object)
+    )
+  })
+
+  it('keeps a custom calculation code when another calculation row is deleted', async () => {
+    seedIndependentRows({
+      calculationRows: [
+        { id: 'calculation-1', code: '001', autoCode: true, inputs: {} },
+        { id: 'calculation-2', code: 'CUSTOM', autoCode: false, inputs: {} },
+        { id: 'calculation-3', code: '003', autoCode: true, inputs: {} }
+      ]
+    })
+    messageBoxMocks.confirm.mockResolvedValueOnce('confirm')
+    const { wrapper } = mountPage()
+    const standardBefore = rowCodes(wrapper, 'standard')
+
+    await wrapper.get('[data-testid="delete-calculation-rows"]').trigger('click')
+    await selectRow(wrapper, 'calculation', 'calculation-1')
+    await wrapper.get('[data-testid="confirm-delete-calculation-rows"]').trigger('click')
+    await flushPromises()
+
+    expect(rowCodes(wrapper, 'calculation')).toEqual(['CUSTOM', '002'])
+    expect(rowCodes(wrapper, 'standard')).toEqual(standardBefore)
+  })
+
+  it('refuses to delete every row and keeps at least one sample', async () => {
+    seedIndependentRows({
+      standardRows: [
+        { id: 'standard-1', code: '001', autoCode: true },
+        { id: 'standard-2', code: '002', autoCode: true }
+      ]
+    })
+    const { wrapper } = mountPage()
+
+    await wrapper.get('[data-testid="delete-standard-rows"]').trigger('click')
+    await selectRow(wrapper, 'standard', 'standard-1')
+    await selectRow(wrapper, 'standard', 'standard-2')
+
+    expect(wrapper.get('[data-testid="confirm-delete-standard-rows"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('至少保留一个样品')
+    expect(messageBoxMocks.confirm).not.toHaveBeenCalled()
+  })
+
+  it('keeps rows and selections when the confirmation is cancelled', async () => {
+    seedIndependentRows({
+      standardRows: [
+        { id: 'standard-1', code: '001', autoCode: true },
+        { id: 'standard-2', code: '002', autoCode: true }
+      ]
+    })
+    messageBoxMocks.confirm.mockRejectedValueOnce('cancel')
+    const { wrapper } = mountPage()
+
+    await wrapper.get('[data-testid="delete-standard-rows"]').trigger('click')
+    await selectRow(wrapper, 'standard', 'standard-2')
+    await wrapper.get('[data-testid="confirm-delete-standard-rows"]').trigger('click')
+    await flushPromises()
+
+    expect(rowCodes(wrapper, 'standard')).toEqual(['001', '002'])
+    expect(wrapper.get('[data-testid="standard-selection-count"]').text()).toContain('1')
   })
 
   it('loads samples and displays their sorted range before applying', async () => {
