@@ -1,5 +1,5 @@
-import { ConflictException } from '@nestjs/common'
-import { EmployeeLeaveStatus, EmployeePayrollStatus, EmployeeStatus } from '@prisma/client'
+import { BadRequestException, ConflictException } from '@nestjs/common'
+import { EmployeeLeaveStatus, EmployeePayrollStatus, EmployeeStatus, Prisma } from '@prisma/client'
 import { describe, expect, it, vi } from 'vitest'
 import { EmployeeDataCipherService } from './employee-data-cipher.service'
 import { EmployeeAttendanceService } from './employee-attendance.service'
@@ -21,23 +21,31 @@ function createService(overrides: Record<string, unknown> = {}) {
     employeeCommissionType: {
       findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn()
     },
-    employeeCommissionRecord: { count: vi.fn().mockResolvedValue(0) },
+    employeeCommissionRecord: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]) },
     employeeDateOverride: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
     employeeWeeklySchedule: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
-    employeeMonthlySetting: { count: vi.fn().mockResolvedValue(0) },
-    employeeBonus: { count: vi.fn().mockResolvedValue(0) },
+    employeeMonthlySetting: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), upsert: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+    employeeBonus: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]) },
     employeePayrollItem: { count: vi.fn().mockResolvedValue(0) },
     employeePayrollRun: { findFirst: vi.fn().mockResolvedValue(null) },
     employeeAuditLog: { create: vi.fn().mockResolvedValue({}) },
-    $transaction: vi.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
+    $executeRawUnsafe: vi.fn().mockResolvedValue(1),
+    $transaction: vi.fn(),
     ...overrides
   }
+  prisma.$transaction = vi.fn(async (argument: Array<Promise<unknown>> | ((tx: typeof prisma) => Promise<unknown>)) =>
+    typeof argument === 'function' ? argument(prisma) : Promise.all(argument))
+  return finishService(prisma)
+}
+
+function finishService(prisma: any) {
   const cipher = {
     encrypt: vi.fn((value: string) => `cipher:${value}`),
     decrypt: vi.fn((value: string) => value.replace('cipher:', '')),
     mask: vi.fn((value: string) => `***${value.slice(-4)}`)
   } as unknown as EmployeeDataCipherService
-  return { service: new EmployeeAttendanceService(prisma as never, cipher), prisma, cipher }
+  const photos = { remove: vi.fn().mockResolvedValue(true) }
+  return { service: new EmployeeAttendanceService(prisma as never, cipher, photos as never), prisma, cipher, photos }
 }
 
 describe('EmployeeAttendanceService ownership and conflicts', () => {
@@ -140,7 +148,7 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
 
   it('batch-generates a month without overwriting manually edited attendance', async () => {
     const { service, prisma } = createService()
-    prisma.employee.findMany.mockResolvedValue([{ id: 'employee-1' }])
+    prisma.employee.findMany.mockResolvedValue([{ id: 'employee-1', hireDate: '2026-01-01', terminationDate: null }])
     prisma.employeeAttendanceRecord.findMany.mockResolvedValue([{
       id: 'manual-1', employeeId: 'employee-1', date: '2026-08-10', manuallyEdited: true
     }])
@@ -153,6 +161,133 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     expect(prisma.employeeAttendanceRecord.update).not.toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'manual-1' } }))
   })
 
+  it('generates only dates inside inclusive employment intervals, including historical inactive employees', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findMany.mockResolvedValue([
+      { id: 'mid-hire', status: EmployeeStatus.ACTIVE, hireDate: '2026-08-15', terminationDate: '2026-08-20' },
+      { id: 'historical', status: EmployeeStatus.INACTIVE, hireDate: '2026-07-01', terminationDate: '2026-08-05' }
+    ])
+
+    const result = await service.generateAttendance('front-1', 'front-1', {
+      month: '2026-08', employeeIds: ['mid-hire', 'historical']
+    })
+
+    expect(prisma.employee.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { frontendUserId: 'front-1', id: { in: ['mid-hire', 'historical'] } }
+    }))
+    expect(result.created).toBe(11)
+    const dates = prisma.employeeAttendanceRecord.create.mock.calls.map((call: any[]) => call[0].data.date)
+    expect(dates).toContain('2026-08-15')
+    expect(dates).toContain('2026-08-20')
+    expect(dates).toContain('2026-08-01')
+    expect(dates).toContain('2026-08-05')
+    expect(dates).not.toContain('2026-08-06')
+  })
+
+  it('rejects leave when the date has no resolvable schedule or exceeds scheduled duration', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeLeaveType.findFirst.mockResolvedValue({ id: 'leave-type-1', frontendUserId: 'front-1', active: true })
+    prisma.employeeLeaveRequest.findFirst.mockResolvedValue(null)
+    prisma.employeeWeeklySchedule.findFirst.mockResolvedValue(null)
+
+    await expect(service.createLeaveRequest('front-1', 'front-1', {
+      employeeId: 'employee-1', leaveTypeId: 'leave-type-1', startDate: '2026-08-10', endDate: '2026-08-10',
+      unit: 'HOUR', hours: 1, reason: '事假'
+    })).rejects.toBeInstanceOf(ConflictException)
+
+    prisma.employeeWeeklySchedule.findFirst.mockResolvedValue({ isWorkday: true, scheduledMinutes: 360 })
+    await expect(service.createLeaveRequest('front-1', 'front-1', {
+      employeeId: 'employee-1', leaveTypeId: 'leave-type-1', startDate: '2026-08-10', endDate: '2026-08-10',
+      unit: 'HOUR', hours: 7, reason: '事假'
+    })).rejects.toBeInstanceOf(BadRequestException)
+  })
+
+  it('semantically validates moved dates and checks both source and destination payroll months', async () => {
+    const { service, prisma } = createService()
+    prisma.employeeDateOverride.findFirst.mockResolvedValueOnce({
+      id: 'override-1', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-10'
+    })
+
+    await expect(service.updateDateOverride('front-1', 'front-1', 'override-1', {
+      date: '2026-02-31'
+    })).rejects.toBeInstanceOf(BadRequestException)
+
+    prisma.employeeDateOverride.findFirst.mockReset().mockResolvedValueOnce({
+      id: 'override-1', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-10'
+    }).mockResolvedValueOnce(null)
+    prisma.employeePayrollRun.findFirst.mockImplementation(async ({ where }: any) =>
+      where.month === '2026-08' ? { id: 'confirmed' } : null
+    )
+    await expect(service.updateDateOverride('front-1', 'front-1', 'override-1', {
+      date: '2026-09-10'
+    })).rejects.toBeInstanceOf(ConflictException)
+  })
+
+  it('maps a concurrent attendance unique constraint to HTTP 409', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeAttendanceRecord.findFirst.mockResolvedValue(null)
+    prisma.employeeAttendanceRecord.create.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('duplicate', {
+      code: 'P2002', clientVersion: 'test'
+    }))
+
+    await expect(service.createAttendance('front-1', 'front-1', {
+      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480
+    })).rejects.toBeInstanceOf(ConflictException)
+  })
+
+  it('serializes leave overlap checking and creation inside one transaction', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeLeaveType.findFirst.mockResolvedValue({ id: 'leave-type-1', frontendUserId: 'front-1', active: true })
+    prisma.employeeWeeklySchedule.findFirst.mockResolvedValue({ isWorkday: true, scheduledMinutes: 480 })
+    prisma.employeeLeaveRequest.findFirst.mockResolvedValue(null)
+    prisma.employeeLeaveRequest.create.mockResolvedValue({ id: 'leave-1' })
+
+    await service.createLeaveRequest('front-1', 'front-1', {
+      employeeId: 'employee-1', leaveTypeId: 'leave-type-1', startDate: '2026-08-10', endDate: '2026-08-10',
+      unit: 'FULL_DAY', reason: '事假'
+    })
+
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', 'employee-leave:front-1:employee-1'
+    )
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+    })
+  })
+
+  it('runs a business mutation and audit insert in the same interactive transaction', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeBonus.create.mockResolvedValue({ id: 'bonus-1' })
+    prisma.employeeAuditLog.create.mockRejectedValue(new Error('audit failed'))
+
+    await expect(service.createBonus('front-1', 'front-1', {
+      employeeId: 'employee-1', date: '2026-08-10', amount: 100, reason: '优秀'
+    })).rejects.toThrow('audit failed')
+
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function))
+  })
+
+  it('requires bonus amounts to be greater than zero', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    await expect(service.createBonus('front-1', 'front-1', {
+      employeeId: 'employee-1', date: '2026-08-10', amount: -1, reason: '调整'
+    })).rejects.toBeInstanceOf(BadRequestException)
+  })
+
+  it('validates and honors leave list date/month filters', async () => {
+    const { service, prisma } = createService()
+    await service.listLeaveRequests('front-1', { startDate: '2026-08-10', endDate: '2026-08-20' })
+    expect(prisma.employeeLeaveRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({
+      startDate: { lte: '2026-08-20' }, endDate: { gte: '2026-08-10' }
+    }) }))
+    expect(() => service.listLeaveRequests('front-1', { month: '2026-13' })).toThrow(BadRequestException)
+  })
+
   it('deactivates an employee with historical records instead of deleting the employee', async () => {
     const { service, prisma } = createService()
     prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1', status: EmployeeStatus.ACTIVE })
@@ -163,5 +298,30 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
 
     expect(prisma.employee.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'employee-1' }, data: expect.objectContaining({ status: EmployeeStatus.INACTIVE }) }))
     expect(prisma.employee.delete).not.toHaveBeenCalled()
+  })
+
+  it('cleans replaced and hard-deleted private photos only after the database mutation succeeds', async () => {
+    const { service, prisma, photos } = createService()
+    prisma.employee.findFirst.mockResolvedValue({
+      id: 'employee-1', frontendUserId: 'front-1', photoPath: '/private/old.jpg', terminationDate: null
+    })
+    prisma.employee.update.mockResolvedValue({ id: 'employee-1' })
+
+    await service.attachPhoto('front-1', 'front-1', 'employee-1', '/private/new.jpg')
+    expect(photos.remove).toHaveBeenCalledWith('/private/old.jpg')
+
+    prisma.employeeAttendanceRecord.count.mockResolvedValue(0)
+    await service.deleteEmployee('front-1', 'front-1', 'employee-1')
+    expect(prisma.employee.delete).toHaveBeenCalledWith({ where: { id: 'employee-1' } })
+    expect(photos.remove).toHaveBeenCalledWith('/private/old.jpg')
+  })
+
+  it('does not turn successful photo replacement into a false failure when old-file cleanup fails', async () => {
+    const { service, prisma, photos } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1', photoPath: '/private/old.jpg' })
+    prisma.employee.update.mockResolvedValue({ id: 'employee-1' })
+    photos.remove.mockRejectedValue(new Error('unlink failed'))
+
+    await expect(service.attachPhoto('front-1', 'front-1', 'employee-1', '/private/new.jpg')).resolves.toEqual({ id: 'employee-1', hasPhoto: true })
   })
 })

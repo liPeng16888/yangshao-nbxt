@@ -62,12 +62,17 @@ export class EmployeeAttendanceController {
   }
 
   @Post('employees/:id/photo')
-  @UseInterceptors(FileInterceptor('photo'))
+  @UseInterceptors(FileInterceptor('photo', { limits: { fileSize: 5 * 1024 * 1024 } }))
   async uploadPhoto(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @UploadedFile() file: EmployeePhotoFile, @Headers('x-ys-access-grant') grant?: string) {
     await this.authorize(user.id, grant)
     await this.attendance.getEmployee(user.id, id)
     const photoPath = await this.photos.save(user.id, id, file)
-    return this.attendance.attachPhoto(user.id, user.id, id, photoPath)
+    try {
+      return await this.attendance.attachPhoto(user.id, user.id, id, photoPath)
+    } catch (error) {
+      await this.photos.remove(photoPath).catch(() => false)
+      throw error
+    }
   }
 
   @Get('employees/:id/photo')

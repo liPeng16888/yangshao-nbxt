@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 export interface EmployeePhotoFile {
@@ -45,6 +45,19 @@ export class PrivateEmployeePhotoService {
       return await readFile(resolved)
     } catch {
       throw new NotFoundException('员工照片不存在')
+    }
+  }
+
+  async remove(absolutePath: string) {
+    const resolved = path.resolve(absolutePath)
+    const root = this.root()
+    if (!resolved.startsWith(`${root}${path.sep}`)) return false
+    try {
+      await unlink(resolved)
+      return true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true
+      throw error
     }
   }
 
