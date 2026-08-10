@@ -20,7 +20,8 @@ function createController(options: { protected?: boolean; grantValid?: boolean }
     'listLeaveRequests', 'createLeaveRequest', 'updateLeaveRequest', 'deleteLeaveRequest', 'approveLeave', 'rejectLeave',
     'listCommissionTypes', 'createCommissionType', 'updateCommissionType', 'deleteCommissionType',
     'listCommissionRecords', 'createCommissionRecord', 'updateCommissionRecord', 'deleteCommissionRecord',
-    'listBonuses', 'createBonus', 'updateBonus', 'deleteBonus', 'compensationTotals'
+    'listBonuses', 'createBonus', 'updateBonus', 'deleteBonus', 'compensationTotals',
+    'overview', 'generate', 'getPayroll', 'createAdjustment', 'updateAdjustment', 'deleteAdjustment', 'confirm', 'reopen'
   ] as const
   const service = Object.fromEntries(serviceNames.map((name) => [name, vi.fn().mockResolvedValue({})])) as unknown as EmployeeAttendanceService
   const auth = {
@@ -32,7 +33,7 @@ function createController(options: { protected?: boolean; grantValid?: boolean }
     })
   }
   const photos = { save: vi.fn().mockResolvedValue('/private/new.jpg'), read: vi.fn().mockResolvedValue(Buffer.from('photo')), remove: vi.fn() }
-  return { controller: new EmployeeAttendanceController(service, auth as never, photos as never), service: service as any, auth, photos }
+  return { controller: new EmployeeAttendanceController(service, auth as never, photos as never, service as never), service: service as any, auth, photos }
 }
 
 describe('EmployeeAttendanceController authorization and ownership', () => {
@@ -138,7 +139,15 @@ describe('EmployeeAttendanceController authorization and ownership', () => {
       { method: 'createBonus', args: [body, grant], serviceMethod: 'createBonus', prefix: ['front-1', 'front-1'] },
       { method: 'updateBonus', args: ['id', body, grant], serviceMethod: 'updateBonus', prefix: ['front-1', 'front-1'] },
       { method: 'deleteBonus', args: ['id', grant], serviceMethod: 'deleteBonus', prefix: ['front-1', 'front-1'] },
-      { method: 'compensationTotals', args: ['2026-08', grant], serviceMethod: 'compensationTotals', prefix: ['front-1'] }
+      { method: 'compensationTotals', args: ['2026-08', grant], serviceMethod: 'compensationTotals', prefix: ['front-1'] },
+      { method: 'overview', args: ['2026-08', grant], serviceMethod: 'overview', prefix: ['front-1'] },
+      { method: 'generatePayroll', args: [{ month: '2026-08' }, grant], serviceMethod: 'generate', prefix: ['front-1', 'front-1'] },
+      { method: 'getPayroll', args: ['2026-08', grant], serviceMethod: 'getPayroll', prefix: ['front-1'] },
+      { method: 'createPayrollAdjustment', args: ['item-1', { amount: 10, reason: '调整' }, grant], serviceMethod: 'createAdjustment', prefix: ['front-1', 'front-1'] },
+      { method: 'updatePayrollAdjustment', args: ['adjustment-1', { amount: 10, reason: '调整' }, grant], serviceMethod: 'updateAdjustment', prefix: ['front-1', 'front-1'] },
+      { method: 'deletePayrollAdjustment', args: ['adjustment-1', grant], serviceMethod: 'deleteAdjustment', prefix: ['front-1', 'front-1'] },
+      { method: 'confirmPayroll', args: ['run-1', grant], serviceMethod: 'confirm', prefix: ['front-1', 'front-1'] },
+      { method: 'reopenPayroll', args: ['run-1', { reason: '补录' }, grant], serviceMethod: 'reopen', prefix: ['front-1', 'front-1'] }
     ]
     const routedMethods = Object.getOwnPropertyNames(EmployeeAttendanceController.prototype)
       .filter((name) => Reflect.getMetadata(METHOD_METADATA, EmployeeAttendanceController.prototype[name as keyof EmployeeAttendanceController]) !== undefined)

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Headers, Param, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Headers, Optional, Param, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import { AccessGuardFeature, UserRole } from '@prisma/client'
 import { AuthGuard } from '../auth/auth.guard'
@@ -10,10 +10,11 @@ import { RolesGuard } from '../auth/roles.guard'
 import {
   AttendanceDto, AttendanceListQueryDto, BonusDto, CommissionRecordDto, CommissionTypeDto,
   CreateEmployeeDto, DateOverrideDto, EmployeeQueryDto, GenerateAttendanceDto, LeaveRequestDto,
-  LeaveTypeDto, MonthlySettingDto, ReviewLeaveDto, WeeklyScheduleDto
+  LeaveTypeDto, MonthlySettingDto, PayrollAdjustmentDto, PayrollGenerateDto, PayrollReopenDto, ReviewLeaveDto, WeeklyScheduleDto
 } from './employee-attendance.dto'
 import { EmployeeAttendanceService } from './employee-attendance.service'
 import { EmployeePhotoFile, PrivateEmployeePhotoService } from './private-employee-photo.service'
+import { PayrollService } from './payroll.service'
 
 @Controller('employee-attendance')
 @UseGuards(AuthGuard, RolesGuard)
@@ -22,7 +23,8 @@ export class EmployeeAttendanceController {
   constructor(
     private readonly attendance: EmployeeAttendanceService,
     private readonly auth: AuthService,
-    private readonly photos: PrivateEmployeePhotoService
+    private readonly photos: PrivateEmployeePhotoService,
+    @Optional() private readonly payrollService?: PayrollService
   ) {}
 
   @Get('employees')
@@ -244,6 +246,46 @@ export class EmployeeAttendanceController {
   @Get('compensation/totals')
   async compensationTotals(@CurrentUserInfo() user: CurrentUser, @Query('month') month: string, @Headers('x-ys-access-grant') grant?: string) {
     await this.authorize(user.id, grant); return this.attendance.compensationTotals(user.id, month)
+  }
+
+  @Get('overview')
+  async overview(@CurrentUserInfo() user: CurrentUser, @Query('month') month: string, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.payrollService!.overview(user.id, month)
+  }
+
+  @Post('payroll/generate')
+  async generatePayroll(@CurrentUserInfo() user: CurrentUser, @Body() body: PayrollGenerateDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.payrollService!.generate(user.id, user.id, body.month)
+  }
+
+  @Get('payroll')
+  async getPayroll(@CurrentUserInfo() user: CurrentUser, @Query('month') month: string, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.payrollService!.getPayroll(user.id, month)
+  }
+
+  @Post('payroll/items/:itemId/adjustments')
+  async createPayrollAdjustment(@CurrentUserInfo() user: CurrentUser, @Param('itemId') itemId: string, @Body() body: PayrollAdjustmentDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.payrollService!.createAdjustment(user.id, user.id, itemId, body.amount, body.reason)
+  }
+
+  @Put('payroll/adjustments/:id')
+  async updatePayrollAdjustment(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: PayrollAdjustmentDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.payrollService!.updateAdjustment(user.id, user.id, id, body.amount, body.reason)
+  }
+
+  @Delete('payroll/adjustments/:id')
+  async deletePayrollAdjustment(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.payrollService!.deleteAdjustment(user.id, user.id, id)
+  }
+
+  @Post('payroll/:id/confirm')
+  async confirmPayroll(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.payrollService!.confirm(user.id, user.id, id)
+  }
+
+  @Post('payroll/:id/reopen')
+  async reopenPayroll(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: PayrollReopenDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.payrollService!.reopen(user.id, user.id, id, body.reason)
   }
 
   private async authorize(frontendUserId: string, grant?: string, requireGrant = false) {

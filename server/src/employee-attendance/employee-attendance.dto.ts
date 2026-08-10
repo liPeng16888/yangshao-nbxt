@@ -122,3 +122,29 @@ export class AttendanceListQueryDto {
   @IsOptional() @Matches(BUSINESS_MONTH_PATTERN) month?: string
   @IsOptional() @IsEnum(EmployeeLeaveStatus) status?: EmployeeLeaveStatus
 }
+
+export class PayrollGenerateDto {
+  @Matches(BUSINESS_MONTH_PATTERN) month!: string
+}
+
+export class PayrollAdjustmentDto {
+  @Transform(({ value }) => number(value)) @IsNumber() amount!: number
+  @Transform(({ value }) => trim(value)) @IsString() @IsNotEmpty() reason!: string
+}
+
+export class PayrollReopenDto {
+  @Transform(({ value }) => trim(value)) @IsString() @IsNotEmpty() reason!: string
+}
+
+export class AdminEmployeeAttendanceQueryDto {
+  @IsOptional() frontendUserIds?: string | string[]
+  @IsOptional() @IsString() employeeId?: string
+  @IsOptional() @Matches(BUSINESS_DATE_PATTERN) startDate?: string
+  @IsOptional() @Matches(BUSINESS_DATE_PATTERN) endDate?: string
+  @IsOptional() @Matches(BUSINESS_MONTH_PATTERN) month?: string
+  @IsOptional() @IsString() status?: string
+}
+
+export class AdminEmployeeRevealDto {
+  @IsString() @IsNotEmpty() password!: string
+}
