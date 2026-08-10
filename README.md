@@ -16,7 +16,7 @@ pnpm dev:admin
 pnpm dev:server
 ```
 
-客户前端默认使用开发 Mock 数据，可直接用下面账号登录：
+客户前端以 Mock 标志启动后，可直接用下面账号登录：
 
 ```text
 账号：admin
@@ -37,29 +37,21 @@ YANGSHAO-2026
 密码：admin123456
 ```
 
-开发预览数据不连接数据库；真实联调或部署时设置 `VITE_ADMIN_USE_MOCKS=false` 并启动后端服务。
+Mock 预览数据不连接数据库；已提交的环境模板默认关闭 Mock，避免生产构建误用演示数据。
 
 首次运行分别创建三个环境文件：
 
 ```bash
-cp .env.example .env
-cp admin/.env.example admin/.env
+cp .env.example .env.local
+cp admin/.env.example admin/.env.local
 cp server/.env.example server/.env
 ```
 
-本地同时演示两个前端时，请保持：
-
-```text
-VITE_USE_MOCKS=true
-# admin/.env
-VITE_ADMIN_USE_MOCKS=true
-```
-
-然后分别启动：
+前两个文件使用已被 Git 忽略的 Vite `.env.local`，后端使用已被 Git 忽略的 `server/.env`，真实密钥不会因为这套复制方式进入版本控制。模板中的两个 Mock 开关均为 `false`。仅在本地演示时，通过启动命令临时覆盖为 `true`：
 
 ```bash
-./node_modules/.bin/vite --host 127.0.0.1 --port 5173
-cd admin && ./node_modules/.bin/vite --host 127.0.0.1 --port 5174
+VITE_USE_MOCKS=true ./node_modules/.bin/vite --host 127.0.0.1 --port 5173
+cd admin && VITE_ADMIN_USE_MOCKS=true ./node_modules/.bin/vite --host 127.0.0.1 --port 5174
 ```
 
 - 客户前端登录后访问 `http://127.0.0.1:5173/employee-attendance/overview`。
@@ -83,10 +75,10 @@ cd admin && ./node_modules/.bin/vite --host 127.0.0.1 --port 5174
 ```text
 VITE_API_BASE_URL=/api
 VITE_APP_TITLE=仰韶化验室内部系统
-VITE_USE_MOCKS=true
+VITE_USE_MOCKS=false
 ```
 
-接入真实后端时，将 `VITE_USE_MOCKS` 改为 `false`，并确认 `VITE_API_BASE_URL` 指向后端网关或 Nginx 代理路径。
+接入真实后端时保持 `VITE_USE_MOCKS=false`，并确认 `VITE_API_BASE_URL` 指向后端网关或 Nginx 代理路径。后台同样保持 `VITE_ADMIN_USE_MOCKS=false`。
 
 后端需要配置 PostgreSQL、JWT 和主账号：
 
@@ -105,7 +97,7 @@ SERVER_PORT=3000
 
 `EMPLOYEE_DATA_CIPHER_SECRET` 专门用于员工身份证号、银行卡号、住址和紧急联系人等敏感字段的 AES-256-GCM 加密，不能复用 `PASSWORD_CIPHER_SECRET`。该密钥必须在同一套数据的整个生命周期保持不变；丢失或随意更换会导致已保存数据无法解密。请通过部署平台的密钥管理或仅管理员可读的环境文件保存，不要提交真实密钥。
 
-`PRIVATE_EMPLOYEE_PHOTO_DIR` 必须指向后端进程可读写、但 Nginx/静态站点不能直接公开访问的目录；员工照片只能通过已鉴权接口读取。该目录与数据库应一起纳入备份。
+`PRIVATE_EMPLOYEE_PHOTO_DIR` 必须指向后端进程可读写、但 Nginx/静态站点不能直接公开访问的目录；员工照片只能通过已鉴权接口读取。该目录与数据库应一起纳入备份。本地相对路径的 `private-uploads/` 和 `server/private-uploads/` 已加入 Git 忽略，但生产环境仍必须使用仓库之外的绝对路径。
 
 初始化数据库：
 
