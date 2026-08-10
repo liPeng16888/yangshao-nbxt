@@ -1,13 +1,20 @@
 import axios from 'axios'
+import type { AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
 import type {
   AdminAttendanceAuditRow,
+  AdminAttendanceAuditQuery,
+  AdminAttendanceRecord,
+  AdminBonusRecord,
+  AdminCommissionRecord,
   AdminAttendanceEmployee,
+  AdminAttendanceEmployeeResponse,
   AdminAttendanceOverview,
   AdminAttendancePayrollRun,
   AdminAttendanceSchedules,
   AdminCustomerOverviewRow,
   AdminEmployeeAttendanceQuery,
+  AdminLeaveRequest,
   AdminMedicineInventoryItem,
   AdminMedicineInventoryMovement,
   AdminRevealedAttendanceEmployee,
@@ -28,11 +35,13 @@ export type AdminProfilePayload = {
 }
 
 type AdminRequest = {
-  get<T = any, R = any>(url: string, config?: any): Promise<R>
-  post<T = any, R = any>(url: string, payload?: any, config?: any): Promise<R>
-  patch<T = any, R = any>(url: string, payload?: any, config?: any): Promise<R>
-  delete<T = any, R = any>(url: string, config?: any): Promise<R>
+  get<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
+  post<T = any, R = any>(url: string, payload?: any, config?: AdminRequestConfig): Promise<R>
+  patch<T = any, R = any>(url: string, payload?: any, config?: AdminRequestConfig): Promise<R>
+  delete<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
 }
+
+type AdminRequestConfig = AxiosRequestConfig & { preserveAdminSessionOnUnauthorized?: boolean }
 
 const realRequest = axios.create({
   baseURL: import.meta.env.VITE_ADMIN_API_BASE_URL || '/api',
@@ -58,7 +67,8 @@ realRequest.interceptors.response.use(
           : typeof data?.error === 'string'
             ? data.error
             : error?.message || '请求失败'
-    if (error?.response?.status === 401) {
+    const preserveSession = Boolean((error?.config as AdminRequestConfig | undefined)?.preserveAdminSessionOnUnauthorized)
+    if (error?.response?.status === 401 && !preserveSession) {
       localStorage.removeItem(ADMIN_TOKEN_KEY)
       localStorage.removeItem(ADMIN_USER_KEY)
       window.location.href = `${import.meta.env.BASE_URL}login`
@@ -279,7 +289,7 @@ const mockEmployeeAttendance = {
       items: [{ id: 'payroll-item-1', employeeId: 'emp-1', employeeNumberSnapshot: 'YG001', employeeNameSnapshot: '张三', payableAmount: 6596, issues: [], calculationSnapshot: { input: { baseSalary: 6000 }, result: { overtimePay: 0, commissionAmount: 96, bonusAmount: 200, leaveDeduction: 0, absenceDeduction: 0, payableAmount: 6596 } }, adjustments: [] }]
     }
   ],
-  audit: [] as Record<string, any>[]
+  audit: [] as AdminAttendanceAuditRow[]
 }
 
 function mockAdminUser() {
@@ -293,19 +303,32 @@ function mockAuthorizedFrontendIds() {
   return (sub?.permissions || []).map((item) => item.id)
 }
 
-function mockAttendanceIds(config?: any) {
+function mockAttendanceIds(config?: AdminRequestConfig) {
   const permitted = mockAuthorizedFrontendIds()
   const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
   return requested.length ? requested.filter((id) => permitted.includes(id)) : permitted
 }
 
-function mockAttendanceEntityFilter<T extends Record<string, any>>(rows: T[], config?: any) {
+function mockAttendanceEntityFilter<T extends Record<string, unknown>>(rows: T[], config?: AdminRequestConfig) {
   const ids = mockAttendanceIds(config)
   const employeeId = String(config?.params?.employeeId || '')
-  return rows.filter((row) => ids.includes(row.frontendUserId) && (!employeeId || row.employeeId === employeeId))
+  return rows.filter((row) => ids.includes(String(row.frontendUserId)) && (!employeeId || row.employeeId === employeeId))
 }
 
-function mockAttendanceFilter<T extends Record<string, any>>(rows: T[], config?: any, dateFields: [string, string?] = ['date']) {
+function mockMonthlyScheduleFilter(config?: AdminRequestConfig) {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  const month = String(config?.params?.month || '')
+  return mockEmployeeAttendance.schedules.monthly.filter((row) => ids.includes(row.frontendUserId)
+    && (!employeeId || row.employeeId === employeeId)
+    && (!month || row.month === month))
+}
+
+function isEmployeeAttendanceAdminPath(url: string) {
+  return url === '/admin/employee-attendance' || url.startsWith('/admin/employee-attendance/')
+}
+
+function mockAttendanceFilter<T extends Record<string, unknown>>(rows: T[], config?: AdminRequestConfig, dateFields: [string, string?] = ['date']) {
   const ids = mockAttendanceIds(config)
   const employeeId = String(config?.params?.employeeId || '')
   const month = String(config?.params?.month || '')
@@ -316,7 +339,7 @@ function mockAttendanceFilter<T extends Record<string, any>>(rows: T[], config?:
   return rows.filter((row) => {
     const rowStart = String(row[startField] || '')
     const rowEnd = String(row[endField] || rowStart)
-    return ids.includes(row.frontendUserId)
+    return ids.includes(String(row.frontendUserId))
       && (!employeeId || row.employeeId === employeeId)
       && (!month || rowStart.slice(0, 7) === month || (endField !== startField && rowStart <= `${month}-31` && rowEnd >= `${month}-01`))
       && (!startDate || rowEnd >= startDate)
@@ -429,7 +452,7 @@ function parseHistoryFields(value: unknown) {
 }
 
 const mockRequest = {
-  async get(url: string, config?: any) {
+  async get(url: string, config?: AdminRequestConfig) {
     if (url === '/admin/auth/me') return mockAdminUser()
     if (url === '/admin/frontend-users/options') {
       const allowed = mockAuthorizedFrontendIds()
@@ -462,7 +485,7 @@ const mockRequest = {
       return {
         weekly: mockAttendanceEntityFilter(mockEmployeeAttendance.schedules.weekly, config),
         overrides: mockAttendanceFilter(mockEmployeeAttendance.schedules.overrides, config),
-        monthly: mockAttendanceFilter(mockEmployeeAttendance.schedules.monthly, config, ['month'])
+        monthly: mockMonthlyScheduleFilter(config)
       }
     }
     if (url === '/admin/employee-attendance/attendance') return mockAttendanceFilter(mockEmployeeAttendance.attendance, config)
@@ -479,9 +502,9 @@ const mockRequest = {
         .filter((row) => !employeeId || row.items.length)
     }
     if (url === '/admin/employee-attendance/audit') {
-      const employeeId = String(config?.params?.employeeId || '')
-      return mockAttendanceFilter(mockEmployeeAttendance.audit, { ...config, params: { ...config?.params, employeeId: '' } }, ['createdAt'])
-        .filter((row) => !employeeId || row.entityId === employeeId)
+      const ids = mockAttendanceIds(config)
+      const month = String(config?.params?.month || '')
+      return mockEmployeeAttendance.audit.filter((row) => ids.includes(row.frontendUserId) && (!month || String(row.createdAt).slice(0, 7) === month))
     }
     if (url === '/admin/data-statistics/lab-sheets') {
       const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
@@ -576,7 +599,7 @@ const mockRequest = {
     if (url === '/admin/accounts/sub-admins') return mockRows.subAdmins
     return {}
   },
-  async post(url: string, payload?: any, config?: any) {
+  async post(url: string, payload?: any, config?: AdminRequestConfig) {
     if (url === '/admin/auth/login') {
       if (payload?.account === mockUser.account && payload?.password === 'admin123456') return { token: 'mock-admin-token', user: mockUser }
       const sub = mockRows.subAdmins.find((row) => row.account === payload?.account && row.password === payload?.password)
@@ -597,7 +620,7 @@ const mockRequest = {
       })
       return { ...employee, ...mockEmployeeAttendance.sensitive[employee.id] }
     }
-    if (url.startsWith('/admin/employee-attendance/')) throw new Error('后台员工考勤只读')
+    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     const approveDeletionMatch = url.match(/^\/admin\/finance\/delete-requests\/(.+)\/approve$/)
     if (approveDeletionMatch) {
       const row = mockRows.deletionRequests.find((item) => item.id === approveDeletionMatch[1])
@@ -622,7 +645,7 @@ const mockRequest = {
     return { ok: true }
   },
   async patch(url: string, payload?: any) {
-    if (url.startsWith('/admin/employee-attendance/')) throw new Error('后台员工考勤只读')
+    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     if (url === '/admin/auth/profile') {
       mockUser.account = payload?.account || mockUser.account
       mockUser.username = payload?.username || mockUser.username
@@ -644,7 +667,7 @@ const mockRequest = {
     return { ok: true }
   },
   async delete(url: string) {
-    if (url.startsWith('/admin/employee-attendance/')) throw new Error('后台员工考勤只读')
+    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     return { ok: true }
   }
 } as AdminRequest
@@ -750,7 +773,7 @@ function employeeAttendanceParams(query: AdminEmployeeAttendanceQuery) {
   }
 }
 
-function normalizeAdminAttendanceEmployee(row: any): AdminAttendanceEmployee {
+function normalizeAdminAttendanceEmployee(row: AdminAttendanceEmployeeResponse): AdminAttendanceEmployee {
   const { idCard, bankCard, address, emergencyContact, ...safe } = row
   return {
     ...safe,
@@ -766,7 +789,7 @@ export function getAdminAttendanceOverview(query: AdminEmployeeAttendanceQuery) 
 }
 
 export function getAdminAttendanceEmployees(query: AdminEmployeeAttendanceQuery) {
-  return request.get<any, any[]>('/admin/employee-attendance/employees', { params: employeeAttendanceParams(query) })
+  return request.get<unknown, AdminAttendanceEmployeeResponse[]>('/admin/employee-attendance/employees', { params: employeeAttendanceParams(query) })
     .then((rows) => rows.map(normalizeAdminAttendanceEmployee))
 }
 
@@ -775,31 +798,34 @@ export function getAdminAttendanceSchedules(query: AdminEmployeeAttendanceQuery)
 }
 
 export function getAdminAttendanceRecords(query: AdminEmployeeAttendanceQuery) {
-  return request.get<any, Record<string, any>[]>('/admin/employee-attendance/attendance', { params: employeeAttendanceParams(query) })
+  return request.get<any, AdminAttendanceRecord[]>('/admin/employee-attendance/attendance', { params: employeeAttendanceParams(query) })
 }
 
 export function getAdminAttendanceLeaves(query: AdminEmployeeAttendanceQuery) {
-  return request.get<any, Record<string, any>[]>('/admin/employee-attendance/leaves', { params: employeeAttendanceParams(query) })
+  return request.get<any, AdminLeaveRequest[]>('/admin/employee-attendance/leaves', { params: employeeAttendanceParams(query) })
 }
 
 export function getAdminAttendanceCommissions(query: AdminEmployeeAttendanceQuery) {
-  return request.get<any, Record<string, any>[]>('/admin/employee-attendance/commissions', { params: employeeAttendanceParams(query) })
+  return request.get<any, AdminCommissionRecord[]>('/admin/employee-attendance/commissions', { params: employeeAttendanceParams(query) })
 }
 
 export function getAdminAttendanceBonuses(query: AdminEmployeeAttendanceQuery) {
-  return request.get<any, Record<string, any>[]>('/admin/employee-attendance/bonuses', { params: employeeAttendanceParams(query) })
+  return request.get<any, AdminBonusRecord[]>('/admin/employee-attendance/bonuses', { params: employeeAttendanceParams(query) })
 }
 
 export function getAdminAttendancePayroll(query: AdminEmployeeAttendanceQuery) {
   return request.get<any, AdminAttendancePayrollRun[]>('/admin/employee-attendance/payroll', { params: employeeAttendanceParams(query) })
 }
 
-export function getAdminAttendanceAudit(query: AdminEmployeeAttendanceQuery) {
-  return request.get<any, AdminAttendanceAuditRow[]>('/admin/employee-attendance/audit', { params: employeeAttendanceParams(query) })
+export function getAdminAttendanceAudit(query: AdminAttendanceAuditQuery) {
+  return request.get<any, AdminAttendanceAuditRow[]>('/admin/employee-attendance/audit', {
+    params: { frontendUserIds: buildFrontendIds(query.frontendUserIds), ...(query.month ? { month: query.month } : {}) }
+  })
 }
 
 export function revealAdminAttendanceEmployee(employeeId: string, password: string, frontendUserIds: string[]) {
   return request.post<any, any>(`/admin/employee-attendance/employees/${employeeId}/reveal`, { password }, {
-    params: { frontendUserIds: buildFrontendIds(frontendUserIds) }
+    params: { frontendUserIds: buildFrontendIds(frontendUserIds) },
+    preserveAdminSessionOnUnauthorized: true
   }).then((row) => ({ ...normalizeAdminAttendanceEmployee(row), idCard: row.idCard || '', bankCard: row.bankCard || '', address: row.address || '', emergencyContact: row.emergencyContact || '' }) as AdminRevealedAttendanceEmployee)
 }

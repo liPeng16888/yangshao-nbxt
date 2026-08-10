@@ -142,11 +142,66 @@ describe('EmployeeAttendancePage', () => {
     expect(wrapper.text()).toContain('410000199001011234')
   })
 
+  it('keeps a failed password reveal in the dialog and allows a retry', async () => {
+    api.revealAdminAttendanceEmployee.mockRejectedValueOnce(new Error('当前后台账号密码错误'))
+    const wrapper = mountPage()
+    await flushPromises()
+    await wrapper.get('[data-testid="reveal-employee-emp-1"]').trigger('click')
+    const password = wrapper.getComponent({ name: 'ElInput' })
+    password.vm.$emit('update:modelValue', 'wrong-password')
+    await wrapper.get('[data-testid="confirm-employee-reveal"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前后台账号密码错误')
+    expect(wrapper.find('[data-testid="confirm-employee-reveal"]').exists()).toBe(true)
+
+    password.vm.$emit('update:modelValue', 'admin123456')
+    await wrapper.get('[data-testid="confirm-employee-reveal"]').trigger('click')
+    await flushPromises()
+    expect(api.revealAdminAttendanceEmployee).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('410000199001011234')
+  })
+
   it('loads both commissions and bonuses for the compensation route', async () => {
     Object.assign(routeState, { path: '/employee-attendance/compensation', meta: { employeeAttendancePage: 'compensation' } })
-    mountPage()
+    api.getAdminAttendanceCommissions.mockResolvedValueOnce([{
+      id: 'commission-1', frontendUserId: 'front-2', employeeId: 'emp-1', date: '2026-08-08', quantity: 2,
+      unitPriceSnapshot: 18, amount: 36, commissionType: { id: 'type-1', name: '送样提成' }, employee: { employeeNumber: 'YG001', name: '张三' }
+    }])
+    const wrapper = mountPage()
     await flushPromises()
     expect(api.getAdminAttendanceCommissions).toHaveBeenCalledOnce()
     expect(api.getAdminAttendanceBonuses).toHaveBeenCalledOnce()
+    expect((wrapper.getComponent(TableStub).props('data')!).at(0)!).toMatchObject({ accountName: '仰韶客户二（yangshao002）', unitPrice: 18 })
+  })
+
+  it('shows frontend account identity and formatted check-in/check-out values on attendance records', async () => {
+    Object.assign(routeState, { path: '/employee-attendance/records', meta: { employeeAttendancePage: 'records' } })
+    api.getAdminAttendanceRecords.mockResolvedValueOnce([{
+      id: 'attendance-1', frontendUserId: 'front-2', employeeId: 'emp-1', date: '2026-08-08',
+      checkInAt: '2026-08-08T08:05:00+08:00', checkOutAt: null, scheduledMinutes: 480,
+      workedMinutes: 0, lateMinutes: 5, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0,
+      employee: { employeeNumber: 'YG001', name: '张三' }
+    }])
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect((wrapper.getComponent(TableStub).props('data')!).at(0)!).toMatchObject({
+      accountName: '仰韶客户二（yangshao002）', checkInText: '08:05', checkOutText: '未录入'
+    })
+  })
+
+  it('labels and renders a generic attendance audit with account, action and entity details', async () => {
+    api.getAdminAttendanceAudit.mockResolvedValueOnce([{
+      id: 'audit-1', frontendUserId: 'front-1', action: 'UPDATE', entityType: 'EmployeeAttendanceRecord',
+      entityId: 'attendance-1', reason: '修正时间', createdAt: '2026-08-08T09:00:00+08:00', actorUser: { account: 'admin', username: '主账号', role: 'ROOT_ADMIN' }
+    }])
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('员工考勤审计')
+    expect(wrapper.text()).not.toContain('敏感信息查看审计')
+    const auditTable = wrapper.findAllComponents(TableStub).at(-1)!
+    expect((auditTable.props('data')!).at(0)!).toMatchObject({ accountName: '凯里化验室（kaili001）', actionLabel: '修改', entityLabel: '考勤记录' })
   })
 })

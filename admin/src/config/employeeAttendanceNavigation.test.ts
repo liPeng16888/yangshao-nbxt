@@ -4,6 +4,7 @@ import {
   employeeAttendanceNavigation,
   resolveEmployeeAttendancePage
 } from './employeeAttendanceNavigation'
+import { employeeAttendanceColumns } from './employeeAttendanceColumns'
 
 describe('employee attendance admin navigation', () => {
   it('contains the seven approved read-only pages in their fixed order', () => {
@@ -25,5 +26,12 @@ describe('employee attendance admin navigation', () => {
     expect(defaultEmployeeAttendanceRoute.path).toBe('/employee-attendance/overview')
     expect(resolveEmployeeAttendancePage('/employee-attendance/payroll')).toBe('payroll')
     expect(resolveEmployeeAttendancePage('/employee-attendance/unknown')).toBe('overview')
+  })
+
+  it('keeps multi-account rows identifiable and includes both punch times', () => {
+    for (const page of ['schedules', 'records', 'leave', 'compensation', 'payroll'] as const) {
+      expect(employeeAttendanceColumns[page].map((column) => column.key)).toContain('accountName')
+    }
+    expect(employeeAttendanceColumns.records.map((column) => column.key)).toEqual(expect.arrayContaining(['checkInText', 'checkOutText']))
   })
 })

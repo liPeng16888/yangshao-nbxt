@@ -2,8 +2,8 @@
   <el-table :data="rows" border stripe>
     <el-table-column v-for="column in columns" :key="column.key" :label="column.label" :min-width="column.width || 120">
       <template #default="scope">
-        <el-tag v-if="column.key === 'status'" size="small">{{ statusText(scope.row?.[column.key]) }}</el-tag>
-        <span v-else>{{ format(scope.row?.[column.key], column.key) }}</span>
+        <el-tag v-if="column.key === 'status'" size="small">{{ statusText(cellValue(scope.row, column.key)) }}</el-tag>
+        <span v-else>{{ format(cellValue(scope.row, column.key), column.key) }}</span>
       </template>
     </el-table-column>
     <el-table-column v-if="section === 'employees'" label="敏感信息" width="130" fixed="right">
@@ -22,13 +22,14 @@
 
 <script setup lang="ts">
 import type { EmployeeAttendanceAdminPage } from '../../config/employeeAttendanceNavigation'
+import type { AdminAttendanceTableRow } from '../../types'
 
 defineProps<{
   section: EmployeeAttendanceAdminPage
-  rows: Record<string, any>[]
+  rows: AdminAttendanceTableRow[]
   columns: Array<{ key: string; label: string; width?: number }>
 }>()
-defineEmits<{ reveal: [employee: Record<string, any>] }>()
+defineEmits<{ reveal: [employee: AdminAttendanceTableRow] }>()
 
 const statusLabels: Record<string, string> = {
   ACTIVE: '在职', INACTIVE: '停用', TERMINATED: '离职',
@@ -36,6 +37,7 @@ const statusLabels: Record<string, string> = {
   DRAFT: '草稿', CONFIRMED: '已确认'
 }
 const statusText = (value: unknown) => statusLabels[String(value || '')] || String(value || '-')
+const cellValue = (row: AdminAttendanceTableRow | undefined, key: string) => row?.[key as keyof AdminAttendanceTableRow]
 
 function format(value: unknown, key: string) {
   if (value == null || value === '') return '-'

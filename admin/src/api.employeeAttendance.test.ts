@@ -5,6 +5,7 @@ import {
   adminLogin,
   getAdminAttendanceAudit,
   getAdminAttendanceEmployees,
+  getAdminAttendanceSchedules,
   getFrontendOptions,
   request,
   revealAdminAttendanceEmployee
@@ -50,8 +51,26 @@ describe('admin employee attendance mock contract', () => {
   })
 
   it('rejects every attendance business mutation in Mock mode', async () => {
-    await expect(request.post('/admin/employee-attendance/leaves/leave-1/approve')).rejects.toThrow('只读')
-    await expect(request.patch('/admin/employee-attendance/employees/emp-1', {})).rejects.toThrow('只读')
-    await expect(request.delete('/admin/employee-attendance/attendance/attendance-1')).rejects.toThrow('只读')
+    for (const path of ['/admin/employee-attendance', '/admin/employee-attendance/leaves/leave-1/approve']) {
+      await expect(request.post(path)).rejects.toThrow('只读')
+      await expect(request.patch(path, {})).rejects.toThrow('只读')
+      await expect(request.delete(path)).rejects.toThrow('只读')
+    }
+  })
+
+  it('matches server schedule and audit filter semantics', async () => {
+    const schedules = await getAdminAttendanceSchedules({
+      frontendUserIds: ['front-1'], startDate: '2099-01-01', endDate: '2099-01-31'
+    })
+    expect(schedules.weekly).toHaveLength(1)
+    expect(schedules.overrides).toHaveLength(0)
+    expect(schedules.monthly).toHaveLength(1)
+
+    const [employee] = await getAdminAttendanceEmployees({ frontendUserIds: ['front-1'] })
+    await revealAdminAttendanceEmployee(employee.id, 'admin123456', ['front-1'])
+    const audits = await request.get('/admin/employee-attendance/audit', { params: {
+      frontendUserIds: 'front-1', employeeId: 'not-the-employee', startDate: '2099-01-01', status: 'NOPE'
+    } }) as Array<{ id: string; entityId: string }>
+    expect(audits.some((row) => row.entityId === employee.id)).toBe(true)
   })
 })

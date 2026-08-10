@@ -48,13 +48,17 @@
 
     <section v-if="section === 'employees'" class="panel audit-panel">
       <div class="section-title">
-        <h3>敏感信息查看审计</h3>
+        <h3>员工考勤审计</h3>
         <el-button @click="loadAudit">刷新</el-button>
       </div>
+      <p class="audit-hint">审计记录仅按上方选择的前台账号范围显示；员工和状态筛选不影响审计列表。</p>
       <el-table :data="auditRows" border>
-        <el-table-column prop="createdAt" label="查看时间" min-width="180" />
-        <el-table-column prop="actorLabel" label="后台账号" min-width="140" />
-        <el-table-column prop="entityId" label="员工记录" min-width="180" />
+        <el-table-column prop="accountName" label="前台账号" min-width="160" />
+        <el-table-column prop="createdAt" label="操作时间" min-width="180" />
+        <el-table-column prop="actorLabel" label="操作账号" min-width="140" />
+        <el-table-column prop="actionLabel" label="操作类型" min-width="120" />
+        <el-table-column prop="entityLabel" label="数据类型" min-width="130" />
+        <el-table-column prop="entityId" label="记录 ID" min-width="180" />
         <el-table-column prop="reason" label="原因" min-width="220" />
       </el-table>
     </section>
@@ -105,8 +109,17 @@ import {
 } from '../config/employeeAttendanceNavigation'
 import type {
   AdminAttendanceAuditRow,
+  AdminAttendanceAuditDisplayRow,
+  AdminBonusRecord,
+  AdminCommissionRecord,
   AdminAttendanceEmployee,
+  AdminAttendanceFrontendAccount,
+  AdminLeaveRequest,
   AdminAttendanceOverview,
+  AdminAttendancePayrollRun,
+  AdminAttendanceRecord,
+  AdminAttendanceSchedules,
+  AdminAttendanceTableRow,
   AdminEmployeeAttendanceQuery,
   AdminRevealedAttendanceEmployee,
   FrontendOption
@@ -121,8 +134,8 @@ const currentNavigation = computed(() => employeeAttendanceNavigation.find((item
 const accounts = ref<FrontendOption[]>([])
 const employeeOptions = ref<AdminAttendanceEmployee[]>([])
 const overview = ref<AdminAttendanceOverview | null>(null)
-const rows = ref<Record<string, any>[]>([])
-const auditRows = ref<Record<string, any>[]>([])
+const rows = ref<AdminAttendanceTableRow[]>([])
+const auditRows = ref<AdminAttendanceAuditDisplayRow[]>([])
 const loading = ref(false)
 const error = ref('')
 const revealVisible = ref(false)
@@ -176,35 +189,53 @@ function employeeLabel(employeeId: string, embedded?: { employeeNumber?: string;
   return employee ? `${employee.employeeNumber} ${employee.name}` : employeeId || '-'
 }
 
-function accountLabel(row: Record<string, any>) {
+function accountLabel(row: { frontendUserId: string; frontendUser?: AdminAttendanceFrontendAccount }) {
   const user = row.frontendUser
-  return user?.displayRemark || user?.username || user?.account || accounts.value.find((item) => item.id === row.frontendUserId)?.name || row.frontendUserId
+  const option = accounts.value.find((item) => item.id === row.frontendUserId)
+  const name = user?.displayRemark || user?.username || option?.name || ''
+  const account = user?.account || option?.account || ''
+  if (name && account && name !== account) return `${name}（${account}）`
+  return account || name || row.frontendUserId
 }
 
 function normalizeEmployee(row: AdminAttendanceEmployee) {
   return { ...row, accountName: accountLabel(row) }
 }
 
-function normalizeSchedule(data: { weekly: Record<string, any>[]; overrides: Record<string, any>[]; monthly: Record<string, any>[] }) {
+function normalizeSchedule(data: AdminAttendanceSchedules): AdminAttendanceTableRow[] {
   const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
   return [
-    ...data.weekly.map((row) => ({ ...row, categoryLabel: '周排班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: weekdays[row.weekday] || row.weekday, scheduleDate: '-' })),
-    ...data.overrides.map((row) => ({ ...row, categoryLabel: '临时调班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.date })),
-    ...data.monthly.map((row) => ({ ...row, categoryLabel: '月度设置', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.month }))
+    ...data.weekly.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '周排班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: weekdays[row.weekday] || row.weekday, scheduleDate: '-' })),
+    ...data.overrides.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '临时调班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.date })),
+    ...data.monthly.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '月度设置', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.month }))
   ]
 }
 
-function normalizeCommon(row: Record<string, any>) {
-  return { ...row, employeeLabel: employeeLabel(row.employeeId, row.employee) }
+function normalizeCommon<T extends AdminAttendanceRecord | AdminLeaveRequest | AdminCommissionRecord | AdminBonusRecord>(row: T) {
+  return { ...row, accountName: accountLabel(row), employeeLabel: employeeLabel(row.employeeId, row.employee) }
 }
 
-function normalizeLeave(row: Record<string, any>) {
+function normalizeAttendance(row: AdminAttendanceRecord): AdminAttendanceTableRow {
+  return {
+    ...normalizeCommon(row),
+    checkInText: formatPunchTime(row.checkInAt),
+    checkOutText: formatPunchTime(row.checkOutAt)
+  }
+}
+
+function formatPunchTime(value?: string | null) {
+  if (!value) return '未录入'
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed.format('HH:mm') : String(value)
+}
+
+function normalizeLeave(row: AdminLeaveRequest): AdminAttendanceTableRow {
   const unitLabels: Record<string, string> = { FULL_DAY: '整天', HALF_DAY: '半天', HOUR: '小时' }
   return { ...normalizeCommon(row), leaveTypeLabel: row.leaveType?.name || row.leaveTypeId, unitLabel: unitLabels[row.unit] || row.unit }
 }
 
-function normalizePayroll(runs: Record<string, any>[]) {
-  return runs.flatMap((run) => (run.items || []).map((item: Record<string, any>) => {
+function normalizePayroll(runs: AdminAttendancePayrollRun[]): AdminAttendanceTableRow[] {
+  return runs.flatMap((run) => (run.items || []).map((item) => {
     const result = item.calculationSnapshot?.result || item
     const input = item.calculationSnapshot?.input || item
     return {
@@ -243,14 +274,14 @@ async function loadSection() {
       rows.value = employeeOptions.value.map(normalizeEmployee)
       await loadAudit()
     } else if (section.value === 'schedules') rows.value = normalizeSchedule(await api.getAdminAttendanceSchedules(requestQuery))
-    else if (section.value === 'records') rows.value = (await api.getAdminAttendanceRecords(requestQuery)).map(normalizeCommon)
+    else if (section.value === 'records') rows.value = (await api.getAdminAttendanceRecords(requestQuery)).map(normalizeAttendance)
     else if (section.value === 'leave') rows.value = (await api.getAdminAttendanceLeaves(requestQuery)).map(normalizeLeave)
     else if (section.value === 'compensation') {
       const [commissions, bonuses] = await Promise.all([
         api.getAdminAttendanceCommissions(requestQuery), api.getAdminAttendanceBonuses(requestQuery)
       ])
       rows.value = [
-        ...commissions.map((row) => ({ ...normalizeCommon(row), categoryLabel: '提成', typeLabel: row.commissionType?.name || row.commissionTypeId, reason: row.remark || '-' })),
+        ...commissions.map((row) => ({ ...normalizeCommon(row), categoryLabel: '提成', typeLabel: row.commissionType?.name || row.commissionTypeId, unitPrice: row.unitPriceSnapshot, reason: row.remark || '-' })),
         ...bonuses.map((row) => ({ ...normalizeCommon(row), categoryLabel: '奖金', typeLabel: '奖金', quantity: '-', unitPrice: '-', reason: row.reason }))
       ]
     } else rows.value = normalizePayroll(await api.getAdminAttendancePayroll(requestQuery))
@@ -263,10 +294,18 @@ async function loadSection() {
 
 async function loadAudit() {
   try {
-    const audit = await api.getAdminAttendanceAudit(query())
+    const audit = await api.getAdminAttendanceAudit({ frontendUserIds: query().frontendUserIds })
+    const actionLabels: Record<string, string> = { CREATE: '新建', UPDATE: '修改', DELETE: '删除', APPROVE: '批准', REJECT: '拒绝', CONFIRM: '确认工资', REOPEN: '撤销确认', REVEAL: '查看完整信息' }
+    const entityLabels: Record<string, string> = { Employee: '员工档案', EmployeeAttendanceRecord: '考勤记录', EmployeeLeaveRequest: '请假记录', EmployeeCommissionRecord: '提成记录', EmployeeBonus: '奖金记录', EmployeePayrollRun: '工资批次' }
     auditRows.value = audit.map((row: AdminAttendanceAuditRow) => ({
-      ...row,
-      actorLabel: row.actorUser?.username || row.actorUser?.account || '-'
+      id: row.id,
+      accountName: accountLabel(row),
+      createdAt: dayjs(row.createdAt).isValid() ? dayjs(row.createdAt).format('YYYY-MM-DD HH:mm:ss') : row.createdAt,
+      actorLabel: row.actorUser?.username || row.actorUser?.account || '-',
+      actionLabel: actionLabels[row.action] || row.action,
+      entityLabel: entityLabels[row.entityType] || row.entityType,
+      entityId: row.entityId,
+      reason: row.reason || '-'
     }))
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '审计数据加载失败'
@@ -282,7 +321,7 @@ function updateFilters(value: AdminEmployeeAttendanceQuery) {
   Object.assign(filters, value)
 }
 
-function openReveal(employee: Record<string, any>) {
+function openReveal(employee: AdminAttendanceTableRow) {
   revealEmployeeId.value = employee.id
   revealPassword.value = ''
   revealError.value = ''
@@ -341,5 +380,6 @@ onMounted(async () => {
 .overview-grid span { color: #718096; }
 .overview-grid strong { color: #172b4d; font-size: 28px; }
 .audit-panel { display: grid; gap: 14px; }
+.audit-hint { margin: -4px 0 0; color: #718096; }
 @media (max-width: 1000px) { .overview-grid { grid-template-columns: repeat(2, minmax(160px, 1fr)); } }
 </style>

@@ -21,6 +21,7 @@ export const employeeAttendanceColumns: Record<Exclude<EmployeeAttendanceAdminPa
     { key: 'attendanceBonus', label: '全勤奖' }
   ],
   schedules: [
+    { key: 'accountName', label: '前台账号', width: 150 },
     { key: 'categoryLabel', label: '排班类型' },
     { key: 'employeeLabel', label: '员工', width: 150 },
     { key: 'scheduleDate', label: '日期/月份' },
@@ -32,8 +33,11 @@ export const employeeAttendanceColumns: Record<Exclude<EmployeeAttendanceAdminPa
     { key: 'remark', label: '备注', width: 180 }
   ],
   records: [
+    { key: 'accountName', label: '前台账号', width: 150 },
     { key: 'date', label: '日期' },
     { key: 'employeeLabel', label: '员工', width: 150 },
+    { key: 'checkInText', label: '上班时间' },
+    { key: 'checkOutText', label: '下班时间' },
     { key: 'scheduledMinutes', label: '排班分钟' },
     { key: 'workedMinutes', label: '实际工作分钟' },
     { key: 'lateMinutes', label: '迟到分钟' },
@@ -43,6 +47,7 @@ export const employeeAttendanceColumns: Record<Exclude<EmployeeAttendanceAdminPa
     { key: 'remark', label: '备注', width: 180 }
   ],
   leave: [
+    { key: 'accountName', label: '前台账号', width: 150 },
     { key: 'employeeLabel', label: '员工', width: 150 },
     { key: 'leaveTypeLabel', label: '请假类型' },
     { key: 'startDate', label: '开始日期' },
@@ -54,6 +59,7 @@ export const employeeAttendanceColumns: Record<Exclude<EmployeeAttendanceAdminPa
     { key: 'reviewRemark', label: '审核备注', width: 180 }
   ],
   compensation: [
+    { key: 'accountName', label: '前台账号', width: 150 },
     { key: 'categoryLabel', label: '类别' },
     { key: 'date', label: '日期' },
     { key: 'employeeLabel', label: '员工', width: 150 },
