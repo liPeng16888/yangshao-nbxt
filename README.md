@@ -39,6 +39,43 @@ YANGSHAO-2026
 
 开发预览数据不连接数据库；真实联调或部署时设置 `VITE_ADMIN_USE_MOCKS=false` 并启动后端服务。
 
+首次运行分别创建三个环境文件：
+
+```bash
+cp .env.example .env
+cp admin/.env.example admin/.env
+cp server/.env.example server/.env
+```
+
+本地同时演示两个前端时，请保持：
+
+```text
+VITE_USE_MOCKS=true
+# admin/.env
+VITE_ADMIN_USE_MOCKS=true
+```
+
+然后分别启动：
+
+```bash
+./node_modules/.bin/vite --host 127.0.0.1 --port 5173
+cd admin && ./node_modules/.bin/vite --host 127.0.0.1 --port 5174
+```
+
+- 客户前端登录后访问 `http://127.0.0.1:5173/employee-attendance/overview`。
+- 后台使用 `admin / admin123456` 登录 `http://127.0.0.1:5174/admin/login`，随后访问 `http://127.0.0.1:5174/admin/employee-attendance/overview`。
+- 后台 Mock 子账号 `sub001 / sub123456` 只能查看已授权的前端账号数据，可用于验证账号隔离。
+
+## 员工考勤与工资
+
+“员工考勤”位于“化验报告”和“财务”之间，包含七个二级页面：考勤概览、员工档案、排班管理、考勤记录、请假管理、提成与奖金、工资统计。
+
+客户前端的 `/employee-attendance/*` 页面用于录入和管理；后台 `/admin/employee-attendance/*` 页面严格只读，只提供筛选、汇总和脱敏查看。后台只有查看单个员工敏感信息时会要求重新输入当前后台账号密码，并记录审计；后台没有业务新增、修改、删除、请假审批、工资确认或 PNG 导出入口。
+
+工资统计采用员工月薪、全勤奖、手工加班、提成、奖金、人工调整、超额请假和缺勤计算。工资确认前会检查待审批请假、排班和考勤缺失；确认后锁定当月来源记录，填写原因撤销确认后才可修改。个人工资条和当月全员工资汇总均可从客户前端导出为高清 PNG。
+
+本地 Mock 数据按登录的前端账号隔离并保存在浏览器 `localStorage`，适合界面演示，不等同于数据库备份或生产数据。
+
 ## 环境变量
 
 复制 `.env.example` 后按环境调整：
@@ -57,12 +94,18 @@ VITE_USE_MOCKS=true
 DATABASE_URL=postgresql://yangshao:password@127.0.0.1:5432/yangshao?schema=public
 JWT_SECRET=请换成强随机字符串
 PASSWORD_CIPHER_SECRET=请换成强随机字符串
+EMPLOYEE_DATA_CIPHER_SECRET=请换成独立且不少于 32 个 UTF-8 字节的强随机字符串
+PRIVATE_EMPLOYEE_PHOTO_DIR=/var/lib/yangshao/private/employee-photos
 ROOT_ADMIN_ACCOUNT=root
 ROOT_ADMIN_PASSWORD=请换成主账号密码
 ROOT_ADMIN_NAME=主账号
 UPLOAD_DIR=/var/www/yangshao/uploads
 SERVER_PORT=3000
 ```
+
+`EMPLOYEE_DATA_CIPHER_SECRET` 专门用于员工身份证号、银行卡号、住址和紧急联系人等敏感字段的 AES-256-GCM 加密，不能复用 `PASSWORD_CIPHER_SECRET`。该密钥必须在同一套数据的整个生命周期保持不变；丢失或随意更换会导致已保存数据无法解密。请通过部署平台的密钥管理或仅管理员可读的环境文件保存，不要提交真实密钥。
+
+`PRIVATE_EMPLOYEE_PHOTO_DIR` 必须指向后端进程可读写、但 Nginx/静态站点不能直接公开访问的目录；员工照片只能通过已鉴权接口读取。该目录与数据库应一起纳入备份。
 
 初始化数据库：
 
@@ -72,13 +115,34 @@ pnpm --filter yangshao-server prisma:migrate
 pnpm --filter yangshao-server seed
 ```
 
+### 员工考勤数据库迁移
+
+员工考勤迁移位于：
+
+```text
+server/prisma/migrations/20260810000000_add_employee_attendance/migration.sql
+```
+
+迁移只新增员工考勤枚举、14 张业务表、账号归属索引/复合外键，以及 `EMPLOYEE_ATTENDANCE` 访问保护类型，不会修改已有业务表中的数据。开发环境可执行 `prisma:migrate`；已部署环境先备份 PostgreSQL，再执行不会交互创建迁移的 `prisma:deploy`：
+
+```bash
+pnpm --filter yangshao-server prisma:generate
+pnpm --filter yangshao-server prisma:migrate   # 仅本地开发
+pnpm --filter yangshao-server prisma:deploy    # 已部署环境
+```
+
+本仓库不提供自动执行的破坏性 down migration。若上线后需要回滚，先停止写入并回退应用代码，再恢复执行该迁移前的 PostgreSQL 备份；直接删除这 14 张表会永久丢失员工、考勤、工资快照和审计数据。不要在未备份的数据库上手工回滚，也不要把本次本地验证当成已部署或已执行生产迁移。
+
 ## 构建与测试
 
 ```bash
 pnpm test
+./node_modules/.bin/vitest run admin/src
+./server/node_modules/.bin/vitest run --root server
 pnpm build
 pnpm build:admin
 pnpm build:server
+pnpm build:all
 ```
 
 ## 腾讯云 VPS / Nginx 部署要点
