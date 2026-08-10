@@ -1,4 +1,4 @@
-import { defineComponent } from 'vue'
+import { defineComponent, nextTick } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import { createPinia } from 'pinia'
@@ -143,6 +143,46 @@ describe('employee attendance navigation', () => {
     await flushPromises()
     expect(useEmployeeAttendanceStore(pinia).error).toContain('名称已存在')
     expect((input.element as HTMLInputElement).value).toBe('事假')
+    wrapper.unmount()
+  })
+
+  it('opens the payroll export dialog in summary and selected-employee modes', async () => {
+    const pinia = createPinia()
+    const PayrollExportDialogStub = defineComponent({
+      name: 'PayrollExportDialog',
+      props: { visible: Boolean, run: Object, item: Object },
+      emits: ['close'],
+      template: '<div v-if="visible" data-testid="payroll-export-dialog" />'
+    })
+    const wrapper = mount(EmployeePayrollPage, {
+      global: { plugins: [pinia, ElementPlus], stubs: { PayrollExportDialog: PayrollExportDialogStub } }
+    })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    const employee = store.employees[0]
+    const item = {
+      id: 'payroll-item-1', employeeId: employee.id, employee, payableAmount: 6200, issues: [], adjustments: [],
+      calculationSnapshot: {
+        generatedAt: '2026-08-31T00:00:00.000Z',
+        input: { baseSalary: 6000, attendanceBonus: 200, scheduledWorkDays: 22, restQuotaDays: 4, countedLeaveDays: 0, absenceDays: 0, overtimeMinutes: 0, overtimeHourlyRate: 20, commissionAmount: 0, bonusAmount: 0, adjustments: [] },
+        result: { dailyRate: 272.73, excessLeaveDays: 0, leaveDeduction: 0, absenceDeduction: 0, overtimeHours: 0, overtimePay: 0, commissionAmount: 0, bonusAmount: 0, adjustmentAmount: 0, attendanceBonus: 200, payableAmount: 6200, issues: [] }
+      }
+    }
+    store.payroll = { id: 'run-1', month: '2026-08', status: 'DRAFT', totalAmount: 6200, issueCount: 0, issues: [], items: [item] }
+    await nextTick()
+
+    await wrapper.get('[data-testid="export-payroll-summary"]').trigger('click')
+    let dialog = wrapper.getComponent(PayrollExportDialogStub)
+    expect(dialog.props('visible')).toBe(true)
+    expect(dialog.props('run')).toEqual(store.payroll)
+    expect(dialog.props('item')).toBeNull()
+
+    dialog.vm.$emit('close')
+    await nextTick()
+    await wrapper.get('[data-testid="export-payroll-slip"]').trigger('click')
+    dialog = wrapper.getComponent(PayrollExportDialogStub)
+    expect(dialog.props('visible')).toBe(true)
+    expect(dialog.props('item')).toEqual(item)
     wrapper.unmount()
   })
 })
