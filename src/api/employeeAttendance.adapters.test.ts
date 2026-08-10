@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   buildEmployeeMutationPayload,
   normalizeAttendanceGenerationResponse,
+  normalizeAttendanceMutationPayload,
+  normalizeAttendanceQuery,
   normalizeBonusResponse,
   normalizeCommissionResponse,
   normalizeCommissionTypeResponse,
@@ -12,7 +14,8 @@ import {
   normalizeMonthlySettingResponse,
   normalizePayrollAdjustmentResponse,
   normalizePayrollResponse,
-  selectEmployeeAttendanceGrant
+  selectEmployeeAttendanceGrant,
+  toBeijingDateTimeLocal
 } from './employeeAttendance'
 import { verifyAccessGuardGroup } from './accessGuard'
 
@@ -44,12 +47,37 @@ describe('employee attendance real API adapters', () => {
 
   it('normalizes attendance generation counts and selects only an attendance-feature grant', () => {
     expect(normalizeAttendanceGenerationResponse({ created: 3, updated: 2, skippedManual: 1 })).toEqual({ created: 3, updated: 2, skippedManual: 1, generated: 5 })
-    expect(selectEmployeeAttendanceGrant({ finance: { expiresAt: Date.now() + 1000, token: 'wrong', features: ['FINANCE'] }, attendance: { expiresAt: Date.now() + 1000, token: 'right', features: ['EMPLOYEE_ATTENDANCE'] } })).toBe('right')
+    expect(selectEmployeeAttendanceGrant({ finance: { groupId: 'finance', grantVersion: 1, expiresAt: Date.now() + 1000, token: 'wrong', features: ['FINANCE'] }, attendance: { groupId: 'attendance', grantVersion: 2, expiresAt: Date.now() + 1000, token: 'right', features: ['EMPLOYEE_ATTENDANCE'] } })).toBe('right')
     expect(selectEmployeeAttendanceGrant({ legacy: { expiresAt: Date.now() + 1000, token: 'legacy-without-feature' } })).toBeUndefined()
+    expect(selectEmployeeAttendanceGrant({ stale: { expiresAt: Date.now() + 1000, token: 'legacy-versionless', features: ['EMPLOYEE_ATTENDANCE'] } })).toBeUndefined()
+  })
+
+  it('serializes datetime-local punches with a fixed Beijing offset and restores Beijing wall time for editing', () => {
+    const payload = normalizeAttendanceMutationPayload({
+      employeeId: 'e1', date: '2026-08-08', isScheduledWorkday: true, scheduledMinutes: 480,
+      checkInAt: '2026-08-08T08:05', checkOutAt: '2026-08-08T17:30'
+    })
+    expect(payload).toMatchObject({
+      checkInAt: '2026-08-08T08:05:00+08:00',
+      checkOutAt: '2026-08-08T17:30:00+08:00'
+    })
+    expect(toBeijingDateTimeLocal('2026-08-08T00:05:00Z')).toBe('2026-08-08T08:05')
+    expect(normalizeAttendanceMutationPayload({
+      employeeId: 'e1', date: '2026-08-08', isScheduledWorkday: true, scheduledMinutes: 480,
+      checkInAt: '', checkOutAt: ''
+    })).toMatchObject({ checkInAt: null, checkOutAt: null })
+  })
+
+  it('rejects a query that combines a month with a date range', () => {
+    expect(() => normalizeAttendanceQuery({ month: '2026-08', startDate: '2026-08-01', endDate: '2026-08-31' }))
+      .toThrow('月份和日期范围不能同时筛选')
+    expect(normalizeAttendanceQuery({ month: '2026-08' })).toEqual({ month: '2026-08' })
   })
 
   it('provides a mock grant token that can be tagged with attendance features', async () => {
-    await expect(verifyAccessGuardGroup('attendance-group', '1234', 5, '1234')).resolves.toMatchObject({ token: 'mock-access-grant:attendance-group' })
+    await expect(verifyAccessGuardGroup('attendance-group', '1234', 5, '1234')).resolves.toMatchObject({
+      token: 'mock-access-grant:attendance-group:1', groupId: 'attendance-group', grantVersion: 1
+    })
   })
 
   it('normalizes Decimal fields on every Decimal-bearing write response', () => {

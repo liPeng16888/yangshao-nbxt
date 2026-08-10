@@ -28,7 +28,7 @@ describe('LabSheetsController segmented parameter access', () => {
 
   it('passes a denied completed-sample grant to the apply service', async () => {
     auth.isFeatureProtected.mockResolvedValue(true)
-    auth.hasAccessGrant.mockReturnValue(false)
+    auth.hasAccessGrant.mockResolvedValue(false)
     const controller = new LabSheetsController(sheets as never, auth as never)
     const payload = { parameters: {}, startIndex: 3 }
 
@@ -40,7 +40,7 @@ describe('LabSheetsController segmented parameter access', () => {
 
   it('passes an accepted completed-sample grant to the apply service', async () => {
     auth.isFeatureProtected.mockResolvedValue(true)
-    auth.hasAccessGrant.mockReturnValue(true)
+    auth.hasAccessGrant.mockResolvedValue(true)
     const controller = new LabSheetsController(sheets as never, auth as never)
 
     await controller.applyCurrentParameters(frontendUser, { parameters: {}, startIndex: 3 }, 'client-1', 'valid-grant')
@@ -70,7 +70,7 @@ describe('LabSheetsController segmented parameter access', () => {
 
   it('passes a denied completed-sample grant to the add-blocks service', async () => {
     auth.isFeatureProtected.mockResolvedValue(true)
-    auth.hasAccessGrant.mockReturnValue(false)
+    auth.hasAccessGrant.mockResolvedValue(false)
     const controller = new LabSheetsController(sheets as never, auth as never)
 
     await controller.addBlocks(frontendUser, 'sheet-1', 2, 'client-1', 'wrong-grant')
@@ -81,7 +81,7 @@ describe('LabSheetsController segmented parameter access', () => {
 
   it('passes an accepted completed-sample grant to the add-blocks service', async () => {
     auth.isFeatureProtected.mockResolvedValue(true)
-    auth.hasAccessGrant.mockReturnValue(true)
+    auth.hasAccessGrant.mockResolvedValue(true)
     const controller = new LabSheetsController(sheets as never, auth as never)
 
     await controller.addBlocks(frontendUser, 'sheet-1', 1, 'client-1', 'valid-grant')

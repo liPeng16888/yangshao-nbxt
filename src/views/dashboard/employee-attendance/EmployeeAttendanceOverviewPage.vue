@@ -17,7 +17,7 @@ const displayedIssues = computed(() => store.overview?.issues.length ? store.ove
 const cards = computed(() => { const data = store.overview; return data ? [
   { label: '在职员工', value: data.activeEmployees }, { label: '今日出勤', value: data.todayPresent },
   { label: '今日请假', value: data.todayOnLeave }, { label: '今日缺勤', value: data.todayAbsent },
-  { label: '加班总时长', value: `${data.overtimeHours} 小时` }, { label: '待审请假', value: data.pendingLeaves },
+  { label: '本月加班总时长', value: `${data.overtimeHours} 小时` }, { label: '待审请假', value: data.pendingLeaves },
   { label: '预计应发', value: `¥${data.projectedPayroll.toFixed(2)}` }, { label: '异常数', value: data.issueCount }
 ] : [] })
 async function load() { await store.loadOverview().catch(() => undefined) }

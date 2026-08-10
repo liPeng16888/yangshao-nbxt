@@ -4,6 +4,8 @@ import { IsArray, IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, Is
 
 export const BUSINESS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 export const BUSINESS_MONTH_PATTERN = /^\d{4}-\d{2}$/
+export const CLOCK_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+export const ZONED_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i
 
 const trim = (value: unknown) => typeof value === 'string' ? value.trim() : value
 const number = (value: unknown) => value === '' || value === null || value === undefined ? value : Number(value)
@@ -34,6 +36,8 @@ export class WeeklyScheduleDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Transform(({ value }) => number(value)) @IsInt() @Min(0) @Max(6) weekday!: number
   @IsBoolean() isWorkday!: boolean
+  @Transform(({ value }) => trim(value)) @IsOptional() @Matches(CLOCK_TIME_PATTERN) plannedStartTime?: string
+  @Transform(({ value }) => trim(value)) @IsOptional() @Matches(CLOCK_TIME_PATTERN) plannedEndTime?: string
   @Transform(({ value }) => number(value)) @IsInt() @Min(0) @Max(1440) scheduledMinutes!: number
 }
 
@@ -41,6 +45,8 @@ export class DateOverrideDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Matches(BUSINESS_DATE_PATTERN) date!: string
   @IsBoolean() isWorkday!: boolean
+  @Transform(({ value }) => trim(value)) @IsOptional() @Matches(CLOCK_TIME_PATTERN) plannedStartTime?: string
+  @Transform(({ value }) => trim(value)) @IsOptional() @Matches(CLOCK_TIME_PATTERN) plannedEndTime?: string
   @Transform(({ value }) => number(value)) @IsInt() @Min(0) @Max(1440) scheduledMinutes!: number
   @Transform(({ value }) => trim(value)) @IsOptional() @IsString() remark?: string
 }
@@ -57,8 +63,8 @@ export class AttendanceDto {
   @Matches(BUSINESS_DATE_PATTERN) date!: string
   @IsBoolean() isScheduledWorkday!: boolean
   @Transform(({ value }) => number(value)) @IsInt() @Min(0) @Max(1440) scheduledMinutes!: number
-  @IsOptional() @IsString() checkInAt?: string
-  @IsOptional() @IsString() checkOutAt?: string
+  @Transform(({ value }) => trim(value)) @IsOptional() @Matches(ZONED_DATE_TIME_PATTERN) checkInAt?: string
+  @Transform(({ value }) => trim(value)) @IsOptional() @Matches(ZONED_DATE_TIME_PATTERN) checkOutAt?: string
   @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) workedMinutes?: number
   @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) lateMinutes?: number
   @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) earlyLeaveMinutes?: number

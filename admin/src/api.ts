@@ -261,11 +261,11 @@ const mockEmployeeAttendance = {
   } as Record<string, { idCard: string; bankCard: string; address: string; emergencyContact: string }>,
   schedules: {
     weekly: [
-      { id: 'weekly-1', frontendUserId: 'front-1', employeeId: 'emp-1', weekday: 1, isWorkday: true, scheduledMinutes: 480 },
-      { id: 'weekly-2', frontendUserId: 'front-2', employeeId: 'emp-3', weekday: 1, isWorkday: true, scheduledMinutes: 480 }
+      { id: 'weekly-1', frontendUserId: 'front-1', employeeId: 'emp-1', weekday: 1, isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480 },
+      { id: 'weekly-2', frontendUserId: 'front-2', employeeId: 'emp-3', weekday: 1, isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480 }
     ],
     overrides: [
-      { id: 'override-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-09', isWorkday: true, scheduledMinutes: 360, remark: '临时值班' }
+      { id: 'override-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-09', isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '14:00', scheduledMinutes: 360, remark: '临时值班' }
     ],
     monthly: [
       { id: 'month-1', frontendUserId: 'front-1', employeeId: 'emp-1', month: '2026-08', scheduledWorkDays: 22, restQuotaDays: 4 }
@@ -309,6 +309,10 @@ function mockAttendanceIds(config?: AdminRequestConfig) {
   const permitted = mockAuthorizedFrontendIds()
   const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
   return requested.length ? requested.filter((id) => permitted.includes(id)) : permitted
+}
+
+function assertExclusiveAttendanceDateFilter(config?: AdminRequestConfig) {
+  if (config?.params?.month && (config.params.startDate || config.params.endDate)) throw new Error('月份和日期范围不能同时筛选')
 }
 
 function mockAttendanceEntityFilter<T extends Record<string, unknown>>(rows: T[], config?: AdminRequestConfig) {
@@ -466,6 +470,7 @@ function parseHistoryFields(value: unknown) {
 
 const mockRequest = {
   async get(url: string, config?: AdminRequestConfig) {
+    if (isEmployeeAttendanceAdminPath(url)) assertExclusiveAttendanceDateFilter(config)
     if (url === '/admin/auth/me') return mockAdminUser()
     if (url === '/admin/frontend-users/options') {
       const allowed = mockAuthorizedFrontendIds()
@@ -483,7 +488,7 @@ const mockRequest = {
         month,
         workforce: mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE').length,
         attendanceRecords: mockEmployeeAttendance.attendance.filter((row) => ids.includes(row.frontendUserId) && row.date.startsWith(month)).length,
-        pendingLeave: mockEmployeeAttendance.leaves.filter((row) => ids.includes(row.frontendUserId) && row.status === 'PENDING').length,
+        pendingLeave: mockEmployeeAttendance.leaves.filter((row) => ids.includes(row.frontendUserId) && row.status === 'PENDING' && row.startDate <= `${month}-31` && row.endDate >= `${month}-01`).length,
         payrollRuns: mockEmployeeAttendance.payroll.filter((row) => ids.includes(row.frontendUserId) && row.month === month).length,
         readonly: true
       }
@@ -776,6 +781,7 @@ export function getAdminMedicineOutbounds(
 }
 
 function employeeAttendanceParams(query: AdminEmployeeAttendanceQuery) {
+  if (query.month && (query.startDate || query.endDate)) throw new Error('月份和日期范围不能同时筛选')
   return {
     frontendUserIds: buildFrontendIds(query.frontendUserIds),
     ...(query.employeeId ? { employeeId: query.employeeId } : {}),
@@ -797,36 +803,36 @@ function normalizeAdminAttendanceEmployee(row: AdminAttendanceEmployeeResponse):
   }
 }
 
-export function getAdminAttendanceOverview(query: AdminEmployeeAttendanceQuery) {
+export async function getAdminAttendanceOverview(query: AdminEmployeeAttendanceQuery) {
   return request.get<any, AdminAttendanceOverview>('/admin/employee-attendance/overview', { params: employeeAttendanceParams(query) })
 }
 
-export function getAdminAttendanceEmployees(query: AdminEmployeeAttendanceQuery) {
+export async function getAdminAttendanceEmployees(query: AdminEmployeeAttendanceQuery) {
   return request.get<unknown, AdminAttendanceEmployeeResponse[]>('/admin/employee-attendance/employees', { params: employeeAttendanceParams(query) })
     .then((rows) => rows.map(normalizeAdminAttendanceEmployee))
 }
 
-export function getAdminAttendanceSchedules(query: AdminEmployeeAttendanceQuery) {
+export async function getAdminAttendanceSchedules(query: AdminEmployeeAttendanceQuery) {
   return request.get<any, AdminAttendanceSchedules>('/admin/employee-attendance/schedules', { params: employeeAttendanceParams(query) })
 }
 
-export function getAdminAttendanceRecords(query: AdminEmployeeAttendanceQuery) {
+export async function getAdminAttendanceRecords(query: AdminEmployeeAttendanceQuery) {
   return request.get<any, AdminAttendanceRecord[]>('/admin/employee-attendance/attendance', { params: employeeAttendanceParams(query) })
 }
 
-export function getAdminAttendanceLeaves(query: AdminEmployeeAttendanceQuery) {
+export async function getAdminAttendanceLeaves(query: AdminEmployeeAttendanceQuery) {
   return request.get<any, AdminLeaveRequest[]>('/admin/employee-attendance/leaves', { params: employeeAttendanceParams(query) })
 }
 
-export function getAdminAttendanceCommissions(query: AdminEmployeeAttendanceQuery) {
+export async function getAdminAttendanceCommissions(query: AdminEmployeeAttendanceQuery) {
   return request.get<any, AdminCommissionRecord[]>('/admin/employee-attendance/commissions', { params: employeeAttendanceParams(query) })
 }
 
-export function getAdminAttendanceBonuses(query: AdminEmployeeAttendanceQuery) {
+export async function getAdminAttendanceBonuses(query: AdminEmployeeAttendanceQuery) {
   return request.get<any, AdminBonusRecord[]>('/admin/employee-attendance/bonuses', { params: employeeAttendanceParams(query) })
 }
 
-export function getAdminAttendancePayroll(query: AdminEmployeeAttendanceQuery) {
+export async function getAdminAttendancePayroll(query: AdminEmployeeAttendanceQuery) {
   return request.get<any, AdminAttendancePayrollRun[]>('/admin/employee-attendance/payroll', { params: employeeAttendanceParams(query) })
 }
 

@@ -34,9 +34,15 @@ describe('lab sheet segmented parameter API', () => {
     window.sessionStorage.clear()
     window.sessionStorage.setItem('ys_lab_sheet_client_id', 'client-1')
     window.localStorage.setItem('ys_access_guard_group_sessions', JSON.stringify({
-      'completed-data-group': {
+      'finance-group': {
+        groupId: 'finance-group', grantVersion: 1,
         expiresAt: Date.now() + 60_000,
-        token: 'completed-data-grant'
+        token: 'finance-grant', features: ['FINANCE']
+      },
+      'completed-data-group': {
+        groupId: 'completed-data-group', grantVersion: 1,
+        expiresAt: Date.now() + 60_000,
+        token: 'completed-data-grant', features: ['COMPLETED_SAMPLE_DATA']
       }
     }))
   })

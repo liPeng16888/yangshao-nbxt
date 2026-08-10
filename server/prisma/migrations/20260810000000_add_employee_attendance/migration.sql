@@ -16,6 +16,9 @@ CREATE TYPE "EmployeeAuditAction" AS ENUM ('CREATE', 'UPDATE', 'DELETE', 'APPROV
 -- AlterEnum
 ALTER TYPE "AccessGuardFeature" ADD VALUE 'EMPLOYEE_ATTENDANCE';
 
+-- AlterTable
+ALTER TABLE "AccessGuardGroup" ADD COLUMN     "grantVersion" INTEGER NOT NULL DEFAULT 1;
+
 -- CreateTable
 CREATE TABLE "Employee" (
     "id" TEXT NOT NULL,
@@ -48,6 +51,8 @@ CREATE TABLE "EmployeeWeeklySchedule" (
     "employeeId" TEXT NOT NULL,
     "weekday" INTEGER NOT NULL,
     "isWorkday" BOOLEAN NOT NULL DEFAULT true,
+    "plannedStartTime" TEXT,
+    "plannedEndTime" TEXT,
     "scheduledMinutes" INTEGER NOT NULL DEFAULT 480,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -62,6 +67,8 @@ CREATE TABLE "EmployeeDateOverride" (
     "employeeId" TEXT NOT NULL,
     "date" TEXT NOT NULL,
     "isWorkday" BOOLEAN NOT NULL,
+    "plannedStartTime" TEXT,
+    "plannedEndTime" TEXT,
     "scheduledMinutes" INTEGER NOT NULL DEFAULT 480,
     "remark" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -418,19 +425,19 @@ ALTER TABLE "Employee" ADD CONSTRAINT "Employee_frontendUserId_fkey" FOREIGN KEY
 ALTER TABLE "EmployeeWeeklySchedule" ADD CONSTRAINT "EmployeeWeeklySchedule_frontendUserId_fkey" FOREIGN KEY ("frontendUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "EmployeeWeeklySchedule" ADD CONSTRAINT "EmployeeWeeklySchedule_employeeId_frontendUserId_fkey" FOREIGN KEY ("employeeId", "frontendUserId") REFERENCES "Employee"("id", "frontendUserId") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "EmployeeWeeklySchedule" ADD CONSTRAINT "EmployeeWeeklySchedule_employeeId_frontendUserId_fkey" FOREIGN KEY ("employeeId", "frontendUserId") REFERENCES "Employee"("id", "frontendUserId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "EmployeeDateOverride" ADD CONSTRAINT "EmployeeDateOverride_frontendUserId_fkey" FOREIGN KEY ("frontendUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "EmployeeDateOverride" ADD CONSTRAINT "EmployeeDateOverride_employeeId_frontendUserId_fkey" FOREIGN KEY ("employeeId", "frontendUserId") REFERENCES "Employee"("id", "frontendUserId") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "EmployeeDateOverride" ADD CONSTRAINT "EmployeeDateOverride_employeeId_frontendUserId_fkey" FOREIGN KEY ("employeeId", "frontendUserId") REFERENCES "Employee"("id", "frontendUserId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "EmployeeMonthlySetting" ADD CONSTRAINT "EmployeeMonthlySetting_frontendUserId_fkey" FOREIGN KEY ("frontendUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "EmployeeMonthlySetting" ADD CONSTRAINT "EmployeeMonthlySetting_employeeId_frontendUserId_fkey" FOREIGN KEY ("employeeId", "frontendUserId") REFERENCES "Employee"("id", "frontendUserId") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "EmployeeMonthlySetting" ADD CONSTRAINT "EmployeeMonthlySetting_employeeId_frontendUserId_fkey" FOREIGN KEY ("employeeId", "frontendUserId") REFERENCES "Employee"("id", "frontendUserId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "EmployeeAttendanceRecord" ADD CONSTRAINT "EmployeeAttendanceRecord_frontendUserId_fkey" FOREIGN KEY ("frontendUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

@@ -2,7 +2,7 @@
   <PageShell title="员工档案" description="管理员工人事信息、薪资参数和私有照片；敏感信息默认脱敏。" :show-month="false" :show-employee="false" @refresh="load">
     <div class="toolbar">
       <el-input v-model="keyword" clearable placeholder="搜索编号、姓名或手机" style="width:260px" />
-      <el-select v-model="statusFilter" clearable placeholder="全部状态" style="width:130px"><el-option label="在职" value="ACTIVE"/><el-option label="停用" value="INACTIVE"/><el-option label="已离职" value="TERMINATED"/></el-select>
+      <el-select v-model="statusFilter" clearable placeholder="全部状态" style="width:130px"><el-option label="在职" value="ACTIVE"/><el-option label="停用/离职" value="INACTIVE"/></el-select>
       <el-button type="primary" @click="openCreate">新增员工</el-button>
     </div>
     <el-table :data="filtered" empty-text="暂无员工档案">
@@ -21,7 +21,7 @@
     <el-alert v-if="formError" :title="formError" type="error" :closable="false" show-icon />
     <el-form label-position="top" class="form-grid">
       <el-form-item label="员工编号" required><el-input v-model="form.employeeNumber" data-testid="employee-number"/></el-form-item><el-form-item label="姓名" required><el-input v-model="form.name" data-testid="employee-name"/></el-form-item>
-      <el-form-item label="在职状态"><el-select v-model="form.status"><el-option label="在职" value="ACTIVE"/><el-option label="停用" value="INACTIVE"/><el-option label="已离职" value="TERMINATED"/></el-select></el-form-item>
+      <el-form-item label="在职状态"><el-select v-model="form.status"><el-option label="在职" value="ACTIVE"/><el-option label="停用/离职" value="INACTIVE"/></el-select></el-form-item>
       <el-form-item label="手机"><el-input v-model="form.phone"/></el-form-item><el-form-item label="身份证"><el-input v-model="form.idCard" data-testid="employee-id-card" placeholder="编辑时留空保持原值"/></el-form-item><el-form-item label="银行卡"><el-input v-model="form.bankCard" data-testid="employee-bank-card" placeholder="编辑时留空保持原值"/></el-form-item>
       <el-form-item label="住址"><el-input v-model="form.address" placeholder="编辑时留空保持原值"/></el-form-item><el-form-item label="紧急联系人"><el-input v-model="form.emergencyContact" placeholder="编辑时留空保持原值"/></el-form-item><el-form-item label="入职日期" required><el-date-picker v-model="form.hireDate" type="date" value-format="YYYY-MM-DD"/></el-form-item>
       <el-form-item label="离职日期"><el-date-picker v-model="form.terminationDate" type="date" value-format="YYYY-MM-DD" clearable/></el-form-item>
@@ -29,7 +29,7 @@
     </el-form><template #footer><el-button @click="visible=false">取消</el-button><el-button data-testid="employee-save" type="primary" :loading="store.saving" @click="save">保存</el-button></template>
   </el-dialog>
   <el-dialog v-model="revealVisible" title="敏感信息（本次查看）" width="560px"><el-descriptions v-if="revealed" :column="1" border><el-descriptions-item label="身份证">{{ revealed.idCard || '-' }}</el-descriptions-item><el-descriptions-item label="银行卡">{{ revealed.bankCard || '-' }}</el-descriptions-item><el-descriptions-item label="住址">{{ revealed.address || '-' }}</el-descriptions-item><el-descriptions-item label="紧急联系人">{{ revealed.emergencyContact || '-' }}</el-descriptions-item></el-descriptions></el-dialog>
-  <el-dialog v-model="photoVisible" title="员工私有照片" width="520px" @closed="releasePhoto"><img v-if="photoUrl" :src="photoUrl" alt="员工照片" style="display:block;max-width:100%;max-height:65vh;margin:auto"/><el-empty v-else description="Mock 演示不存储实际照片文件"/></el-dialog>
+  <el-dialog v-model="photoVisible" title="员工私有照片" width="520px" @closed="releasePhoto"><img v-if="photoUrl" :src="photoUrl" alt="员工照片" style="display:block;max-width:100%;max-height:65vh;margin:auto"/><el-empty v-else description="照片内容暂不可用，请重新上传"/></el-dialog>
 </template>
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -45,7 +45,7 @@ const store = useEmployeeAttendanceStore()
 const accessGuard = useAccessGuardStore()
 const keyword = ref(''), statusFilter = ref<Employee['status'] | ''>(''), visible = ref(false), editingId = ref(''), formError = ref('')
 const revealVisible = ref(false), revealed = ref<RevealedEmployee | null>(null), photoVisible = ref(false), photoUrl = ref('')
-const statusLabel = { ACTIVE: '在职', INACTIVE: '停用', TERMINATED: '已离职' }
+const statusLabel = { ACTIVE: '在职', INACTIVE: '停用/离职' }
 const statusName = (status: Employee['status']) => statusLabel[status]
 const blank = (): EmployeePayload => ({ employeeNumber: '', name: '', status: 'ACTIVE', phone: '', idCard: '', bankCard: '', address: '', emergencyContact: '', hireDate: dayjs().format('YYYY-MM-DD'), terminationDate: '', baseSalary: 0, attendanceBonus: 0, overtimeHourlyRate: 0, restQuotaDays: 4 })
 const form = reactive<EmployeePayload>(blank())

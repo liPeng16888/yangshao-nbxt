@@ -26,13 +26,13 @@ function createController(options: { protected?: boolean; grantValid?: boolean }
   const service = Object.fromEntries(serviceNames.map((name) => [name, vi.fn().mockResolvedValue({})])) as unknown as EmployeeAttendanceService
   const auth = {
     isFeatureProtected: vi.fn().mockResolvedValue(Boolean(options.protected)),
-    hasAccessGrant: vi.fn().mockReturnValue(Boolean(options.grantValid)),
+    hasAccessGrant: vi.fn().mockResolvedValue(Boolean(options.grantValid)),
     assertAccessGrant: vi.fn(async (frontendUserId: string, grant: string | undefined, feature: AccessGuardFeature, alwaysRequire = false) => {
       const protectedFeature = alwaysRequire || await auth.isFeatureProtected(frontendUserId, feature)
-      if (protectedFeature && !auth.hasAccessGrant(frontendUserId, grant, feature)) throw new ForbiddenException('访问授权无效或已过期')
+      if (protectedFeature && !(await auth.hasAccessGrant(frontendUserId, grant, feature))) throw new ForbiddenException('访问授权无效或已过期')
     })
   }
-  const photos = { save: vi.fn().mockResolvedValue('/private/new.jpg'), read: vi.fn().mockResolvedValue(Buffer.from('photo')), remove: vi.fn() }
+  const photos = { save: vi.fn().mockResolvedValue('/private/new.jpg'), read: vi.fn().mockResolvedValue({ buffer: Buffer.from('photo'), contentType: 'image/png' }), remove: vi.fn() }
   return { controller: new EmployeeAttendanceController(service, auth as never, photos as never, service as never), service: service as any, auth, photos }
 }
 
@@ -86,6 +86,16 @@ describe('EmployeeAttendanceController authorization and ownership', () => {
     const [Interceptor] = Reflect.getMetadata(INTERCEPTORS_METADATA, EmployeeAttendanceController.prototype.uploadPhoto)
     const instance = new Interceptor() as { multer: { limits: { fileSize: number } } }
     expect(instance.multer.limits.fileSize).toBe(5 * 1024 * 1024)
+  })
+
+  it('returns private photos with detected content type and no-store response headers', async () => {
+    const { controller } = createController()
+    const file = await controller.readPhoto(frontendUser, 'employee-1', undefined)
+    expect(file.getHeaders()).toMatchObject({ type: 'image/png' })
+    expect(Reflect.getMetadata('__headers__', EmployeeAttendanceController.prototype.readPhoto)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Cache-Control', value: 'private, no-store' }),
+      expect.objectContaining({ name: 'X-Content-Type-Options', value: 'nosniff' })
+    ]))
   })
 
   it('checks the attendance grant and authenticated ownership on every public endpoint', async () => {

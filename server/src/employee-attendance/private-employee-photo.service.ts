@@ -42,7 +42,10 @@ export class PrivateEmployeePhotoService {
     const root = this.root()
     if (!resolved.startsWith(`${root}${path.sep}`)) throw new NotFoundException('员工照片不存在')
     try {
-      return await readFile(resolved)
+      const buffer = await readFile(resolved)
+      const contentType = this.detectContentType(buffer)
+      if (!contentType) throw new Error('unsupported image content')
+      return { buffer, contentType }
     } catch {
       throw new NotFoundException('员工照片不存在')
     }
@@ -62,7 +65,12 @@ export class PrivateEmployeePhotoService {
   }
 
   private root() {
-    return path.resolve(this.config.get<string>('PRIVATE_EMPLOYEE_PHOTO_DIR') || path.join(process.cwd(), 'private-uploads', 'employee-photos'))
+    const privateRoot = path.resolve(this.config.get<string>('PRIVATE_EMPLOYEE_PHOTO_DIR') || path.join(process.cwd(), 'private-uploads', 'employee-photos'))
+    const publicRoot = path.resolve(this.config.get<string>('UPLOAD_DIR') || path.join(process.cwd(), 'uploads'))
+    if (privateRoot === publicRoot || privateRoot.startsWith(`${publicRoot}${path.sep}`)) {
+      throw new BadRequestException('私有员工照片目录不能位于公开上传目录中')
+    }
+    return privateRoot
   }
 
   private safeSegment(value: string) {
@@ -74,5 +82,10 @@ export class PrivateEmployeePhotoService {
     if (mimeType === 'image/png') return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
     if (mimeType === 'image/webp') return buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP'
     return false
+  }
+
+  private detectContentType(buffer: Buffer) {
+    return Object.keys(PrivateEmployeePhotoService.extensions)
+      .find((mimeType) => this.matchesImageSignature(mimeType, buffer)) || null
   }
 }

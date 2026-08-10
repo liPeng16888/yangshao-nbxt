@@ -17,13 +17,13 @@ export class LabSheetsController {
   @Get('current')
   async getCurrent(@CurrentUserInfo() user: CurrentUser, @Headers('x-ys-access-grant') grant?: string) {
     const protectedFeature = await this.auth.isFeatureProtected(user.id, 'COMPLETED_SAMPLE_DATA')
-    return this.sheets.getDefaultSheetForFrontendUser(user.id, !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA'))
+    return this.sheets.getDefaultSheetForFrontendUser(user.id, !protectedFeature || await this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA'))
   }
 
   @Get()
   async getByDate(@CurrentUserInfo() user: CurrentUser, @Query('date') date: string, @Headers('x-ys-access-grant') grant?: string) {
     const protectedFeature = await this.auth.isFeatureProtected(user.id, 'COMPLETED_SAMPLE_DATA')
-    return this.sheets.getSheetForFrontendUser(user.id, date, !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA'))
+    return this.sheets.getSheetForFrontendUser(user.id, date, !protectedFeature || await this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA'))
   }
 
   @Get('parameters/current')
@@ -48,7 +48,7 @@ export class LabSheetsController {
       user.id,
       payload,
       sourceClientId,
-      !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA')
+      !protectedFeature || await this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA')
     )
   }
 
@@ -66,14 +66,14 @@ export class LabSheetsController {
       sheetId,
       Number(count || 0),
       sourceClientId,
-      !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA')
+      !protectedFeature || await this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA')
     )
   }
 
   @Put(':sheetId/cells')
   async saveBlock(@CurrentUserInfo() user: CurrentUser, @Param('sheetId') sheetId: string, @Body() block: Record<string, unknown>, @Headers('x-ys-client-id') sourceClientId?: string, @Headers('x-ys-access-grant') grant?: string) {
     const protectedFeature = await this.auth.isFeatureProtected(user.id, 'COMPLETED_SAMPLE_DATA')
-    return this.sheets.saveSampleBlock(user, sheetId, block, sourceClientId, !protectedFeature || this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA'))
+    return this.sheets.saveSampleBlock(user, sheetId, block, sourceClientId, !protectedFeature || await this.auth.hasAccessGrant(user.id, grant, 'COMPLETED_SAMPLE_DATA'))
   }
 
   @Get('history')

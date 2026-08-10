@@ -27,6 +27,8 @@ export const employeeAttendanceColumns: Record<Exclude<EmployeeAttendanceAdminPa
     { key: 'scheduleDate', label: '日期/月份' },
     { key: 'weekdayLabel', label: '星期' },
     { key: 'isWorkday', label: '工作日' },
+    { key: 'plannedStartTime', label: '开始时间' },
+    { key: 'plannedEndTime', label: '结束时间' },
     { key: 'scheduledMinutes', label: '排班分钟' },
     { key: 'scheduledWorkDays', label: '应出勤天数' },
     { key: 'restQuotaDays', label: '月休额度' },

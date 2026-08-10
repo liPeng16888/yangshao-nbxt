@@ -32,7 +32,7 @@ defineProps<{
 defineEmits<{ reveal: [employee: AdminAttendanceTableRow] }>()
 
 const statusLabels: Record<string, string> = {
-  ACTIVE: '在职', INACTIVE: '停用', TERMINATED: '离职',
+  ACTIVE: '在职', INACTIVE: '停用',
   PENDING: '待审核', APPROVED: '已批准', REJECTED: '已拒绝',
   DRAFT: '草稿', CONFIRMED: '已确认'
 }

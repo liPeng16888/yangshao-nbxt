@@ -1,23 +1,16 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { createAccessGuardGroup, deleteAccessGuardGroup, getAccessGuardGroups, updateAccessGuardGroup, verifyAccessGuardGroup, type AccessGuardGroup, type AccessGuardGroupPayload } from '@/api/accessGuard'
+import {
+  createAccessGuardGroup, deleteAccessGuardGroup, getAccessGuardGroups, readAccessGuardSessions,
+  removeAccessGuardSession, updateAccessGuardGroup, verifyAccessGuardGroup, writeAccessGuardSessions,
+  type AccessGuardGroup, type AccessGuardGroupPayload, type StoredAccessGuardSession
+} from '@/api/accessGuard'
 import { featureForPath, type AccessGuardFeature } from '@/router/guards'
 
 interface AccessRequestOptions { title: string; message: string; onSuccess: () => void | Promise<void> }
 type PendingAction = (() => void | Promise<void>) | null
 
-const SESSION_KEY = 'ys_access_guard_group_sessions'
-
-export interface AccessGuardSession { expiresAt: number; token?: string; features?: AccessGuardFeature[] }
-
-function readSessions(): Record<string, AccessGuardSession> {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(SESSION_KEY) || '{}') as Record<string, AccessGuardSession | number>
-    return Object.fromEntries(Object.entries(stored).map(([id, value]) => [id, typeof value === 'number' ? { expiresAt: value } : value]))
-  } catch { return {} }
-}
-
-function writeSessions(value: Record<string, AccessGuardSession>) { window.localStorage.setItem(SESSION_KEY, JSON.stringify(value)) }
+export type AccessGuardSession = StoredAccessGuardSession
 
 export const useAccessGuardStore = defineStore('accessGuard', () => {
   const groups = ref<AccessGuardGroup[]>([])
@@ -31,13 +24,25 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
   let pendingAction: PendingAction = null
 
   const activeGroup = computed(() => groups.value.find((group) => group.id === activeGroupId.value) || null)
-  const settings = computed(() => activeGroup.value || { enabled: false, ttlMinutes: 5, password: '', recoveryPrompt: '', recoveryAnswer: '' })
+  const settings = computed(() => activeGroup.value || { enabled: false, ttlMinutes: 5, grantVersion: 0, password: '', recoveryPrompt: '', recoveryAnswer: '' })
   const isProtectionActive = computed(() => groups.value.some((group) => group.enabled && group.features.length))
   const hasRecovery = computed(() => Boolean(activeGroup.value?.recoveryPrompt && activeGroup.value?.recoveryAnswer))
 
   async function loadGroups(force = false) {
     if (loaded.value && !force) return groups.value
     groups.value = await getAccessGuardGroups()
+    const currentGroups = new Map(groups.value.map((group) => [group.id, group]))
+    const sessions = readAccessGuardSessions()
+    let changed = false
+    for (const [id, session] of Object.entries(sessions)) {
+      const group = currentGroups.get(id)
+      const sameFeatures = group && [...(session.features || [])].sort().join('|') === [...group.features].sort().join('|')
+      if (!group || !group.enabled || session.groupId !== id || session.grantVersion !== group.grantVersion || !sameFeatures) {
+        delete sessions[id]
+        changed = true
+      }
+    }
+    if (changed) { writeAccessGuardSessions(sessions); accessSessionRevision.value += 1 }
     loaded.value = true
     return groups.value
   }
@@ -46,7 +51,11 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
   function hasFeatureAccess(feature: AccessGuardFeature) {
     const group = groupForFeature(feature)
     if (!group) return true
-    return (readSessions()[group.id]?.expiresAt || 0) > Date.now()
+    const session = readAccessGuardSessions()[group.id]
+    return Boolean(
+      session?.groupId === group.id && session.grantVersion === group.grantVersion && session.token &&
+      (session.expiresAt || 0) > Date.now() && session.features?.includes(feature)
+    )
   }
   function hasValidSession() { return Boolean(activeGroup.value && hasFeatureAccess(activeGroup.value.features[0])) }
   function isProtectedPath(path: string) { return featureForPath(path) !== null }
@@ -72,7 +81,10 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
     if (!password.trim()) return { ok: false, message: '请输入访问密码' }
     try {
       const verification = await verifyAccessGuardGroup(group.id, password.trim(), group.ttlMinutes, group.password)
-      const sessions = readSessions(); sessions[group.id] = { ...verification, features: [...group.features] }; writeSessions(sessions); accessSessionRevision.value += 1
+      if (verification.groupId !== group.id || !verification.features.length) return { ok: false, message: '访问授权响应无效' }
+      group.grantVersion = verification.grantVersion
+      group.features = [...verification.features]
+      const sessions = readAccessGuardSessions(); sessions[group.id] = verification; writeAccessGuardSessions(sessions); accessSessionRevision.value += 1
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : '访问密码不正确' }
     }
@@ -83,11 +95,22 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
     const group = activeGroup.value
     if (!group || payload.recoveryAnswer.trim() !== group.recoveryAnswer) return { ok: false, message: '找回答案不正确' }
     if (payload.newPassword.trim().length < 4 || payload.newPassword.trim() !== payload.confirmPassword.trim()) return { ok: false, message: '新访问密码至少 4 位且两次输入一致' }
-    await updateAccessGuardGroup(group.id, { ...group, password: payload.newPassword.trim() }); await loadGroups(true)
+    await updateAccessGuardGroup(group.id, { ...group, password: payload.newPassword.trim() })
+    if (removeAccessGuardSession(group.id)) accessSessionRevision.value += 1
+    await loadGroups(true)
     return verifyPassword(payload.newPassword)
   }
-  async function saveGroup(payload: AccessGuardGroupPayload, id?: string) { const result = id ? await updateAccessGuardGroup(id, payload) : await createAccessGuardGroup(payload); await loadGroups(true); return result }
-  async function removeGroup(id: string) { await deleteAccessGuardGroup(id); await loadGroups(true) }
+  async function saveGroup(payload: AccessGuardGroupPayload, id?: string) {
+    const result = id ? await updateAccessGuardGroup(id, payload) : await createAccessGuardGroup(payload)
+    if (id && removeAccessGuardSession(id)) accessSessionRevision.value += 1
+    await loadGroups(true)
+    return result
+  }
+  async function removeGroup(id: string) {
+    await deleteAccessGuardGroup(id)
+    if (removeAccessGuardSession(id)) accessSessionRevision.value += 1
+    await loadGroups(true)
+  }
   function openSettings() { settingsVisible.value = true; void loadGroups() }
 
   return { groups, settings, activeGroup, settingsVisible, dialogVisible, accessTitle, accessMessage, accessSessionRevision, isProtectionActive, hasRecovery, loadGroups, openSettings, cancelAccess, isProtectedPath, hasValidSession, requiresAccessForPath, requestAccess, requestFeatureAccess, hasFeatureAccess, verifyPassword, resetPasswordWithRecovery, saveGroup, removeGroup }

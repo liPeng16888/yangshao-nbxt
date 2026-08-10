@@ -24,6 +24,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isLoggedIn = computed(() => Boolean(token.value && user.value))
 
   function persist(nextToken: string, nextUser: AuthUser) {
+    localStorage.removeItem('ys_access_guard_group_sessions')
     token.value = nextToken
     user.value = nextUser
     localStorage.setItem(tokenKey, nextToken)
@@ -65,6 +66,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     localStorage.removeItem(tokenKey)
     localStorage.removeItem(userKey)
+    localStorage.removeItem('ys_access_guard_group_sessions')
   }
 
   async function updateCurrentPassword(payload: UpdatePasswordPayload) {

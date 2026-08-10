@@ -7,6 +7,14 @@ import { PasswordService } from './password.service'
 import { AccessGuardGroupDto, AccessGuardSettingsDto, LoginDto, RegisterDto, UpdateAdminProfileDto, UpdatePasswordDto } from './dto'
 import type { CurrentUser } from './current-user'
 
+interface AccessGrantClaims {
+  sub?: string
+  type?: string
+  groupId?: string
+  grantVersion?: number
+  features?: AccessGuardFeature[]
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -197,7 +205,7 @@ export class AuthService {
     this.assertFrontendUser(currentUser)
     const data = this.normalizeAccessGuardGroup(dto)
     const existing = await this.prisma.accessGuardGroup.findFirst({ where: { id, frontendUserId: currentUser.id } })
-    if (!existing) throw new UnauthorizedException('访问组合不存在或无权修改')
+    if (!existing) throw new ForbiddenException('访问组合不存在或无权修改')
     await this.ensureNoGroupFeatureConflict(currentUser.id, data.features, id)
     try {
       const group = await this.prisma.$transaction(async (tx) => {
@@ -207,6 +215,7 @@ export class AuthService {
           data: {
             name: data.name, enabled: data.enabled, ttlMinutes: data.ttlMinutes, password: data.password,
             recoveryPrompt: data.recoveryPrompt, recoveryAnswer: data.recoveryAnswer,
+            grantVersion: { increment: 1 },
             features: { create: data.features.map((feature) => ({ frontendUserId: currentUser.id, feature })) }
           },
           include: { features: { orderBy: { feature: 'asc' } } }
@@ -219,26 +228,48 @@ export class AuthService {
   async deleteAccessGuardGroup(currentUser: CurrentUser, id: string) {
     this.assertFrontendUser(currentUser)
     const result = await this.prisma.accessGuardGroup.deleteMany({ where: { id, frontendUserId: currentUser.id } })
-    if (!result.count) throw new UnauthorizedException('访问组合不存在或无权删除')
+    if (!result.count) throw new ForbiddenException('访问组合不存在或无权删除')
     return { ok: true }
   }
 
   async verifyAccessGuardGroup(currentUser: CurrentUser, id: string, password: string) {
     this.assertFrontendUser(currentUser)
     const group = await this.prisma.accessGuardGroup.findFirst({ where: { id, frontendUserId: currentUser.id }, include: { features: true } })
-    if (!group || !group.enabled) throw new UnauthorizedException('访问组合不存在或未启用')
-    if (password.trim() !== group.password) throw new UnauthorizedException('访问密码不正确')
+    if (!group || !group.enabled) throw new ForbiddenException('访问组合不存在或未启用')
+    if (password.trim() !== group.password) throw new ForbiddenException('访问密码不正确')
+    const features = group.features.map((item) => item.feature)
     const expiresAt = Date.now() + group.ttlMinutes * 60_000
-    const token = jwt.sign({ sub: currentUser.id, type: 'access-guard', groupId: group.id, features: group.features.map((item) => item.feature), exp: Math.floor(expiresAt / 1000) }, this.config.get<string>('JWT_SECRET') || 'dev-secret')
-    return { expiresAt, token }
+    const token = jwt.sign({
+      sub: currentUser.id, type: 'access-guard', groupId: group.id, grantVersion: group.grantVersion,
+      features, exp: Math.floor(expiresAt / 1000)
+    }, this.config.get<string>('JWT_SECRET') || 'dev-secret')
+    return { expiresAt, token, groupId: group.id, grantVersion: group.grantVersion, features }
   }
 
-  hasAccessGrant(currentUserId: string, token: string | undefined, feature: AccessGuardFeature) {
+  async hasAccessGrant(currentUserId: string, token: string | undefined, feature: AccessGuardFeature) {
     if (!token) return false
+    let payload: AccessGrantClaims
     try {
-      const payload = jwt.verify(token, this.config.get<string>('JWT_SECRET') || 'dev-secret') as { sub?: string; type?: string; features?: AccessGuardFeature[] }
-      return payload.sub === currentUserId && payload.type === 'access-guard' && Array.isArray(payload.features) && payload.features.includes(feature)
+      const verified = jwt.verify(token, this.config.get<string>('JWT_SECRET') || 'dev-secret')
+      if (typeof verified === 'string') return false
+      payload = verified as AccessGrantClaims
     } catch { return false }
+    if (
+      payload.sub !== currentUserId || payload.type !== 'access-guard' || !payload.groupId ||
+      !Number.isInteger(payload.grantVersion) || Number(payload.grantVersion) < 1 ||
+      !Array.isArray(payload.features) || !payload.features.includes(feature)
+    ) return false
+    const currentGroup = await this.prisma.accessGuardGroup.findFirst({
+      where: {
+        id: payload.groupId,
+        frontendUserId: currentUserId,
+        enabled: true,
+        grantVersion: payload.grantVersion,
+        features: { some: { frontendUserId: currentUserId, feature } }
+      },
+      select: { id: true }
+    })
+    return Boolean(currentGroup)
   }
 
   async isFeatureProtected(currentUserId: string, feature: AccessGuardFeature) {
@@ -251,8 +282,8 @@ export class AuthService {
 
   async assertAccessGrant(currentUserId: string, token: string | undefined, feature: AccessGuardFeature, alwaysRequire = false) {
     const protectedFeature = alwaysRequire || await this.isFeatureProtected(currentUserId, feature)
-    if (protectedFeature && !this.hasAccessGrant(currentUserId, token, feature)) {
-      throw new ForbiddenException('访问授权无效或已过期')
+    if (protectedFeature && !(await this.hasAccessGrant(currentUserId, token, feature))) {
+      throw new ForbiddenException({ code: 'ACCESS_GRANT_INVALID', message: '访问授权无效或已过期' })
     }
   }
 
@@ -292,6 +323,7 @@ export class AuthService {
     password: string
     recoveryPrompt: string
     recoveryAnswer: string
+    grantVersion: number
     features: Array<{ feature: AccessGuardFeature }>
   }) {
     return {
@@ -299,6 +331,7 @@ export class AuthService {
       name: group.name,
       enabled: group.enabled,
       ttlMinutes: group.ttlMinutes,
+      grantVersion: group.grantVersion,
       password: group.password,
       recoveryPrompt: group.recoveryPrompt,
       recoveryAnswer: group.recoveryAnswer,

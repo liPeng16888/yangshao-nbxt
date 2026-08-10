@@ -177,6 +177,7 @@ model AccessGuardGroup {
   name           String
   enabled        Boolean  @default(true)
   ttlMinutes     Int      @default(5)
+  grantVersion   Int      @default(1)
   password       String
   recoveryPrompt String
   recoveryAnswer String
@@ -577,12 +578,14 @@ model EmployeeWeeklySchedule {
   employeeId       String
   weekday          Int
   isWorkday        Boolean  @default(true)
+  plannedStartTime String?
+  plannedEndTime   String?
   scheduledMinutes Int      @default(480)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
 
   @@unique([employeeId, weekday])
   @@unique([id, frontendUserId])
@@ -595,13 +598,15 @@ model EmployeeDateOverride {
   employeeId       String
   date             String
   isWorkday        Boolean
+  plannedStartTime String?
+  plannedEndTime   String?
   scheduledMinutes Int      @default(480)
   remark           String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
 
   @@unique([employeeId, date])
   @@unique([id, frontendUserId])
@@ -619,7 +624,7 @@ model EmployeeMonthlySetting {
   updatedAt         DateTime @updatedAt
 
   frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
 
   @@unique([employeeId, month])
   @@unique([id, frontendUserId])

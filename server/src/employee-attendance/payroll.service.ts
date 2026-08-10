@@ -35,31 +35,40 @@ export class PayrollService {
   async overview(frontendUserId: string, month: string) {
     this.assertMonth(month)
     const today = this.today()
-    const [workforce, todayRows, leaves, pendingLeave, payroll] = await Promise.all([
+    const [monthStart, monthEnd] = this.monthBounds(month)
+    const [workforce, todayRows, monthRows, leaves, pendingLeave, payroll] = await Promise.all([
       this.prisma.employee.count({ where: { frontendUserId, status: EmployeeStatus.ACTIVE } }),
       this.prisma.employeeAttendanceRecord.findMany({ where: { frontendUserId, date: today } }),
+      this.prisma.employeeAttendanceRecord.findMany({ where: { frontendUserId, date: { startsWith: month } } }),
       this.prisma.employeeLeaveRequest.count({ where: {
         frontendUserId, status: EmployeeLeaveStatus.APPROVED,
         startDate: { lte: today }, endDate: { gte: today }
       } }),
-      this.prisma.employeeLeaveRequest.count({ where: { frontendUserId, status: EmployeeLeaveStatus.PENDING } }),
+      this.prisma.employeeLeaveRequest.count({ where: {
+        frontendUserId, status: EmployeeLeaveStatus.PENDING,
+        startDate: { lte: monthEnd }, endDate: { gte: monthStart }
+      } }),
       this.prisma.employeePayrollRun.findFirst({
         where: { frontendUserId, month },
         include: { items: { select: { payableAmount: true, issues: true } } }
       })
     ])
     const projectedPayroll = (payroll?.items || []).reduce((sum, item) => sum.plus(item.payableAmount), new Prisma.Decimal(0))
-    const issues = (payroll?.items || []).reduce((sum, item) => sum + this.jsonIssues(item.issues).length, 0)
+    const payrollIssues = (payroll?.items || []).flatMap((item) => this.jsonIssues(item.issues))
+    const lateDays = monthRows.filter((row) => row.lateMinutes > 0).length
+    const earlyDays = monthRows.filter((row) => row.earlyLeaveMinutes > 0).length
+    const reminders = lateDays || earlyDays ? [`本月考勤提醒：迟到 ${lateDays} 天，早退 ${earlyDays} 天（不自动扣薪）`] : []
     return {
       month,
       workforce,
       todayAttendance: todayRows.filter((row) => Boolean(row.checkInAt || row.checkOutAt || row.workedMinutes)).length,
       todayLeave: leaves,
       todayAbsence: todayRows.filter((row) => row.absenceMinutes > 0).length,
-      overtimeMinutes: todayRows.reduce((sum, row) => sum + row.overtimeMinutes, 0),
+      overtimeMinutes: monthRows.reduce((sum, row) => sum + row.overtimeMinutes, 0),
       pendingLeave,
       projectedPayroll: projectedPayroll.toDecimalPlaces(2).toNumber(),
-      issueCount: issues
+      issueCount: payrollIssues.length + pendingLeave + reminders.length,
+      issues: [...payrollIssues, ...(pendingLeave ? [`${pendingLeave} 条请假待审批`] : []), ...reminders]
     }
   }
 
@@ -177,19 +186,26 @@ export class PayrollService {
   }
 
   async adminOverview(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     const month = query.month || this.today().slice(0, 7)
     this.assertMonth(month)
+    const [monthStart, monthEnd] = this.monthBounds(month)
     const [employees, attendance, leaves, payroll] = await Promise.all([
       this.prisma.employee.count({ where: { frontendUserId: { in: frontendUserIds }, status: EmployeeStatus.ACTIVE } }),
       this.prisma.employeeAttendanceRecord.count({ where: { frontendUserId: { in: frontendUserIds }, date: { startsWith: month } } }),
-      this.prisma.employeeLeaveRequest.count({ where: { frontendUserId: { in: frontendUserIds }, status: EmployeeLeaveStatus.PENDING } }),
+      this.prisma.employeeLeaveRequest.count({ where: {
+        frontendUserId: { in: frontendUserIds }, status: EmployeeLeaveStatus.PENDING,
+        startDate: { lte: monthEnd }, endDate: { gte: monthStart }
+      } }),
       this.prisma.employeePayrollRun.count({ where: { frontendUserId: { in: frontendUserIds }, month } })
     ])
     return { month, workforce: employees, attendanceRecords: attendance, pendingLeave: leaves, payrollRuns: payroll, readonly: true }
   }
 
   async adminEmployees(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
-    const status = query.status && Object.values(EmployeeStatus).includes(query.status as EmployeeStatus) ? query.status as EmployeeStatus : undefined
+    this.assertExclusiveDateFilter(query)
+    if (query.status && !Object.values(EmployeeStatus).includes(query.status as EmployeeStatus)) throw new BadRequestException('员工状态无效')
+    const status = query.status as EmployeeStatus | undefined
     const rows = await this.prisma.employee.findMany({ where: {
       frontendUserId: { in: frontendUserIds }, ...(query.employeeId ? { id: query.employeeId } : {}), ...(status ? { status } : {})
     }, include: { frontendUser: { select: { account: true, username: true, displayRemark: true } } }, orderBy: [{ frontendUserId: 'asc' }, { employeeNumber: 'asc' }] })
@@ -197,6 +213,7 @@ export class PayrollService {
   }
 
   async adminSchedules(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     const where = this.adminEmployeeWhere(frontendUserIds, query)
     return {
       weekly: await this.prisma.employeeWeeklySchedule.findMany({ where, orderBy: [{ employeeId: 'asc' }, { weekday: 'asc' }] }),
@@ -206,12 +223,14 @@ export class PayrollService {
   }
 
   adminAttendance(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     return this.prisma.employeeAttendanceRecord.findMany({ where: {
       ...this.adminEmployeeWhere(frontendUserIds, query), ...this.adminDateWhere(query)
     }, include: { employee: { select: { employeeNumber: true, name: true } } }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] })
   }
 
   adminLeaves(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     const overlap = this.adminOverlapWhere(query)
     return this.prisma.employeeLeaveRequest.findMany({ where: {
       ...this.adminEmployeeWhere(frontendUserIds, query), ...overlap,
@@ -220,18 +239,21 @@ export class PayrollService {
   }
 
   adminCommissions(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     return this.prisma.employeeCommissionRecord.findMany({ where: {
       ...this.adminEmployeeWhere(frontendUserIds, query), ...this.adminDateWhere(query)
     }, include: { employee: { select: { employeeNumber: true, name: true } }, commissionType: true }, orderBy: { date: 'desc' } })
   }
 
   adminBonuses(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     return this.prisma.employeeBonus.findMany({ where: {
       ...this.adminEmployeeWhere(frontendUserIds, query), ...this.adminDateWhere(query)
     }, include: { employee: { select: { employeeNumber: true, name: true } } }, orderBy: { date: 'desc' } })
   }
 
   adminPayroll(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     if (query.month) this.assertMonth(query.month)
     const status = query.status && Object.values(EmployeePayrollStatus).includes(query.status as EmployeePayrollStatus) ? query.status as EmployeePayrollStatus : undefined
     return this.prisma.employeePayrollRun.findMany({ where: {
@@ -244,6 +266,7 @@ export class PayrollService {
   }
 
   adminAudit(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     return this.prisma.employeeAuditLog.findMany({ where: {
       frontendUserId: { in: frontendUserIds }, ...this.adminCreatedWhere(query)
     }, include: { actorUser: { select: { account: true, username: true, role: true } } }, orderBy: { createdAt: 'desc' } })
@@ -268,7 +291,7 @@ export class PayrollService {
   private async refreshDraft(tx: Prisma.TransactionClient, run: any) {
     const existing = await tx.employeePayrollItem.findMany({ where: { payrollRunId: run.id, frontendUserId: run.frontendUserId }, include: { adjustments: true } })
     const adjustments = new Map(existing.map((item: any) => [item.employeeId, item.adjustments || []]))
-    const sources = await this.payrollSources(tx, run.frontendUserId, run.month, adjustments)
+    const sources = await this.payrollSources(tx, run.frontendUserId, run.month, adjustments, existing.map((item: any) => item.employeeId))
     const keptIds: string[] = []
     const rows: any[] = []
     for (const source of sources) {
@@ -279,19 +302,21 @@ export class PayrollService {
         : await tx.employeePayrollItem.create({ data })
       if (row) { keptIds.push(row.id); rows.push({ ...row, adjustments: adjustments.get(source.employee.id) || [] }) }
     }
-    await tx.employeePayrollItem.deleteMany({ where: {
-      payrollRunId: run.id, frontendUserId: run.frontendUserId, ...(keptIds.length ? { id: { notIn: keptIds } } : {})
-    } })
+    for (const current of existing) {
+      if (!keptIds.includes(current.id)) rows.push(current)
+    }
     return rows
   }
 
-  private async payrollSources(db: Db, frontendUserId: string, month: string, adjustments: Map<string, any[]>) {
+  private async payrollSources(db: Db, frontendUserId: string, month: string, adjustments: Map<string, any[]>, preservedEmployeeIds: string[] = []) {
     const [monthStart, monthEnd] = this.monthBounds(month)
     const employees = await db.employee.findMany({ where: {
-      frontendUserId, hireDate: { lte: monthEnd },
-      OR: [
-        { status: EmployeeStatus.ACTIVE, terminationDate: null },
-        { terminationDate: { gte: monthStart } }
+      frontendUserId, OR: [
+        { id: { in: preservedEmployeeIds } },
+        { AND: [{ hireDate: { lte: monthEnd } }, { OR: [
+          { status: EmployeeStatus.ACTIVE, terminationDate: null },
+          { terminationDate: { gte: monthStart } }
+        ] }] }
       ]
     }, orderBy: { employeeNumber: 'asc' } })
     const employeeIds = employees.map((employee) => employee.id)
@@ -312,20 +337,27 @@ export class PayrollService {
       const countedLeaveDays = employeeLeaves
         .filter((item) => item.leaveType.countsTowardRestQuota)
         .reduce((sum, item) => sum.plus(this.leavePortion(item, monthStart, monthEnd, employeeAttendance)), new Prisma.Decimal(0))
-      const absenceDays = employeeAttendance.reduce((sum, item) => {
-        if (!item.isScheduledWorkday || item.absenceMinutes <= 0 || item.scheduledMinutes <= 0) return sum
-        const recorded = Prisma.Decimal.min(new Prisma.Decimal(item.absenceMinutes).div(item.scheduledMinutes), new Prisma.Decimal(1))
+      const attendanceEvaluations = employeeAttendance.filter((item) => item.isScheduledWorkday).map((item) => {
+        const scheduledMinutes = Math.max(0, item.scheduledMinutes)
         const approvedCoverage = Prisma.Decimal.min(
           employeeLeaves.filter((leave) => leave.startDate <= item.date && leave.endDate >= item.date)
             .reduce((coverage, leave) => coverage.plus(this.leaveCoverageForDate(leave)), new Prisma.Decimal(0)),
           new Prisma.Decimal(1)
         )
-        return sum.plus(Prisma.Decimal.max(recorded.minus(approvedCoverage), new Prisma.Decimal(0)))
-      }, new Prisma.Decimal(0))
-      const unresolved = employeeAttendance.filter((item) => item.isScheduledWorkday && item.scheduledMinutes > 0 &&
-        !item.checkInAt && !item.checkOutAt && item.absenceMinutes <= 0 &&
-        employeeLeaves.filter((leave) => leave.startDate <= item.date && leave.endDate >= item.date)
-          .reduce((coverage, leave) => coverage.plus(this.leaveCoverageForDate(leave)), new Prisma.Decimal(0)).lt(1))
+        const uncoveredMinutes = new Prisma.Decimal(scheduledMinutes).times(new Prisma.Decimal(1).minus(approvedCoverage))
+        const hasPair = Boolean(item.checkInAt && item.checkOutAt)
+        const hasLonePunch = Boolean(item.checkInAt) !== Boolean(item.checkOutAt)
+        const recordedAbsence = new Prisma.Decimal(Math.max(0, item.absenceMinutes || 0))
+        const insufficientExplicitAbsence = !hasPair && recordedAbsence.lt(uncoveredMinutes)
+        const effectiveAbsence = !hasPair
+          ? uncoveredMinutes
+          : Prisma.Decimal.min(recordedAbsence, uncoveredMinutes)
+        const absenceDays = scheduledMinutes > 0
+          ? Prisma.Decimal.min(effectiveAbsence.div(scheduledMinutes), new Prisma.Decimal(1))
+          : new Prisma.Decimal(0)
+        return { item, absenceDays, hasLonePunch, insufficientExplicitAbsence, invalidSchedule: scheduledMinutes <= 0 }
+      })
+      const absenceDays = attendanceEvaluations.reduce((sum, evaluation) => sum.plus(evaluation.absenceDays), new Prisma.Decimal(0))
       const input: PayrollCalculationInput = {
         baseSalary: employee.baseSalary.toString(),
         attendanceBonus: employee.attendanceBonus.toString(),
@@ -342,9 +374,14 @@ export class PayrollService {
       const result = calculatePayroll(input)
       const issues = [...result.issues]
       if (!setting || new Prisma.Decimal(setting.scheduledWorkDays).lte(0)) issues.push('缺少员工月度排班')
-      const scheduledRows = employeeAttendance.filter((item) => item.isScheduledWorkday).length
+      const scheduledRows = attendanceEvaluations.filter((evaluation) => !evaluation.invalidSchedule).length
       if (setting && new Prisma.Decimal(setting.scheduledWorkDays).gt(scheduledRows)) issues.push('缺少考勤排班记录')
-      if (unresolved.length) issues.push(`有 ${unresolved.length} 天未处理缺勤`)
+      const invalidSchedules = attendanceEvaluations.filter((evaluation) => evaluation.invalidSchedule).length
+      if (invalidSchedules) issues.push(`有 ${invalidSchedules} 天排班工作日时长必须大于 0`)
+      const lonePunches = attendanceEvaluations.filter((evaluation) => evaluation.hasLonePunch).length
+      if (lonePunches) issues.push(`有 ${lonePunches} 天打卡必须成对`)
+      const unresolved = attendanceEvaluations.filter((evaluation) => evaluation.insufficientExplicitAbsence).length
+      if (unresolved) issues.push(`有 ${unresolved} 天未处理缺勤`)
       return { input, issues: Array.from(new Set(issues)), employee }
     })
   }
@@ -447,11 +484,13 @@ export class PayrollService {
   }
 
   private adminDateWhere(query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     if (query.month) { this.assertMonth(query.month); return { date: { startsWith: query.month } } }
     return query.startDate || query.endDate ? { date: { ...(query.startDate ? { gte: query.startDate } : {}), ...(query.endDate ? { lte: query.endDate } : {}) } } : {}
   }
 
   private adminOverlapWhere(query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     if (query.month) {
       this.assertMonth(query.month)
       const [start, end] = this.monthBounds(query.month)
@@ -461,12 +500,17 @@ export class PayrollService {
   }
 
   private adminCreatedWhere(query: AdminEmployeeAttendanceQueryDto) {
+    this.assertExclusiveDateFilter(query)
     if (!query.month) return {}
     this.assertMonth(query.month)
     const [start, end] = this.monthBounds(query.month)
     const next = new Date(`${end}T00:00:00+08:00`)
     next.setDate(next.getDate() + 1)
     return { createdAt: { gte: new Date(`${start}T00:00:00+08:00`), lt: next } }
+  }
+
+  private assertExclusiveDateFilter(query: Pick<AdminEmployeeAttendanceQueryDto, 'month' | 'startDate' | 'endDate'>) {
+    if (query.month && (query.startDate || query.endDate)) throw new BadRequestException('月份和日期范围不能同时使用')
   }
 
   private plainInput(input: PayrollCalculationInput) {

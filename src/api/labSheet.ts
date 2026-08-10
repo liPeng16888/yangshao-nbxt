@@ -1,4 +1,5 @@
 import request, { useMocks } from '@/utils/request'
+import { readAccessGuardSessions, selectAccessGuardGrant } from '@/api/accessGuard'
 import type { LabParameter, LabSheet, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
 import {
   mockAddSampleBlocks,
@@ -77,8 +78,7 @@ function clientHeaders() {
 
 function accessGrantHeaders() {
   try {
-    const sessions = JSON.parse(window.localStorage.getItem('ys_access_guard_group_sessions') || '{}') as Record<string, { expiresAt?: number; token?: string }>
-    const token = Object.values(sessions).find((session) => (session.expiresAt || 0) > Date.now() && session.token)?.token
+    const token = selectAccessGuardGrant(readAccessGuardSessions(), 'COMPLETED_SAMPLE_DATA')
     return token ? { headers: { 'X-YS-Access-Grant': token } } : undefined
   } catch { return undefined }
 }

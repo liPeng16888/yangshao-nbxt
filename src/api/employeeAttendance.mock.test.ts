@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest'
 import dayjs from 'dayjs'
+import { readEmployeePhoto, uploadEmployeePhoto } from '@/api/employeeAttendance'
 import {
   mockConfirmPayroll,
   mockCreateEmployee,
@@ -8,11 +9,15 @@ import {
   mockDeleteEmployee,
   mockDeleteLeave,
   mockGeneratePayroll,
+  mockGetOverview,
   mockGetAttendance,
+  mockGetCommissions,
   mockGetEmployee,
   mockGetEmployees,
   mockGetLeaves,
   mockGetPayroll,
+  mockGetWeeklySchedules,
+  mockReadEmployeePhoto,
   mockReviewLeave,
   mockReopenPayroll,
   mockSaveAttendance,
@@ -23,7 +28,9 @@ import {
   mockSaveLeave,
   mockSaveLeaveType,
   mockSaveMonthlySetting,
+  mockSaveWeeklySchedule,
   mockUploadEmployeePhoto,
+  mockUpdateEmployee,
   resetEmployeeAttendanceMock
 } from '@/mocks/employeeAttendance'
 
@@ -53,6 +60,47 @@ describe('employee attendance mock repository', () => {
     expect(Object.values(window.localStorage).join('')).not.toContain('410000199001011234')
   })
 
+  it('round-trips private employee photos in Mock without exposing a public URL', async () => {
+    const photo = new File(['private-photo'], 'photo.png', { type: 'image/png' })
+    await mockUploadEmployeePhoto('emp-1', photo)
+    const readBack = await mockReadEmployeePhoto('emp-1')
+    expect(readBack).toBeInstanceOf(Blob)
+    expect(readBack).toMatchObject({ size: photo.size, type: 'image/png' })
+  })
+
+  it('round-trips private employee photos through the public Mock API used by the page', async () => {
+    const photo = new File(['private-photo-api'], 'photo.png', { type: 'image/png' })
+    await uploadEmployeePhoto('emp-1', photo)
+    const readBack = await readEmployeePhoto('emp-1')
+    expect(readBack).toBeInstanceOf(Blob)
+    expect(readBack).toMatchObject({ size: photo.size, type: 'image/png' })
+  })
+
+  it('derives schedule minutes from planned start/end and rejects overnight shifts', async () => {
+    const saved = await mockSaveWeeklySchedule({ employeeId: 'emp-1', weekday: 1, isWorkday: true, scheduledMinutes: 1, plannedStartTime: '08:30', plannedEndTime: '17:30' })
+    expect(saved).toMatchObject({ scheduledMinutes: 540, plannedStartTime: '08:30', plannedEndTime: '17:30' })
+    await expect(mockSaveWeeklySchedule({ employeeId: 'emp-1', weekday: 2, isWorkday: true, scheduledMinutes: 1, plannedStartTime: '20:00', plannedEndTime: '08:00' })).rejects.toThrow('跨日排班')
+    const rest = await mockSaveWeeklySchedule({ employeeId: 'emp-1', weekday: 0, isWorkday: false, scheduledMinutes: 480, plannedStartTime: '08:00', plannedEndTime: '17:00' })
+    expect(rest).toMatchObject({ scheduledMinutes: 0, plannedStartTime: null, plannedEndTime: null })
+    expect((await mockGetWeeklySchedules('emp-1')).find((row) => row.weekday === 1)?.scheduledMinutes).toBe(540)
+  })
+
+  it('enforces timezone-aware paired punches and full uncovered no-punch absence', async () => {
+    const date = dayjs().add(1, 'day').format('YYYY-MM-DD')
+    const base = { employeeId: 'emp-1', date, isScheduledWorkday: true, scheduledMinutes: 480 }
+    await expect(mockSaveAttendance({ ...base, scheduledMinutes: 0, absenceMinutes: 0 })).rejects.toThrow('工作日时长')
+    await expect(mockSaveAttendance({ ...base, checkInAt: `${date}T08:00:00+08:00` })).rejects.toThrow('同时填写')
+    await expect(mockSaveAttendance({ ...base, checkInAt: `${date}T08:00`, checkOutAt: `${date}T17:00` })).rejects.toThrow('时区')
+    await expect(mockSaveAttendance({ ...base, absenceMinutes: 1 })).rejects.toThrow('完整记录')
+  })
+
+  it('rejects mixed month and date-range filters in Mock just like the server', async () => {
+    await expect(mockGetAttendance({ month: '2026-08', startDate: '2026-08-01' }))
+      .rejects.toThrow('月份和日期范围不能同时使用')
+    await expect(mockGetLeaves({ month: '2026-08', endDate: '2026-08-31' }))
+      .rejects.toThrow('月份和日期范围不能同时使用')
+  })
+
   it('isolates persisted records by the authenticated frontend account and never exposes plaintext sensitive fields in normal lists', async () => {
     window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-a', account: 'lab-a' }))
     resetEmployeeAttendanceMock()
@@ -76,10 +124,19 @@ describe('employee attendance mock repository', () => {
 
   it('locks confirmed payroll and preserves adjustments only while the run is a draft', async () => {
     const month = dayjs().format('YYYY-MM')
+    const previousMonth = dayjs().subtract(1, 'month').format('YYYY-MM')
+    const previousMonday = dayjs(`${previousMonth}-01`).day(1).month() === dayjs(`${previousMonth}-01`).month()
+      ? dayjs(`${previousMonth}-01`).day(1).format('YYYY-MM-DD')
+      : dayjs(`${previousMonth}-01`).add(1, 'week').day(1).format('YYYY-MM-DD')
     await mockReviewLeave('leave-1', 'APPROVED')
+    await mockSaveLeave({
+      employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: previousMonday, endDate: previousMonday,
+      unit: 'FULL_DAY', reason: '上月待审请假'
+    })
     await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 4 })
     await mockSaveMonthlySetting({ employeeId: 'emp-2', month, scheduledWorkDays: 1, restQuotaDays: 4 })
     const draft = await mockGeneratePayroll(month)
+    expect(draft.issues.join('')).not.toContain('请假待审批')
     await mockCreatePayrollAdjustment(draft.items[0].id, { amount: 88, reason: '补发岗位补贴' })
     await mockConfirmPayroll(draft.id)
     expect((await mockGetAttendance({ month })).every((row) => Boolean(row.lockedAt))).toBe(true)
@@ -138,8 +195,8 @@ describe('employee attendance mock repository', () => {
     await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 4 })
     await mockSaveMonthlySetting({ employeeId: 'emp-2', month, scheduledWorkDays: 1, restQuotaDays: 4 })
     const record = (await mockGetAttendance({ employeeId: 'emp-2', month }))[0]
-    await mockSaveAttendance({ ...record, checkInAt: '', checkOutAt: '', absenceMinutes: 0 }, record.id)
-    expect((await mockGeneratePayroll(month)).issues.join('')).toContain('未打卡且未处理')
+    await expect(mockSaveAttendance({ ...record, checkInAt: '', checkOutAt: '', absenceMinutes: 0 }, record.id))
+      .rejects.toThrow('必须完整记录')
 
     await mockSaveAttendance({ ...record, checkInAt: '', checkOutAt: '', absenceMinutes: 480 }, record.id)
     const refreshed = await mockGeneratePayroll(month)
@@ -204,6 +261,46 @@ describe('employee attendance mock repository', () => {
     await expect(mockConfirmPayroll(draft.id)).resolves.toMatchObject({ status: 'CONFIRMED' })
   })
 
+  it('preserves a draft payroll item and its adjustment after employee eligibility changes', async () => {
+    const month = dayjs().format('YYYY-MM')
+    await mockReviewLeave('leave-1', 'APPROVED')
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 4 })
+    const record = (await mockGetAttendance({ employeeId: 'emp-1', month }))[0]
+    await mockSaveAttendance({ ...record, checkInAt: `${record.date}T08:00:00+08:00`, checkOutAt: `${record.date}T17:00:00+08:00`, absenceMinutes: 0 }, record.id)
+    const draft = await mockGeneratePayroll(month)
+    const item = draft.items.find((row) => row.employeeId === 'emp-1')!
+    await mockCreatePayrollAdjustment(item.id, { amount: 88, reason: '补发' })
+    const employee = await mockGetEmployee('emp-1')
+    await mockUpdateEmployee('emp-1', { ...employee, status: 'INACTIVE', terminationDate: '', hireDate: dayjs().add(1, 'month').format('YYYY-MM-DD') })
+
+    const refreshed = await mockGeneratePayroll(month)
+    expect(refreshed.items.find((row) => row.id === item.id)?.adjustments).toEqual([expect.objectContaining({ amount: 88, reason: '补发' })])
+  })
+
+  it('scopes overview pending leave and overtime to the selected month', async () => {
+    const currentMonth = dayjs().format('YYYY-MM')
+    const previousMonth = dayjs().subtract(1, 'month').format('YYYY-MM')
+    const previousWorkday = dayjs(`${previousMonth}-10`).format('YYYY-MM-DD')
+    const leave = await mockSaveLeave({ employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: previousWorkday, endDate: previousWorkday, unit: 'FULL_DAY', reason: '上月请假' })
+    expect(leave.status).toBe('PENDING')
+    const todayRecord = (await mockGetAttendance({ employeeId: 'emp-1', month: currentMonth }))[0]
+    await mockSaveAttendance({ ...todayRecord, checkInAt: `${todayRecord.date}T08:00:00+08:00`, checkOutAt: `${todayRecord.date}T17:00:00+08:00`, overtimeMinutes: 150 }, todayRecord.id)
+
+    const overview = await mockGetOverview(currentMonth)
+    expect(overview.pendingLeaves).toBe(1) // seeded current-month leave only; previous month must not add another blocker
+    expect(overview.overtimeHours).toBe(3.5)
+  })
+
+  it('restricts referenced type edits while allowing records to retain the same inactive type', async () => {
+    await expect(mockSaveLeaveType({ name: '改名事假', active: true, countsTowardRestQuota: true }, 'leave-type-rest')).rejects.toThrow('已使用')
+    const disabled = await mockSaveCommissionType({ name: '送样提成', unitName: '份', unitPrice: 12, active: false }, 'ct-1')
+    expect(disabled.active).toBe(false)
+    const existing = (await mockGetCommissions())[0]
+    await expect(mockSaveCommission({ ...existing, commissionTypeId: 'ct-1', quantity: 9 }, existing.id)).resolves.toBeTruthy()
+    const other = await mockSaveCommissionType({ name: '停用新类型', unitName: '份', unitPrice: 1, active: false })
+    await expect(mockSaveCommission({ ...existing, commissionTypeId: other.id }, existing.id)).rejects.toThrow('已停用')
+  })
+
   it('enforces pending-only leave mutations, unique type names and confirmed-month checks on both sides of date moves', async () => {
     const month = dayjs().format('YYYY-MM')
     const today = dayjs().format('YYYY-MM-DD')
@@ -219,8 +316,8 @@ describe('employee attendance mock repository', () => {
     await expect(mockDeleteLeave('leave-1')).rejects.toThrow('已处理')
 
     const currentOverride = await mockSaveDateOverride({ employeeId: 'emp-1', date: today, isWorkday: false, scheduledMinutes: 0 })
-    const nextOverride = await mockSaveDateOverride({ employeeId: 'emp-1', date: nextDate, isWorkday: true, scheduledMinutes: 480 })
-    const nextAttendance = await mockSaveAttendance({ employeeId: 'emp-1', date: nextDate, isScheduledWorkday: true, scheduledMinutes: 480, absenceMinutes: 0, overtimeMinutes: 0 })
+    const nextOverride = await mockSaveDateOverride({ employeeId: 'emp-1', date: nextDate, isWorkday: true, scheduledMinutes: 480, plannedStartTime: '08:00', plannedEndTime: '16:00' })
+    const nextAttendance = await mockSaveAttendance({ employeeId: 'emp-1', date: nextDate, isScheduledWorkday: true, scheduledMinutes: 480, absenceMinutes: 480, overtimeMinutes: 0 })
     const nextLeave = await mockSaveLeave({ employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: nextDate, endDate: nextDate, unit: 'FULL_DAY', reason: '下月请假' })
     const currentCommission = await mockSaveCommission({ employeeId: 'emp-1', commissionTypeId: 'ct-1', date: today, quantity: 2 })
     const nextCommission = await mockSaveCommission({ employeeId: 'emp-1', commissionTypeId: 'ct-1', date: nextDate, quantity: 1 })

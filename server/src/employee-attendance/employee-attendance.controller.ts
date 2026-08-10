@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Headers, Optional, Param, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Header, Headers, Optional, Param, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import { AccessGuardFeature, UserRole } from '@prisma/client'
 import { AuthGuard } from '../auth/auth.guard'
@@ -78,9 +78,12 @@ export class EmployeeAttendanceController {
   }
 
   @Get('employees/:id/photo')
+  @Header('Cache-Control', 'private, no-store')
+  @Header('X-Content-Type-Options', 'nosniff')
   async readPhoto(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
     await this.authorize(user.id, grant)
-    return new StreamableFile(await this.photos.read(await this.attendance.getPhotoPath(user.id, id)))
+    const photo = await this.photos.read(await this.attendance.getPhotoPath(user.id, id))
+    return new StreamableFile(photo.buffer, { type: photo.contentType })
   }
 
   @Get('weekly-schedules')

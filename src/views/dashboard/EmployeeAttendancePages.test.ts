@@ -52,6 +52,19 @@ describe('employee attendance navigation', () => {
     expect(featureForPath('/employee-attendance/payroll')).toBe('EMPLOYEE_ATTENDANCE')
   })
 
+  it('labels the overview overtime card as the selected-month total and removes unsupported terminated status', async () => {
+    const overview = mount(EmployeeAttendanceOverviewPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    expect(overview.text()).toContain('本月加班总时长')
+    overview.unmount()
+
+    const directory = mount(EmployeeDirectoryPage, { global: { plugins: [createPinia(), ElementPlus], stubs: { teleport: true, 'el-select': true, 'el-option': true, 'el-date-picker': true, 'el-input-number': true } } })
+    await flushPromises()
+    expect(directory.text()).not.toContain('TERMINATED')
+    expect(directory.html()).not.toContain('value="TERMINATED"')
+    directory.unmount()
+  })
+
   it('renders all seven management pages with loading completion and meaningful empty/sample states', async () => {
     const pages = [
       [EmployeeAttendanceOverviewPage, '考勤概览'], [EmployeeDirectoryPage, '员工档案'],
@@ -109,6 +122,55 @@ describe('employee attendance navigation', () => {
     wrapper.unmount()
   })
 
+  it('shows planned start/end controls and the derived duration for workday schedules', async () => {
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.employeeId = 'emp-1'
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('开始时间')
+    expect(wrapper.text()).toContain('结束时间')
+    expect(wrapper.text()).toContain('自动计算分钟')
+    wrapper.unmount()
+  })
+
+  it('visibly switches the records page between mutually exclusive month and date-range filters', async () => {
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.selectDateRange('2026-07-01', '2026-07-31')
+    await nextTick()
+
+    const monthPicker = wrapper.findAllComponents({ name: 'ElDatePicker' }).find((node) => node.props('type') === 'month')!
+    monthPicker.vm.$emit('update:modelValue', '2026-08')
+    await nextTick()
+    expect(store.month).toBe('2026-08')
+    expect(store.startDate).toBe('')
+    expect(store.endDate).toBe('')
+
+    const startPicker = wrapper.findAllComponents({ name: 'ElDatePicker' }).find((node) => node.props('placeholder') === '开始日期')!
+    startPicker.vm.$emit('update:modelValue', '2026-08-10')
+    await nextTick()
+    expect(store.month).toBe('')
+    expect(store.startDate).toBe('2026-08-10')
+    wrapper.unmount()
+
+    for (const component of [EmployeeLeavePage, EmployeeCompensationPage]) {
+      const pagePinia = createPinia()
+      const page = mount(component, { global: { plugins: [pagePinia, ElementPlus] } })
+      const pageStore = useEmployeeAttendanceStore(pagePinia)
+      await flushPromises()
+      const pageStart = page.findAllComponents({ name: 'ElDatePicker' }).find((node) => node.props('placeholder') === '开始日期')!
+      pageStart.vm.$emit('update:modelValue', '2026-08-10')
+      await nextTick()
+      expect(pageStore.month).toBe('')
+      page.unmount()
+    }
+  })
+
   it('requires a successful attendance access verification before revealing sensitive employee values', async () => {
     window.localStorage.setItem('ys_mock_access_guard_groups', JSON.stringify([{
       id: 'attendance-group', name: '员工考勤验证', enabled: true, ttlMinutes: 5, password: '1234',
@@ -144,6 +206,16 @@ describe('employee attendance navigation', () => {
     expect(useEmployeeAttendanceStore(pinia).error).toContain('名称已存在')
     expect((input.element as HTMLInputElement).value).toBe('事假')
     wrapper.unmount()
+  })
+
+  it('marks referenced leave and commission types as immutable while keeping their one-way deactivate action', async () => {
+    for (const component of [EmployeeLeavePage, EmployeeCompensationPage]) {
+      const wrapper = mount(component, { global: { plugins: [createPinia(), ElementPlus] } })
+      await flushPromises()
+      expect(wrapper.text()).toContain('已使用，仅可停用')
+      expect(wrapper.text()).toContain('删除/停用')
+      wrapper.unmount()
+    }
   })
 
   it('opens the payroll export dialog in summary and selected-employee modes', async () => {
@@ -183,6 +255,23 @@ describe('employee attendance navigation', () => {
     dialog = wrapper.getComponent(PayrollExportDialogStub)
     expect(dialog.props('visible')).toBe(true)
     expect(dialog.props('item')).toEqual(item)
+    wrapper.unmount()
+  })
+
+  it('visibly blocks payroll confirmation while the selected-month draft has issues', async () => {
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = {
+      id: 'blocked-run', month: '2026-08', status: 'DRAFT', totalAmount: 0, issueCount: 1,
+      issues: ['1 条请假待审批'], items: []
+    }
+    await nextTick()
+
+    const confirmButton = wrapper.findAll('button').find((node) => node.text().includes('确认工资并锁定'))!
+    expect(confirmButton.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('1 条请假待审批')
     wrapper.unmount()
   })
 })

@@ -17,4 +17,16 @@ describe('employee attendance store operation state', () => {
     finishSecond(); await second
     expect(store.loading).toBe(false)
   })
+
+  it('makes month and date-range filters mutually exclusive and restores month mode before generation', () => {
+    const store = useEmployeeAttendanceStore()
+    store.selectDateRange('2026-07-01', '2026-07-31')
+    expect(store.month).toBe('')
+    expect(store.dateQuery()).toEqual({ employeeId: undefined, month: undefined, startDate: '2026-07-01', endDate: '2026-07-31' })
+
+    store.selectMonth('2026-08')
+    expect(store.startDate).toBe('')
+    expect(store.endDate).toBe('')
+    expect(store.dateQuery()).toEqual({ employeeId: undefined, month: '2026-08', startDate: undefined, endDate: undefined })
+  })
 })

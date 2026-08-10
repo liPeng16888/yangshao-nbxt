@@ -1,4 +1,4 @@
-export type EmployeeStatus = 'ACTIVE' | 'INACTIVE' | 'TERMINATED'
+export type EmployeeStatus = 'ACTIVE' | 'INACTIVE'
 export type LeaveUnit = 'FULL_DAY' | 'HALF_DAY' | 'HOUR'
 export type LeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
 export type PayrollStatus = 'DRAFT' | 'CONFIRMED'
@@ -18,26 +18,26 @@ export interface Employee extends Required<Pick<EmployeePayload, 'employeeNumber
 }
 export interface RevealedEmployee extends Employee { idCard: string; bankCard: string; address: string; emergencyContact: string }
 
-export interface WeeklySchedulePayload { employeeId: string; weekday: number; isWorkday: boolean; scheduledMinutes: number }
+export interface WeeklySchedulePayload { employeeId: string; weekday: number; isWorkday: boolean; plannedStartTime?: string | null; plannedEndTime?: string | null; scheduledMinutes: number }
 export interface WeeklySchedule extends WeeklySchedulePayload { id: string }
-export interface DateOverridePayload { employeeId: string; date: string; isWorkday: boolean; scheduledMinutes: number; remark?: string }
+export interface DateOverridePayload { employeeId: string; date: string; isWorkday: boolean; plannedStartTime?: string | null; plannedEndTime?: string | null; scheduledMinutes: number; remark?: string }
 export interface DateOverride extends DateOverridePayload { id: string }
 export interface MonthlySetting { id: string; employeeId: string; month: string; scheduledWorkDays: number; restQuotaDays: number }
 
 export interface AttendancePayload {
-  employeeId: string; date: string; isScheduledWorkday: boolean; scheduledMinutes: number; checkInAt?: string; checkOutAt?: string;
+  employeeId: string; date: string; isScheduledWorkday: boolean; scheduledMinutes: number; checkInAt?: string | null; checkOutAt?: string | null;
   workedMinutes?: number; lateMinutes?: number; earlyLeaveMinutes?: number; absenceMinutes?: number; overtimeMinutes?: number; remark?: string
 }
 export interface AttendanceRecord extends AttendancePayload { id: string; manuallyEdited: boolean; lockedAt?: string | null }
 export interface AttendanceGenerationResult { created: number; updated: number; skippedManual: number; generated: number }
 
 export interface LeaveTypePayload { name: string; active?: boolean; countsTowardRestQuota: boolean }
-export interface LeaveType extends Required<LeaveTypePayload> { id: string }
+export interface LeaveType extends Required<LeaveTypePayload> { id: string; referenced?: boolean }
 export interface LeaveRequestPayload { employeeId: string; leaveTypeId: string; startDate: string; endDate: string; unit: LeaveUnit; hours?: number; reason: string }
 export interface LeaveRequest extends LeaveRequestPayload { id: string; status: LeaveStatus; countedDays: number; reviewRemark: string; lockedAt?: string | null }
 
 export interface CommissionTypePayload { name: string; unitName: string; unitPrice: number; active?: boolean }
-export interface CommissionType extends Required<CommissionTypePayload> { id: string }
+export interface CommissionType extends Required<CommissionTypePayload> { id: string; referenced?: boolean }
 export interface CommissionPayload { employeeId: string; commissionTypeId: string; date: string; quantity: number; unitPrice?: number; remark?: string }
 export interface CommissionRecord extends CommissionPayload { id: string; unitPrice: number; amount: number; lockedAt?: string | null }
 export interface BonusPayload { employeeId: string; date: string; amount: number; reason: string }

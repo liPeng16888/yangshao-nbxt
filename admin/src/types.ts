@@ -60,7 +60,7 @@ export interface AdminMedicineInventoryMovement {
   createdAt: string
 }
 
-export type AdminEmployeeStatus = 'ACTIVE' | 'INACTIVE' | 'TERMINATED'
+export type AdminEmployeeStatus = 'ACTIVE' | 'INACTIVE'
 export type AdminLeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
 export type AdminPayrollStatus = 'DRAFT' | 'CONFIRMED'
 export type AdminAttendanceNumeric = number | string
@@ -156,6 +156,8 @@ export interface AdminWeeklySchedule {
   employeeId: string
   weekday: number
   isWorkday: boolean
+  plannedStartTime?: string | null
+  plannedEndTime?: string | null
   scheduledMinutes: number
 }
 
@@ -165,6 +167,8 @@ export interface AdminDateOverride {
   employeeId: string
   date: string
   isWorkday: boolean
+  plannedStartTime?: string | null
+  plannedEndTime?: string | null
   scheduledMinutes: number
   remark?: string | null
 }
@@ -338,6 +342,8 @@ export interface AdminAttendanceTableRow {
   scheduleDate?: string
   weekdayLabel?: string | number
   isWorkday?: boolean
+  plannedStartTime?: string | null
+  plannedEndTime?: string | null
   scheduledMinutes?: number
   scheduledWorkDays?: AdminAttendanceNumeric
   restQuotaDays?: AdminAttendanceNumeric

@@ -64,7 +64,9 @@ cd admin && VITE_ADMIN_USE_MOCKS=true ./node_modules/.bin/vite --host 127.0.0.1 
 
 客户前端的 `/employee-attendance/*` 页面用于录入和管理；后台 `/admin/employee-attendance/*` 页面严格只读，只提供筛选、汇总和脱敏查看。后台只有查看单个员工敏感信息时会要求重新输入当前后台账号密码，并记录审计；后台没有业务新增、修改、删除、请假审批、工资确认或 PNG 导出入口。
 
-工资统计采用员工月薪、全勤奖、手工加班、提成、奖金、人工调整、超额请假和缺勤计算。工资确认前会检查待审批请假、排班和考勤缺失；确认后锁定当月来源记录，填写原因撤销确认后才可修改。个人工资条和当月全员工资汇总均可从客户前端导出为高清 PNG。
+排班工作日必须填写 24 小时制 `HH:mm` 计划上下班时间，工时由系统派生；休息日统一为空时间和 0 分钟。本版不支持跨日排班，结束时间必须晚于开始时间。打卡时间按北京业务日校验，上下班必须成对。
+
+工资统计采用员工月薪、全勤奖、手工加班、提成、奖金、人工调整、超额请假和缺勤计算。工资确认前会检查所选月份的待审批请假、排班和考勤缺失；确认后锁定当月来源记录，填写原因撤销确认后才可修改。个人工资条和当月全员工资汇总均可从客户前端导出为高清 PNG。
 
 本地 Mock 数据按登录的前端账号隔离并保存在浏览器 `localStorage`，适合界面演示，不等同于数据库备份或生产数据。
 
@@ -78,7 +80,7 @@ VITE_APP_TITLE=仰韶化验室内部系统
 VITE_USE_MOCKS=false
 ```
 
-接入真实后端时保持 `VITE_USE_MOCKS=false`，并确认 `VITE_API_BASE_URL` 指向后端网关或 Nginx 代理路径。后台同样保持 `VITE_ADMIN_USE_MOCKS=false`。
+接入真实后端时保持 `VITE_USE_MOCKS=false`。本地开发的客户前端使用 `VITE_API_BASE_URL=/api`，根目录 Vite 会把 `/api` 代理到 `http://127.0.0.1:3000`；部署时由 Nginx 或后端网关接管同一路径。后台同样保持 `VITE_ADMIN_USE_MOCKS=false`。
 
 后端需要配置 PostgreSQL、JWT 和主账号：
 
@@ -97,7 +99,7 @@ SERVER_PORT=3000
 
 `EMPLOYEE_DATA_CIPHER_SECRET` 专门用于员工身份证号、银行卡号、住址和紧急联系人等敏感字段的 AES-256-GCM 加密，不能复用 `PASSWORD_CIPHER_SECRET`。该密钥必须在同一套数据的整个生命周期保持不变；丢失或随意更换会导致已保存数据无法解密。请通过部署平台的密钥管理或仅管理员可读的环境文件保存，不要提交真实密钥。
 
-`PRIVATE_EMPLOYEE_PHOTO_DIR` 必须指向后端进程可读写、但 Nginx/静态站点不能直接公开访问的目录；员工照片只能通过已鉴权接口读取。该目录与数据库应一起纳入备份。本地相对路径的 `private-uploads/` 和 `server/private-uploads/` 已加入 Git 忽略，但生产环境仍必须使用仓库之外的绝对路径。
+`PRIVATE_EMPLOYEE_PHOTO_DIR` 必须指向后端进程可读写、但 Nginx/静态站点不能直接公开访问的目录；不能等于或位于 `UPLOAD_DIR` 之下，否则后端会拒绝读写。员工照片只能通过已鉴权接口读取，响应禁止公开缓存。该目录与数据库应一起纳入备份。本地相对路径的 `private-uploads/` 和 `server/private-uploads/` 已加入 Git 忽略，但生产环境仍必须使用仓库之外的绝对路径。
 
 初始化数据库：
 
@@ -115,7 +117,7 @@ pnpm --filter yangshao-server seed
 server/prisma/migrations/20260810000000_add_employee_attendance/migration.sql
 ```
 
-迁移只新增员工考勤枚举、14 张业务表、账号归属索引/复合外键，以及 `EMPLOYEE_ATTENDANCE` 访问保护类型，不会修改已有业务表中的数据。开发环境可执行 `prisma:migrate`；已部署环境先备份 PostgreSQL，再执行不会交互创建迁移的 `prisma:deploy`：
+迁移新增员工考勤枚举、14 张业务表、账号归属索引/复合外键、`EMPLOYEE_ATTENDANCE` 访问保护类型，并为已有访问组合表增加默认为 1 的 `grantVersion` 撤销版本列；不包含删表、删列或清理业务数据。开发环境可执行 `prisma:migrate`；已部署环境先备份 PostgreSQL，再执行不会交互创建迁移的 `prisma:deploy`：
 
 ```bash
 pnpm --filter yangshao-server prisma:generate

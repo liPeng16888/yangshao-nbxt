@@ -148,7 +148,7 @@ const defaultMonth = dayjs().format('YYYY-MM')
 const filters = reactive<AdminEmployeeAttendanceQuery>({ frontendUserIds: [], month: defaultMonth })
 
 const statusOptionMap: Partial<Record<EmployeeAttendanceAdminPage, Array<{ label: string; value: string }>>> = {
-  employees: [{ label: '在职', value: 'ACTIVE' }, { label: '停用', value: 'INACTIVE' }, { label: '离职', value: 'TERMINATED' }],
+  employees: [{ label: '在职', value: 'ACTIVE' }, { label: '停用/离职', value: 'INACTIVE' }],
   leave: [{ label: '待审核', value: 'PENDING' }, { label: '已批准', value: 'APPROVED' }, { label: '已拒绝', value: 'REJECTED' }],
   payroll: [{ label: '草稿', value: 'DRAFT' }, { label: '已确认', value: 'CONFIRMED' }]
 }
@@ -207,7 +207,7 @@ function normalizeSchedule(data: AdminAttendanceSchedules): AdminAttendanceTable
   return [
     ...data.weekly.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '周排班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: weekdays[row.weekday] || row.weekday, scheduleDate: '-' })),
     ...data.overrides.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '临时调班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.date })),
-    ...data.monthly.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '月度设置', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.month }))
+    ...data.monthly.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '月度设置', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.month, plannedStartTime: '-', plannedEndTime: '-' }))
   ]
 }
 
@@ -225,8 +225,8 @@ function normalizeAttendance(row: AdminAttendanceRecord): AdminAttendanceTableRo
 
 function formatPunchTime(value?: string | null) {
   if (!value) return '未录入'
-  const parsed = dayjs(value)
-  return parsed.isValid() ? parsed.format('HH:mm') : String(value)
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? String(value) : new Date(parsed.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(11, 16)
 }
 
 function normalizeLeave(row: AdminLeaveRequest): AdminAttendanceTableRow {

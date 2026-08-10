@@ -40,8 +40,9 @@ const TableStub = defineComponent({
 })
 const TableColumnStub = defineComponent({
   name: 'ElTableColumn',
-  setup(_, { slots }) {
-    return () => h('div', slots.default?.({ row: activeTableRows[0] }) || [])
+  props: { label: String },
+  setup(props, { slots }) {
+    return () => h('div', [props.label, ...(slots.default?.({ row: activeTableRows[0] }) || [])])
   }
 })
 const ButtonStub = defineComponent({ name: 'ElButton', emits: ['click'], template: '<button type="button" @click="$emit(\'click\')"><slot /></button>' })
@@ -128,6 +129,14 @@ describe('EmployeeAttendancePage', () => {
     expect(wrapper.text()).not.toMatch(/新增|编辑|删除|审批|批准|拒绝|确认工资|撤销确认|导出/)
   })
 
+  it('does not recognize the removed TERMINATED employee status', async () => {
+    api.getAdminAttendanceEmployees.mockResolvedValueOnce([{ ...employees[0], status: 'TERMINATED' }])
+    const wrapper = mountPage()
+    await flushPromises()
+    expect(wrapper.text()).toContain('TERMINATED')
+    expect(wrapper.text()).not.toContain('离职')
+  })
+
   it('reveals one employee only after password submission and refreshes the audit list', async () => {
     const wrapper = mountPage()
     await flushPromises()
@@ -179,7 +188,7 @@ describe('EmployeeAttendancePage', () => {
     Object.assign(routeState, { path: '/employee-attendance/records', meta: { employeeAttendancePage: 'records' } })
     api.getAdminAttendanceRecords.mockResolvedValueOnce([{
       id: 'attendance-1', frontendUserId: 'front-2', employeeId: 'emp-1', date: '2026-08-08',
-      checkInAt: '2026-08-08T08:05:00+08:00', checkOutAt: null, scheduledMinutes: 480,
+      checkInAt: '2026-08-08T00:05:00Z', checkOutAt: null, scheduledMinutes: 480,
       workedMinutes: 0, lateMinutes: 5, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0,
       employee: { employeeNumber: 'YG001', name: '张三' }
     }])
@@ -189,6 +198,21 @@ describe('EmployeeAttendancePage', () => {
     expect((wrapper.getComponent(TableStub).props('data')!).at(0)!).toMatchObject({
       accountName: '仰韶客户二（yangshao002）', checkInText: '08:05', checkOutText: '未录入'
     })
+  })
+
+  it('shows planned start/end times on the read-only schedule table', async () => {
+    Object.assign(routeState, { path: '/employee-attendance/schedules', meta: { employeeAttendancePage: 'schedules' } })
+    api.getAdminAttendanceSchedules.mockResolvedValueOnce({
+      weekly: [{ id: 'weekly-1', frontendUserId: 'front-1', employeeId: 'emp-1', weekday: 1, isWorkday: true, plannedStartTime: '08:30', plannedEndTime: '17:30', scheduledMinutes: 540 }],
+      overrides: [], monthly: []
+    })
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('开始时间')
+    expect(wrapper.text()).toContain('结束时间')
+    expect(wrapper.text()).toContain('08:30')
+    expect(wrapper.text()).toContain('17:30')
   })
 
   it('labels and renders a generic attendance audit with account, action and entity details', async () => {

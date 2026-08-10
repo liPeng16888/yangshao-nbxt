@@ -136,6 +136,9 @@ export class EmployeeAttendanceService {
     const result = await this.configurationTransaction(frontendUserId, async (tx) => {
       const employee = await this.owned(tx.employee, frontendUserId, id, '员工不存在')
       const historyCounts = await Promise.all([
+        tx.employeeWeeklySchedule.count({ where: { frontendUserId, employeeId: id } }),
+        tx.employeeDateOverride.count({ where: { frontendUserId, employeeId: id } }),
+        tx.employeeMonthlySetting.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeAttendanceRecord.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeLeaveRequest.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeCommissionRecord.count({ where: { frontendUserId, employeeId: id } }),
@@ -166,9 +169,10 @@ export class EmployeeAttendanceService {
   async createWeeklySchedule(frontendUserId: string, actorUserId: string, payload: WeeklyScheduleDto) {
     await this.assertEmployee(frontendUserId, payload.employeeId)
     this.assertWeekday(payload.weekday)
+    const schedule = this.scheduleData(payload)
     try {
       const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'EmployeeWeeklySchedule', (created) => created.id,
-        (tx) => tx.employeeWeeklySchedule.create({ data: { frontendUserId, ...payload, scheduledMinutes: this.minutes(payload.scheduledMinutes) } }))
+        (tx) => tx.employeeWeeklySchedule.create({ data: { frontendUserId, employeeId: payload.employeeId, weekday: payload.weekday, ...schedule } }))
       return row
     } catch (error) { this.rethrowConflict(error, '该员工星期排班已存在') }
   }
@@ -177,12 +181,12 @@ export class EmployeeAttendanceService {
     const current = await this.owned(this.prisma.employeeWeeklySchedule, frontendUserId, id, '排班不存在')
     if (payload.employeeId) await this.assertEmployee(frontendUserId, payload.employeeId)
     if (payload.weekday !== undefined) this.assertWeekday(payload.weekday)
+    const schedule = this.scheduleData(payload, current)
     try {
       const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeWeeklySchedule', current.id, (tx) => tx.employeeWeeklySchedule.update({ where: { id }, data: {
         ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
         ...(payload.weekday !== undefined ? { weekday: payload.weekday } : {}),
-        ...(payload.isWorkday !== undefined ? { isWorkday: payload.isWorkday } : {}),
-        ...(payload.scheduledMinutes !== undefined ? { scheduledMinutes: this.minutes(payload.scheduledMinutes) } : {})
+        ...schedule
       } }))
       return row
     } catch (error) { this.rethrowConflict(error, '该员工星期排班已存在') }
@@ -208,9 +212,12 @@ export class EmployeeAttendanceService {
     await this.assertMonthWritable(frontendUserId, payload.date)
     const duplicate = await this.prisma.employeeDateOverride.findFirst({ where: { frontendUserId, employeeId: payload.employeeId, date: payload.date } })
     if (duplicate) throw new ConflictException('该员工当日已有临时调班')
+    const schedule = this.scheduleData(payload)
     try {
       return await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'EmployeeDateOverride', (created) => created.id,
-        (tx) => tx.employeeDateOverride.create({ data: { frontendUserId, ...payload, scheduledMinutes: this.minutes(payload.scheduledMinutes), remark: this.optional(payload.remark) } }), undefined, [payload.date])
+        (tx) => tx.employeeDateOverride.create({ data: {
+          frontendUserId, employeeId: payload.employeeId, date: payload.date, ...schedule, remark: this.optional(payload.remark)
+        } }), undefined, [payload.date])
     } catch (error) { this.rethrowConflict(error, '该员工当日已有临时调班') }
   }
 
@@ -234,11 +241,11 @@ export class EmployeeAttendanceService {
             frontendUserId, employeeId: payload.employeeId || locked.employeeId, date: targetDate, id: { not: id }
           } })
           if (duplicate) throw new ConflictException('该员工当日已有临时调班')
+          const schedule = this.scheduleData(payload, locked)
           const row = await tx.employeeDateOverride.update({ where: { id }, data: {
             ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
             ...(payload.date !== undefined ? { date: payload.date } : {}),
-            ...(payload.isWorkday !== undefined ? { isWorkday: payload.isWorkday } : {}),
-            ...(payload.scheduledMinutes !== undefined ? { scheduledMinutes: this.minutes(payload.scheduledMinutes) } : {}),
+            ...schedule,
             ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
           } })
           await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeDateOverride', id, undefined, tx)
@@ -300,15 +307,18 @@ export class EmployeeAttendanceService {
     const duplicate = await this.prisma.employeeAttendanceRecord.findFirst({ where: { frontendUserId, employeeId: payload.employeeId, date: payload.date } })
     if (duplicate) throw new ConflictException('该员工当日考勤已存在')
     try {
-      return await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'EmployeeAttendanceRecord', (created) => created.id, (tx) => tx.employeeAttendanceRecord.create({ data: {
-        frontendUserId,
-        employeeId: payload.employeeId,
-        date: payload.date,
-        isScheduledWorkday: payload.isScheduledWorkday,
-        scheduledMinutes: this.minutes(payload.scheduledMinutes),
-        ...this.attendanceData(payload),
-        manuallyEdited: true
-      } }), undefined, [payload.date])
+      return await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'EmployeeAttendanceRecord', (created) => created.id, async (tx) => {
+        const data = await this.attendanceData(frontendUserId, payload, undefined, tx)
+        return tx.employeeAttendanceRecord.create({ data: {
+          frontendUserId,
+          ...data,
+          employeeId: payload.employeeId,
+          date: payload.date,
+          isScheduledWorkday: payload.isScheduledWorkday,
+          scheduledMinutes: this.minutes(payload.scheduledMinutes),
+          manuallyEdited: true
+        } })
+      }, undefined, [payload.date])
     } catch (error) { this.rethrowConflict(error, '该员工当日考勤已存在') }
   }
 
@@ -333,7 +343,9 @@ export class EmployeeAttendanceService {
             frontendUserId, employeeId: payload.employeeId || locked.employeeId, date: targetDate, id: { not: id }
           } })
           if (duplicate) throw new ConflictException('该员工当日考勤已存在')
-          const row = await tx.employeeAttendanceRecord.update({ where: { id }, data: { ...this.attendanceData(payload), manuallyEdited: true } })
+          const row = await tx.employeeAttendanceRecord.update({ where: { id }, data: {
+            ...await this.attendanceData(frontendUserId, payload, locked, tx), manuallyEdited: true
+          } })
           await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeAttendanceRecord', id, undefined, tx)
           return row
         }
@@ -409,8 +421,13 @@ export class EmployeeAttendanceService {
     } catch (error) { this.rethrowConflict(error, '批量生成考勤时发生并发重复，请刷新后重试') }
   }
 
-  listLeaveTypes(frontendUserId: string) {
-    return this.prisma.employeeLeaveType.findMany({ where: { frontendUserId }, orderBy: [{ active: 'desc' }, { name: 'asc' }] })
+  async listLeaveTypes(frontendUserId: string) {
+    const rows = await this.prisma.employeeLeaveType.findMany({
+      where: { frontendUserId },
+      include: { _count: { select: { leaveRequests: true } } },
+      orderBy: [{ active: 'desc' }, { name: 'asc' }]
+    })
+    return rows.map(({ _count, ...row }) => ({ ...row, referenced: _count.leaveRequests > 0 }))
   }
 
   async createLeaveType(frontendUserId: string, actorUserId: string, payload: LeaveTypeDto) {
@@ -425,7 +442,11 @@ export class EmployeeAttendanceService {
     await this.owned(this.prisma.employeeLeaveType, frontendUserId, id, '请假类型不存在')
     try {
       const row = await this.configurationTransaction(frontendUserId, async (tx) => {
-        await this.owned(tx.employeeLeaveType, frontendUserId, id, '请假类型不存在')
+        const current = await this.owned(tx.employeeLeaveType, frontendUserId, id, '请假类型不存在')
+        const referenced = await tx.employeeLeaveRequest.count({ where: { frontendUserId, leaveTypeId: id } })
+        if (referenced && !this.referencedLeaveTypeUpdateAllowed(current, payload)) {
+          throw new ConflictException('已使用的请假类型只允许停用')
+        }
         const updated = await tx.employeeLeaveType.update({ where: { id }, data: {
           ...(payload.name !== undefined ? { name: this.required(payload.name, '请假类型') } : {}),
           ...(payload.active !== undefined ? { active: payload.active } : {}),
@@ -450,6 +471,7 @@ export class EmployeeAttendanceService {
   }
 
   listLeaveRequests(frontendUserId: string, query: AttendanceListQueryDto = {}) {
+    this.assertExclusiveDateFilter(query)
     if (query.startDate) this.assertDate(query.startDate)
     if (query.endDate) this.assertDate(query.endDate)
     if (query.startDate && query.endDate && query.startDate > query.endDate) throw new BadRequestException('结束日期不能早于开始日期')
@@ -526,8 +548,9 @@ export class EmployeeAttendanceService {
         if (locked.status !== EmployeeLeaveStatus.PENDING) throw new ConflictException('仅待审批请假可修改')
         if (payload.employeeId) await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
         if (payload.leaveTypeId) {
-          const type = await tx.employeeLeaveType.findFirst({ where: { id: payload.leaveTypeId, frontendUserId, active: true } })
-          if (!type) throw new NotFoundException('请假类型不存在或已停用')
+          const type = await tx.employeeLeaveType.findFirst({ where: { id: payload.leaveTypeId, frontendUserId } })
+          if (!type) throw new NotFoundException('请假类型不存在')
+          if (!type.active && payload.leaveTypeId !== locked.leaveTypeId) throw new ConflictException('请假类型已停用')
         }
         const countedDays = await this.countLeaveDays(frontendUserId, target, tx)
         await this.assertNoLeaveOverlap(frontendUserId, target.employeeId, target.startDate, target.endDate, id, tx)
@@ -576,8 +599,13 @@ export class EmployeeAttendanceService {
     return this.reviewLeave(frontendUserId, actorUserId, id, EmployeeLeaveStatus.REJECTED, reviewRemark)
   }
 
-  listCommissionTypes(frontendUserId: string) {
-    return this.prisma.employeeCommissionType.findMany({ where: { frontendUserId }, orderBy: [{ active: 'desc' }, { name: 'asc' }] })
+  async listCommissionTypes(frontendUserId: string) {
+    const rows = await this.prisma.employeeCommissionType.findMany({
+      where: { frontendUserId },
+      include: { _count: { select: { records: true } } },
+      orderBy: [{ active: 'desc' }, { name: 'asc' }]
+    })
+    return rows.map(({ _count, ...row }) => ({ ...row, referenced: _count.records > 0 }))
   }
 
   async createCommissionType(frontendUserId: string, actorUserId: string, payload: CommissionTypeDto) {
@@ -593,12 +621,21 @@ export class EmployeeAttendanceService {
   async updateCommissionType(frontendUserId: string, actorUserId: string, id: string, payload: Partial<CommissionTypeDto>) {
     await this.owned(this.prisma.employeeCommissionType, frontendUserId, id, '提成类型不存在')
     try {
-      const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeCommissionType', id, (tx) => tx.employeeCommissionType.update({ where: { id }, data: {
-        ...(payload.name !== undefined ? { name: this.required(payload.name, '提成类型') } : {}),
-        ...(payload.unitName !== undefined ? { unitName: this.required(payload.unitName, '计量单位') } : {}),
-        ...(payload.unitPrice !== undefined ? { unitPrice: this.nonnegative(payload.unitPrice, '默认单价') } : {}),
-        ...(payload.active !== undefined ? { active: payload.active } : {})
-      } }))
+      const row = await this.configurationTransaction(frontendUserId, async (tx) => {
+        const current = await this.owned(tx.employeeCommissionType, frontendUserId, id, '提成类型不存在')
+        const referenced = await tx.employeeCommissionRecord.count({ where: { frontendUserId, commissionTypeId: id } })
+        if (referenced && !this.referencedCommissionTypeUpdateAllowed(current, payload)) {
+          throw new ConflictException('已使用的提成类型只允许停用')
+        }
+        const updated = await tx.employeeCommissionType.update({ where: { id }, data: {
+          ...(payload.name !== undefined ? { name: this.required(payload.name, '提成类型') } : {}),
+          ...(payload.unitName !== undefined ? { unitName: this.required(payload.unitName, '计量单位') } : {}),
+          ...(payload.unitPrice !== undefined ? { unitPrice: this.nonnegative(payload.unitPrice, '默认单价') } : {}),
+          ...(payload.active !== undefined ? { active: payload.active } : {})
+        } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeCommissionType', id, undefined, tx)
+        return updated
+      })
       return row
     } catch (error) { this.rethrowConflict(error, '提成类型名称已存在') }
   }
@@ -653,8 +690,9 @@ export class EmployeeAttendanceService {
           if (payload.employeeId) await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
           let type = null
           if (payload.commissionTypeId) {
-            type = await tx.employeeCommissionType.findFirst({ where: { id: payload.commissionTypeId, frontendUserId, active: true } })
-            if (!type) throw new NotFoundException('提成类型不存在或已停用')
+            type = await tx.employeeCommissionType.findFirst({ where: { id: payload.commissionTypeId, frontendUserId } })
+            if (!type) throw new NotFoundException('提成类型不存在')
+            if (!type.active && payload.commissionTypeId !== locked.commissionTypeId) throw new ConflictException('提成类型已停用')
           }
           const quantity = this.nonnegative(payload.quantity ?? locked.quantity, '提成数量')
           const unitPrice = this.nonnegative(payload.unitPrice ?? (type?.unitPrice ?? locked.unitPriceSnapshot), '提成单价')
@@ -864,28 +902,53 @@ export class EmployeeAttendanceService {
     }
   }
 
-  private attendanceData(payload: Partial<AttendanceDto>) {
+  private async attendanceData(
+    frontendUserId: string,
+    payload: Partial<AttendanceDto>,
+    current?: Partial<AttendanceDto>,
+    db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest'> = this.prisma
+  ) {
+    const merged = { ...current, ...payload } as AttendanceDto
+    this.assertDate(merged.date)
+    const scheduledMinutes = this.minutes(merged.scheduledMinutes)
+    if (merged.isScheduledWorkday && scheduledMinutes <= 0) throw new BadRequestException('排班工作日时长必须大于 0')
+    if (!merged.isScheduledWorkday && scheduledMinutes !== 0) throw new BadRequestException('休息日排班时长必须为 0')
+    const checkInAt = this.optionalDateTime(merged.checkInAt, merged.date, '上班时间')
+    const checkOutAt = this.optionalDateTime(merged.checkOutAt, merged.date, '下班时间')
+    if (Boolean(checkInAt) !== Boolean(checkOutAt)) throw new BadRequestException('必须同时填写上班和下班时间')
+    if (checkInAt && checkOutAt && checkOutAt.getTime() <= checkInAt.getTime()) throw new BadRequestException('下班时间必须晚于上班时间')
+    const absenceMinutes = this.minutes(merged.absenceMinutes)
+    if (merged.isScheduledWorkday && !checkInAt && !checkOutAt) {
+      const coverage = await this.approvedLeaveCoverage(frontendUserId, merged.employeeId, merged.date, db)
+      const uncoveredMinutes = Math.max(0, Math.round(scheduledMinutes * (1 - coverage)))
+      if (absenceMinutes < uncoveredMinutes) throw new BadRequestException(`未打卡时必须完整记录未被批准请假覆盖的缺勤时长（${uncoveredMinutes} 分钟）`)
+    }
     return {
       ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
       ...(payload.date !== undefined ? { date: payload.date } : {}),
       ...(payload.isScheduledWorkday !== undefined ? { isScheduledWorkday: payload.isScheduledWorkday } : {}),
-      ...(payload.scheduledMinutes !== undefined ? { scheduledMinutes: this.minutes(payload.scheduledMinutes) } : {}),
-      ...(payload.checkInAt !== undefined ? { checkInAt: this.optionalDateTime(payload.checkInAt) } : {}),
-      ...(payload.checkOutAt !== undefined ? { checkOutAt: this.optionalDateTime(payload.checkOutAt) } : {}),
+      ...(payload.scheduledMinutes !== undefined ? { scheduledMinutes } : {}),
+      ...(payload.checkInAt !== undefined ? { checkInAt } : {}),
+      ...(payload.checkOutAt !== undefined ? { checkOutAt } : {}),
       ...(payload.workedMinutes !== undefined ? { workedMinutes: this.minutes(payload.workedMinutes) } : {}),
       ...(payload.lateMinutes !== undefined ? { lateMinutes: this.minutes(payload.lateMinutes) } : {}),
       ...(payload.earlyLeaveMinutes !== undefined ? { earlyLeaveMinutes: this.minutes(payload.earlyLeaveMinutes) } : {}),
-      ...(payload.absenceMinutes !== undefined ? { absenceMinutes: this.minutes(payload.absenceMinutes) } : {}),
+      ...(payload.absenceMinutes !== undefined ? { absenceMinutes } : {}),
       ...(payload.overtimeMinutes !== undefined ? { overtimeMinutes: this.minutes(payload.overtimeMinutes) } : {}),
       ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
     }
   }
 
   private dateWhere(query: AttendanceListQueryDto) {
+    this.assertExclusiveDateFilter(query)
     if (query.month) { this.assertMonth(query.month); return { date: { startsWith: query.month } } }
     if (query.startDate) this.assertDate(query.startDate)
     if (query.endDate) this.assertDate(query.endDate)
     return query.startDate || query.endDate ? { date: { ...(query.startDate ? { gte: query.startDate } : {}), ...(query.endDate ? { lte: query.endDate } : {}) } } : {}
+  }
+
+  private assertExclusiveDateFilter(query: Pick<AttendanceListQueryDto, 'month' | 'startDate' | 'endDate'>) {
+    if (query.month && (query.startDate || query.endDate)) throw new BadRequestException('月份和日期范围不能同时使用')
   }
 
   private async assertEmployee(frontendUserId: string, employeeId: string) {
@@ -1022,12 +1085,70 @@ export class EmployeeAttendanceService {
     return numeric
   }
 
-  private optionalDateTime(value: unknown) {
+  private optionalDateTime(value: unknown, businessDate: string, label: string) {
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) throw new BadRequestException('时间格式无效')
+      if (this.beijingDate(value) !== businessDate) throw new BadRequestException(`${label}不属于当前北京业务考勤日期`)
+      return value
+    }
     const text = String(value ?? '').trim()
     if (!text) return null
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(text)) {
+      throw new BadRequestException(`${label}必须包含明确时区`)
+    }
     const date = new Date(text)
     if (Number.isNaN(date.getTime())) throw new BadRequestException('时间格式无效')
+    if (this.beijingDate(date) !== businessDate) throw new BadRequestException(`${label}不属于当前北京业务考勤日期`)
     return date
+  }
+
+  private scheduleData(payload: Partial<WeeklyScheduleDto | DateOverrideDto>, current?: any) {
+    const isWorkday = payload.isWorkday ?? current?.isWorkday
+    if (!isWorkday) return { isWorkday: false, plannedStartTime: null, plannedEndTime: null, scheduledMinutes: 0 }
+    const plannedStartTime = payload.plannedStartTime === undefined ? current?.plannedStartTime : this.optional(payload.plannedStartTime)
+    const plannedEndTime = payload.plannedEndTime === undefined ? current?.plannedEndTime : this.optional(payload.plannedEndTime)
+    if (!plannedStartTime || !plannedEndTime) throw new BadRequestException('工作日必须填写计划上下班时间')
+    const start = this.clockMinutes(plannedStartTime)
+    const end = this.clockMinutes(plannedEndTime)
+    if (end <= start) throw new BadRequestException('本版暂不支持跨日排班，计划下班时间必须晚于上班时间')
+    return { isWorkday: true, plannedStartTime, plannedEndTime, scheduledMinutes: end - start }
+  }
+
+  private clockMinutes(value: string) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new BadRequestException('计划时间必须为 HH:mm 格式')
+    const [hour, minute] = value.split(':').map(Number)
+    return hour * 60 + minute
+  }
+
+  private async approvedLeaveCoverage(frontendUserId: string, employeeId: string, date: string, db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest'>) {
+    const leaves = await db.employeeLeaveRequest.findMany({ where: {
+      frontendUserId, employeeId, status: EmployeeLeaveStatus.APPROVED,
+      startDate: { lte: date }, endDate: { gte: date }
+    } })
+    return Math.min(1, leaves.reduce((sum, leave: any) => sum + Number(this.leaveCoverageForAttendance(leave)), 0))
+  }
+
+  private leaveCoverageForAttendance(leave: any) {
+    if (leave.unit === EmployeeLeaveUnit.FULL_DAY) return 1
+    if (leave.unit === EmployeeLeaveUnit.HALF_DAY) return 0.5
+    return Math.min(1, Number(leave.countedDays || 0))
+  }
+
+  private referencedLeaveTypeUpdateAllowed(current: any, payload: Partial<LeaveTypeDto>) {
+    return payload.active === false && current.active !== false &&
+      (payload.name === undefined || this.required(payload.name, '请假类型') === current.name) &&
+      (payload.countsTowardRestQuota === undefined || payload.countsTowardRestQuota === current.countsTowardRestQuota)
+  }
+
+  private referencedCommissionTypeUpdateAllowed(current: any, payload: Partial<CommissionTypeDto>) {
+    return payload.active === false && current.active !== false &&
+      (payload.name === undefined || this.required(payload.name, '提成类型') === current.name) &&
+      (payload.unitName === undefined || this.required(payload.unitName, '计量单位') === current.unitName) &&
+      (payload.unitPrice === undefined || new Prisma.Decimal(payload.unitPrice).equals(current.unitPrice))
+  }
+
+  private beijingDate(value: Date) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value)
   }
 
   private assertWeekday(value: number) {

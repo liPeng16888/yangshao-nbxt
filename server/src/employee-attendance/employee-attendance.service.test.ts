@@ -22,11 +22,11 @@ function createService(overrides: Record<string, unknown> = {}) {
       findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn()
     },
     employeeCommissionRecord: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]) },
-    employeeDateOverride: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
-    employeeWeeklySchedule: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
+    employeeDateOverride: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+    employeeWeeklySchedule: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
     employeeMonthlySetting: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), upsert: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
     employeeBonus: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]) },
-    employeePayrollItem: { count: vi.fn().mockResolvedValue(0) },
+    employeePayrollItem: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]) },
     employeePayrollRun: { findFirst: vi.fn().mockResolvedValue(null) },
     employeeAuditLog: { create: vi.fn().mockResolvedValue({}) },
     $executeRawUnsafe: vi.fn().mockResolvedValue(1),
@@ -49,6 +49,26 @@ function finishService(prisma: any) {
 }
 
 describe('EmployeeAttendanceService ownership and conflicts', () => {
+  it('reports whether leave and commission types are referenced so immutable UI controls stay disabled', async () => {
+    const { service, prisma } = createService()
+    prisma.employeeLeaveType.findMany.mockResolvedValue([{ id: 'leave-type-1', name: '事假', _count: { leaveRequests: 1 } }])
+    prisma.employeeCommissionType.findMany.mockResolvedValue([{ id: 'commission-type-1', name: '送样', _count: { records: 0 } }])
+
+    await expect(service.listLeaveTypes('front-1')).resolves.toEqual([{ id: 'leave-type-1', name: '事假', referenced: true }])
+    await expect(service.listCommissionTypes('front-1')).resolves.toEqual([{ id: 'commission-type-1', name: '送样', referenced: false }])
+  })
+
+  it('rejects mixed month and date-range list filters instead of silently choosing one', async () => {
+    const { service, prisma } = createService()
+
+    expect(() => service.listAttendance('front-1', { month: '2026-08', startDate: '2026-08-01' }))
+      .toThrow('月份和日期范围不能同时使用')
+    expect(() => service.listLeaveRequests('front-1', { month: '2026-08', endDate: '2026-08-31' }))
+      .toThrow('月份和日期范围不能同时使用')
+    expect(prisma.employeeAttendanceRecord.findMany).not.toHaveBeenCalled()
+    expect(prisma.employeeLeaveRequest.findMany).not.toHaveBeenCalled()
+  })
+
   it('rejects a duplicate employee number inside the current frontend account', async () => {
     const { service, prisma } = createService()
     prisma.employee.findFirst.mockResolvedValue({ id: 'existing', frontendUserId: 'front-1', employeeNumber: '001' })
@@ -75,7 +95,7 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     prisma.employeeAttendanceRecord.findFirst.mockResolvedValue({ id: 'existing' })
 
     await expect(service.createAttendance('front-1', 'front-1', {
-      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480
+      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480, absenceMinutes: 480
     })).rejects.toBeInstanceOf(ConflictException)
     expect(prisma.employeeAttendanceRecord.create).not.toHaveBeenCalled()
   })
@@ -129,7 +149,7 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     prisma.employeePayrollRun.findFirst.mockResolvedValue({ id: 'run-1', status: EmployeePayrollStatus.CONFIRMED })
 
     await expect(service.createAttendance('front-1', 'front-1', {
-      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480
+      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480, absenceMinutes: 480
     })).rejects.toBeInstanceOf(ConflictException)
     expect(prisma.employeeAttendanceRecord.create).not.toHaveBeenCalled()
   })
@@ -233,7 +253,7 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     }))
 
     await expect(service.createAttendance('front-1', 'front-1', {
-      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480
+      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480, absenceMinutes: 480
     })).rejects.toBeInstanceOf(ConflictException)
   })
 
@@ -450,5 +470,110 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     photos.remove.mockRejectedValue(new Error('unlink failed'))
 
     await expect(service.attachPhoto('front-1', 'front-1', 'employee-1', '/private/new.jpg')).resolves.toEqual({ id: 'employee-1', hasPhoto: true })
+  })
+
+  it('derives workday minutes from a non-overnight planned shift and normalizes rest days', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeWeeklySchedule.create.mockImplementation(async ({ data }: any) => ({ id: 'weekly-1', ...data }))
+
+    const workday: any = await service.createWeeklySchedule('front-1', 'front-1', {
+      employeeId: 'employee-1', weekday: 1, isWorkday: true,
+      plannedStartTime: '08:30', plannedEndTime: '17:30', scheduledMinutes: 1
+    } as any)
+    expect(workday).toMatchObject({ plannedStartTime: '08:30', plannedEndTime: '17:30', scheduledMinutes: 540 })
+
+    prisma.employeeWeeklySchedule.create.mockImplementation(async ({ data }: any) => ({ id: 'weekly-2', ...data }))
+    const rest: any = await service.createWeeklySchedule('front-1', 'front-1', {
+      employeeId: 'employee-1', weekday: 0, isWorkday: false,
+      plannedStartTime: '08:30', plannedEndTime: '17:30', scheduledMinutes: 540
+    } as any)
+    expect(rest).toMatchObject({ plannedStartTime: null, plannedEndTime: null, scheduledMinutes: 0 })
+  })
+
+  it('rejects missing or overnight planned shift times', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    await expect(service.createWeeklySchedule('front-1', 'front-1', {
+      employeeId: 'employee-1', weekday: 1, isWorkday: true, scheduledMinutes: 480
+    } as any)).rejects.toThrow('计划上下班时间')
+    await expect(service.createWeeklySchedule('front-1', 'front-1', {
+      employeeId: 'employee-1', weekday: 1, isWorkday: true,
+      plannedStartTime: '20:00', plannedEndTime: '08:00', scheduledMinutes: 720
+    } as any)).rejects.toThrow('暂不支持跨日排班')
+  })
+
+  it('rejects invalid workday duration, punch pairing, chronology, timezone and Beijing business date', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeAttendanceRecord.findFirst.mockResolvedValue(null)
+
+    const base = { employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480 }
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, scheduledMinutes: 0, absenceMinutes: 0 } as any)).rejects.toThrow('排班工作日时长必须大于 0')
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, checkInAt: '2026-08-10T08:00:00+08:00' } as any)).rejects.toThrow('必须同时填写')
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, checkInAt: '2026-08-10T08:00:00', checkOutAt: '2026-08-10T17:00:00' } as any)).rejects.toThrow('时区')
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, checkInAt: '2026-08-10T17:00:00+08:00', checkOutAt: '2026-08-10T08:00:00+08:00' } as any)).rejects.toThrow('下班时间必须晚于上班时间')
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, checkInAt: '2026-08-09T23:00:00+08:00', checkOutAt: '2026-08-10T01:00:00+08:00' } as any)).rejects.toThrow('北京业务考勤日期')
+  })
+
+  it('keeps trusted stored punch instants valid when a partial update changes only the remark', async () => {
+    const { service, prisma } = createService()
+    const current = {
+      id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-10',
+      isScheduledWorkday: true, scheduledMinutes: 480,
+      checkInAt: new Date('2026-08-10T00:00:00.000Z'), checkOutAt: new Date('2026-08-10T09:00:00.000Z'),
+      workedMinutes: 480, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0,
+      remark: null, payrollLockedAt: null
+    }
+    prisma.employeeAttendanceRecord.findFirst
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(null)
+    prisma.employeeAttendanceRecord.update.mockImplementation(async ({ data }: any) => ({ ...current, ...data }))
+
+    await expect(service.updateAttendance('front-1', 'front-1', current.id, { remark: '修正备注' }))
+      .resolves.toMatchObject({ remark: '修正备注' })
+    expect(prisma.employeeAttendanceRecord.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ remark: '修正备注', manuallyEdited: true })
+    }))
+  })
+
+  it('deactivates instead of deleting when any scheduling history exists', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1', terminationDate: null, photoPath: null })
+    prisma.employeeWeeklySchedule.count.mockResolvedValue(1)
+    prisma.employee.update.mockResolvedValue({ id: 'employee-1', status: EmployeeStatus.INACTIVE, terminationDate: '2026-08-10' })
+
+    await service.deleteEmployee('front-1', 'front-1', 'employee-1')
+
+    expect(prisma.employee.update).toHaveBeenCalled()
+    expect(prisma.employee.delete).not.toHaveBeenCalled()
+  })
+
+  it('allows referenced types only to transition from active to inactive', async () => {
+    const { service, prisma } = createService()
+    prisma.employeeLeaveType.findFirst.mockResolvedValue({ id: 'leave-type-1', frontendUserId: 'front-1', name: '事假', active: true, countsTowardRestQuota: true })
+    prisma.employeeLeaveRequest.count.mockResolvedValue(1)
+    await expect(service.updateLeaveType('front-1', 'front-1', 'leave-type-1', { name: '新事假' })).rejects.toThrow('已使用')
+    prisma.employeeLeaveType.update.mockResolvedValue({ id: 'leave-type-1', active: false })
+    await expect(service.updateLeaveType('front-1', 'front-1', 'leave-type-1', { active: false })).resolves.toMatchObject({ active: false })
+
+    prisma.employeeCommissionType.findFirst.mockResolvedValue({ id: 'commission-type-1', frontendUserId: 'front-1', name: '送样', unitName: '份', unitPrice: new Prisma.Decimal(10), active: true })
+    prisma.employeeCommissionRecord.count.mockResolvedValue(1)
+    await expect(service.updateCommissionType('front-1', 'front-1', 'commission-type-1', { unitPrice: 20 })).rejects.toThrow('已使用')
+  })
+
+  it('allows an existing record to retain its now-inactive type but rejects reassignment to another inactive type', async () => {
+    const { service, prisma } = createService()
+    prisma.employeeCommissionRecord.findFirst.mockResolvedValue({
+      id: 'record-1', frontendUserId: 'front-1', employeeId: 'employee-1', commissionTypeId: 'type-old',
+      date: '2026-08-10', quantity: new Prisma.Decimal(1), unitPriceSnapshot: new Prisma.Decimal(10), payrollLockedAt: null
+    })
+    prisma.employeeCommissionType.findFirst.mockResolvedValue({ id: 'type-old', frontendUserId: 'front-1', active: false, unitPrice: new Prisma.Decimal(10) })
+    prisma.employeeCommissionRecord.update.mockImplementation(async ({ data }: any) => ({ id: 'record-1', ...data }))
+    await expect(service.updateCommissionRecord('front-1', 'front-1', 'record-1', { commissionTypeId: 'type-old', quantity: 2 })).resolves.toBeTruthy()
+
+    prisma.employeeCommissionType.findFirst.mockResolvedValue({ id: 'type-new', frontendUserId: 'front-1', active: false, unitPrice: new Prisma.Decimal(10) })
+    await expect(service.updateCommissionRecord('front-1', 'front-1', 'record-1', { commissionTypeId: 'type-new' })).rejects.toThrow('已停用')
   })
 })
