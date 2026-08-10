@@ -10,6 +10,7 @@ import { accessGuardFeatures, featureForPath } from '@/router/guards'
 import { resetEmployeeAttendanceMock } from '@/mocks/employeeAttendance'
 import { mockCreateEmployee } from '@/mocks/employeeAttendance'
 import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
+import { useAccessGuardStore } from '@/stores/accessGuard'
 import EmployeeAttendanceOverviewPage from './employee-attendance/EmployeeAttendanceOverviewPage.vue'
 import EmployeeDirectoryPage from './employee-attendance/EmployeeDirectoryPage.vue'
 import EmployeeSchedulesPage from './employee-attendance/EmployeeSchedulesPage.vue'
@@ -105,6 +106,43 @@ describe('employee attendance navigation', () => {
     await flushPromises()
     expect((wrapper.get('[data-testid="month-scheduled-days"] input').element as HTMLInputElement).value).toBe('0')
     expect((wrapper.get('[data-testid="month-rest-quota"] input').element as HTMLInputElement).value).toBe('3')
+    wrapper.unmount()
+  })
+
+  it('requires a successful attendance access verification before revealing sensitive employee values', async () => {
+    window.localStorage.setItem('ys_mock_access_guard_groups', JSON.stringify([{
+      id: 'attendance-group', name: '员工考勤验证', enabled: true, ttlMinutes: 5, password: '1234',
+      recoveryPrompt: '', recoveryAnswer: '', features: ['EMPLOYEE_ATTENDANCE']
+    }]))
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeDirectoryPage, { global: { plugins: [pinia, ElementPlus], stubs: { teleport: true, 'el-select': true, 'el-option': true, 'el-date-picker': true, 'el-input-number': true } } })
+    await flushPromises()
+    await wrapper.findAll('button').find((node) => node.text() === '查看敏感信息')!.trigger('click')
+    await flushPromises()
+    const access = useAccessGuardStore(pinia)
+    expect(access.dialogVisible).toBe(true)
+    await expect(access.verifyPassword('wrong')).resolves.toMatchObject({ ok: false, message: '访问密码不正确' })
+    expect(wrapper.text()).not.toContain('410000199001011234')
+    await expect(access.verifyPassword('1234')).resolves.toMatchObject({ ok: true })
+    await flushPromises()
+    expect(wrapper.text()).toContain('410000199001011234')
+    wrapper.unmount()
+  })
+
+  it('retains a non-employee form value and surfaces the error when a leave-type mutation fails', async () => {
+    const pinia = createPinia()
+    const passThrough = { template: '<div><slot /></div>' }
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [pinia, ElementPlus], stubs: {
+      teleport: true, 'el-tabs': passThrough, 'el-tab-pane': passThrough, 'el-table': true, 'el-table-column': true,
+      'el-select': true, 'el-option': true, 'el-date-picker': true, 'el-input-number': true, 'el-switch': true
+    } } })
+    await flushPromises()
+    const input = wrapper.get('input[placeholder="类型名称"]')
+    await input.setValue('事假')
+    await wrapper.findAll('button').find((node) => node.text() === '新增类型')!.trigger('click')
+    await flushPromises()
+    expect(useEmployeeAttendanceStore(pinia).error).toContain('名称已存在')
+    expect((input.element as HTMLInputElement).value).toBe('事假')
     wrapper.unmount()
   })
 })

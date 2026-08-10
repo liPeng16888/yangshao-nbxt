@@ -3,8 +3,14 @@ import { describe, expect, it } from 'vitest'
 import {
   buildEmployeeMutationPayload,
   normalizeAttendanceGenerationResponse,
+  normalizeBonusResponse,
   normalizeCommissionResponse,
+  normalizeCommissionTypeResponse,
+  normalizeDeleteEmployeeResponse,
   normalizeEmployeeResponse,
+  normalizeLeaveResponse,
+  normalizeMonthlySettingResponse,
+  normalizePayrollAdjustmentResponse,
   normalizePayrollResponse,
   selectEmployeeAttendanceGrant
 } from './employeeAttendance'
@@ -44,5 +50,22 @@ describe('employee attendance real API adapters', () => {
 
   it('provides a mock grant token that can be tagged with attendance features', async () => {
     await expect(verifyAccessGuardGroup('attendance-group', '1234', 5, '1234')).resolves.toMatchObject({ token: 'mock-access-grant:attendance-group' })
+  })
+
+  it('normalizes Decimal fields on every Decimal-bearing write response', () => {
+    expect(normalizeMonthlySettingResponse({ id: 'ms-1', employeeId: 'e1', month: '2026-08', scheduledWorkDays: '22.50', restQuotaDays: '4.25' }))
+      .toMatchObject({ scheduledWorkDays: 22.5, restQuotaDays: 4.25 })
+    expect(normalizeLeaveResponse({ id: 'l1', countedDays: '0.50', hours: '4.00', payrollLockedAt: 'locked' }))
+      .toMatchObject({ countedDays: 0.5, hours: 4, lockedAt: 'locked' })
+    expect(normalizeCommissionTypeResponse({ id: 'ct1', unitPrice: '12.35' })).toMatchObject({ unitPrice: 12.35 })
+    expect(normalizeBonusResponse({ id: 'b1', amount: '88.60', payrollLockedAt: 'locked' })).toMatchObject({ amount: 88.6, lockedAt: 'locked' })
+    expect(normalizePayrollAdjustmentResponse({ id: 'a1', payrollItemId: 'p1', amount: '-10.01', reason: '补扣' }))
+      .toMatchObject({ amount: -10.01 })
+  })
+
+  it('normalizes both delete-employee response variants', () => {
+    expect(normalizeDeleteEmployeeResponse({ ok: true })).toEqual({ ok: true })
+    expect(normalizeDeleteEmployeeResponse({ id: 'e1', employeeNumber: '001', name: '张三', hireDate: '2026-01-01', status: 'INACTIVE', baseSalary: '6000.00' }))
+      .toMatchObject({ id: 'e1', status: 'INACTIVE', baseSalary: 6000 })
   })
 })

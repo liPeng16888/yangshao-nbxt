@@ -45,10 +45,17 @@ export interface BonusRecord extends BonusPayload { id: string; lockedAt?: strin
 
 export interface CompensationTotal { employeeId: string; commissionAmount: number; bonusAmount: number }
 export interface PayrollAdjustment { id: string; payrollItemId: string; amount: number; reason: string }
-export interface PayrollSnapshot {
-  baseSalary: number; attendanceBonus: number; overtimePay: number; commissionAmount: number; bonusAmount: number;
-  adjustmentAmount: number; leaveDeduction: number; absenceDeduction: number; payableAmount: number
+export interface PayrollCalculationInput {
+  baseSalary: number; attendanceBonus: number; scheduledWorkDays: number; restQuotaDays: number; countedLeaveDays: number;
+  absenceDays: number; overtimeMinutes: number; overtimeHourlyRate: number; commissionAmount: number; bonusAmount: number;
+  adjustments: Array<{ amount: number }>
 }
+export interface PayrollCalculationResult {
+  dailyRate: number; excessLeaveDays: number; leaveDeduction: number; absenceDeduction: number; overtimeHours: number;
+  overtimePay: number; commissionAmount: number; bonusAmount: number; adjustmentAmount: number; attendanceBonus: number;
+  payableAmount: number; issues: string[]
+}
+export interface PayrollSnapshot { input: PayrollCalculationInput; result: PayrollCalculationResult; generatedAt: string }
 export interface PayrollItem { id: string; employeeId: string; employee: Employee; payableAmount: number; calculationSnapshot: PayrollSnapshot; issues: string[]; adjustments: PayrollAdjustment[] }
 export interface PayrollRun { id: string; month: string; status: PayrollStatus; totalAmount: number; issueCount: number; issues: string[]; items: PayrollItem[]; confirmedAt?: string | null; reopenReason?: string }
 export interface AttendanceOverview {
