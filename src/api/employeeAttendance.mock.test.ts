@@ -118,8 +118,8 @@ describe('employee attendance mock repository', () => {
 
   it('blocks confirmation while leave is pending', async () => {
     const draft = await mockGeneratePayroll(dayjs().format('YYYY-MM'))
-    expect(draft.issues.join('')).toContain('请假待审批')
-    await expect(mockConfirmPayroll(draft.id)).rejects.toThrow('暂不能确认')
+    expect(draft.issues.join('')).not.toContain('请假待审批')
+    await expect(mockConfirmPayroll(draft.id)).rejects.toThrow('待审批请假')
   })
 
   it('locks confirmed payroll and preserves adjustments only while the run is a draft', async () => {
@@ -294,6 +294,23 @@ describe('employee attendance mock repository', () => {
     const generatedOverview = await mockGetOverview(currentMonth)
     expect(generatedOverview.issues.filter((issue) => issue.includes('请假待审批'))).toHaveLength(1)
     expect(generatedOverview.issueCount).toBe(generatedOverview.issues.length)
+
+    const currentWorkday = dayjs(`${currentMonth}-01`).day(1).month() === dayjs(`${currentMonth}-01`).month()
+      ? dayjs(`${currentMonth}-01`).day(1).format('YYYY-MM-DD')
+      : dayjs(`${currentMonth}-01`).add(1, 'week').day(1).format('YYYY-MM-DD')
+    const secondPending = await mockSaveLeave({
+      employeeId: 'emp-2', leaveTypeId: 'leave-type-rest', startDate: currentWorkday, endDate: currentWorkday,
+      unit: 'FULL_DAY', reason: '新增待审批请假'
+    })
+    const increasedOverview = await mockGetOverview(currentMonth)
+    expect(increasedOverview.pendingLeaves).toBe(2)
+    expect(increasedOverview.issues.filter((issue) => issue.includes('请假待审批'))).toEqual(['2 条请假待审批'])
+
+    await mockReviewLeave('leave-1', 'APPROVED')
+    await mockReviewLeave(secondPending.id, 'APPROVED')
+    const clearedOverview = await mockGetOverview(currentMonth)
+    expect(clearedOverview.pendingLeaves).toBe(0)
+    expect(clearedOverview.issues.some((issue) => issue.includes('请假待审批'))).toBe(false)
   })
 
   it('restricts referenced type edits while allowing records to retain the same inactive type', async () => {

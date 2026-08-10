@@ -7,6 +7,13 @@ import type {
   LeaveRequest, LeaveType, MonthlySetting, PayrollRun, WeeklySchedule
 } from '@/types/employeeAttendance'
 
+export function syncPendingLeaveIssue(run: Pick<PayrollRun, 'issues' | 'issueCount'>, pendingLeaves: number) {
+  const issues = run.issues.filter((issue) => !issue.includes('请假待审批'))
+  if (pendingLeaves > 0) issues.push(`${pendingLeaves} 条请假待审批`)
+  run.issues = issues
+  run.issueCount = issues.length
+}
+
 export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () => {
   const month = ref(dayjs().format('YYYY-MM'))
   const employeeId = ref('')
@@ -68,10 +75,7 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   const loadPayroll = () => run(async () => {
     const [run, summary] = await Promise.all([api.getPayroll(month.value), api.getOverview(month.value)])
     overview.value = summary
-    if (run && summary.pendingLeaves > 0 && !run.issues.some((issue) => issue.includes('请假待审批'))) {
-      run.issues = [...run.issues, `${summary.pendingLeaves} 条请假待审批`]
-      run.issueCount += 1
-    }
+    if (run) syncPendingLeaveIssue(run, summary.pendingLeaves)
     payroll.value = run
     return payroll.value
   })

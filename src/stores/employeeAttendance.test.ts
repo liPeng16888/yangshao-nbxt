@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useEmployeeAttendanceStore } from './employeeAttendance'
+import { syncPendingLeaveIssue, useEmployeeAttendanceStore } from './employeeAttendance'
 
 describe('employee attendance store operation state', () => {
   beforeEach(() => setActivePinia(createPinia()))
@@ -29,5 +29,16 @@ describe('employee attendance store operation state', () => {
     expect(store.startDate).toBe('')
     expect(store.endDate).toBe('')
     expect(store.dateQuery()).toEqual({ employeeId: undefined, month: '2026-08', startDate: undefined, endDate: undefined })
+  })
+
+  it('replaces stale pending-leave warnings with the current overview count', () => {
+    const run = { issues: ['张三：缺少考勤', '1 条请假待审批'], issueCount: 2 }
+    syncPendingLeaveIssue(run, 2)
+    expect(run.issues).toEqual(['张三：缺少考勤', '2 条请假待审批'])
+    expect(run.issueCount).toBe(2)
+
+    syncPendingLeaveIssue(run, 0)
+    expect(run.issues).toEqual(['张三：缺少考勤'])
+    expect(run.issueCount).toBe(1)
   })
 })
