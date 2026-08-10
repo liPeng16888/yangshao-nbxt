@@ -92,5 +92,5 @@ async function removeMonth() {
   catch (error) { store.setError(errorText(error, '月度设置删除失败')) }
 }
 watch([() => store.employeeId, () => store.month], load)
-onMounted(load)
+onMounted(() => { store.restoreMonthMode(); void load() })
 </script>

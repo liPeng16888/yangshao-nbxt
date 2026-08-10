@@ -21,6 +21,6 @@ const cards = computed(() => { const data = store.overview; return data ? [
   { label: '预计应发', value: `¥${data.projectedPayroll.toFixed(2)}` }, { label: '异常数', value: data.issueCount }
 ] : [] })
 async function load() { await store.loadOverview().catch(() => undefined) }
-onMounted(load)
+onMounted(() => { store.restoreMonthMode(); void load() })
 </script>
 <style scoped>.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.overview-grid article{padding:16px;border:1px solid #dbe5f0;border-radius:7px;background:#f8fbff}.overview-grid span{display:block;color:#64748b;font-size:13px}.overview-grid strong{display:block;margin-top:8px;font-size:23px}.issue{margin:8px 0}@media(max-width:1000px){.overview-grid{grid-template-columns:repeat(2,1fr)}}</style>

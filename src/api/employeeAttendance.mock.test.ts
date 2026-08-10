@@ -289,6 +289,11 @@ describe('employee attendance mock repository', () => {
     const overview = await mockGetOverview(currentMonth)
     expect(overview.pendingLeaves).toBe(1) // seeded current-month leave only; previous month must not add another blocker
     expect(overview.overtimeHours).toBe(3.5)
+
+    await mockGeneratePayroll(currentMonth)
+    const generatedOverview = await mockGetOverview(currentMonth)
+    expect(generatedOverview.issues.filter((issue) => issue.includes('请假待审批'))).toHaveLength(1)
+    expect(generatedOverview.issueCount).toBe(generatedOverview.issues.length)
   })
 
   it('restricts referenced type edits while allowing records to retain the same inactive type', async () => {

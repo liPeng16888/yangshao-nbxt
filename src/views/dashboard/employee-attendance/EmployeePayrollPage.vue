@@ -231,7 +231,7 @@ function closeExport() {
   exportItem.value = null
 }
 
-onMounted(load)
+onMounted(() => { store.restoreMonthMode(); void load() })
 </script>
 
 <style scoped>

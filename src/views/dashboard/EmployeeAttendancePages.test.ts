@@ -154,7 +154,7 @@ describe('employee attendance navigation', () => {
     const startPicker = wrapper.findAllComponents({ name: 'ElDatePicker' }).find((node) => node.props('placeholder') === '开始日期')!
     startPicker.vm.$emit('update:modelValue', '2026-08-10')
     await nextTick()
-    expect(store.month).toBe('')
+    expect(store.month).toBe('2026-08')
     expect(store.startDate).toBe('2026-08-10')
     wrapper.unmount()
 
@@ -166,7 +166,24 @@ describe('employee attendance navigation', () => {
       const pageStart = page.findAllComponents({ name: 'ElDatePicker' }).find((node) => node.props('placeholder') === '开始日期')!
       pageStart.vm.$emit('update:modelValue', '2026-08-10')
       await nextTick()
-      expect(pageStore.month).toBe('')
+      expect(pageStore.month).not.toBe('')
+      page.unmount()
+    }
+  })
+
+  it('restores a valid month when navigating from date filtering to monthly pages', async () => {
+    const pinia = createPinia()
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+
+    for (const component of [EmployeeAttendanceOverviewPage, EmployeeSchedulesPage, EmployeePayrollPage]) {
+      store.selectDateRange('2026-07-01', '2026-07-31')
+      const page = mount(component, { global: { plugins: [pinia, ElementPlus] } })
+      await flushPromises()
+      expect(store.month).toBe('2026-08')
+      expect(store.startDate).toBe('')
+      expect(store.endDate).toBe('')
+      expect(store.error).toBe('')
       page.unmount()
     }
   })

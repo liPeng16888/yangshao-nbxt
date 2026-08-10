@@ -3,7 +3,7 @@
     <section class="attendance-head">
       <div><h2>{{ title }}</h2><p>{{ description }}</p></div>
       <div class="attendance-filters">
-        <el-date-picker v-if="showMonth" :model-value="store.month" type="month" value-format="YYYY-MM" placeholder="选择月份" @update:model-value="selectMonth" />
+        <el-date-picker v-if="showMonth" :model-value="displayedMonth" type="month" value-format="YYYY-MM" placeholder="选择月份" @update:model-value="selectMonth" />
         <el-select v-if="showEmployee" v-model="store.employeeId" clearable filterable placeholder="全部员工" @change="emit('refresh')">
           <el-option v-for="row in store.employees" :key="row.id" :label="`${row.employeeNumber} ${row.name}`" :value="row.id" />
         </el-select>
@@ -19,11 +19,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
 withDefaults(defineProps<{ title: string; description: string; showMonth?: boolean; showEmployee?: boolean }>(), { showMonth: true, showEmployee: true })
 const emit = defineEmits<{ refresh: [] }>()
 const store = useEmployeeAttendanceStore()
+const displayedMonth = computed(() => store.startDate || store.endDate ? '' : store.month)
 function selectMonth(value: unknown) { store.selectMonth(typeof value === 'string' ? value : ''); emit('refresh') }
 onMounted(() => { if (!store.employees.length) void store.loadEmployees().catch(() => undefined) })
 </script>

@@ -48,9 +48,20 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   function selectDateRange(start: string, end: string) {
     startDate.value = start
     endDate.value = end
-    if (start || end) month.value = ''
   }
-  const dateQuery = () => ({ employeeId: employeeId.value || undefined, month: month.value || undefined, startDate: startDate.value || undefined, endDate: endDate.value || undefined })
+  function restoreMonthMode() {
+    startDate.value = ''
+    endDate.value = ''
+  }
+  const dateQuery = () => {
+    const usesDateRange = Boolean(startDate.value || endDate.value)
+    return {
+      employeeId: employeeId.value || undefined,
+      month: usesDateRange ? undefined : month.value || undefined,
+      startDate: usesDateRange ? startDate.value || undefined : undefined,
+      endDate: usesDateRange ? endDate.value || undefined : undefined
+    }
+  }
   const loadAttendance = () => run(async () => { attendance.value = await api.getAttendance(dateQuery()); return attendance.value })
   const loadLeaves = () => run(async () => { [leaveTypes.value, leaves.value] = await Promise.all([api.getLeaveTypes(), api.getLeaves({ ...dateQuery(), status: leaveStatus.value || undefined })]); return leaves.value })
   const loadCompensation = () => run(async () => { [commissionTypes.value, commissions.value, bonuses.value] = await Promise.all([api.getCommissionTypes(), api.getCommissions(dateQuery()), api.getBonuses(dateQuery())]); return commissions.value })
@@ -66,5 +77,5 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   })
   function clearError() { error.value = '' }
   function setError(message: string) { error.value = message }
-  return { month, employeeId, startDate, endDate, leaveStatus, loading, saving, error, employees, activeEmployees, overview, weeklySchedules, overrides, monthSettings, attendance, leaveTypes, leaves, commissionTypes, commissions, bonuses, payroll, run, clearError, setError, selectMonth, selectDateRange, dateQuery, loadEmployees, loadOverview, loadSchedules, loadAttendance, loadLeaves, loadCompensation, loadPayroll }
+  return { month, employeeId, startDate, endDate, leaveStatus, loading, saving, error, employees, activeEmployees, overview, weeklySchedules, overrides, monthSettings, attendance, leaveTypes, leaves, commissionTypes, commissions, bonuses, payroll, run, clearError, setError, selectMonth, selectDateRange, restoreMonthMode, dateQuery, loadEmployees, loadOverview, loadSchedules, loadAttendance, loadLeaves, loadCompensation, loadPayroll }
 })
