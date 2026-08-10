@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional, UnauthorizedException } from '@nestjs/common'
 import {
   EmployeeAuditAction,
   EmployeeLeaveStatus,
@@ -14,6 +14,7 @@ import { PrismaService } from '../prisma/prisma.service'
 import type { AdminEmployeeAttendanceQueryDto } from './employee-attendance.dto'
 import { EmployeeDataCipherService } from './employee-data-cipher.service'
 import { calculatePayroll, type PayrollCalculationInput } from './payroll-calculator'
+import { PayrollMonthLockService } from './payroll-month-lock.service'
 
 type Db = Prisma.TransactionClient | PrismaService
 type PayrollSource = {
@@ -27,7 +28,8 @@ export class PayrollService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cipher: EmployeeDataCipherService,
-    private readonly passwords: PasswordService
+    private readonly passwords: PasswordService,
+    @Optional() private readonly monthLocks?: PayrollMonthLockService
   ) {}
 
   async overview(frontendUserId: string, month: string) {
@@ -233,7 +235,8 @@ export class PayrollService {
     if (query.month) this.assertMonth(query.month)
     const status = query.status && Object.values(EmployeePayrollStatus).includes(query.status as EmployeePayrollStatus) ? query.status as EmployeePayrollStatus : undefined
     return this.prisma.employeePayrollRun.findMany({ where: {
-      frontendUserId: { in: frontendUserIds }, ...(query.month ? { month: query.month } : {}), ...(status ? { status } : {})
+      frontendUserId: { in: frontendUserIds }, ...(query.month ? { month: query.month } : {}), ...(status ? { status } : {}),
+      ...(query.employeeId ? { items: { some: { employeeId: query.employeeId } } } : {})
     }, include: {
       frontendUser: { select: { account: true, username: true, displayRemark: true } },
       items: { where: query.employeeId ? { employeeId: query.employeeId } : {}, include: { adjustments: true }, orderBy: { employeeNumberSnapshot: 'asc' } }
@@ -311,7 +314,13 @@ export class PayrollService {
         .reduce((sum, item) => sum.plus(this.leavePortion(item, monthStart, monthEnd, employeeAttendance)), new Prisma.Decimal(0))
       const absenceDays = employeeAttendance.reduce((sum, item) => {
         if (!item.isScheduledWorkday || item.absenceMinutes <= 0 || item.scheduledMinutes <= 0) return sum
-        return sum.plus(new Prisma.Decimal(item.absenceMinutes).div(item.scheduledMinutes))
+        const recorded = Prisma.Decimal.min(new Prisma.Decimal(item.absenceMinutes).div(item.scheduledMinutes), new Prisma.Decimal(1))
+        const approvedCoverage = Prisma.Decimal.min(
+          employeeLeaves.filter((leave) => leave.startDate <= item.date && leave.endDate >= item.date)
+            .reduce((coverage, leave) => coverage.plus(this.leaveCoverageForDate(leave)), new Prisma.Decimal(0)),
+          new Prisma.Decimal(1)
+        )
+        return sum.plus(Prisma.Decimal.max(recorded.minus(approvedCoverage), new Prisma.Decimal(0)))
       }, new Prisma.Decimal(0))
       const unresolved = employeeAttendance.filter((item) => item.isScheduledWorkday && item.scheduledMinutes > 0 &&
         !item.checkInAt && !item.checkOutAt && item.absenceMinutes <= 0 &&
@@ -390,18 +399,7 @@ export class PayrollService {
   }
 
   private async serializedMonth<T>(frontendUserId: string, month: string, operation: (tx: Prisma.TransactionClient) => Promise<T>) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        return await this.prisma.$transaction(async (tx) => {
-          await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', `employee-payroll:${frontendUserId}:${month}`)
-          return operation(tx)
-        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
-      } catch (error) {
-        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034') throw error
-        if (attempt === 2) throw new ConflictException('工资数据发生并发冲突，请刷新后重试')
-      }
-    }
-    throw new ConflictException('工资数据发生并发冲突，请刷新后重试')
+    return (this.monthLocks || new PayrollMonthLockService(this.prisma)).run(frontendUserId, [month], operation)
   }
 
   private audit(tx: Db, frontendUserId: string, actorUserId: string, action: EmployeeAuditAction, entityType: string, entityId: string, reason?: string) {

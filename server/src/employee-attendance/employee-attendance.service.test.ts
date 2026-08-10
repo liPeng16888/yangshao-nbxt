@@ -268,7 +268,49 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
       employeeId: 'employee-1', date: '2026-08-10', amount: 100, reason: '优秀'
     })).rejects.toThrow('audit failed')
 
-    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function))
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+    })
+  })
+
+  it('acquires the payroll month lock and rechecks confirmation inside the mutation transaction', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeePayrollRun.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'confirmed', status: EmployeePayrollStatus.CONFIRMED })
+
+    await expect(service.createBonus('front-1', 'front-1', {
+      employeeId: 'employee-1', date: '2026-08-10', amount: 100, reason: '优秀'
+    })).rejects.toBeInstanceOf(ConflictException)
+
+    const lockOrder = prisma.$executeRawUnsafe.mock.invocationCallOrder[0]
+    const recheckOrder = prisma.employeePayrollRun.findFirst.mock.invocationCallOrder[1]
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', 'employee-payroll:front-1:2026-08'
+    )
+    expect(lockOrder).toBeLessThan(recheckOrder)
+    expect(prisma.employeeBonus.create).not.toHaveBeenCalled()
+  })
+
+  it('locks every cross-month leave month in canonical order before overlap checking and writing', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeLeaveType.findFirst.mockResolvedValue({ id: 'leave-type-1', frontendUserId: 'front-1', active: true })
+    prisma.employeeWeeklySchedule.findFirst.mockResolvedValue({ isWorkday: true, scheduledMinutes: 480 })
+    prisma.employeeLeaveRequest.findFirst.mockResolvedValue(null)
+    prisma.employeeLeaveRequest.create.mockResolvedValue({ id: 'leave-1' })
+
+    await service.createLeaveRequest('front-1', 'front-1', {
+      employeeId: 'employee-1', leaveTypeId: 'leave-type-1', startDate: '2026-08-31', endDate: '2026-09-01',
+      unit: 'FULL_DAY', reason: '跨月请假'
+    })
+
+    expect(prisma.$executeRawUnsafe.mock.calls.slice(0, 3)).toEqual([
+      ['SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', 'employee-payroll:front-1:2026-08'],
+      ['SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', 'employee-payroll:front-1:2026-09'],
+      ['SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', 'employee-leave:front-1:employee-1']
+    ])
   })
 
   it('requires bonus amounts to be greater than zero', async () => {

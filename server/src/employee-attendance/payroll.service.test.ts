@@ -15,7 +15,7 @@ function createPrisma() {
     employeeCommissionRecord: { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     employeeBonus: { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     employeePayrollRun: {
-      findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 })
+      findFirst: vi.fn(), findUnique: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 })
     },
     employeePayrollItem: {
       findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn(),
@@ -172,6 +172,41 @@ describe('PayrollService frontend payroll', () => {
 
     expect(tx.$executeRawUnsafe).toHaveBeenCalledWith(expect.stringContaining('pg_advisory_xact_lock'), 'employee-payroll:front-1:2026-08')
     expect(tx.employeePayrollItem.update).toHaveBeenCalledWith({ where: { id: 'item-1' }, data: expect.objectContaining({ payableAmount: decimal(5900), adjustmentAmount: decimal(-100) }) })
+  })
+
+  it.each([
+    ['full-day approved leave', EmployeeLeaveUnit.FULL_DAY, 1, 0],
+    ['half-day approved leave', EmployeeLeaveUnit.HALF_DAY, 0.5, 0.5],
+    ['hourly approved leave', EmployeeLeaveUnit.HOUR, 0.25, 0.75],
+    ['no approved leave', null, 0, 1]
+  ])('subtracts %s coverage from recorded absence', async (_label, unit, countedDays, expectedAbsenceDays) => {
+    const { service, tx } = serviceFixture()
+    tx.employee.findMany.mockResolvedValue([employee])
+    tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(1), restQuotaDays: decimal(2) }])
+    tx.employeeAttendanceRecord.findMany.mockResolvedValue([{
+      employeeId: employee.id, date: '2026-08-01', isScheduledWorkday: true, scheduledMinutes: 480,
+      checkInAt: null, checkOutAt: null, absenceMinutes: 480, overtimeMinutes: 0
+    }])
+    tx.employeeLeaveRequest.findMany.mockResolvedValue(unit ? [{
+      employeeId: employee.id, startDate: '2026-08-01', endDate: '2026-08-01', countedDays: decimal(countedDays),
+      unit, status: EmployeeLeaveStatus.APPROVED, leaveType: { countsTowardRestQuota: false }
+    }] : [])
+    tx.employeePayrollRun.findFirst.mockResolvedValue(null)
+    tx.employeePayrollRun.create.mockResolvedValue({ id: 'run-1', frontendUserId: 'front-1', month: '2026-08', status: EmployeePayrollStatus.DRAFT })
+
+    const result: any = await service.generate('front-1', 'front-1', '2026-08')
+
+    expect(result.items[0].absenceDays).toEqual(decimal(expectedAbsenceDays))
+  })
+
+  it('filters admin payroll parent runs through matching employee items', async () => {
+    const { service, prisma } = serviceFixture()
+
+    await service.adminPayroll(['front-1'], { month: '2026-08', employeeId: 'employee-1' })
+
+    expect(prisma.employeePayrollRun.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ items: { some: { employeeId: 'employee-1' } } })
+    }))
   })
 })
 
