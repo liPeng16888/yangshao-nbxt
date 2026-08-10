@@ -6,7 +6,7 @@
     class="payroll-export-dialog"
     :close-on-click-modal="!exporting"
     :close-on-press-escape="!exporting"
-    @close="emit('close')"
+    @close="requestClose"
   >
     <section v-if="run && item" class="payroll-preview payroll-preview--slip">
       <header>
@@ -105,8 +105,10 @@ const emit = defineEmits<{
 
 const exporting = ref(false)
 const dialogTitle = computed(() => props.item ? '导出个人工资条' : '导出全员工资汇总')
+let dialogGeneration = 0
 
 watch(() => props.visible, (visible) => {
+  dialogGeneration += 1
   if (visible) exporting.value = false
 })
 
@@ -114,9 +116,14 @@ function deduction(value: number) {
   return formatPayrollMoney(-Math.abs(value))
 }
 
+function requestClose() {
+  if (!exporting.value) emit('close')
+}
+
 async function exportPng() {
   if (exporting.value || !props.run) return
   exporting.value = true
+  const generation = dialogGeneration
   try {
     const exported = props.item
       ? await downloadEmployeePayrollPng(
@@ -124,6 +131,7 @@ async function exportPng() {
         `${props.run.month}_${props.item.employee.employeeNumber}_${props.item.employee.name}_工资条`
       )
       : await downloadPayrollSummaryPng(props.run)
+    if (generation !== dialogGeneration || !props.visible) return
     if (!exported) {
       ElMessage.error('工资图片生成失败，请重试')
       return
@@ -131,9 +139,11 @@ async function exportPng() {
     ElMessage.success(props.item ? '工资条图片已保存' : '工资汇总图片已保存')
     emit('close')
   } catch {
-    ElMessage.error('工资图片生成失败，请重试')
+    if (generation === dialogGeneration && props.visible) {
+      ElMessage.error('工资图片生成失败，请重试')
+    }
   } finally {
-    exporting.value = false
+    if (generation === dialogGeneration) exporting.value = false
   }
 }
 </script>

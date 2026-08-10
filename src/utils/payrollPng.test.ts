@@ -189,6 +189,20 @@ describe('employee payroll PNG export', () => {
     expect(document.body.querySelector('a')).toBeNull()
   })
 
+  it('collapses repeated case-insensitive PNG suffixes to one canonical extension', async () => {
+    mockCanvasContext()
+    mockSuccessfulDownload()
+    let downloadedFilename = ''
+    vi.spyOn(document.body, 'appendChild').mockImplementation((node) => {
+      downloadedFilename = (node as HTMLAnchorElement).download
+      return Node.prototype.appendChild.call(document.body, node)
+    })
+
+    await expect(downloadEmployeePayrollPng(makeItem(), '张三工资条.PnG.png.PNG')).resolves.toBe(true)
+
+    expect(downloadedFilename).toBe('张三工资条.png')
+  })
+
   it('grows the all-employee summary canvas for a long table', () => {
     const oneEmployee = createPayrollSummaryCanvasLayout(makeRun(1))
     const sixtyEmployees = createPayrollSummaryCanvasLayout(makeRun(60))
@@ -220,6 +234,51 @@ describe('employee payroll PNG export', () => {
     mockCanvasContext()
     vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => callback(null))
     await expect(downloadPayrollSummaryPng(makeRun())).resolves.toBe(false)
+  })
+
+  it('returns false when canvas toBlob throws', async () => {
+    mockCanvasContext()
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(() => {
+      throw new Error('toBlob failed')
+    })
+
+    await expect(downloadEmployeePayrollPng(makeItem())).resolves.toBe(false)
+  })
+
+  it('returns false when object URL creation is missing, empty or throws', async () => {
+    for (const behavior of ['missing', 'empty', 'throw'] as const) {
+      vi.restoreAllMocks()
+      mockCanvasContext()
+      vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => {
+        callback(new Blob(['png'], { type: 'image/png' }))
+      })
+      if (behavior === 'missing') {
+        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: undefined })
+      } else if (behavior === 'empty') {
+        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => '') })
+      } else {
+        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => { throw new Error('URL failed') }) })
+      }
+
+      await expect(downloadPayrollSummaryPng(makeRun())).resolves.toBe(false)
+      expect(document.body.querySelector('a')).toBeNull()
+    }
+  })
+
+  it('falls back when link removal throws and reports a revoke cleanup failure without leaking the link', async () => {
+    mockCanvasContext()
+    const objectUrl = mockSuccessfulDownload()
+    vi.spyOn(HTMLAnchorElement.prototype, 'remove').mockImplementation(() => {
+      throw new Error('remove failed')
+    })
+    objectUrl.revoke.mockImplementation(() => {
+      throw new Error('revoke failed')
+    })
+
+    await expect(downloadEmployeePayrollPng(makeItem())).resolves.toBe(false)
+
+    expect(objectUrl.revoke).toHaveBeenCalledWith('blob:employee-payroll')
+    expect(document.body.querySelector('a')).toBeNull()
   })
 
   it('returns false on timeout and ignores a late blob without leaking a URL or link', async () => {

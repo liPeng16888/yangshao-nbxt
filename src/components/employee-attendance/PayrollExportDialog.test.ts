@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessage } from 'element-plus'
-import { defineComponent } from 'vue'
+import { defineComponent, nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Employee, PayrollItem, PayrollRun } from '@/types/employeeAttendance'
 import PayrollExportDialog from './PayrollExportDialog.vue'
@@ -132,5 +132,38 @@ describe('PayrollExportDialog', () => {
 
     expect(downloadPayrollSummaryPng).toHaveBeenCalledTimes(2)
     expect(messages.error).toHaveBeenCalledTimes(2)
+  })
+
+  it('blocks header close while exporting and ignores a stale result after close and reopen', async () => {
+    const messages = mockMessages()
+    const completions: Array<(result: boolean) => void> = []
+    vi.mocked(downloadPayrollSummaryPng).mockImplementation(() => new Promise((resolve) => {
+      completions.push(resolve)
+    }))
+    const wrapper = mountDialog()
+    const dialog = wrapper.getComponent(DialogStub)
+
+    await wrapper.get('[data-testid="payroll-export-confirm"]').trigger('click')
+    dialog.vm.$emit('close')
+    await nextTick()
+    expect(wrapper.emitted('close')).toBeUndefined()
+
+    await wrapper.setProps({ visible: false })
+    await wrapper.setProps({ visible: true })
+    await wrapper.get('[data-testid="payroll-export-confirm"]').trigger('click')
+    expect(downloadPayrollSummaryPng).toHaveBeenCalledTimes(2)
+
+    completions[0](true)
+    await flushPromises()
+    expect(messages.success).not.toHaveBeenCalled()
+    expect(wrapper.emitted('close')).toBeUndefined()
+
+    await wrapper.get('[data-testid="payroll-export-confirm"]').trigger('click')
+    expect(downloadPayrollSummaryPng).toHaveBeenCalledTimes(2)
+
+    completions[1](true)
+    await flushPromises()
+    expect(messages.success).toHaveBeenCalledWith('工资汇总图片已保存')
+    expect(wrapper.emitted('close')).toHaveLength(1)
   })
 })

@@ -341,7 +341,7 @@ function formatTimestamp(value: string) {
 }
 
 function sanitizePngFilename(filename: string) {
-  const withoutExtension = filename.replace(/\.png$/i, '')
+  const withoutExtension = filename.replace(/(?:\.png)+$/i, '')
   const safeBase = withoutExtension
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
     .replace(/[. ]+$/g, '')
@@ -380,8 +380,7 @@ function downloadCanvasBlob(canvas: HTMLCanvasElement, filename: string) {
           link.style.display = 'none'
           document.body.appendChild(link)
           link.click()
-          cleanupDownload(link, objectUrl)
-          finish(true)
+          finish(cleanupDownload(link, objectUrl))
         } catch {
           cleanupDownload(link, objectUrl)
           finish(false)
@@ -394,6 +393,7 @@ function downloadCanvasBlob(canvas: HTMLCanvasElement, filename: string) {
 }
 
 function cleanupDownload(link: HTMLAnchorElement | null, objectUrl: string | null) {
+  let cleaned = true
   if (link) {
     try {
       link.remove()
@@ -401,7 +401,7 @@ function cleanupDownload(link: HTMLAnchorElement | null, objectUrl: string | nul
       try {
         link.parentNode?.removeChild(link)
       } catch {
-        // Best effort; the result path still reports the original download failure.
+        cleaned = false
       }
     }
   }
@@ -409,7 +409,8 @@ function cleanupDownload(link: HTMLAnchorElement | null, objectUrl: string | nul
     try {
       URL.revokeObjectURL(objectUrl)
     } catch {
-      // Revocation is best effort after a completed or failed browser download attempt.
+      cleaned = false
     }
   }
+  return cleaned
 }
