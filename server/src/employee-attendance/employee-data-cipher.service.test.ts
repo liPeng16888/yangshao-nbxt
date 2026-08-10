@@ -62,6 +62,19 @@ describe('EmployeeDataCipherService', () => {
     expect(() => service.encrypt('sensitive')).toThrowError('EMPLOYEE_DATA_CIPHER_SECRET is required')
   })
 
+  it('rejects an employee-data secret shorter than 32 UTF-8 bytes', () => {
+    process.env.EMPLOYEE_DATA_CIPHER_SECRET = 'x'.repeat(31)
+    const service = new EmployeeDataCipherService()
+
+    expect(() => service.encrypt('sensitive')).toThrowError('EMPLOYEE_DATA_CIPHER_SECRET must be at least 32 bytes')
+  })
+
+  it('rejects empty plaintext before producing an undecryptable ciphertext', () => {
+    const service = new EmployeeDataCipherService()
+
+    expect(() => service.encrypt('')).toThrowError('Employee data plaintext is required')
+  })
+
   it('masks all but the final four characters and handles short or empty values', () => {
     const service = new EmployeeDataCipherService()
 

@@ -10,6 +10,7 @@ const DECRYPT_ERROR = 'Unable to decrypt employee data'
 @Injectable()
 export class EmployeeDataCipherService {
   encrypt(plaintext: string) {
+    if (!plaintext) throw new Error('Employee data plaintext is required')
     const iv = randomBytes(IV_BYTES)
     const cipher = createCipheriv(CIPHER_ALGORITHM, this.key(), iv)
     const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
@@ -50,6 +51,9 @@ export class EmployeeDataCipherService {
   private key() {
     const secret = process.env.EMPLOYEE_DATA_CIPHER_SECRET?.trim()
     if (!secret) throw new Error('EMPLOYEE_DATA_CIPHER_SECRET is required')
+    if (Buffer.byteLength(secret, 'utf8') < 32) {
+      throw new Error('EMPLOYEE_DATA_CIPHER_SECRET must be at least 32 bytes')
+    }
     return createHash('sha256').update(secret, 'utf8').digest()
   }
 }

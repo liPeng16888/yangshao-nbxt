@@ -819,7 +819,7 @@ model EmployeePayrollItem {
   adjustments  EmployeePayrollAdjustment[]
 
   @@unique([payrollRunId, employeeId])
-  @@unique([id, frontendUserId])
+  @@unique([id, employeeId, frontendUserId])
   @@index([frontendUserId, employeeId])
 }
 
@@ -834,7 +834,7 @@ model EmployeePayrollAdjustment {
   updatedAt      DateTime @updatedAt
 
   frontendUser User                @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  payrollItem  EmployeePayrollItem @relation(fields: [payrollItemId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+  payrollItem  EmployeePayrollItem @relation(fields: [payrollItemId, employeeId, frontendUserId], references: [id, employeeId, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
   employee     Employee            @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
 
   @@unique([id, frontendUserId])

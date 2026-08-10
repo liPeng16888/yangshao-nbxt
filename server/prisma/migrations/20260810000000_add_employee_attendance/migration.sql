@@ -388,7 +388,7 @@ CREATE INDEX "EmployeePayrollItem_frontendUserId_employeeId_idx" ON "EmployeePay
 CREATE UNIQUE INDEX "EmployeePayrollItem_payrollRunId_employeeId_key" ON "EmployeePayrollItem"("payrollRunId", "employeeId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "EmployeePayrollItem_id_frontendUserId_key" ON "EmployeePayrollItem"("id", "frontendUserId");
+CREATE UNIQUE INDEX "EmployeePayrollItem_id_employeeId_frontendUserId_key" ON "EmployeePayrollItem"("id", "employeeId", "frontendUserId");
 
 -- CreateIndex
 CREATE INDEX "EmployeePayrollAdjustment_frontendUserId_payrollItemId_idx" ON "EmployeePayrollAdjustment"("frontendUserId", "payrollItemId");
@@ -490,7 +490,7 @@ ALTER TABLE "EmployeePayrollItem" ADD CONSTRAINT "EmployeePayrollItem_employeeId
 ALTER TABLE "EmployeePayrollAdjustment" ADD CONSTRAINT "EmployeePayrollAdjustment_frontendUserId_fkey" FOREIGN KEY ("frontendUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "EmployeePayrollAdjustment" ADD CONSTRAINT "EmployeePayrollAdjustment_payrollItemId_frontendUserId_fkey" FOREIGN KEY ("payrollItemId", "frontendUserId") REFERENCES "EmployeePayrollItem"("id", "frontendUserId") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "EmployeePayrollAdjustment" ADD CONSTRAINT "EmployeePayrollAdjustment_payrollItemId_employeeId_fronten_fkey" FOREIGN KEY ("payrollItemId", "employeeId", "frontendUserId") REFERENCES "EmployeePayrollItem"("id", "employeeId", "frontendUserId") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "EmployeePayrollAdjustment" ADD CONSTRAINT "EmployeePayrollAdjustment_employeeId_frontendUserId_fkey" FOREIGN KEY ("employeeId", "frontendUserId") REFERENCES "Employee"("id", "frontendUserId") ON DELETE RESTRICT ON UPDATE CASCADE;
