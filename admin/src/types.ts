@@ -106,6 +106,17 @@ export interface AdminAttendanceEmployeeResponse extends Omit<AdminAttendanceEmp
   emergencyContactMasked?: string
 }
 
+export interface AdminAttendanceRevealPayload {
+  password: string
+}
+
+export interface AdminRevealedAttendanceEmployeeResponse extends AdminAttendanceEmployeeResponse {
+  idCard: string
+  bankCard: string
+  address: string
+  emergencyContact: string
+}
+
 export interface AdminRevealedAttendanceEmployee extends AdminAttendanceEmployee {
   idCard: string
   bankCard: string

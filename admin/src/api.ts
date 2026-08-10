@@ -5,6 +5,7 @@ import type {
   AdminAttendanceAuditRow,
   AdminAttendanceAuditQuery,
   AdminAttendanceRecord,
+  AdminAttendanceRevealPayload,
   AdminBonusRecord,
   AdminCommissionRecord,
   AdminAttendanceEmployee,
@@ -18,6 +19,7 @@ import type {
   AdminMedicineInventoryItem,
   AdminMedicineInventoryMovement,
   AdminRevealedAttendanceEmployee,
+  AdminRevealedAttendanceEmployeeResponse,
   AdminUser,
   FrontendOption
 } from './types'
@@ -36,8 +38,8 @@ export type AdminProfilePayload = {
 
 type AdminRequest = {
   get<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
-  post<T = any, R = any>(url: string, payload?: any, config?: AdminRequestConfig): Promise<R>
-  patch<T = any, R = any>(url: string, payload?: any, config?: AdminRequestConfig): Promise<R>
+  post<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
+  patch<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
   delete<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
 }
 
@@ -324,6 +326,17 @@ function mockMonthlyScheduleFilter(config?: AdminRequestConfig) {
     && (!month || row.month === month))
 }
 
+function mockScheduleOverrideFilter(config?: AdminRequestConfig) {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  const month = String(config?.params?.month || '')
+  const startDate = String(config?.params?.startDate || '')
+  const endDate = String(config?.params?.endDate || '')
+  return mockEmployeeAttendance.schedules.overrides.filter((row) => ids.includes(row.frontendUserId)
+    && (!employeeId || row.employeeId === employeeId)
+    && (month ? row.date.startsWith(month) : (!startDate || row.date >= startDate) && (!endDate || row.date <= endDate)))
+}
+
 function isEmployeeAttendanceAdminPath(url: string) {
   return url === '/admin/employee-attendance' || url.startsWith('/admin/employee-attendance/')
 }
@@ -484,7 +497,7 @@ const mockRequest = {
     if (url === '/admin/employee-attendance/schedules') {
       return {
         weekly: mockAttendanceEntityFilter(mockEmployeeAttendance.schedules.weekly, config),
-        overrides: mockAttendanceFilter(mockEmployeeAttendance.schedules.overrides, config),
+        overrides: mockScheduleOverrideFilter(config),
         monthly: mockMonthlyScheduleFilter(config)
       }
     }
@@ -824,8 +837,24 @@ export function getAdminAttendanceAudit(query: AdminAttendanceAuditQuery) {
 }
 
 export function revealAdminAttendanceEmployee(employeeId: string, password: string, frontendUserIds: string[]) {
-  return request.post<any, any>(`/admin/employee-attendance/employees/${employeeId}/reveal`, { password }, {
+  return request.post<AdminAttendanceRevealPayload, AdminRevealedAttendanceEmployeeResponse>(`/admin/employee-attendance/employees/${employeeId}/reveal`, { password }, {
     params: { frontendUserIds: buildFrontendIds(frontendUserIds) },
     preserveAdminSessionOnUnauthorized: true
-  }).then((row) => ({ ...normalizeAdminAttendanceEmployee(row), idCard: row.idCard || '', bankCard: row.bankCard || '', address: row.address || '', emergencyContact: row.emergencyContact || '' }) as AdminRevealedAttendanceEmployee)
+  }).then((row): AdminRevealedAttendanceEmployee => ({
+    ...normalizeAdminAttendanceEmployee({
+      ...row,
+      idCardMasked: maskAdminSensitive(row.idCard),
+      bankCardMasked: maskAdminSensitive(row.bankCard),
+      addressMasked: maskAdminSensitive(row.address),
+      emergencyContactMasked: maskAdminSensitive(row.emergencyContact)
+    }),
+    idCard: row.idCard,
+    bankCard: row.bankCard,
+    address: row.address,
+    emergencyContact: row.emergencyContact
+  }))
+}
+
+function maskAdminSensitive(value: string) {
+  return value ? `${value.slice(0, 3)}****${value.slice(-4)}` : ''
 }

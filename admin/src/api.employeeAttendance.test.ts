@@ -10,6 +10,7 @@ import {
   request,
   revealAdminAttendanceEmployee
 } from './api'
+import type { AdminRevealedAttendanceEmployee } from './types'
 
 beforeAll(() => {
   const values = new Map<string, string>()
@@ -43,8 +44,10 @@ describe('admin employee attendance mock contract', () => {
     expect(masked).not.toHaveProperty('idCard')
 
     await expect(revealAdminAttendanceEmployee(masked.id, 'wrong-password', ['front-1'])).rejects.toThrow('密码错误')
-    const revealed = await revealAdminAttendanceEmployee(masked.id, 'admin123456', ['front-1'])
+    const revealPromise: Promise<AdminRevealedAttendanceEmployee> = revealAdminAttendanceEmployee(masked.id, 'admin123456', ['front-1'])
+    const revealed = await revealPromise
     expect(revealed.idCard).toBe('410000199001011234')
+    expect(revealed.idCardMasked).toContain('*')
 
     const audits = await getAdminAttendanceAudit({ frontendUserIds: ['front-1'] })
     expect(audits[0]).toMatchObject({ action: 'REVEAL', entityId: masked.id })
@@ -72,5 +75,17 @@ describe('admin employee attendance mock contract', () => {
       frontendUserIds: 'front-1', employeeId: 'not-the-employee', startDate: '2099-01-01', status: 'NOPE'
     } }) as Array<{ id: string; entityId: string }>
     expect(audits.some((row) => row.entityId === employee.id)).toBe(true)
+  })
+
+  it('gives schedule month precedence over date range and ignores status', async () => {
+    const monthWins = await getAdminAttendanceSchedules({
+      frontendUserIds: ['front-1'], month: '2026-08', startDate: '2099-01-01', endDate: '2099-01-31'
+    })
+    expect(monthWins.overrides.map((row) => row.id)).toEqual(['override-1'])
+
+    const statusIgnored = await getAdminAttendanceSchedules({ frontendUserIds: ['front-1'], status: 'NOPE' })
+    expect(statusIgnored.weekly).toHaveLength(1)
+    expect(statusIgnored.overrides).toHaveLength(1)
+    expect(statusIgnored.monthly).toHaveLength(1)
   })
 })
