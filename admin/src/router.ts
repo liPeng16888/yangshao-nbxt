@@ -10,7 +10,9 @@ import BlacklistPage from './views/BlacklistPage.vue'
 import CustomerOverviewPage from './views/CustomerOverviewPage.vue'
 import MedicineInventoryPage from './views/MedicineInventoryPage.vue'
 import TodoPage from './views/TodoPage.vue'
+import EmployeeAttendancePage from './views/EmployeeAttendancePage.vue'
 import { financeNavigationGroups } from './config/financeNavigation'
+import { employeeAttendanceNavigation } from './config/employeeAttendanceNavigation'
 
 const financeRoutes = financeNavigationGroups.flatMap((group) =>
   group.children.map((child) => ({
@@ -19,6 +21,12 @@ const financeRoutes = financeNavigationGroups.flatMap((group) =>
     meta: { title: '财务报表', financeGroup: group.id, financePage: child.page }
   }))
 )
+
+const employeeAttendanceRoutes = employeeAttendanceNavigation.map((item) => ({
+  path: item.path.slice(1),
+  component: EmployeeAttendancePage,
+  meta: { title: item.label, employeeAttendancePage: item.page }
+}))
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -30,6 +38,8 @@ export const router = createRouter({
       children: [
         { path: '', redirect: '/data' },
         { path: 'data', component: DataStatisticsPage, meta: { title: '数据统计' } },
+        { path: 'employee-attendance', redirect: '/employee-attendance/overview' },
+        ...employeeAttendanceRoutes,
         { path: 'finance', redirect: '/finance/income' },
         ...financeRoutes,
         { path: 'todos', component: TodoPage, meta: { title: '待办事项' } },

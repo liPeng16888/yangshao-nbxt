@@ -92,10 +92,11 @@ import dayjs from 'dayjs'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Box, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, List, User } from '@element-plus/icons-vue'
+import { Box, Calendar, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, List, User } from '@element-plus/icons-vue'
 import { adminMe, currentAdminUser, logoutAdmin, updateAdminProfile } from '../api'
 import type { AdminUser } from '../types'
 import { financeNavigationGroups } from '../config/financeNavigation'
+import { employeeAttendanceNavigation } from '../config/employeeAttendanceNavigation'
 
 interface NavChild {
   path: string
@@ -131,6 +132,12 @@ const nowText = computed(() => now.value.format('YYYY-MM-DD HH:mm:ss'))
 const navItems = computed<NavItem[]>(() => {
   const items = [
     { path: '/data', label: '数据统计', icon: DataAnalysis },
+    {
+      path: '/employee-attendance',
+      label: '员工考勤',
+      icon: Calendar,
+      children: employeeAttendanceNavigation.map(({ path, label }) => ({ path, label }))
+    },
     { path: '/finance', label: '财务报表', icon: Money, children: financeNavigationGroups.map(({ path, label }) => ({ path, label })) },
     { path: '/todos', label: '待办事项', icon: List },
     { path: '/customer-overview', label: '客户总览', icon: User },

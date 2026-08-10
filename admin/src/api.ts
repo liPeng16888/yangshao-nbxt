@@ -1,9 +1,16 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import type {
+  AdminAttendanceAuditRow,
+  AdminAttendanceEmployee,
+  AdminAttendanceOverview,
+  AdminAttendancePayrollRun,
+  AdminAttendanceSchedules,
   AdminCustomerOverviewRow,
+  AdminEmployeeAttendanceQuery,
   AdminMedicineInventoryItem,
   AdminMedicineInventoryMovement,
+  AdminRevealedAttendanceEmployee,
   AdminUser,
   FrontendOption
 } from './types'
@@ -214,6 +221,110 @@ const mockRows = {
   ]
 }
 
+const mockEmployeeAttendance = {
+  employees: [
+    {
+      id: 'emp-1', frontendUserId: 'front-1', employeeNumber: 'YG001', name: '张三', status: 'ACTIVE', phone: '13800000001',
+      idCard: '410***********1234', bankCard: '622*********7890', address: '洛阳市***', emergencyContact: '张父***',
+      hireDate: '2026-01-01', terminationDate: null, baseSalary: 6000, attendanceBonus: 300, overtimeHourlyRate: 30,
+      restQuotaDays: 4, hasPhoto: true, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+    },
+    {
+      id: 'emp-2', frontendUserId: 'front-1', employeeNumber: 'YG002', name: '李四', status: 'ACTIVE', phone: '13800000002',
+      idCard: '410***********2345', bankCard: '622*********8901', address: '三门峡市***', emergencyContact: '李母***',
+      hireDate: '2026-02-01', terminationDate: null, baseSalary: 5500, attendanceBonus: 300, overtimeHourlyRate: 28,
+      restQuotaDays: 4, hasPhoto: false, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+    },
+    {
+      id: 'emp-3', frontendUserId: 'front-2', employeeNumber: 'YG001', name: '王五', status: 'INACTIVE', phone: '13800000003',
+      idCard: '410***********3456', bankCard: '622*********9012', address: '郑州市***', emergencyContact: '王父***',
+      hireDate: '2026-03-01', terminationDate: null, baseSalary: 5200, attendanceBonus: 200, overtimeHourlyRate: 26,
+      restQuotaDays: 4, hasPhoto: false, frontendUser: { account: 'yangshao002', username: '仰韶客户二', displayRemark: '' }
+    }
+  ],
+  sensitive: {
+    'emp-1': { idCard: '410000199001011234', bankCard: '6222021234567890', address: '洛阳市涧西区', emergencyContact: '张父 13800001001' },
+    'emp-2': { idCard: '410000199202022345', bankCard: '6222022345678901', address: '三门峡市湖滨区', emergencyContact: '李母 13800001002' },
+    'emp-3': { idCard: '410000199303033456', bankCard: '6222023456789012', address: '郑州市金水区', emergencyContact: '王父 13800001003' }
+  } as Record<string, { idCard: string; bankCard: string; address: string; emergencyContact: string }>,
+  schedules: {
+    weekly: [
+      { id: 'weekly-1', frontendUserId: 'front-1', employeeId: 'emp-1', weekday: 1, isWorkday: true, scheduledMinutes: 480 },
+      { id: 'weekly-2', frontendUserId: 'front-2', employeeId: 'emp-3', weekday: 1, isWorkday: true, scheduledMinutes: 480 }
+    ],
+    overrides: [
+      { id: 'override-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-09', isWorkday: true, scheduledMinutes: 360, remark: '临时值班' }
+    ],
+    monthly: [
+      { id: 'month-1', frontendUserId: 'front-1', employeeId: 'emp-1', month: '2026-08', scheduledWorkDays: 22, restQuotaDays: 4 }
+    ]
+  },
+  attendance: [
+    { id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 510, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' } },
+    { id: 'attendance-2', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 470, lateMinutes: 10, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '王五' } }
+  ],
+  leaves: [
+    { id: 'leave-1', frontendUserId: 'front-1', employeeId: 'emp-2', leaveTypeId: 'leave-type-1', startDate: '2026-08-08', endDate: '2026-08-08', unit: 'HALF_DAY', countedDays: 0.5, reason: '个人事务', status: 'PENDING', reviewRemark: '', employee: { employeeNumber: 'YG002', name: '李四' }, leaveType: { id: 'leave-type-1', name: '事假' } }
+  ],
+  commissions: [
+    { id: 'commission-1', frontendUserId: 'front-1', employeeId: 'emp-1', commissionTypeId: 'commission-type-1', date: '2026-08-08', quantity: 8, unitPriceSnapshot: 12, amount: 96, remark: '当日送样', employee: { employeeNumber: 'YG001', name: '张三' }, commissionType: { id: 'commission-type-1', name: '送样提成' } }
+  ],
+  bonuses: [
+    { id: 'bonus-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', amount: 200, reason: '月度安全奖', employee: { employeeNumber: 'YG001', name: '张三' } }
+  ],
+  payroll: [
+    {
+      id: 'payroll-1', frontendUserId: 'front-1', month: '2026-08', status: 'DRAFT',
+      frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' },
+      items: [{ id: 'payroll-item-1', employeeId: 'emp-1', employeeNumberSnapshot: 'YG001', employeeNameSnapshot: '张三', payableAmount: 6596, issues: [], calculationSnapshot: { input: { baseSalary: 6000 }, result: { overtimePay: 0, commissionAmount: 96, bonusAmount: 200, leaveDeduction: 0, absenceDeduction: 0, payableAmount: 6596 } }, adjustments: [] }]
+    }
+  ],
+  audit: [] as Record<string, any>[]
+}
+
+function mockAdminUser() {
+  return currentAdminUser() || mockUser
+}
+
+function mockAuthorizedFrontendIds() {
+  const admin = mockAdminUser()
+  if (admin.role === 'ROOT_ADMIN') return mockRows.frontendUsers.map((row) => row.id)
+  const sub = mockRows.subAdmins.find((row) => row.id === admin.id || row.account === admin.account)
+  return (sub?.permissions || []).map((item) => item.id)
+}
+
+function mockAttendanceIds(config?: any) {
+  const permitted = mockAuthorizedFrontendIds()
+  const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
+  return requested.length ? requested.filter((id) => permitted.includes(id)) : permitted
+}
+
+function mockAttendanceEntityFilter<T extends Record<string, any>>(rows: T[], config?: any) {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  return rows.filter((row) => ids.includes(row.frontendUserId) && (!employeeId || row.employeeId === employeeId))
+}
+
+function mockAttendanceFilter<T extends Record<string, any>>(rows: T[], config?: any, dateFields: [string, string?] = ['date']) {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  const month = String(config?.params?.month || '')
+  const startDate = String(config?.params?.startDate || '')
+  const endDate = String(config?.params?.endDate || '')
+  const status = String(config?.params?.status || '')
+  const [startField, endField = startField] = dateFields
+  return rows.filter((row) => {
+    const rowStart = String(row[startField] || '')
+    const rowEnd = String(row[endField] || rowStart)
+    return ids.includes(row.frontendUserId)
+      && (!employeeId || row.employeeId === employeeId)
+      && (!month || rowStart.slice(0, 7) === month || (endField !== startField && rowStart <= `${month}-31` && rowEnd >= `${month}-01`))
+      && (!startDate || rowEnd >= startDate)
+      && (!endDate || rowStart <= endDate)
+      && (!status || row.status === status)
+  })
+}
+
 const mockSheet = {
   id: 'sheet-1',
   frontendUserId: 'front-1',
@@ -319,14 +430,58 @@ function parseHistoryFields(value: unknown) {
 
 const mockRequest = {
   async get(url: string, config?: any) {
-    if (url === '/admin/auth/me') return mockUser
+    if (url === '/admin/auth/me') return mockAdminUser()
     if (url === '/admin/frontend-users/options') {
-      return mockRows.frontendUsers.map((row) => ({
+      const allowed = mockAuthorizedFrontendIds()
+      return mockRows.frontendUsers.filter((row) => allowed.includes(row.id)).map((row) => ({
         id: row.id,
         account: row.account,
         name: row.displayRemark || row.username || row.account,
         disabled: row.disabled
       }))
+    }
+    if (url === '/admin/employee-attendance/overview') {
+      const ids = mockAttendanceIds(config)
+      const month = String(config?.params?.month || '2026-08')
+      return {
+        month,
+        workforce: mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE').length,
+        attendanceRecords: mockEmployeeAttendance.attendance.filter((row) => ids.includes(row.frontendUserId) && row.date.startsWith(month)).length,
+        pendingLeave: mockEmployeeAttendance.leaves.filter((row) => ids.includes(row.frontendUserId) && row.status === 'PENDING').length,
+        payrollRuns: mockEmployeeAttendance.payroll.filter((row) => ids.includes(row.frontendUserId) && row.month === month).length,
+        readonly: true
+      }
+    }
+    if (url === '/admin/employee-attendance/employees') {
+      const ids = mockAttendanceIds(config)
+      const employeeId = String(config?.params?.employeeId || '')
+      const status = String(config?.params?.status || '')
+      return mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && (!employeeId || row.id === employeeId) && (!status || row.status === status))
+    }
+    if (url === '/admin/employee-attendance/schedules') {
+      return {
+        weekly: mockAttendanceEntityFilter(mockEmployeeAttendance.schedules.weekly, config),
+        overrides: mockAttendanceFilter(mockEmployeeAttendance.schedules.overrides, config),
+        monthly: mockAttendanceFilter(mockEmployeeAttendance.schedules.monthly, config, ['month'])
+      }
+    }
+    if (url === '/admin/employee-attendance/attendance') return mockAttendanceFilter(mockEmployeeAttendance.attendance, config)
+    if (url === '/admin/employee-attendance/leaves') return mockAttendanceFilter(mockEmployeeAttendance.leaves, config, ['startDate', 'endDate'])
+    if (url === '/admin/employee-attendance/commissions') return mockAttendanceFilter(mockEmployeeAttendance.commissions, config)
+    if (url === '/admin/employee-attendance/bonuses') return mockAttendanceFilter(mockEmployeeAttendance.bonuses, config)
+    if (url === '/admin/employee-attendance/payroll') {
+      const ids = mockAttendanceIds(config)
+      const employeeId = String(config?.params?.employeeId || '')
+      const month = String(config?.params?.month || '')
+      const status = String(config?.params?.status || '')
+      return mockEmployeeAttendance.payroll.filter((row) => ids.includes(row.frontendUserId) && (!month || row.month === month) && (!status || row.status === status))
+        .map((row) => ({ ...row, items: row.items.filter((item) => !employeeId || item.employeeId === employeeId) }))
+        .filter((row) => !employeeId || row.items.length)
+    }
+    if (url === '/admin/employee-attendance/audit') {
+      const employeeId = String(config?.params?.employeeId || '')
+      return mockAttendanceFilter(mockEmployeeAttendance.audit, { ...config, params: { ...config?.params, employeeId: '' } }, ['createdAt'])
+        .filter((row) => !employeeId || row.entityId === employeeId)
     }
     if (url === '/admin/data-statistics/lab-sheets') {
       const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
@@ -421,12 +576,28 @@ const mockRequest = {
     if (url === '/admin/accounts/sub-admins') return mockRows.subAdmins
     return {}
   },
-  async post(url: string, payload?: any) {
+  async post(url: string, payload?: any, config?: any) {
     if (url === '/admin/auth/login') {
-      if (payload?.account !== mockUser.account || payload?.password !== 'admin123456') throw new Error('账号或密码错误')
-      return { token: 'mock-admin-token', user: mockUser }
+      if (payload?.account === mockUser.account && payload?.password === 'admin123456') return { token: 'mock-admin-token', user: mockUser }
+      const sub = mockRows.subAdmins.find((row) => row.account === payload?.account && row.password === payload?.password)
+      if (sub) return { token: 'mock-sub-admin-token', user: { id: sub.id, account: sub.account, username: sub.username, role: 'SUB_ADMIN' } }
+      throw new Error('账号或密码错误')
     }
     if (url === '/admin/accounts/invite-codes') return { code: `YS-${Date.now().toString().slice(-6)}` }
+    const revealEmployeeMatch = url.match(/^\/admin\/employee-attendance\/employees\/(.+)\/reveal$/)
+    if (revealEmployeeMatch) {
+      const admin = mockAdminUser()
+      const validPassword = admin.role === 'ROOT_ADMIN' ? 'admin123456' : 'sub123456'
+      if (payload?.password !== validPassword) throw new Error('当前后台账号密码错误')
+      const employee = mockEmployeeAttendance.employees.find((row) => row.id === revealEmployeeMatch[1] && mockAttendanceIds(config).includes(row.frontendUserId))
+      if (!employee) throw new Error('员工不存在或无权查看')
+      mockEmployeeAttendance.audit.unshift({
+        id: `audit-${Date.now()}`, frontendUserId: employee.frontendUserId, action: 'REVEAL', entityType: 'Employee', entityId: employee.id,
+        reason: '后台敏感信息二次验证查看', createdAt: new Date().toISOString(), actorUser: { account: admin.account, username: admin.username, role: admin.role }
+      })
+      return { ...employee, ...mockEmployeeAttendance.sensitive[employee.id] }
+    }
+    if (url.startsWith('/admin/employee-attendance/')) throw new Error('后台员工考勤只读')
     const approveDeletionMatch = url.match(/^\/admin\/finance\/delete-requests\/(.+)\/approve$/)
     if (approveDeletionMatch) {
       const row = mockRows.deletionRequests.find((item) => item.id === approveDeletionMatch[1])
@@ -451,6 +622,7 @@ const mockRequest = {
     return { ok: true }
   },
   async patch(url: string, payload?: any) {
+    if (url.startsWith('/admin/employee-attendance/')) throw new Error('后台员工考勤只读')
     if (url === '/admin/auth/profile') {
       mockUser.account = payload?.account || mockUser.account
       mockUser.username = payload?.username || mockUser.username
@@ -471,7 +643,8 @@ const mockRequest = {
     }
     return { ok: true }
   },
-  async delete() {
+  async delete(url: string) {
+    if (url.startsWith('/admin/employee-attendance/')) throw new Error('后台员工考勤只读')
     return { ok: true }
   }
 } as AdminRequest
@@ -564,4 +737,69 @@ export function getAdminMedicineOutbounds(
       ...(endDate ? { endDate } : {})
     }
   })
+}
+
+function employeeAttendanceParams(query: AdminEmployeeAttendanceQuery) {
+  return {
+    frontendUserIds: buildFrontendIds(query.frontendUserIds),
+    ...(query.employeeId ? { employeeId: query.employeeId } : {}),
+    ...(query.month ? { month: query.month } : {}),
+    ...(query.startDate ? { startDate: query.startDate } : {}),
+    ...(query.endDate ? { endDate: query.endDate } : {}),
+    ...(query.status ? { status: query.status } : {})
+  }
+}
+
+function normalizeAdminAttendanceEmployee(row: any): AdminAttendanceEmployee {
+  const { idCard, bankCard, address, emergencyContact, ...safe } = row
+  return {
+    ...safe,
+    idCardMasked: row.idCardMasked ?? idCard ?? '',
+    bankCardMasked: row.bankCardMasked ?? bankCard ?? '',
+    addressMasked: row.addressMasked ?? address ?? '',
+    emergencyContactMasked: row.emergencyContactMasked ?? emergencyContact ?? ''
+  }
+}
+
+export function getAdminAttendanceOverview(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminAttendanceOverview>('/admin/employee-attendance/overview', { params: employeeAttendanceParams(query) })
+}
+
+export function getAdminAttendanceEmployees(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, any[]>('/admin/employee-attendance/employees', { params: employeeAttendanceParams(query) })
+    .then((rows) => rows.map(normalizeAdminAttendanceEmployee))
+}
+
+export function getAdminAttendanceSchedules(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminAttendanceSchedules>('/admin/employee-attendance/schedules', { params: employeeAttendanceParams(query) })
+}
+
+export function getAdminAttendanceRecords(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, Record<string, any>[]>('/admin/employee-attendance/attendance', { params: employeeAttendanceParams(query) })
+}
+
+export function getAdminAttendanceLeaves(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, Record<string, any>[]>('/admin/employee-attendance/leaves', { params: employeeAttendanceParams(query) })
+}
+
+export function getAdminAttendanceCommissions(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, Record<string, any>[]>('/admin/employee-attendance/commissions', { params: employeeAttendanceParams(query) })
+}
+
+export function getAdminAttendanceBonuses(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, Record<string, any>[]>('/admin/employee-attendance/bonuses', { params: employeeAttendanceParams(query) })
+}
+
+export function getAdminAttendancePayroll(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminAttendancePayrollRun[]>('/admin/employee-attendance/payroll', { params: employeeAttendanceParams(query) })
+}
+
+export function getAdminAttendanceAudit(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminAttendanceAuditRow[]>('/admin/employee-attendance/audit', { params: employeeAttendanceParams(query) })
+}
+
+export function revealAdminAttendanceEmployee(employeeId: string, password: string, frontendUserIds: string[]) {
+  return request.post<any, any>(`/admin/employee-attendance/employees/${employeeId}/reveal`, { password }, {
+    params: { frontendUserIds: buildFrontendIds(frontendUserIds) }
+  }).then((row) => ({ ...normalizeAdminAttendanceEmployee(row), idCard: row.idCard || '', bankCard: row.bankCard || '', address: row.address || '', emergencyContact: row.emergencyContact || '' }) as AdminRevealedAttendanceEmployee)
 }
