@@ -72,6 +72,40 @@ enum AccessGuardFeature {
   MEDICINE_INVENTORY
   CUSTOMER_OVERVIEW
   COMPLETED_SAMPLE_DATA
+  EMPLOYEE_ATTENDANCE
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum EmployeeLeaveUnit {
+  HOUR
+  HALF_DAY
+  FULL_DAY
+}
+
+enum EmployeeLeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum EmployeePayrollStatus {
+  DRAFT
+  CONFIRMED
+}
+
+enum EmployeeAuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  CONFIRM
+  REOPEN
+  REVEAL
 }
 
 model User {
@@ -115,22 +149,39 @@ model User {
   medicineCommonNames             MedicineCommonName[]         @relation("FrontendMedicineCommonNames")
   accessGuardGroups               AccessGuardGroup[]           @relation("FrontendAccessGuardGroups")
   accessGuardGroupFeatures        AccessGuardGroupFeature[]    @relation("FrontendAccessGuardGroupFeatures")
+  employees                       Employee[]
+  employeeWeeklySchedules         EmployeeWeeklySchedule[]
+  employeeDateOverrides           EmployeeDateOverride[]
+  employeeMonthlySettings         EmployeeMonthlySetting[]
+  employeeAttendanceRecords       EmployeeAttendanceRecord[]
+  employeeLeaveTypes              EmployeeLeaveType[]
+  employeeLeaveRequests           EmployeeLeaveRequest[]       @relation("FrontendEmployeeLeaveRequests")
+  reviewedEmployeeLeaveRequests   EmployeeLeaveRequest[]       @relation("EmployeeLeaveReviewer")
+  employeeCommissionTypes         EmployeeCommissionType[]
+  employeeCommissionRecords       EmployeeCommissionRecord[]
+  employeeBonuses                 EmployeeBonus[]
+  employeePayrollRuns             EmployeePayrollRun[]         @relation("FrontendEmployeePayrollRuns")
+  confirmedEmployeePayrollRuns    EmployeePayrollRun[]         @relation("EmployeePayrollConfirmer")
+  employeePayrollItems            EmployeePayrollItem[]
+  employeePayrollAdjustments      EmployeePayrollAdjustment[]
+  employeeAuditLogs               EmployeeAuditLog[]           @relation("FrontendEmployeeAuditLogs")
+  performedEmployeeAuditLogs      EmployeeAuditLog[]           @relation("EmployeeAuditActor")
 
   @@index([role])
   @@index([deletedAt])
 }
 
 model AccessGuardGroup {
-  id             String                    @id @default(uuid())
+  id             String   @id @default(uuid())
   frontendUserId String
   name           String
-  enabled        Boolean                   @default(true)
-  ttlMinutes     Int                       @default(5)
+  enabled        Boolean  @default(true)
+  ttlMinutes     Int      @default(5)
   password       String
   recoveryPrompt String
   recoveryAnswer String
-  createdAt      DateTime                  @default(now())
-  updatedAt      DateTime                  @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   frontendUser User                      @relation("FrontendAccessGuardGroups", fields: [frontendUserId], references: [id], onDelete: Cascade)
   features     AccessGuardGroupFeature[]
@@ -480,4 +531,334 @@ model MedicineCommonName {
 
   @@unique([frontendUserId, name])
   @@index([frontendUserId, name])
+}
+
+model Employee {
+  id                     String         @id @default(uuid())
+  frontendUserId         String
+  employeeNumber         String
+  name                   String
+  status                 EmployeeStatus @default(ACTIVE)
+  phone                  String?
+  idCardCipher           String?
+  bankCardCipher         String?
+  addressCipher          String?
+  emergencyContactCipher String?
+  photoPath              String?
+  hireDate               String
+  terminationDate        String?
+  baseSalary             Decimal        @default(0) @db.Decimal(12, 2)
+  attendanceBonus        Decimal        @default(0) @db.Decimal(12, 2)
+  overtimeHourlyRate     Decimal        @default(0) @db.Decimal(12, 2)
+  restQuotaDays          Decimal        @default(0) @db.Decimal(6, 2)
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  frontendUser       User                        @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  weeklySchedules    EmployeeWeeklySchedule[]
+  dateOverrides      EmployeeDateOverride[]
+  monthlySettings    EmployeeMonthlySetting[]
+  attendanceRecords  EmployeeAttendanceRecord[]
+  leaveRequests      EmployeeLeaveRequest[]
+  commissionRecords  EmployeeCommissionRecord[]
+  bonuses            EmployeeBonus[]
+  payrollItems       EmployeePayrollItem[]
+  payrollAdjustments EmployeePayrollAdjustment[]
+
+  @@unique([frontendUserId, employeeNumber])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, status])
+  @@index([frontendUserId, name])
+}
+
+model EmployeeWeeklySchedule {
+  id               String   @id @default(uuid())
+  frontendUserId   String
+  employeeId       String
+  weekday          Int
+  isWorkday        Boolean  @default(true)
+  scheduledMinutes Int      @default(480)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([employeeId, weekday])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, employeeId])
+}
+
+model EmployeeDateOverride {
+  id               String   @id @default(uuid())
+  frontendUserId   String
+  employeeId       String
+  date             String
+  isWorkday        Boolean
+  scheduledMinutes Int      @default(480)
+  remark           String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([employeeId, date])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, date])
+}
+
+model EmployeeMonthlySetting {
+  id                String   @id @default(uuid())
+  frontendUserId    String
+  employeeId        String
+  month             String
+  scheduledWorkDays Decimal  @db.Decimal(6, 2)
+  restQuotaDays     Decimal  @default(0) @db.Decimal(6, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([employeeId, month])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, month])
+}
+
+model EmployeeAttendanceRecord {
+  id                 String    @id @default(uuid())
+  frontendUserId     String
+  employeeId         String
+  date               String
+  isScheduledWorkday Boolean
+  scheduledMinutes   Int       @default(0)
+  checkInAt          DateTime?
+  checkOutAt         DateTime?
+  workedMinutes      Int       @default(0)
+  lateMinutes        Int       @default(0)
+  earlyLeaveMinutes  Int       @default(0)
+  absenceMinutes     Int       @default(0)
+  overtimeMinutes    Int       @default(0)
+  manuallyEdited     Boolean   @default(false)
+  remark             String?
+  payrollLockedAt    DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([employeeId, date])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, date])
+  @@index([frontendUserId, employeeId, date])
+}
+
+model EmployeeLeaveType {
+  id                    String   @id @default(uuid())
+  frontendUserId        String
+  name                  String
+  active                Boolean  @default(true)
+  countsTowardRestQuota Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  frontendUser  User                   @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  leaveRequests EmployeeLeaveRequest[]
+
+  @@unique([frontendUserId, name])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, active])
+}
+
+model EmployeeLeaveRequest {
+  id              String              @id @default(uuid())
+  frontendUserId  String
+  employeeId      String
+  leaveTypeId     String
+  startDate       String
+  endDate         String
+  unit            EmployeeLeaveUnit
+  hours           Decimal?            @db.Decimal(6, 2)
+  countedDays     Decimal             @db.Decimal(6, 2)
+  reason          String
+  status          EmployeeLeaveStatus @default(PENDING)
+  reviewRemark    String?
+  reviewedById    String?
+  reviewedAt      DateTime?
+  payrollLockedAt DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  frontendUser User              @relation("FrontendEmployeeLeaveRequests", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee          @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  leaveType    EmployeeLeaveType @relation(fields: [leaveTypeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  reviewedBy   User?             @relation("EmployeeLeaveReviewer", fields: [reviewedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, status, startDate])
+  @@index([frontendUserId, employeeId, startDate, endDate])
+  @@index([leaveTypeId])
+}
+
+model EmployeeCommissionType {
+  id             String   @id @default(uuid())
+  frontendUserId String
+  name           String
+  unitName       String
+  unitPrice      Decimal  @db.Decimal(12, 2)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  frontendUser User                       @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  records      EmployeeCommissionRecord[]
+
+  @@unique([frontendUserId, name])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, active])
+}
+
+model EmployeeCommissionRecord {
+  id                String    @id @default(uuid())
+  frontendUserId    String
+  employeeId        String
+  commissionTypeId  String
+  date              String
+  quantity          Decimal   @db.Decimal(12, 3)
+  unitPriceSnapshot Decimal   @db.Decimal(12, 2)
+  amount            Decimal   @db.Decimal(12, 2)
+  remark            String?
+  payrollLockedAt   DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  frontendUser   User                   @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee       Employee               @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  commissionType EmployeeCommissionType @relation(fields: [commissionTypeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, date])
+  @@index([frontendUserId, employeeId, date])
+  @@index([commissionTypeId])
+}
+
+model EmployeeBonus {
+  id              String    @id @default(uuid())
+  frontendUserId  String
+  employeeId      String
+  date            String
+  amount          Decimal   @db.Decimal(12, 2)
+  reason          String
+  payrollLockedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, date])
+  @@index([frontendUserId, employeeId, date])
+}
+
+model EmployeePayrollRun {
+  id             String                @id @default(uuid())
+  frontendUserId String
+  month          String
+  status         EmployeePayrollStatus @default(DRAFT)
+  confirmedById  String?
+  confirmedAt    DateTime?
+  reopenReason   String?
+  reopenedAt     DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  frontendUser User                  @relation("FrontendEmployeePayrollRuns", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  confirmedBy  User?                 @relation("EmployeePayrollConfirmer", fields: [confirmedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  items        EmployeePayrollItem[]
+
+  @@unique([frontendUserId, month])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, status, month])
+}
+
+model EmployeePayrollItem {
+  id                     String   @id @default(uuid())
+  frontendUserId         String
+  payrollRunId           String
+  employeeId             String
+  employeeNumberSnapshot String
+  employeeNameSnapshot   String
+  baseSalary             Decimal  @db.Decimal(12, 2)
+  attendanceBonus        Decimal  @db.Decimal(12, 2)
+  scheduledWorkDays      Decimal  @db.Decimal(6, 2)
+  restQuotaDays          Decimal  @db.Decimal(6, 2)
+  countedLeaveDays       Decimal  @db.Decimal(6, 2)
+  excessLeaveDays        Decimal  @db.Decimal(6, 2)
+  absenceDays            Decimal  @db.Decimal(6, 2)
+  dailyRate              Decimal  @db.Decimal(12, 2)
+  leaveDeduction         Decimal  @db.Decimal(12, 2)
+  absenceDeduction       Decimal  @db.Decimal(12, 2)
+  overtimeMinutes        Int
+  overtimeHourlyRate     Decimal  @db.Decimal(12, 2)
+  overtimePay            Decimal  @db.Decimal(12, 2)
+  commissionAmount       Decimal  @db.Decimal(12, 2)
+  bonusAmount            Decimal  @db.Decimal(12, 2)
+  adjustmentAmount       Decimal  @db.Decimal(12, 2)
+  payableAmount          Decimal  @db.Decimal(12, 2)
+  issues                 Json
+  calculationSnapshot    Json
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  frontendUser User                        @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  payrollRun   EmployeePayrollRun          @relation(fields: [payrollRunId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+  employee     Employee                    @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  adjustments  EmployeePayrollAdjustment[]
+
+  @@unique([payrollRunId, employeeId])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, employeeId])
+}
+
+model EmployeePayrollAdjustment {
+  id             String   @id @default(uuid())
+  frontendUserId String
+  payrollItemId  String
+  employeeId     String
+  amount         Decimal  @db.Decimal(12, 2)
+  reason         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  frontendUser User                @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  payrollItem  EmployeePayrollItem @relation(fields: [payrollItemId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+  employee     Employee            @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, payrollItemId])
+  @@index([frontendUserId, employeeId])
+}
+
+model EmployeeAuditLog {
+  id             String              @id @default(uuid())
+  frontendUserId String
+  actorUserId    String
+  action         EmployeeAuditAction
+  entityType     String
+  entityId       String
+  reason         String?
+  beforeData     Json?
+  afterData      Json?
+  createdAt      DateTime            @default(now())
+
+  frontendUser User @relation("FrontendEmployeeAuditLogs", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorUser    User @relation("EmployeeAuditActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, createdAt])
+  @@index([frontendUserId, entityType, entityId])
+  @@index([actorUserId, createdAt])
 }
