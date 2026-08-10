@@ -11,9 +11,21 @@ export class PayrollMonthLockService {
     if (!months.length || months.some((month) => !/^\d{4}-\d{2}$/.test(month) || Number(month.slice(5, 7)) < 1 || Number(month.slice(5, 7)) > 12)) {
       throw new BadRequestException('工资锁定月份无效')
     }
+    return this.transact(frontendUserId, months, operation)
+  }
+
+  runConfiguration<T>(frontendUserId: string, operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+    return this.transact(frontendUserId, [], operation)
+  }
+
+  private async transact<T>(frontendUserId: string, months: string[], operation: (tx: Prisma.TransactionClient) => Promise<T>) {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         return await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe(
+            'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+            `employee-payroll-config:${frontendUserId}`
+          )
           for (const month of months) {
             await tx.$executeRawUnsafe(
               'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',

@@ -306,11 +306,96 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
       unit: 'FULL_DAY', reason: '跨月请假'
     })
 
-    expect(prisma.$executeRawUnsafe.mock.calls.slice(0, 3)).toEqual([
+    expect(prisma.$executeRawUnsafe.mock.calls.slice(0, 4)).toEqual([
+      ['SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', 'employee-payroll-config:front-1'],
       ['SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', 'employee-payroll:front-1:2026-08'],
       ['SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', 'employee-payroll:front-1:2026-09'],
       ['SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', 'employee-leave:front-1:employee-1']
     ])
+  })
+
+  it('replans locks when a bonus moved after the stale pre-read', async () => {
+    const { service, prisma } = createService()
+    const august = { id: 'bonus-1', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-10', amount: new Prisma.Decimal(100), reason: '原奖金', payrollLockedAt: null }
+    const september = { ...august, date: '2026-09-10' }
+    prisma.employeeBonus.findFirst
+      .mockResolvedValueOnce(august)
+      .mockResolvedValueOnce(september)
+      .mockResolvedValueOnce(september)
+    prisma.employeeBonus.update.mockResolvedValue({ ...september, amount: new Prisma.Decimal(200) })
+
+    await service.updateBonus('front-1', 'front-1', 'bonus-1', { amount: 200 })
+
+    const lockKeys = prisma.$executeRawUnsafe.mock.calls.map((call: unknown[]) => call[1])
+    expect(lockKeys).toContain('employee-payroll:front-1:2026-09')
+    expect(prisma.employeeBonus.findFirst).toHaveBeenCalledTimes(3)
+    expect(prisma.employeeBonus.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('rechecks payrollLockedAt on the current attendance row before stale delete', async () => {
+    const { service, prisma } = createService()
+    prisma.employeeAttendanceRecord.findFirst
+      .mockResolvedValueOnce({ id: 'attendance-1', frontendUserId: 'front-1', date: '2026-08-10', payrollLockedAt: null })
+      .mockResolvedValueOnce({ id: 'attendance-1', frontendUserId: 'front-1', date: '2026-09-10', payrollLockedAt: new Date() })
+      .mockResolvedValueOnce({ id: 'attendance-1', frontendUserId: 'front-1', date: '2026-09-10', payrollLockedAt: new Date() })
+
+    await expect(service.deleteAttendance('front-1', 'front-1', 'attendance-1')).rejects.toBeInstanceOf(ConflictException)
+
+    expect(prisma.employeeAttendanceRecord.delete).not.toHaveBeenCalled()
+    expect(prisma.$executeRawUnsafe.mock.calls.map((call: unknown[]) => call[1])).toContain('employee-payroll:front-1:2026-09')
+  })
+
+  it('reloads leave range and status under month and employee locks before review', async () => {
+    const { service, prisma } = createService()
+    prisma.employeeLeaveRequest.findFirst
+      .mockResolvedValueOnce({ id: 'leave-1', frontendUserId: 'front-1', employeeId: 'employee-1', startDate: '2026-08-31', endDate: '2026-08-31', status: EmployeeLeaveStatus.PENDING, payrollLockedAt: null })
+      .mockResolvedValueOnce({ id: 'leave-1', frontendUserId: 'front-1', employeeId: 'employee-1', startDate: '2026-09-01', endDate: '2026-09-01', status: EmployeeLeaveStatus.APPROVED, payrollLockedAt: null })
+      .mockResolvedValueOnce({ id: 'leave-1', frontendUserId: 'front-1', employeeId: 'employee-1', startDate: '2026-09-01', endDate: '2026-09-01', status: EmployeeLeaveStatus.APPROVED, payrollLockedAt: null })
+
+    await expect(service.approveLeave('front-1', 'front-1', 'leave-1')).rejects.toBeInstanceOf(ConflictException)
+
+    const lockKeys = prisma.$executeRawUnsafe.mock.calls.map((call: unknown[]) => call[1])
+    expect(lockKeys).toContain('employee-payroll:front-1:2026-09')
+    expect(lockKeys.at(-1)).toBe('employee-leave:front-1:employee-1')
+    expect(prisma.employeeLeaveRequest.update).not.toHaveBeenCalled()
+  })
+
+  it('serializes payroll-affecting employee and leave-type configuration with the shared config lock', async () => {
+    const { service, prisma } = createService()
+    const employee = { id: 'employee-1', frontendUserId: 'front-1', employeeNumber: '001', name: '张三', hireDate: '2026-01-01', photoPath: null }
+    prisma.employee.findFirst.mockResolvedValue(employee)
+    prisma.employee.update.mockResolvedValue({ ...employee, baseSalary: new Prisma.Decimal(7000) })
+
+    await service.updateEmployee('front-1', 'front-1', 'employee-1', { baseSalary: 7000 })
+
+    prisma.employeeLeaveType.findFirst.mockResolvedValue({ id: 'type-1', frontendUserId: 'front-1', countsTowardRestQuota: true })
+    prisma.employeeLeaveType.update.mockResolvedValue({ id: 'type-1', countsTowardRestQuota: false })
+    await service.updateLeaveType('front-1', 'front-1', 'type-1', { countsTowardRestQuota: false })
+
+    const configLocks = prisma.$executeRawUnsafe.mock.calls.filter((call: unknown[]) => call[1] === 'employee-payroll-config:front-1')
+    expect(configLocks).toHaveLength(2)
+    expect(prisma.employee.update).toHaveBeenCalledTimes(1)
+    expect(prisma.employeeLeaveType.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('serializes history-based employee deactivation with payroll confirmation', async () => {
+    const { service, prisma } = createService()
+    const employee = {
+      id: 'employee-1', frontendUserId: 'front-1', employeeNumber: '001', name: '张三',
+      terminationDate: null, photoPath: null
+    }
+    prisma.employee.findFirst.mockResolvedValue(employee)
+    prisma.employeeAttendanceRecord.count.mockResolvedValue(1)
+    prisma.employee.update.mockResolvedValue({ ...employee, status: EmployeeStatus.INACTIVE, terminationDate: '2026-08-10' })
+
+    await service.deleteEmployee('front-1', 'front-1', 'employee-1')
+
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('pg_advisory_xact_lock'),
+      'employee-payroll-config:front-1'
+    )
+    expect(prisma.employee.findFirst).toHaveBeenCalledTimes(2)
+    expect(prisma.employee.update).toHaveBeenCalledTimes(1)
   })
 
   it('requires bonus amounts to be greater than zero', async () => {

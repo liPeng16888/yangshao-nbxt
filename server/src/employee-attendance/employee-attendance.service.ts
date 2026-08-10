@@ -29,6 +29,10 @@ import type {
 
 type PrismaDelegate = { findFirst(args: any): Promise<any> }
 
+class PayrollLockPlanChanged extends Error {
+  constructor(readonly months: string[]) { super('payroll lock plan changed') }
+}
+
 @Injectable()
 export class EmployeeAttendanceService {
   constructor(
@@ -73,7 +77,7 @@ export class EmployeeAttendanceService {
       throw new ConflictException('员工编号已存在')
     }
     try {
-      const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'Employee', (created) => created.id, (tx) => tx.employee.create({ data: {
+      const row = await this.configurationAtomic(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'Employee', (created) => created.id, (tx) => tx.employee.create({ data: {
         frontendUserId,
         employeeNumber,
         name: this.required(payload.name, '员工姓名'),
@@ -95,50 +99,63 @@ export class EmployeeAttendanceService {
   }
 
   async updateEmployee(frontendUserId: string, actorUserId: string, id: string, payload: Partial<CreateEmployeeDto>) {
-    const current = await this.owned(this.prisma.employee, frontendUserId, id, '员工不存在')
+    await this.owned(this.prisma.employee, frontendUserId, id, '员工不存在')
     if (payload.hireDate) this.assertDate(payload.hireDate)
     if (payload.terminationDate) this.assertDate(payload.terminationDate)
-    const hireDate = payload.hireDate || current.hireDate
-    if (payload.terminationDate && payload.terminationDate < hireDate) throw new BadRequestException('离职日期不能早于入职日期')
     try {
-      const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'Employee', id, (tx) => tx.employee.update({ where: { id }, data: {
-        ...(payload.employeeNumber !== undefined ? { employeeNumber: this.required(payload.employeeNumber, '员工编号') } : {}),
-        ...(payload.name !== undefined ? { name: this.required(payload.name, '员工姓名') } : {}),
-        ...(payload.status !== undefined ? { status: payload.status } : {}),
-        ...(payload.phone !== undefined ? { phone: this.optional(payload.phone) } : {}),
-        ...(payload.idCard !== undefined ? { idCardCipher: this.encryptOptional(payload.idCard) } : {}),
-        ...(payload.bankCard !== undefined ? { bankCardCipher: this.encryptOptional(payload.bankCard) } : {}),
-        ...(payload.address !== undefined ? { addressCipher: this.encryptOptional(payload.address) } : {}),
-        ...(payload.emergencyContact !== undefined ? { emergencyContactCipher: this.encryptOptional(payload.emergencyContact) } : {}),
-        ...(payload.hireDate !== undefined ? { hireDate: payload.hireDate } : {}),
-        ...(payload.terminationDate !== undefined ? { terminationDate: this.optional(payload.terminationDate) } : {}),
-        ...(payload.baseSalary !== undefined ? { baseSalary: this.nonnegative(payload.baseSalary, '基本月薪') } : {}),
-        ...(payload.attendanceBonus !== undefined ? { attendanceBonus: this.nonnegative(payload.attendanceBonus, '全勤奖') } : {}),
-        ...(payload.overtimeHourlyRate !== undefined ? { overtimeHourlyRate: this.nonnegative(payload.overtimeHourlyRate, '加班时薪') } : {}),
-        ...(payload.restQuotaDays !== undefined ? { restQuotaDays: this.nonnegative(payload.restQuotaDays, '月休额度') } : {})
-      } }))
+      const row = await this.configurationTransaction(frontendUserId, async (tx) => {
+        const lockedCurrent = await this.owned(tx.employee, frontendUserId, id, '员工不存在')
+        const hireDate = payload.hireDate || lockedCurrent.hireDate
+        const terminationDate = payload.terminationDate === undefined ? lockedCurrent.terminationDate : this.optional(payload.terminationDate)
+        if (terminationDate && terminationDate < hireDate) throw new BadRequestException('离职日期不能早于入职日期')
+        const updated = await tx.employee.update({ where: { id }, data: {
+          ...(payload.employeeNumber !== undefined ? { employeeNumber: this.required(payload.employeeNumber, '员工编号') } : {}),
+          ...(payload.name !== undefined ? { name: this.required(payload.name, '员工姓名') } : {}),
+          ...(payload.status !== undefined ? { status: payload.status } : {}),
+          ...(payload.phone !== undefined ? { phone: this.optional(payload.phone) } : {}),
+          ...(payload.idCard !== undefined ? { idCardCipher: this.encryptOptional(payload.idCard) } : {}),
+          ...(payload.bankCard !== undefined ? { bankCardCipher: this.encryptOptional(payload.bankCard) } : {}),
+          ...(payload.address !== undefined ? { addressCipher: this.encryptOptional(payload.address) } : {}),
+          ...(payload.emergencyContact !== undefined ? { emergencyContactCipher: this.encryptOptional(payload.emergencyContact) } : {}),
+          ...(payload.hireDate !== undefined ? { hireDate: payload.hireDate } : {}),
+          ...(payload.terminationDate !== undefined ? { terminationDate } : {}),
+          ...(payload.baseSalary !== undefined ? { baseSalary: this.nonnegative(payload.baseSalary, '基本月薪') } : {}),
+          ...(payload.attendanceBonus !== undefined ? { attendanceBonus: this.nonnegative(payload.attendanceBonus, '全勤奖') } : {}),
+          ...(payload.overtimeHourlyRate !== undefined ? { overtimeHourlyRate: this.nonnegative(payload.overtimeHourlyRate, '加班时薪') } : {}),
+          ...(payload.restQuotaDays !== undefined ? { restQuotaDays: this.nonnegative(payload.restQuotaDays, '月休额度') } : {})
+        } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'Employee', id, undefined, tx)
+        return updated
+      })
       return this.employeeDto(row, false)
     } catch (error) { this.rethrowConflict(error, '员工编号已存在') }
   }
 
   async deleteEmployee(frontendUserId: string, actorUserId: string, id: string) {
-    const employee = await this.owned(this.prisma.employee, frontendUserId, id, '员工不存在')
-    const historyCounts = await Promise.all([
-      this.prisma.employeeAttendanceRecord.count({ where: { frontendUserId, employeeId: id } }),
-      this.prisma.employeeLeaveRequest.count({ where: { frontendUserId, employeeId: id } }),
-      this.prisma.employeeCommissionRecord.count({ where: { frontendUserId, employeeId: id } }),
-      this.prisma.employeeBonus.count({ where: { frontendUserId, employeeId: id } }),
-      this.prisma.employeePayrollItem.count({ where: { frontendUserId, employeeId: id } })
-    ])
-    if (historyCounts.some(Boolean)) {
-      const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'Employee', id, (tx) => tx.employee.update({ where: { id }, data: {
-        status: EmployeeStatus.INACTIVE,
-        terminationDate: employee.terminationDate || this.today()
-      } }), '存在历史记录，已停用')
-      return this.employeeDto(row, false)
-    }
-    await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'Employee', id, (tx) => tx.employee.delete({ where: { id } }))
-    await this.cleanupPhoto(employee.photoPath)
+    await this.owned(this.prisma.employee, frontendUserId, id, '员工不存在')
+    const result = await this.configurationTransaction(frontendUserId, async (tx) => {
+      const employee = await this.owned(tx.employee, frontendUserId, id, '员工不存在')
+      const historyCounts = await Promise.all([
+        tx.employeeAttendanceRecord.count({ where: { frontendUserId, employeeId: id } }),
+        tx.employeeLeaveRequest.count({ where: { frontendUserId, employeeId: id } }),
+        tx.employeeCommissionRecord.count({ where: { frontendUserId, employeeId: id } }),
+        tx.employeeBonus.count({ where: { frontendUserId, employeeId: id } }),
+        tx.employeePayrollItem.count({ where: { frontendUserId, employeeId: id } })
+      ])
+      if (historyCounts.some(Boolean)) {
+        const row = await tx.employee.update({ where: { id }, data: {
+          status: EmployeeStatus.INACTIVE,
+          terminationDate: employee.terminationDate || this.today()
+        } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'Employee', id, '存在历史记录，已停用', tx)
+        return { deactivated: true as const, row, photoPath: null }
+      }
+      await tx.employee.delete({ where: { id } })
+      await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'Employee', id, undefined, tx)
+      return { deactivated: false as const, row: null, photoPath: employee.photoPath }
+    })
+    if (result.deactivated) return this.employeeDto(result.row, false)
+    await this.cleanupPhoto(result.photoPath)
     return { ok: true }
   }
 
@@ -202,28 +219,47 @@ export class EmployeeAttendanceService {
     const date = payload.date || current.date
     this.assertDate(current.date)
     this.assertDate(date)
-    await this.assertMonthWritable(frontendUserId, current.date)
-    if (date.slice(0, 7) !== current.date.slice(0, 7)) await this.assertMonthWritable(frontendUserId, date)
-    if (payload.employeeId) await this.assertEmployee(frontendUserId, payload.employeeId)
-    const duplicate = await this.prisma.employeeDateOverride.findFirst({ where: {
-      frontendUserId, employeeId: payload.employeeId || current.employeeId, date, id: { not: id }
-    } })
-    if (duplicate) throw new ConflictException('该员工当日已有临时调班')
     try {
-      return await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeDateOverride', id, (tx) => tx.employeeDateOverride.update({ where: { id }, data: {
-        ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
-        ...(payload.date !== undefined ? { date: payload.date } : {}),
-        ...(payload.isWorkday !== undefined ? { isWorkday: payload.isWorkday } : {}),
-        ...(payload.scheduledMinutes !== undefined ? { scheduledMinutes: this.minutes(payload.scheduledMinutes) } : {}),
-        ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
-      } }), undefined, [current.date, date])
+      return await this.withCurrentPayrollSource(
+        frontendUserId,
+        [current.date, date],
+        (tx) => this.owned(tx.employeeDateOverride, frontendUserId, id, '临时调班不存在'),
+        (locked) => [locked.date, payload.date || locked.date],
+        async (tx, locked) => {
+          const targetDate = payload.date || locked.date
+          this.assertDate(locked.date)
+          this.assertDate(targetDate)
+          if (payload.employeeId) await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
+          const duplicate = await tx.employeeDateOverride.findFirst({ where: {
+            frontendUserId, employeeId: payload.employeeId || locked.employeeId, date: targetDate, id: { not: id }
+          } })
+          if (duplicate) throw new ConflictException('该员工当日已有临时调班')
+          const row = await tx.employeeDateOverride.update({ where: { id }, data: {
+            ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
+            ...(payload.date !== undefined ? { date: payload.date } : {}),
+            ...(payload.isWorkday !== undefined ? { isWorkday: payload.isWorkday } : {}),
+            ...(payload.scheduledMinutes !== undefined ? { scheduledMinutes: this.minutes(payload.scheduledMinutes) } : {}),
+            ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
+          } })
+          await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeDateOverride', id, undefined, tx)
+          return row
+        }
+      )
     } catch (error) { this.rethrowConflict(error, '该员工当日已有临时调班') }
   }
 
   async deleteDateOverride(frontendUserId: string, actorUserId: string, id: string) {
     const row = await this.owned(this.prisma.employeeDateOverride, frontendUserId, id, '临时调班不存在')
-    await this.assertMonthWritable(frontendUserId, row.date)
-    await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeDateOverride', id, (tx) => tx.employeeDateOverride.delete({ where: { id } }), undefined, [row.date])
+    await this.withCurrentPayrollSource(
+      frontendUserId,
+      [row.date],
+      (tx) => this.owned(tx.employeeDateOverride, frontendUserId, id, '临时调班不存在'),
+      (locked) => [locked.date],
+      async (tx) => {
+        await tx.employeeDateOverride.delete({ where: { id } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeDateOverride', id, undefined, tx)
+      }
+    )
     return { ok: true }
   }
 
@@ -278,26 +314,46 @@ export class EmployeeAttendanceService {
 
   async updateAttendance(frontendUserId: string, actorUserId: string, id: string, payload: Partial<AttendanceDto>) {
     const current = await this.owned(this.prisma.employeeAttendanceRecord, frontendUserId, id, '考勤记录不存在')
-    if (current.payrollLockedAt) throw new ConflictException('该考勤记录已被工资确认锁定')
     const date = payload.date || current.date
     this.assertDate(current.date)
     this.assertDate(date)
-    await this.assertMonthWritable(frontendUserId, current.date)
-    if (date.slice(0, 7) !== current.date.slice(0, 7)) await this.assertMonthWritable(frontendUserId, date)
-    if (payload.employeeId) await this.assertEmployee(frontendUserId, payload.employeeId)
-    const duplicate = await this.prisma.employeeAttendanceRecord.findFirst({ where: { frontendUserId, employeeId: payload.employeeId || current.employeeId, date, id: { not: id } } })
-    if (duplicate) throw new ConflictException('该员工当日考勤已存在')
     try {
-      return await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeAttendanceRecord', id,
-        (tx) => tx.employeeAttendanceRecord.update({ where: { id }, data: { ...this.attendanceData(payload), manuallyEdited: true } }), undefined, [current.date, date])
+      return await this.withCurrentPayrollSource(
+        frontendUserId,
+        [current.date, date],
+        (tx) => this.owned(tx.employeeAttendanceRecord, frontendUserId, id, '考勤记录不存在'),
+        (locked) => [locked.date, payload.date || locked.date],
+        async (tx, locked) => {
+          if (locked.payrollLockedAt) throw new ConflictException('该考勤记录已被工资确认锁定')
+          const targetDate = payload.date || locked.date
+          this.assertDate(locked.date)
+          this.assertDate(targetDate)
+          if (payload.employeeId) await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
+          const duplicate = await tx.employeeAttendanceRecord.findFirst({ where: {
+            frontendUserId, employeeId: payload.employeeId || locked.employeeId, date: targetDate, id: { not: id }
+          } })
+          if (duplicate) throw new ConflictException('该员工当日考勤已存在')
+          const row = await tx.employeeAttendanceRecord.update({ where: { id }, data: { ...this.attendanceData(payload), manuallyEdited: true } })
+          await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeAttendanceRecord', id, undefined, tx)
+          return row
+        }
+      )
     } catch (error) { this.rethrowConflict(error, '该员工当日考勤已存在') }
   }
 
   async deleteAttendance(frontendUserId: string, actorUserId: string, id: string) {
     const row = await this.owned(this.prisma.employeeAttendanceRecord, frontendUserId, id, '考勤记录不存在')
-    if (row.payrollLockedAt) throw new ConflictException('该考勤记录已被工资确认锁定')
-    await this.assertMonthWritable(frontendUserId, row.date)
-    await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeAttendanceRecord', id, (tx) => tx.employeeAttendanceRecord.delete({ where: { id } }), undefined, [row.date])
+    await this.withCurrentPayrollSource(
+      frontendUserId,
+      [row.date],
+      (tx) => this.owned(tx.employeeAttendanceRecord, frontendUserId, id, '考勤记录不存在'),
+      (locked) => [locked.date],
+      async (tx, locked) => {
+        if (locked.payrollLockedAt) throw new ConflictException('该考勤记录已被工资确认锁定')
+        await tx.employeeAttendanceRecord.delete({ where: { id } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeAttendanceRecord', id, undefined, tx)
+      }
+    )
     return { ok: true }
   }
 
@@ -368,11 +424,16 @@ export class EmployeeAttendanceService {
   async updateLeaveType(frontendUserId: string, actorUserId: string, id: string, payload: Partial<LeaveTypeDto>) {
     await this.owned(this.prisma.employeeLeaveType, frontendUserId, id, '请假类型不存在')
     try {
-      const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeLeaveType', id, (tx) => tx.employeeLeaveType.update({ where: { id }, data: {
-        ...(payload.name !== undefined ? { name: this.required(payload.name, '请假类型') } : {}),
-        ...(payload.active !== undefined ? { active: payload.active } : {}),
-        ...(payload.countsTowardRestQuota !== undefined ? { countsTowardRestQuota: payload.countsTowardRestQuota } : {})
-      } }))
+      const row = await this.configurationTransaction(frontendUserId, async (tx) => {
+        await this.owned(tx.employeeLeaveType, frontendUserId, id, '请假类型不存在')
+        const updated = await tx.employeeLeaveType.update({ where: { id }, data: {
+          ...(payload.name !== undefined ? { name: this.required(payload.name, '请假类型') } : {}),
+          ...(payload.active !== undefined ? { active: payload.active } : {}),
+          ...(payload.countsTowardRestQuota !== undefined ? { countsTowardRestQuota: payload.countsTowardRestQuota } : {})
+        } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeLeaveType', id, undefined, tx)
+        return updated
+      })
       return row
     } catch (error) { this.rethrowConflict(error, '请假类型名称已存在') }
   }
@@ -435,45 +496,75 @@ export class EmployeeAttendanceService {
 
   async updateLeaveRequest(frontendUserId: string, actorUserId: string, id: string, payload: Partial<LeaveRequestDto>) {
     const current = await this.owned(this.prisma.employeeLeaveRequest, frontendUserId, id, '请假记录不存在')
-    if (current.payrollLockedAt) throw new ConflictException('该请假记录已被工资确认锁定')
-    if (current.status !== EmployeeLeaveStatus.PENDING) throw new ConflictException('仅待审批请假可修改')
     const merged = { ...current, ...payload } as LeaveRequestDto
     this.assertDateRange(current.startDate, current.endDate)
     this.assertDateRange(merged.startDate, merged.endDate)
-    await this.assertRangeWritable(frontendUserId, current.startDate, current.endDate)
-    await this.assertRangeWritable(frontendUserId, merged.startDate, merged.endDate)
-    if (payload.employeeId) await this.assertEmployee(frontendUserId, payload.employeeId)
-    if (payload.leaveTypeId) {
-      const type = await this.prisma.employeeLeaveType.findFirst({ where: { id: payload.leaveTypeId, frontendUserId, active: true } })
-      if (!type) throw new NotFoundException('请假类型不存在或已停用')
-    }
     const months = Array.from(new Set([
       ...this.monthsBetween(current.startDate, current.endDate),
       ...this.monthsBetween(merged.startDate, merged.endDate)
     ])).sort()
-    return this.withLeaveSerialization(frontendUserId, merged.employeeId, months, async (tx) => {
-      const countedDays = await this.countLeaveDays(frontendUserId, merged, tx)
-      await this.assertNoLeaveOverlap(frontendUserId, merged.employeeId, merged.startDate, merged.endDate, id, tx)
-      const row = await tx.employeeLeaveRequest.update({ where: { id }, data: {
-        ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
-        ...(payload.leaveTypeId !== undefined ? { leaveTypeId: payload.leaveTypeId } : {}),
-        ...(payload.startDate !== undefined ? { startDate: payload.startDate } : {}),
-        ...(payload.endDate !== undefined ? { endDate: payload.endDate } : {}),
-        ...(payload.unit !== undefined ? { unit: payload.unit } : {}),
-        hours: merged.unit === EmployeeLeaveUnit.HOUR ? this.positive(merged.hours, '请假小时') : null,
-        countedDays,
-        ...(payload.reason !== undefined ? { reason: this.required(payload.reason, '请假原因') } : {})
-      } })
-      await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeLeaveRequest', id, undefined, tx)
-      return row
-    })
+    return this.withCurrentPayrollSource(
+      frontendUserId,
+      months,
+      (tx) => this.owned(tx.employeeLeaveRequest, frontendUserId, id, '请假记录不存在'),
+      (locked) => {
+        const target = { ...locked, ...payload }
+        return [
+          ...this.monthsBetween(locked.startDate, locked.endDate),
+          ...this.monthsBetween(target.startDate, target.endDate)
+        ]
+      },
+      async (tx, locked) => {
+        const target = { ...locked, ...payload } as LeaveRequestDto
+        this.assertDateRange(locked.startDate, locked.endDate)
+        this.assertDateRange(target.startDate, target.endDate)
+        await tx.$executeRawUnsafe(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          `employee-leave:${frontendUserId}:${target.employeeId}`
+        )
+        if (locked.payrollLockedAt) throw new ConflictException('该请假记录已被工资确认锁定')
+        if (locked.status !== EmployeeLeaveStatus.PENDING) throw new ConflictException('仅待审批请假可修改')
+        if (payload.employeeId) await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
+        if (payload.leaveTypeId) {
+          const type = await tx.employeeLeaveType.findFirst({ where: { id: payload.leaveTypeId, frontendUserId, active: true } })
+          if (!type) throw new NotFoundException('请假类型不存在或已停用')
+        }
+        const countedDays = await this.countLeaveDays(frontendUserId, target, tx)
+        await this.assertNoLeaveOverlap(frontendUserId, target.employeeId, target.startDate, target.endDate, id, tx)
+        const row = await tx.employeeLeaveRequest.update({ where: { id }, data: {
+          ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
+          ...(payload.leaveTypeId !== undefined ? { leaveTypeId: payload.leaveTypeId } : {}),
+          ...(payload.startDate !== undefined ? { startDate: payload.startDate } : {}),
+          ...(payload.endDate !== undefined ? { endDate: payload.endDate } : {}),
+          ...(payload.unit !== undefined ? { unit: payload.unit } : {}),
+          hours: target.unit === EmployeeLeaveUnit.HOUR ? this.positive(target.hours, '请假小时') : null,
+          countedDays,
+          ...(payload.reason !== undefined ? { reason: this.required(payload.reason, '请假原因') } : {})
+        } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeLeaveRequest', id, undefined, tx)
+        return row
+      }
+    )
   }
 
   async deleteLeaveRequest(frontendUserId: string, actorUserId: string, id: string) {
     const row = await this.owned(this.prisma.employeeLeaveRequest, frontendUserId, id, '请假记录不存在')
-    if (row.payrollLockedAt) throw new ConflictException('该请假记录已被工资确认锁定')
-    if (row.status !== EmployeeLeaveStatus.PENDING) throw new ConflictException('仅待审批请假可删除')
-    await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeLeaveRequest', id, (tx) => tx.employeeLeaveRequest.delete({ where: { id } }), undefined, this.monthsBetween(row.startDate, row.endDate))
+    await this.withCurrentPayrollSource(
+      frontendUserId,
+      this.monthsBetween(row.startDate, row.endDate),
+      (tx) => this.owned(tx.employeeLeaveRequest, frontendUserId, id, '请假记录不存在'),
+      (locked) => this.monthsBetween(locked.startDate, locked.endDate),
+      async (tx, locked) => {
+        await tx.$executeRawUnsafe(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          `employee-leave:${frontendUserId}:${locked.employeeId}`
+        )
+        if (locked.payrollLockedAt) throw new ConflictException('该请假记录已被工资确认锁定')
+        if (locked.status !== EmployeeLeaveStatus.PENDING) throw new ConflictException('仅待审批请假可删除')
+        await tx.employeeLeaveRequest.delete({ where: { id } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeLeaveRequest', id, undefined, tx)
+      }
+    )
     return { ok: true }
   }
 
@@ -545,36 +636,55 @@ export class EmployeeAttendanceService {
 
   async updateCommissionRecord(frontendUserId: string, actorUserId: string, id: string, payload: Partial<CommissionRecordDto>) {
     const current = await this.owned(this.prisma.employeeCommissionRecord, frontendUserId, id, '提成记录不存在')
-    if (current.payrollLockedAt) throw new ConflictException('该提成记录已被工资确认锁定')
     const date = payload.date || current.date
     this.assertDate(current.date)
     this.assertDate(date)
-    await this.assertMonthWritable(frontendUserId, current.date)
-    if (date.slice(0, 7) !== current.date.slice(0, 7)) await this.assertMonthWritable(frontendUserId, date)
-    if (payload.employeeId) await this.assertEmployee(frontendUserId, payload.employeeId)
-    let type = null
-    if (payload.commissionTypeId) {
-      type = await this.prisma.employeeCommissionType.findFirst({ where: { id: payload.commissionTypeId, frontendUserId, active: true } })
-      if (!type) throw new NotFoundException('提成类型不存在或已停用')
-    }
-    const quantity = this.nonnegative(payload.quantity ?? current.quantity, '提成数量')
-    const unitPrice = this.nonnegative(payload.unitPrice ?? (type?.unitPrice ?? current.unitPriceSnapshot), '提成单价')
     try {
-      return await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeCommissionRecord', id, (tx) => tx.employeeCommissionRecord.update({ where: { id }, data: {
-        ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
-        ...(payload.commissionTypeId !== undefined ? { commissionTypeId: payload.commissionTypeId } : {}),
-        ...(payload.date !== undefined ? { date: payload.date } : {}), quantity, unitPriceSnapshot: unitPrice,
-        amount: new Prisma.Decimal(unitPrice).mul(quantity).toDecimalPlaces(2),
-        ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
-      } }), undefined, [current.date, date])
+      return await this.withCurrentPayrollSource(
+        frontendUserId,
+        [current.date, date],
+        (tx) => this.owned(tx.employeeCommissionRecord, frontendUserId, id, '提成记录不存在'),
+        (locked) => [locked.date, payload.date || locked.date],
+        async (tx, locked) => {
+          if (locked.payrollLockedAt) throw new ConflictException('该提成记录已被工资确认锁定')
+          const targetDate = payload.date || locked.date
+          this.assertDate(locked.date)
+          this.assertDate(targetDate)
+          if (payload.employeeId) await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
+          let type = null
+          if (payload.commissionTypeId) {
+            type = await tx.employeeCommissionType.findFirst({ where: { id: payload.commissionTypeId, frontendUserId, active: true } })
+            if (!type) throw new NotFoundException('提成类型不存在或已停用')
+          }
+          const quantity = this.nonnegative(payload.quantity ?? locked.quantity, '提成数量')
+          const unitPrice = this.nonnegative(payload.unitPrice ?? (type?.unitPrice ?? locked.unitPriceSnapshot), '提成单价')
+          const row = await tx.employeeCommissionRecord.update({ where: { id }, data: {
+            ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
+            ...(payload.commissionTypeId !== undefined ? { commissionTypeId: payload.commissionTypeId } : {}),
+            ...(payload.date !== undefined ? { date: payload.date } : {}), quantity, unitPriceSnapshot: unitPrice,
+            amount: new Prisma.Decimal(unitPrice).mul(quantity).toDecimalPlaces(2),
+            ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
+          } })
+          await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeCommissionRecord', id, undefined, tx)
+          return row
+        }
+      )
     } catch (error) { this.rethrowConflict(error, '提成记录重复') }
   }
 
   async deleteCommissionRecord(frontendUserId: string, actorUserId: string, id: string) {
     const row = await this.owned(this.prisma.employeeCommissionRecord, frontendUserId, id, '提成记录不存在')
-    if (row.payrollLockedAt) throw new ConflictException('该提成记录已被工资确认锁定')
-    await this.assertMonthWritable(frontendUserId, row.date)
-    await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeCommissionRecord', id, (tx) => tx.employeeCommissionRecord.delete({ where: { id } }), undefined, [row.date])
+    await this.withCurrentPayrollSource(
+      frontendUserId,
+      [row.date],
+      (tx) => this.owned(tx.employeeCommissionRecord, frontendUserId, id, '提成记录不存在'),
+      (locked) => [locked.date],
+      async (tx, locked) => {
+        if (locked.payrollLockedAt) throw new ConflictException('该提成记录已被工资确认锁定')
+        await tx.employeeCommissionRecord.delete({ where: { id } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeCommissionRecord', id, undefined, tx)
+      }
+    )
     return { ok: true }
   }
 
@@ -592,26 +702,44 @@ export class EmployeeAttendanceService {
 
   async updateBonus(frontendUserId: string, actorUserId: string, id: string, payload: Partial<BonusDto>) {
     const current = await this.owned(this.prisma.employeeBonus, frontendUserId, id, '奖金记录不存在')
-    if (current.payrollLockedAt) throw new ConflictException('该奖金记录已被工资确认锁定')
     const date = payload.date || current.date
     this.assertDate(current.date)
     this.assertDate(date)
-    await this.assertMonthWritable(frontendUserId, current.date)
-    if (date.slice(0, 7) !== current.date.slice(0, 7)) await this.assertMonthWritable(frontendUserId, date)
-    if (payload.employeeId) await this.assertEmployee(frontendUserId, payload.employeeId)
-    return this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeBonus', id, (tx) => tx.employeeBonus.update({ where: { id }, data: {
-      ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
-      ...(payload.date !== undefined ? { date: payload.date } : {}),
-      ...(payload.amount !== undefined ? { amount: new Prisma.Decimal(this.positive(payload.amount, '奖金金额')) } : {}),
-      ...(payload.reason !== undefined ? { reason: this.required(payload.reason, '奖金原因') } : {})
-    } }), undefined, [current.date, date])
+    return this.withCurrentPayrollSource(
+      frontendUserId,
+      [current.date, date],
+      (tx) => this.owned(tx.employeeBonus, frontendUserId, id, '奖金记录不存在'),
+      (locked) => [locked.date, payload.date || locked.date],
+      async (tx, locked) => {
+        if (locked.payrollLockedAt) throw new ConflictException('该奖金记录已被工资确认锁定')
+        this.assertDate(locked.date)
+        this.assertDate(payload.date || locked.date)
+        if (payload.employeeId) await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
+        const row = await tx.employeeBonus.update({ where: { id }, data: {
+          ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
+          ...(payload.date !== undefined ? { date: payload.date } : {}),
+          ...(payload.amount !== undefined ? { amount: new Prisma.Decimal(this.positive(payload.amount, '奖金金额')) } : {}),
+          ...(payload.reason !== undefined ? { reason: this.required(payload.reason, '奖金原因') } : {})
+        } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeBonus', id, undefined, tx)
+        return row
+      }
+    )
   }
 
   async deleteBonus(frontendUserId: string, actorUserId: string, id: string) {
     const row = await this.owned(this.prisma.employeeBonus, frontendUserId, id, '奖金记录不存在')
-    if (row.payrollLockedAt) throw new ConflictException('该奖金记录已被工资确认锁定')
-    await this.assertMonthWritable(frontendUserId, row.date)
-    await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeBonus', id, (tx) => tx.employeeBonus.delete({ where: { id } }), undefined, [row.date])
+    await this.withCurrentPayrollSource(
+      frontendUserId,
+      [row.date],
+      (tx) => this.owned(tx.employeeBonus, frontendUserId, id, '奖金记录不存在'),
+      (locked) => [locked.date],
+      async (tx, locked) => {
+        if (locked.payrollLockedAt) throw new ConflictException('该奖金记录已被工资确认锁定')
+        await tx.employeeBonus.delete({ where: { id } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeBonus', id, undefined, tx)
+      }
+    )
     return { ok: true }
   }
 
@@ -646,18 +774,32 @@ export class EmployeeAttendanceService {
 
   private async reviewLeave(frontendUserId: string, actorUserId: string, id: string, status: EmployeeLeaveStatus, reviewRemark?: string) {
     const current = await this.owned(this.prisma.employeeLeaveRequest, frontendUserId, id, '请假记录不存在')
-    if (current.payrollLockedAt) throw new ConflictException('该请假记录已被工资确认锁定')
-    if (current.status !== EmployeeLeaveStatus.PENDING) throw new ConflictException('仅待审批请假可审批')
-    await this.assertRangeWritable(frontendUserId, current.startDate, current.endDate)
-    return this.atomic(
+    return this.withCurrentPayrollSource(
       frontendUserId,
-      actorUserId,
-      status === EmployeeLeaveStatus.APPROVED ? EmployeeAuditAction.APPROVE : EmployeeAuditAction.REJECT,
-      'EmployeeLeaveRequest',
-      id,
-      (tx) => tx.employeeLeaveRequest.update({ where: { id }, data: { status, reviewRemark: this.optional(reviewRemark), reviewedById: actorUserId, reviewedAt: new Date() } }),
-      undefined,
-      this.monthsBetween(current.startDate, current.endDate)
+      this.monthsBetween(current.startDate, current.endDate),
+      (tx) => this.owned(tx.employeeLeaveRequest, frontendUserId, id, '请假记录不存在'),
+      (locked) => this.monthsBetween(locked.startDate, locked.endDate),
+      async (tx, locked) => {
+        await tx.$executeRawUnsafe(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          `employee-leave:${frontendUserId}:${locked.employeeId}`
+        )
+        if (locked.payrollLockedAt) throw new ConflictException('该请假记录已被工资确认锁定')
+        if (locked.status !== EmployeeLeaveStatus.PENDING) throw new ConflictException('仅待审批请假可审批')
+        const row = await tx.employeeLeaveRequest.update({ where: { id }, data: {
+          status, reviewRemark: this.optional(reviewRemark), reviewedById: actorUserId, reviewedAt: new Date()
+        } })
+        await this.audit(
+          frontendUserId,
+          actorUserId,
+          status === EmployeeLeaveStatus.APPROVED ? EmployeeAuditAction.APPROVE : EmployeeAuditAction.REJECT,
+          'EmployeeLeaveRequest',
+          id,
+          undefined,
+          tx
+        )
+        return row
+      }
     )
   }
 
@@ -799,6 +941,51 @@ export class EmployeeAttendanceService {
 
   private payrollMonthLocks() {
     return this.monthLocks || new PayrollMonthLockService(this.prisma)
+  }
+
+  private async withCurrentPayrollSource<T>(
+    frontendUserId: string,
+    initialMonths: string[],
+    load: (tx: Prisma.TransactionClient) => Promise<any>,
+    monthsForCurrent: (current: any) => string[],
+    operation: (tx: Prisma.TransactionClient, current: any) => Promise<T>
+  ) {
+    let planned = Array.from(new Set(initialMonths.map((value) => value.slice(0, 7)))).sort()
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        return await this.payrollMonthLocks().run(frontendUserId, planned, async (tx) => {
+          await this.assertMonthsWritable(frontendUserId, planned, tx)
+          const current = await load(tx)
+          const actual = Array.from(new Set(monthsForCurrent(current).map((value) => value.slice(0, 7)))).sort()
+          if (actual.some((month) => !planned.includes(month))) throw new PayrollLockPlanChanged(actual)
+          return operation(tx, current)
+        })
+      } catch (error) {
+        if (!(error instanceof PayrollLockPlanChanged)) throw error
+        planned = Array.from(new Set([...planned, ...error.months])).sort()
+      }
+    }
+    throw new ConflictException('记录月份持续变化，请刷新后重试')
+  }
+
+  private configurationTransaction<T>(frontendUserId: string, operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+    return this.payrollMonthLocks().runConfiguration(frontendUserId, operation)
+  }
+
+  private configurationAtomic<T>(
+    frontendUserId: string,
+    actorUserId: string,
+    action: EmployeeAuditAction,
+    entityType: string,
+    entityId: string | ((result: any) => string),
+    mutation: (tx: Prisma.TransactionClient) => Promise<T>,
+    reason?: string
+  ) {
+    return this.configurationTransaction(frontendUserId, async (tx) => {
+      const result = await mutation(tx)
+      await this.audit(frontendUserId, actorUserId, action, entityType, typeof entityId === 'function' ? entityId(result) : entityId, reason, tx)
+      return result
+    })
   }
 
   private required(value: unknown, label: string) {

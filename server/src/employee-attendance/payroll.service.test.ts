@@ -129,6 +129,8 @@ describe('PayrollService frontend payroll', () => {
     expect(tx.employeeLeaveRequest.updateMany).toHaveBeenCalled()
     expect(tx.employeeCommissionRecord.updateMany).toHaveBeenCalled()
     expect(tx.employeeBonus.updateMany).toHaveBeenCalled()
+    expect(tx.$executeRawUnsafe.mock.calls[0][1]).toBe('employee-payroll-config:front-1')
+    expect(tx.$executeRawUnsafe.mock.calls[1][1]).toBe('employee-payroll:front-1:2026-08')
   })
 
   it('permits only one concurrent confirmation winner', async () => {
