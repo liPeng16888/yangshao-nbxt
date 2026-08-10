@@ -46,7 +46,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import { useRoute } from 'vue-router'
-import { Box, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, User, Warning } from '@element-plus/icons-vue'
+import { Box, Calendar, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, User, Warning } from '@element-plus/icons-vue'
 
 interface NavChild {
   path: string
@@ -78,6 +78,20 @@ const navItems: NavItem[] = [
     children: [
       { path: '/lab-report/image-template', label: '化验报告图片模板' },
       { path: '/lab-report/sms-template', label: '化验短信生成模板' }
+    ]
+  },
+  {
+    path: '/employee-attendance',
+    label: '员工考勤',
+    icon: Calendar,
+    children: [
+      { path: '/employee-attendance/overview', label: '考勤概览' },
+      { path: '/employee-attendance/employees', label: '员工档案' },
+      { path: '/employee-attendance/schedules', label: '排班管理' },
+      { path: '/employee-attendance/records', label: '考勤记录' },
+      { path: '/employee-attendance/leave', label: '请假管理' },
+      { path: '/employee-attendance/compensation', label: '提成与奖金' },
+      { path: '/employee-attendance/payroll', label: '工资统计' }
     ]
   },
   {

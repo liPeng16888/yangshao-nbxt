@@ -79,7 +79,7 @@ const editorVisible = ref(false)
 const saving = ref(false)
 const editingId = ref('')
 const featureLabels: Record<AccessGuardFeature, string> = {
-  FINANCE: '财务', REPORTS: '报表', BLACKLIST: '黑名单', HISTORICAL_DATES: '历史日期查看',
+  FINANCE: '财务', EMPLOYEE_ATTENDANCE: '员工考勤', REPORTS: '报表', BLACKLIST: '黑名单', HISTORICAL_DATES: '历史日期查看',
   MEDICINE_INVENTORY: '药品库存', CUSTOMER_OVERVIEW: '客户总览', COMPLETED_SAMPLE_DATA: '已完成样品隐藏数据'
 }
 const form = reactive({

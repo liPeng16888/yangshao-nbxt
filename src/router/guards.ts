@@ -6,6 +6,7 @@ export interface AuthRedirectInput {
 
 export const accessGuardFeatures = [
   'FINANCE',
+  'EMPLOYEE_ATTENDANCE',
   'REPORTS',
   'BLACKLIST',
   'HISTORICAL_DATES',
@@ -17,6 +18,7 @@ export const accessGuardFeatures = [
 export type AccessGuardFeature = typeof accessGuardFeatures[number]
 
 export function featureForPath(path: string): AccessGuardFeature | null {
+  if (path.startsWith('/employee-attendance')) return 'EMPLOYEE_ATTENDANCE'
   if (path.startsWith('/finance')) return 'FINANCE'
   if (path.startsWith('/reports')) return 'REPORTS'
   if (path.startsWith('/blacklist')) return 'BLACKLIST'
