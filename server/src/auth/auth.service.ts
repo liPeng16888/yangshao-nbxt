@@ -249,6 +249,13 @@ export class AuthService {
     return Boolean(membership)
   }
 
+  async assertAccessGrant(currentUserId: string, token: string | undefined, feature: AccessGuardFeature, alwaysRequire = false) {
+    const protectedFeature = alwaysRequire || await this.isFeatureProtected(currentUserId, feature)
+    if (protectedFeature && !this.hasAccessGrant(currentUserId, token, feature)) {
+      throw new ForbiddenException('访问授权无效或已过期')
+    }
+  }
+
   private async buildPasswordUpdate(passwordHash: string, dto: UpdatePasswordDto) {
     if (!dto.currentPassword || !dto.newPassword || !dto.confirmPassword) throw new BadRequestException('请完整填写当前密码、新密码和确认密码')
     if (dto.newPassword !== dto.confirmPassword) throw new BadRequestException('两次新密码不一致')
