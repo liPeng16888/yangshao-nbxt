@@ -8,7 +8,7 @@ type PendingAction = (() => void | Promise<void>) | null
 
 const SESSION_KEY = 'ys_access_guard_group_sessions'
 
-export interface AccessGuardSession { expiresAt: number; token?: string }
+export interface AccessGuardSession { expiresAt: number; token?: string; features?: AccessGuardFeature[] }
 
 function readSessions(): Record<string, AccessGuardSession> {
   try {
@@ -72,7 +72,7 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
     if (!password.trim()) return { ok: false, message: '请输入访问密码' }
     try {
       const verification = await verifyAccessGuardGroup(group.id, password.trim(), group.ttlMinutes, group.password)
-      const sessions = readSessions(); sessions[group.id] = verification; writeSessions(sessions); accessSessionRevision.value += 1
+      const sessions = readSessions(); sessions[group.id] = { ...verification, features: [...group.features] }; writeSessions(sessions); accessSessionRevision.value += 1
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : '访问密码不正确' }
     }

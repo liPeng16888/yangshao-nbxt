@@ -8,6 +8,8 @@ import appRouter from '@/router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import { accessGuardFeatures, featureForPath } from '@/router/guards'
 import { resetEmployeeAttendanceMock } from '@/mocks/employeeAttendance'
+import { mockCreateEmployee } from '@/mocks/employeeAttendance'
+import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
 import EmployeeAttendanceOverviewPage from './employee-attendance/EmployeeAttendanceOverviewPage.vue'
 import EmployeeDirectoryPage from './employee-attendance/EmployeeDirectoryPage.vue'
 import EmployeeSchedulesPage from './employee-attendance/EmployeeSchedulesPage.vue'
@@ -62,5 +64,47 @@ describe('employee attendance navigation', () => {
       expect(wrapper.find('.attendance-error').exists()).toBe(false)
       wrapper.unmount()
     }
+  })
+
+  it('keeps employee form values on mutation failure and initializes sensitive edit fields blank', async () => {
+    const wrapper = mount(EmployeeDirectoryPage, { global: { plugins: [createPinia(), ElementPlus], stubs: { teleport: true, 'el-select': true, 'el-option': true, 'el-date-picker': true, 'el-input-number': true } } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="edit-employee-emp-1"]').trigger('click')
+    expect((wrapper.get('[data-testid="employee-id-card"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.get('[data-testid="employee-bank-card"]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.text()).toContain('离职日期')
+
+    const createButton = wrapper.findAll('button').find(node => node.text() === '新增员工')!
+    await createButton.trigger('click')
+    await wrapper.get('[data-testid="employee-number"]').setValue('YG001')
+    await wrapper.get('[data-testid="employee-name"]').setValue('重复员工')
+    await wrapper.get('[data-testid="employee-id-card"]').setValue('410000198812121234')
+    await wrapper.get('[data-testid="employee-save"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('员工编号已存在')
+    expect((wrapper.get('[data-testid="employee-name"]').element as HTMLInputElement).value).toBe('重复员工')
+    expect((wrapper.get('[data-testid="employee-id-card"]').element as HTMLInputElement).value).toBe('410000198812121234')
+    wrapper.unmount()
+  })
+
+  it('loads an existing month setting and clears stale values for an employee without a setting', async () => {
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    expect((wrapper.get('[data-testid="month-scheduled-days"] input').element as HTMLInputElement).value).toBe('22')
+    expect((wrapper.get('[data-testid="month-rest-quota"] input').element as HTMLInputElement).value).toBe('4')
+
+    const employee = await mockCreateEmployee({ employeeNumber: 'YG777', name: '无月设置员工', status: 'ACTIVE', hireDate: '2026-08-01', restQuotaDays: 3 })
+    await store.loadEmployees()
+    store.employeeId = employee.id
+    await flushPromises()
+    expect((wrapper.get('[data-testid="month-scheduled-days"] input').element as HTMLInputElement).value).toBe('0')
+    expect((wrapper.get('[data-testid="month-rest-quota"] input').element as HTMLInputElement).value).toBe('3')
+    wrapper.unmount()
   })
 })

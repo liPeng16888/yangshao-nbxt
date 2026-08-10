@@ -29,6 +29,7 @@ export interface AttendancePayload {
   workedMinutes?: number; lateMinutes?: number; earlyLeaveMinutes?: number; absenceMinutes?: number; overtimeMinutes?: number; remark?: string
 }
 export interface AttendanceRecord extends AttendancePayload { id: string; manuallyEdited: boolean; lockedAt?: string | null }
+export interface AttendanceGenerationResult { created: number; updated: number; skippedManual: number; generated: number }
 
 export interface LeaveTypePayload { name: string; active?: boolean; countsTowardRestQuota: boolean }
 export interface LeaveType extends Required<LeaveTypePayload> { id: string }

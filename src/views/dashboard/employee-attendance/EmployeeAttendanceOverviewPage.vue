@@ -4,8 +4,8 @@
       <article v-for="card in cards" :key="card.label"><span>{{ card.label }}</span><strong>{{ card.value }}</strong></article>
     </div>
     <el-divider content-position="left">待处理问题</el-divider>
-    <el-empty v-if="!store.overview?.issues.length" description="当前没有异常" :image-size="64" />
-    <el-alert v-for="issue in store.overview?.issues" v-else :key="issue" :title="issue" type="warning" show-icon :closable="false" class="issue" />
+    <el-empty v-if="!displayedIssues.length" description="当前没有异常" :image-size="64" />
+    <el-alert v-for="issue in displayedIssues" v-else :key="issue" :title="issue" type="warning" show-icon :closable="false" class="issue" />
   </PageShell>
 </template>
 <script setup lang="ts">
@@ -13,6 +13,7 @@ import { computed, onMounted } from 'vue'
 import PageShell from './EmployeeAttendancePageShell.vue'
 import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
 const store = useEmployeeAttendanceStore()
+const displayedIssues = computed(() => store.overview?.issues.length ? store.overview.issues : store.overview?.issueCount ? [`当前有 ${store.overview.issueCount} 项考勤或工资问题，请进入工资统计查看详情`] : [])
 const cards = computed(() => { const data = store.overview; return data ? [
   { label: '在职员工', value: data.activeEmployees }, { label: '今日出勤', value: data.todayPresent },
   { label: '今日请假', value: data.todayOnLeave }, { label: '今日缺勤', value: data.todayAbsent },

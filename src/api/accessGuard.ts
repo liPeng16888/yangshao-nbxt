@@ -67,5 +67,5 @@ export async function deleteAccessGuardGroup(id: string): Promise<void> {
 export async function verifyAccessGuardGroup(id: string, password: string, ttlMinutes: number, expectedPassword?: string): Promise<AccessGuardVerification> {
   if (!useMocks) return request.post(`/auth/access-groups/${encodeURIComponent(id)}/verify`, { password })
   if (password.trim() !== expectedPassword) throw new Error('访问密码不正确')
-  return { expiresAt: Date.now() + ttlMinutes * 60_000 }
+  return { expiresAt: Date.now() + ttlMinutes * 60_000, token: `mock-access-grant:${id}` }
 }
