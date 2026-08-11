@@ -7,7 +7,7 @@ import type {
   BatchMonthlySchedulePayload, BatchMonthlyScheduleResult,
   CommissionPayload, CommissionRecord, CommissionType, CommissionTypePayload, CompensationTotal, DateOverride,
   DateOverridePayload, Employee, EmployeePayload, EmployeeQuery, LeaveRequest, LeaveRequestPayload, LeaveType,
-  LeaveTypePayload, MonthlyScheduleDay, MonthlySchedulePayload, MonthlySetting, PayrollAdjustment, PayrollRun, RevealedEmployee,
+  LeaveTypePayload, MonthlyScheduleDay, MonthlySchedulePayload, MonthlySetting, MonthlySettingPayload, PayrollAdjustment, PayrollRun, RevealedEmployee,
   ScheduleSegment, WeeklySchedule, WeeklySchedulePayload
 } from '@/types/employeeAttendance'
 
@@ -204,7 +204,7 @@ export const getDateOverrides = (query: AttendanceQuery = {}): Promise<DateOverr
 export const saveDateOverride = (payload: DateOverridePayload, id?: string): Promise<DateOverride> => useMocks ? mock.mockSaveDateOverride(payload, id) : id ? attendanceRequest.put(`/employee-attendance/overrides/${id}`, payload) : attendanceRequest.post('/employee-attendance/overrides', payload)
 export const deleteDateOverride = async (id: string) => useMocks ? mock.mockDeleteDateOverride(id) : attendanceRequest.delete(`/employee-attendance/overrides/${id}`)
 export const getMonthlySettings = (month?: string): Promise<MonthlySetting[]> => useMocks ? mock.mockGetMonthlySettings(month) : attendanceRequest.get('/employee-attendance/month-settings', { params: { month } }).then((rows: any[]) => rows.map(normalizeMonthlySettingResponse))
-export const saveMonthlySetting = (payload: Omit<MonthlySetting, 'id'>): Promise<MonthlySetting> => (useMocks ? mock.mockSaveMonthlySetting(payload) : attendanceRequest.post('/employee-attendance/month-settings', payload)).then(normalizeMonthlySettingResponse)
+export const saveMonthlySetting = (payload: MonthlySettingPayload): Promise<MonthlySetting> => (useMocks ? mock.mockSaveMonthlySetting(payload) : attendanceRequest.post('/employee-attendance/month-settings', payload)).then(normalizeMonthlySettingResponse)
 export const deleteMonthlySetting = async (id: string) => useMocks ? mock.mockDeleteMonthlySetting(id) : attendanceRequest.delete(`/employee-attendance/month-settings/${id}`)
 
 export const getMonthlySchedules = (employeeId: string, month: string): Promise<MonthlyScheduleDay[]> => useMocks

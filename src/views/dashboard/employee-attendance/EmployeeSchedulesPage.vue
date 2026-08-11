@@ -1,5 +1,5 @@
 <template>
-  <PageShell title="排班管理" description="按自然月为每位员工设置每日多个上班、下班时段；时段之间自动作为休息时间。" @refresh="load">
+  <PageShell title="排班管理" description="按自然月为每位员工设置每日多个上班、下班时段；时段之间自动作为休息时间。" :employee-change-refresh="false" :month-change-refresh="false" @refresh="load">
     <template #actions>
       <el-button data-testid="copy-previous-month" :disabled="!store.employeeId" @click="openCopy">复制上月排班</el-button>
       <el-button data-testid="batch-mode" :disabled="!store.employeeId" :type="batchMode ? 'primary' : 'default'" @click="toggleBatchMode">
@@ -62,6 +62,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import PageShell from './EmployeeAttendancePageShell.vue'
 import MonthlyScheduleCalendar from './MonthlyScheduleCalendar.vue'
@@ -86,6 +87,9 @@ const editingRow = computed<MonthlyScheduleDay | undefined>(() => store.monthlyS
 const workdayCount = computed(() => store.monthlySchedules.filter((row) => row.isWorkday && row.segments.length > 0).length)
 const currentMonthSetting = computed(() => store.monthSettings.find((row) => row.employeeId === store.employeeId && row.month === store.month))
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
+let scheduleLoadSequence = 0
+let activeLoadKey = ''
+let activeLoad: Promise<void> | null = null
 
 function hydrateMonthSetting() {
   const employee = store.employees.find((row) => row.id === store.employeeId)
@@ -93,13 +97,35 @@ function hydrateMonthSetting() {
 }
 async function load() {
   store.restoreMonthMode()
-  try {
-    await Promise.all([
-      store.loadMonthlySchedules(),
-      store.run(async () => { store.monthSettings = await api.getMonthlySettings(store.month); return store.monthSettings })
-    ])
-  } catch { /* the shell exposes the persistent store error and retains all local editors */ }
-  hydrateMonthSetting()
+  if (!/^\d{4}-\d{2}$/.test(store.month)) {
+    store.selectMonth(dayjs().format('YYYY-MM'))
+    return
+  }
+  const employeeId = store.employeeId
+  const month = store.month
+  const requestKey = `${employeeId}:${month}`
+  if (activeLoad && activeLoadKey === requestKey) return activeLoad
+  const requestId = ++scheduleLoadSequence
+  const request = (async () => {
+    try {
+      if (!employeeId) {
+        const settings = await store.run(() => api.getMonthlySettings(month))
+        if (requestId !== scheduleLoadSequence || store.employeeId || store.month !== month) return
+        store.monthlySchedules = []
+        store.monthSettings = settings
+        hydrateMonthSetting()
+        return
+      }
+      const [rows, settings] = await store.run(() => Promise.all([api.getMonthlySchedules(employeeId, month), api.getMonthlySettings(month)]))
+      if (requestId !== scheduleLoadSequence || store.employeeId !== employeeId || store.month !== month) return
+      store.monthlySchedules = rows
+      store.monthSettings = settings
+      hydrateMonthSetting()
+    } catch { /* the shell exposes the persistent store error and retains all local editors */ }
+  })()
+  activeLoadKey = requestKey
+  activeLoad = request
+  try { await request } finally { if (activeLoad === request) { activeLoad = null; activeLoadKey = '' } }
 }
 function openDay(date: string) { editingDate.value = date; drawerError.value = ''; drawerVisible.value = true }
 function toggleDate(date: string) {
@@ -142,7 +168,7 @@ async function saveBatch(payload: BatchMonthlySchedulePayload) {
 async function saveMonthSetting() {
   if (!store.employeeId) return
   try {
-    await store.run(() => api.saveMonthlySetting({ employeeId: store.employeeId, month: store.month, scheduledWorkDays: workdayCount.value, restQuotaDays: restQuotaDays.value }), true)
+    await store.run(() => api.saveMonthlySetting({ employeeId: store.employeeId, month: store.month, restQuotaDays: restQuotaDays.value }), true)
     await load()
   } catch (error) { store.setError(errorText(error, '月休额度保存失败')) }
 }

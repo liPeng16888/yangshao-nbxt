@@ -22,6 +22,7 @@ import {
   normalizeMonthlySettingResponse,
   getLeaves,
   getMonthlySchedules,
+  saveMonthlySetting,
   saveAttendance,
   normalizePayrollAdjustmentResponse,
   normalizePayrollResponse,
@@ -50,6 +51,12 @@ describe('employee attendance real API adapters', () => {
     expect(request.get).toHaveBeenCalledWith('/employee-attendance/leaves', {
       params: expect.objectContaining({ employeeIds: 'emp-1,emp-2', month: '2026-08' })
     })
+  })
+
+  it('sends only the editable monthly rest quota and receives a server-derived workday count', async () => {
+    vi.mocked(request.post).mockResolvedValueOnce({ id: 'ms-1', employeeId: 'emp-1', month: '2026-08', restQuotaDays: '3', scheduledWorkDays: '21' })
+    await expect(saveMonthlySetting({ employeeId: 'emp-1', month: '2026-08', restQuotaDays: 3 })).resolves.toMatchObject({ restQuotaDays: 3, scheduledWorkDays: 21 })
+    expect(request.post).toHaveBeenCalledWith('/employee-attendance/month-settings', { employeeId: 'emp-1', month: '2026-08', restQuotaDays: 3 }, {})
   })
 
   it('normalizes ordered actual attendance segments and numeric totals', () => {

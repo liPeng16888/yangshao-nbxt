@@ -108,6 +108,13 @@ describe('employee attendance mock repository', () => {
     expect(rows.filter(row => ['2026-08-03', '2026-08-04'].includes(row.date)).every(row => row.scheduledMinutes === 480 && row.segments.length === 2)).toBe(true)
   })
 
+  it('derives monthly setting workdays from persisted monthly schedules instead of accepting a client total', async () => {
+    const month = dayjs().format('YYYY-MM')
+    const rows = await mockGetMonthlySchedules('emp-1', month)
+    const setting = await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 3 })
+    expect(setting).toMatchObject({ restQuotaDays: 3, scheduledWorkDays: rows.filter((row) => row.isWorkday && row.segments.length > 0).length })
+  })
+
   it('returns every selected cross-month batch row with exact update and overwrite counts', async () => {
     const first = await mockBatchSaveMonthlySchedules({
       employeeId: 'emp-1', dates: ['2026-09-01', '2026-08-31'], isWorkday: true,
@@ -225,8 +232,7 @@ describe('employee attendance mock repository', () => {
   it('derives payroll from monthly schedules and treats missing attendance as normal', async () => {
     await mockReviewLeave('leave-1', 'APPROVED')
     const month = dayjs().format('YYYY-MM')
-    const scheduledWorkDays = (await mockGetMonthlySchedules('emp-1', month)).filter(row => row.isWorkday).length
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 4 })
     const payroll = await mockGeneratePayroll(month)
     const item = payroll.items.find(row => row.employeeId === 'emp-1')!
     expect(item.issues).toEqual([])
@@ -282,8 +288,8 @@ describe('employee attendance mock repository', () => {
       employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: previousMonday, endDate: previousMonday,
       unit: 'FULL_DAY', reason: '上月待审请假'
     })
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 4 })
-    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, scheduledWorkDays: 1, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, restQuotaDays: 4 })
     const draft = await mockGeneratePayroll(month)
     expect(draft.issues.join('')).not.toContain('请假待审批')
     await mockCreatePayrollAdjustment(draft.items[0].id, { amount: 88, reason: '补发岗位补贴' })
@@ -296,8 +302,8 @@ describe('employee attendance mock repository', () => {
   it('calculates leave, absence, overtime, commission, bonus and signed adjustments with two-decimal rounding', async () => {
     const month = dayjs().format('YYYY-MM')
     await mockReviewLeave('leave-1', 'APPROVED')
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 2, restQuotaDays: 0 })
-    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, scheduledWorkDays: 1, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 0 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, restQuotaDays: 4 })
     const leaveDate = dayjs(`${month}-01`).day(1).month() === dayjs(`${month}-01`).month()
       ? dayjs(`${month}-01`).day(1).format('YYYY-MM-DD')
       : dayjs(`${month}-01`).add(1, 'week').day(1).format('YYYY-MM-DD')
@@ -342,8 +348,8 @@ describe('employee attendance mock repository', () => {
   it('flags uncovered no-punch time and subtracts approved leave coverage from recorded absence', async () => {
     const month = dayjs().format('YYYY-MM')
     await mockReviewLeave('leave-1', 'APPROVED')
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 4 })
-    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, scheduledWorkDays: 1, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, restQuotaDays: 4 })
     const record = (await mockGetAttendance({ employeeId: 'emp-2', month }))[0]
     await expect(mockSaveAttendance({ ...record, checkInAt: '', checkOutAt: '', absenceMinutes: 0 }, record.id))
       .rejects.toThrow('必须完整记录')
@@ -357,8 +363,8 @@ describe('employee attendance mock repository', () => {
   it('includes rest-day overtime and stores a complete immutable server-shaped calculation snapshot', async () => {
     const month = dayjs().format('YYYY-MM')
     await mockReviewLeave('leave-1', 'APPROVED')
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 4 })
-    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, scheduledWorkDays: 1, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, restQuotaDays: 4 })
     let restDate = dayjs(`${month}-01`)
     while (restDate.day() !== 6) restDate = restDate.add(1, 'day')
     await mockSaveAttendance({ employeeId: 'emp-1', date: restDate.format('YYYY-MM-DD'), isScheduledWorkday: false, scheduledMinutes: 0, absenceMinutes: 0, overtimeMinutes: 60 })
@@ -389,8 +395,8 @@ describe('employee attendance mock repository', () => {
     await seedMonthlyRange('emp-1', start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'))
     const leave = await mockSaveLeave({ employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: start.format('YYYY-MM-DD'), endDate: end.format('YYYY-MM-DD'), unit: 'FULL_DAY', reason: '跨月事假' })
     await mockReviewLeave(leave.id, 'APPROVED')
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 0 })
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month: nextMonth, scheduledWorkDays: 1, restQuotaDays: 0 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 0 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month: nextMonth, restQuotaDays: 0 })
 
     const current = (await mockGeneratePayroll(month)).items.find((row) => row.employeeId === 'emp-1')!.calculationSnapshot.input
     const next = (await mockGeneratePayroll(nextMonth)).items.find((row) => row.employeeId === 'emp-1')!.calculationSnapshot.input
@@ -401,8 +407,8 @@ describe('employee attendance mock repository', () => {
   it('deducts an explicitly recorded absence without blocking payroll confirmation', async () => {
     const month = dayjs().format('YYYY-MM')
     await mockReviewLeave('leave-1', 'APPROVED')
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 4 })
-    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, scheduledWorkDays: 1, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, restQuotaDays: 4 })
     const record = (await mockGetAttendance({ employeeId: 'emp-1', month }))[0]
     await mockSaveAttendance({ ...record, absenceMinutes: 480 }, record.id)
     const draft = await mockGeneratePayroll(month)
@@ -415,7 +421,7 @@ describe('employee attendance mock repository', () => {
   it('preserves a draft payroll item and its adjustment after employee eligibility changes', async () => {
     const month = dayjs().format('YYYY-MM')
     await mockReviewLeave('leave-1', 'APPROVED')
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 4 })
     const record = (await mockGetAttendance({ employeeId: 'emp-1', month }))[0]
     await mockSaveAttendance({ ...record, checkInAt: `${record.date}T08:00:00+08:00`, checkOutAt: `${record.date}T17:00:00+08:00`, absenceMinutes: 0 }, record.id)
     const draft = await mockGeneratePayroll(month)
@@ -498,8 +504,8 @@ describe('employee attendance mock repository', () => {
     const nextCommission = await mockSaveCommission({ employeeId: 'emp-1', commissionTypeId: 'ct-1', date: nextDate, quantity: 1 })
     const currentBonus = await mockSaveBonus({ employeeId: 'emp-1', date: today, amount: 20, reason: '本月奖金' })
     const nextBonus = await mockSaveBonus({ employeeId: 'emp-1', date: nextDate, amount: 10, reason: '下月奖金' })
-    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 4 })
-    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, scheduledWorkDays: 1, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, restQuotaDays: 4 })
+    await mockSaveMonthlySetting({ employeeId: 'emp-2', month, restQuotaDays: 4 })
     await mockConfirmPayroll((await mockGeneratePayroll(month)).id)
 
     const currentAttendance = (await mockGetAttendance({ employeeId: 'emp-1', month }))[0]

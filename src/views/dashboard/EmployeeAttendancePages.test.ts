@@ -1,6 +1,6 @@
 import { defineComponent, nextTick } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -167,6 +167,137 @@ describe('employee attendance navigation', () => {
     await wrapper.get('[data-testid="copy-previous-month"]').trigger('click')
     expect(wrapper.text()).toContain('覆盖当前月已有排班')
     wrapper.unmount()
+  })
+
+  it('keeps the latest employee/month response when an older schedule request resolves last', async () => {
+    let resolveFirst!: (rows: any[]) => void
+    let resolveSecond!: (rows: any[]) => void
+    const first = new Promise<any[]>((resolve) => { resolveFirst = resolve })
+    const second = new Promise<any[]>((resolve) => { resolveSecond = resolve })
+    const schedules = vi.spyOn(attendanceApi, 'getMonthlySchedules')
+      .mockImplementationOnce(() => first)
+      .mockImplementationOnce(() => second)
+    vi.spyOn(attendanceApi, 'getMonthlySettings').mockResolvedValue([])
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    store.employeeId = 'emp-2'
+    await flushPromises()
+    resolveSecond([{ id: 'new', employeeId: 'emp-2', date: '2026-08-03', isWorkday: false, segments: [], scheduledMinutes: 0, breakMinutes: 0 }])
+    await flushPromises()
+    resolveFirst([{ id: 'old', employeeId: 'emp-1', date: '2026-08-03', isWorkday: true, segments: [{ startTime: '08:00', endTime: '16:00' }], scheduledMinutes: 480, breakMinutes: 0 }])
+    await flushPromises()
+
+    expect(schedules).toHaveBeenCalledTimes(2)
+    expect(store.monthlySchedules).toEqual([expect.objectContaining({ id: 'new', employeeId: 'emp-2' })])
+    wrapper.unmount()
+    schedules.mockRestore()
+  })
+
+  it('does not request schedules with an empty month and restores a valid month', async () => {
+    const schedules = vi.spyOn(attendanceApi, 'getMonthlySchedules')
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.employeeId = 'emp-1'
+    store.selectMonth('')
+    await flushPromises()
+    expect(store.month).toMatch(/^\d{4}-\d{2}$/)
+    expect(schedules).not.toHaveBeenCalledWith('emp-1', '')
+    wrapper.unmount()
+    schedules.mockRestore()
+  })
+
+  it('saves and deletes the selected daily schedule using its calendar payload', async () => {
+    const save = vi.spyOn(attendanceApi, 'saveMonthlyScheduleDay').mockImplementation(async (payload) => ({ id: 'saved', ...payload, scheduledMinutes: 480, breakMinutes: 0 }))
+    const remove = vi.spyOn(attendanceApi, 'deleteMonthlyScheduleDay').mockResolvedValue()
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    const drawer = wrapper.get('[data-testid="schedule-day-drawer"]')
+    await drawer.findAll('button').find((node) => node.text() === '保存')!.trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 'emp-1', date: '2026-08-03', isWorkday: true, segments: [expect.objectContaining({ startTime: '08:00', endTime: '16:00' })] }))
+
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    await wrapper.get('[data-testid="schedule-day-drawer"]').findAll('button').find((node) => node.text() === '删除当天排班')!.trigger('click')
+    await flushPromises()
+    expect(remove).toHaveBeenCalledWith('monthly-emp-1-2026-08-03')
+    wrapper.unmount()
+    save.mockRestore(); remove.mockRestore()
+  })
+
+  it('rejects a locally invalid interval without discarding the edited values', async () => {
+    const save = vi.spyOn(attendanceApi, 'saveMonthlyScheduleDay')
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    const timeControls = wrapper.get('[data-testid="schedule-day-drawer"]').findAllComponents({ name: 'ElTimeSelect' })
+    timeControls[0]!.vm.$emit('update:modelValue', '18:00')
+    await nextTick()
+    await wrapper.get('[data-testid="schedule-day-drawer"]').findAll('button').find((node) => node.text() === '保存')!.trigger('click')
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="schedule-day-drawer"]').text()).toContain('下班时间晚于上班时间')
+    expect((timeControls[0]!.vm as any).modelValue).toBe('18:00')
+    wrapper.unmount()
+    save.mockRestore()
+  })
+
+  it('confirms a batch payload before saving and clears the selected dates on success', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const saveBatch = vi.spyOn(attendanceApi, 'batchSaveMonthlySchedules').mockResolvedValue({ rows: [], updated: 2, overwritten: 2 })
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-mode"]').trigger('click')
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    await wrapper.get('[data-date="2026-08-04"]').trigger('click')
+    await wrapper.get('[data-testid="apply-batch"]').trigger('click')
+    await wrapper.findAll('button').find((node) => node.text() === '确认批量覆盖')!.trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalled()
+    expect(saveBatch).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 'emp-1', dates: ['2026-08-03', '2026-08-04'] }))
+    expect(wrapper.find('[data-testid="apply-batch"]').exists()).toBe(false)
+    wrapper.unmount()
+    confirm.mockRestore(); saveBatch.mockRestore()
+  })
+
+  it('shows a copy failure without closing the confirmation and refreshes after a successful copy', async () => {
+    const copy = vi.spyOn(attendanceApi, 'copyPreviousMonthSchedules')
+      .mockRejectedValueOnce(new Error('上月暂无可复制排班'))
+      .mockResolvedValueOnce({ copied: 22, targetMonth: '2026-08' })
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    await wrapper.get('[data-testid="copy-previous-month"]').trigger('click')
+    const copyButton = () => wrapper.findAll('button').find((node) => node.text().startsWith('确认复制'))!
+    await copyButton().trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('上月暂无可复制排班')
+    await copyButton().trigger('click')
+    await flushPromises()
+    expect(copy).toHaveBeenLastCalledWith('emp-1', '2026-08', true)
+    expect(wrapper.text()).not.toContain('上月暂无可复制排班')
+    wrapper.unmount()
+    copy.mockRestore()
   })
 
   it('visibly switches the records page between mutually exclusive month and date-range filters', async () => {

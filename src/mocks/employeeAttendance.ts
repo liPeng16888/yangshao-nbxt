@@ -4,7 +4,7 @@ import type {
   BatchMonthlySchedulePayload,
   CommissionPayload, CommissionRecord, CommissionType, CommissionTypePayload, CompensationTotal,
   DateOverridePayload, Employee, EmployeeAttendanceInput, EmployeeAttendanceState, EmployeePayload, EmployeeQuery, LeaveRequest,
-  LeaveRequestPayload, LeaveStatus, LeaveType, LeaveTypePayload, MonthlySetting, PayrollItem,
+  LeaveRequestPayload, LeaveStatus, LeaveType, LeaveTypePayload, MonthlySettingPayload, PayrollItem,
   MonthlyScheduleDay, MonthlySchedulePayload, RevealedEmployee, ScheduleSegment, WeeklySchedulePayload
 } from '@/types/employeeAttendance'
 import { breakMinutes, deriveAttendanceMetrics, normalizeClockIntervals, scheduledMinutes } from '@/utils/attendanceIntervals'
@@ -214,7 +214,17 @@ export async function mockSaveDateOverride(payload: DateOverridePayload, overrid
 }
 export async function mockDeleteDateOverride(overrideId: string) { const row = entity(read().overrides, overrideId, '临时调班'); ensureDraftForDate(row.date); remove(read().overrides, overrideId) }
 export async function mockGetMonthlySettings(month?: string) { return later(read().monthSettings.filter((row) => !month || row.month === month)) }
-export async function mockSaveMonthlySetting(payload: Omit<MonthlySetting, 'id'>) { ensureDraftForDate(`${payload.month}-01`); const found = read().monthSettings.find((row) => row.employeeId === payload.employeeId && row.month === payload.month); if (found) Object.assign(found, payload); else read().monthSettings.push({ ...payload, id: id('month-setting') }); save(); return later(found || read().monthSettings.at(-1)!) }
+export async function mockSaveMonthlySetting(payload: MonthlySettingPayload) {
+  ensureDraftForDate(`${payload.month}-01`)
+  const state = read()
+  const scheduledWorkDays = state.monthlySchedules.filter((row) => row.employeeId === payload.employeeId && monthOf(row.date) === payload.month && row.isWorkday && row.segments.length > 0).length
+  const value = { ...payload, scheduledWorkDays }
+  const found = state.monthSettings.find((row) => row.employeeId === payload.employeeId && row.month === payload.month)
+  if (found) Object.assign(found, value)
+  else state.monthSettings.push({ ...value, id: id('month-setting') })
+  save()
+  return later(found || state.monthSettings.at(-1)!)
+}
 export async function mockDeleteMonthlySetting(settingId: string) { const row = entity(read().monthSettings, settingId, '月休设置'); ensureDraftForDate(`${row.month}-01`); remove(read().monthSettings, settingId) }
 
 function validateBusinessDate(date: string) {

@@ -23,6 +23,7 @@ export interface WeeklySchedule extends WeeklySchedulePayload { id: string }
 export interface DateOverridePayload { employeeId: string; date: string; isWorkday: boolean; plannedStartTime?: string | null; plannedEndTime?: string | null; scheduledMinutes: number; remark?: string }
 export interface DateOverride extends DateOverridePayload { id: string }
 export interface MonthlySetting { id: string; employeeId: string; month: string; scheduledWorkDays: number; restQuotaDays: number }
+export interface MonthlySettingPayload { employeeId: string; month: string; restQuotaDays: number }
 
 export interface ScheduleSegment { id?: string; sequence?: number; startTime: string; endTime: string }
 export interface MonthlySchedulePayload { employeeId: string; date: string; isWorkday: boolean; segments: ScheduleSegment[]; remark?: string }
