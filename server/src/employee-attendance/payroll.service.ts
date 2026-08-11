@@ -481,11 +481,9 @@ export class PayrollService {
     const overlapEnd = leave.endDate < end ? leave.endDate : end
     if (overlapStart > overlapEnd) return new Prisma.Decimal(0)
     const scheduledDays = scheduleDays.filter((item) => item.date >= overlapStart && item.date <= overlapEnd).length
-    if (leave.unit === EmployeeLeaveUnit.HOUR) return scheduledDays ? new Prisma.Decimal(leave.countedDays) : new Prisma.Decimal(0)
-    if (scheduledDays) return new Prisma.Decimal(scheduledDays).times(leave.unit === EmployeeLeaveUnit.HALF_DAY ? 0.5 : 1)
-    const total = this.daysInclusive(leave.startDate, leave.endDate)
-    const overlap = this.daysInclusive(overlapStart, overlapEnd)
-    return new Prisma.Decimal(leave.countedDays).times(overlap).div(total)
+    if (!scheduledDays) return new Prisma.Decimal(0)
+    if (leave.unit === EmployeeLeaveUnit.HOUR) return new Prisma.Decimal(leave.countedDays)
+    return new Prisma.Decimal(scheduledDays).times(leave.unit === EmployeeLeaveUnit.HALF_DAY ? 0.5 : 1)
   }
 
   private leaveMinutesForDate(leaves: any[], date: string, scheduledMinutes: number) {

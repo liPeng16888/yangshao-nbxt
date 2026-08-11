@@ -1010,7 +1010,7 @@ export class EmployeeAttendanceService {
     })
   }
 
-  private async countLeaveDays(frontendUserId: string, payload: LeaveRequestDto, db: Pick<Prisma.TransactionClient, 'employeeDateOverride' | 'employeeWeeklySchedule'> = this.prisma) {
+  private async countLeaveDays(frontendUserId: string, payload: LeaveRequestDto, db: Pick<Prisma.TransactionClient, 'employeeMonthlyScheduleDay'> = this.prisma) {
     const days = this.daysInclusive(payload.startDate, payload.endDate)
     if (payload.unit === EmployeeLeaveUnit.HOUR) {
       if (days !== 1) throw new BadRequestException('小时请假必须在同一天')
@@ -1029,13 +1029,10 @@ export class EmployeeAttendanceService {
     return new Prisma.Decimal(payload.unit === EmployeeLeaveUnit.HALF_DAY ? workdays * 0.5 : workdays)
   }
 
-  private async scheduledMinutesForDate(frontendUserId: string, employeeId: string, date: string, db: Pick<Prisma.TransactionClient, 'employeeDateOverride' | 'employeeWeeklySchedule'> = this.prisma) {
-    const override = await db.employeeDateOverride.findFirst({ where: { frontendUserId, employeeId, date } })
-    if (override) return override.isWorkday ? this.minutes(override.scheduledMinutes) : 0
-    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay()
-    const weekly = await db.employeeWeeklySchedule.findFirst({ where: { frontendUserId, employeeId, weekday } })
-    if (!weekly) throw new ConflictException(`缺少 ${date} 的员工排班`)
-    return weekly.isWorkday ? this.minutes(weekly.scheduledMinutes) : 0
+  private async scheduledMinutesForDate(frontendUserId: string, employeeId: string, date: string, db: Pick<Prisma.TransactionClient, 'employeeMonthlyScheduleDay'> = this.prisma) {
+    const schedule = await db.employeeMonthlyScheduleDay.findFirst({ where: { frontendUserId, employeeId, date } })
+    if (!schedule) throw new ConflictException(`缺少 ${date} 的员工月度排班`)
+    return schedule.isWorkday ? this.minutes(schedule.scheduledMinutes) : 0
   }
 
   private employeeDto(row: any, reveal: boolean) {

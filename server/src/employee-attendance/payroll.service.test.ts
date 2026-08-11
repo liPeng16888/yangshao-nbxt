@@ -144,7 +144,11 @@ describe('PayrollService frontend payroll', () => {
     expect(run.items[0].scheduledWorkDays).toEqual(decimal(2))
   })
 
-  it('does not count hourly leave outside the employee schedule bounds', async () => {
+  it.each([
+    ['hourly', EmployeeLeaveUnit.HOUR, 0.25],
+    ['full-day', EmployeeLeaveUnit.FULL_DAY, 1],
+    ['half-day', EmployeeLeaveUnit.HALF_DAY, 0.5]
+  ])('does not count %s leave outside the employee schedule bounds', async (_label, unit, countedDays) => {
     const { service, tx } = serviceFixture()
     tx.employee.findMany.mockResolvedValue([{ ...employee, hireDate: '2026-08-10' }])
     tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(1), restQuotaDays: decimal(0) }])
@@ -152,8 +156,9 @@ describe('PayrollService frontend payroll', () => {
       { ...workdays(1)[0], date: '2026-08-10' }
     ])
     tx.employeeLeaveRequest.findMany.mockResolvedValue([{
-      employeeId: employee.id, startDate: '2026-08-01', endDate: '2026-08-01', unit: EmployeeLeaveUnit.HOUR,
-      hours: decimal(2), countedDays: decimal(0.25), leaveType: { countsTowardRestQuota: true }
+      employeeId: employee.id, startDate: '2026-08-01', endDate: '2026-08-01', unit,
+      hours: unit === EmployeeLeaveUnit.HOUR ? decimal(2) : null,
+      countedDays: decimal(countedDays), leaveType: { countsTowardRestQuota: true }
     }])
     tx.employeePayrollRun.findFirst.mockResolvedValue(null)
     tx.employeePayrollRun.create.mockResolvedValue({ id: 'run-1', frontendUserId: 'front-1', month: '2026-08', status: EmployeePayrollStatus.DRAFT })
