@@ -153,7 +153,10 @@ model User {
   employeeWeeklySchedules         EmployeeWeeklySchedule[]
   employeeDateOverrides           EmployeeDateOverride[]
   employeeMonthlySettings         EmployeeMonthlySetting[]
+  employeeMonthlyScheduleDays     EmployeeMonthlyScheduleDay[]
+  employeeScheduleSegments        EmployeeScheduleSegment[]
   employeeAttendanceRecords       EmployeeAttendanceRecord[]
+  employeeAttendanceSegments      EmployeeAttendanceSegment[]
   employeeLeaveTypes              EmployeeLeaveType[]
   employeeLeaveRequests           EmployeeLeaveRequest[]       @relation("FrontendEmployeeLeaveRequests")
   reviewedEmployeeLeaveRequests   EmployeeLeaveRequest[]       @relation("EmployeeLeaveReviewer")
@@ -555,16 +558,17 @@ model Employee {
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
 
-  frontendUser       User                        @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  weeklySchedules    EmployeeWeeklySchedule[]
-  dateOverrides      EmployeeDateOverride[]
-  monthlySettings    EmployeeMonthlySetting[]
-  attendanceRecords  EmployeeAttendanceRecord[]
-  leaveRequests      EmployeeLeaveRequest[]
-  commissionRecords  EmployeeCommissionRecord[]
-  bonuses            EmployeeBonus[]
-  payrollItems       EmployeePayrollItem[]
-  payrollAdjustments EmployeePayrollAdjustment[]
+  frontendUser        User                         @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  weeklySchedules     EmployeeWeeklySchedule[]
+  dateOverrides       EmployeeDateOverride[]
+  monthlySettings     EmployeeMonthlySetting[]
+  monthlyScheduleDays EmployeeMonthlyScheduleDay[]
+  attendanceRecords   EmployeeAttendanceRecord[]
+  leaveRequests       EmployeeLeaveRequest[]
+  commissionRecords   EmployeeCommissionRecord[]
+  bonuses             EmployeeBonus[]
+  payrollItems        EmployeePayrollItem[]
+  payrollAdjustments  EmployeePayrollAdjustment[]
 
   @@unique([frontendUserId, employeeNumber])
   @@unique([id, frontendUserId])
@@ -631,6 +635,42 @@ model EmployeeMonthlySetting {
   @@index([frontendUserId, month])
 }
 
+model EmployeeMonthlyScheduleDay {
+  id               String    @id @default(uuid())
+  frontendUserId   String
+  employeeId       String
+  date             String
+  isWorkday        Boolean
+  scheduledMinutes Int       @default(0)
+  remark           String?
+  payrollLockedAt  DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  segments     EmployeeScheduleSegment[]
+  frontendUser User                      @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee                  @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([employeeId, date])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, date])
+}
+
+model EmployeeScheduleSegment {
+  id             String @id @default(uuid())
+  frontendUserId String
+  scheduleDayId  String
+  sequence       Int
+  startTime      String
+  endTime        String
+
+  frontendUser User                       @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  scheduleDay  EmployeeMonthlyScheduleDay @relation(fields: [scheduleDayId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([scheduleDayId, sequence])
+  @@index([frontendUserId, scheduleDayId])
+}
+
 model EmployeeAttendanceRecord {
   id                 String    @id @default(uuid())
   frontendUserId     String
@@ -651,13 +691,29 @@ model EmployeeAttendanceRecord {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  frontendUser User                        @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee                    @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  segments     EmployeeAttendanceSegment[]
 
   @@unique([employeeId, date])
   @@unique([id, frontendUserId])
   @@index([frontendUserId, date])
   @@index([frontendUserId, employeeId, date])
+}
+
+model EmployeeAttendanceSegment {
+  id                 String   @id @default(uuid())
+  frontendUserId     String
+  attendanceRecordId String
+  sequence           Int
+  checkInAt          DateTime
+  checkOutAt         DateTime
+
+  frontendUser     User                     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  attendanceRecord EmployeeAttendanceRecord @relation(fields: [attendanceRecordId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([attendanceRecordId, sequence])
+  @@index([frontendUserId, attendanceRecordId])
 }
 
 model EmployeeLeaveType {
