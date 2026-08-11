@@ -6,12 +6,16 @@ import { businessDateInBeijing } from '../common/date'
 import { calculateResults, createEmptyInputs, defaultLabParameters, defaultSampleBlockCount, editableInputFields, hasLabDetectionInput } from '../common/lab'
 import { LabSheetRealtimeService } from './lab-sheet-realtime.service'
 import { collapseConsecutiveFieldChanges } from '../common/change-log'
+import { SharedPrepaidLedgerService } from '../shared-prepaid/shared-prepaid-ledger.service'
+
+const prepaidTupleFields = ['paymentStatus', 'price', 'prepaidMemberId', 'prepaidMemberPhone']
 
 @Injectable()
 export class LabSheetsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly realtime: LabSheetRealtimeService
+    private readonly realtime: LabSheetRealtimeService,
+    private readonly sharedPrepaid: SharedPrepaidLedgerService
   ) {}
 
   async getSheetForFrontendUser(frontendUserId: string, date = businessDateInBeijing(), canViewCompletedSensitiveData = true) {
@@ -184,6 +188,22 @@ export class LabSheetsService {
       if (!Object.keys(effectiveChangedFields).length) return { block, sheet, changed: false }
       this.assertNoInputConflict(block, blockPayload, effectiveChangedFields)
       const nextInputs = { ...oldInputs, ...effectiveChangedFields }
+      const prepaidTupleChanged = prepaidTupleFields.some((field) => (
+        Object.prototype.hasOwnProperty.call(effectiveChangedFields, field)
+      ))
+      if (prepaidTupleChanged && (oldInputs.paymentStatus === '预存款' || nextInputs.paymentStatus === '预存款')) {
+        await this.sharedPrepaid.syncSampleConsumption(tx, {
+          sheetId: sheet.id,
+          sampleBlockId: block.id,
+          sampleIndex: block.index,
+          sheetDate: sheet.date,
+          consumingFrontendUserId: dataOwnerId,
+          actorUserId: user.id,
+          oldInputs,
+          nextInputs,
+          idempotencyKey: String(blockPayload.idempotencyKey || '')
+        })
+      }
       const sheetParameters = (sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
       const existingSnapshot = (block.parameterSnapshot || sheetParameters) as typeof defaultLabParameters
       const firstDetectionInput = !hasLabDetectionInput(oldInputs) && hasLabDetectionInput(nextInputs)
@@ -463,7 +483,7 @@ export class LabSheetsService {
 
   private redactCompletedInputs(inputs: Record<string, unknown>) {
     const redacted = { ...inputs }
-    for (const field of ['ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust', 'sulfur', 'densityRaw', 'whiteness', 'calciumRaw', 'magnesiumRaw', 'carbon', 'titaniumRaw', 'waterSample', 'bottleWater', 'bottleWaterSample', 'moisture', 'crucible', 'sampleWeight', 'burnedCrucibleSample', 'price', 'paymentStatus']) redacted[field] = null
+    for (const field of ['ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust', 'sulfur', 'densityRaw', 'whiteness', 'calciumRaw', 'magnesiumRaw', 'carbon', 'titaniumRaw', 'waterSample', 'bottleWater', 'bottleWaterSample', 'moisture', 'crucible', 'sampleWeight', 'burnedCrucibleSample', 'price', 'paymentStatus', 'prepaidMemberId', 'prepaidMemberPhone']) redacted[field] = null
     return redacted
   }
 

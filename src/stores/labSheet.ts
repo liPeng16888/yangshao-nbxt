@@ -354,9 +354,10 @@ export const useLabSheetStore = defineStore('labSheet', () => {
         autoSaveError.value = '该样品格已被另一台设备修改'
         ElMessage.error('该样品格存在修改冲突，已保留本机内容')
       } else {
+        const businessConflictMessage = getBusinessConflictMessage(error)
         autoSaveStatus.value = 'error'
-        autoSaveError.value = error instanceof Error ? error.message : '自动保存失败'
-        ElMessage.error('自动保存失败，数据已保存在本机草稿中')
+        autoSaveError.value = businessConflictMessage || (error instanceof Error ? error.message : '自动保存失败')
+        ElMessage.error(businessConflictMessage || '自动保存失败，数据已保存在本机草稿中')
       }
       persistLocalDraft()
     } finally {
@@ -526,6 +527,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return {
       payload: {
         id: block.id,
+        idempotencyKey: crypto.randomUUID(),
         baseUpdatedAt: block.updatedAt,
         baseInputs,
         changedFields,
@@ -982,6 +984,27 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   function getConflictBlock(error: unknown): SampleBlock | null {
     const data = (error as { response?: { data?: { block?: SampleBlock; message?: { block?: SampleBlock } } } })?.response?.data
     return data?.block || data?.message?.block || null
+  }
+
+  function getBusinessConflictMessage(error: unknown): string {
+    const response = (error as {
+      response?: {
+        status?: number
+        data?: {
+          message?: string | { message?: string; availableBalance?: unknown }
+          availableBalance?: unknown
+        }
+      }
+    })?.response
+    if (response?.status !== 409 || !response.data) return ''
+    const nested = typeof response.data.message === 'object' ? response.data.message : undefined
+    const message = typeof response.data.message === 'string'
+      ? response.data.message
+      : nested?.message || '业务状态已变化，请刷新后重试'
+    const availableBalance = response.data.availableBalance ?? nested?.availableBalance
+    return availableBalance === undefined || availableBalance === null
+      ? message
+      : `${message}，当前可用余额：${String(availableBalance)} 元`
   }
 
   return {

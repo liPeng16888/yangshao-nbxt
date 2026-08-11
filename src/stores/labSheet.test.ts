@@ -246,6 +246,63 @@ describe('labSheet store auto save', () => {
     )
   })
 
+  it('creates one idempotency key and reuses the same payload object for transient retries', async () => {
+    apiMocks.saveSampleBlock
+      .mockRejectedValueOnce({ response: { status: 500 }, message: 'server error' })
+      .mockResolvedValueOnce(makeBlock({ sampleNumber: 'RETRIED' }))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    store.patchBlock('block-1', { sampleNumber: 'RETRIED' })
+    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(2)
+    const firstPayload = apiMocks.saveSampleBlock.mock.calls[0][1]
+    const retriedPayload = apiMocks.saveSampleBlock.mock.calls[1][1]
+    expect(firstPayload).toBe(retriedPayload)
+    expect(firstPayload.idempotencyKey).toEqual(expect.any(String))
+    expect(firstPayload.idempotencyKey).not.toBe('')
+  })
+
+  it('does not retry an insufficient-balance conflict and preserves the dirty draft with the latest balance message', async () => {
+    apiMocks.saveSampleBlock.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          code: 'PREPAID_BALANCE_INSUFFICIENT',
+          message: '会员预付余额不足',
+          availableBalance: '20.00'
+        }
+      },
+      message: 'Request failed with status code 409'
+    })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    store.patchBlock('block-1', {
+      paymentStatus: '预存款',
+      price: 100,
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    })
+    await vi.advanceTimersByTimeAsync(900)
+
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(1)
+    expect(store.sampleBlocks[0].inputs).toMatchObject({
+      paymentStatus: '预存款',
+      price: 100,
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    })
+    expect(store.pendingAutoSaveCount).toBe(1)
+    expect(store.autoSaveStatus).toBe('error')
+    expect(store.autoSaveError).toBe('会员预付余额不足，当前可用余额：20.00 元')
+    expect(Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index))).toEqual(
+      expect.arrayContaining([expect.stringContaining('ys_lab_draft:v1:front-1:front-1:2026-06-25:sheet-1')])
+    )
+  })
+
   it('isolates a subaccount draft by both shared owner and actual actor', async () => {
     window.localStorage.setItem('ys_user', JSON.stringify({ id: 'sub-1', dataOwnerId: 'front-1', account: 'sub-1' }))
     apiMocks.saveSampleBlock.mockRejectedValue({ response: { status: 400 }, message: 'bad request' })

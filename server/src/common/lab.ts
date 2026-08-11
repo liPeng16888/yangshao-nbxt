@@ -26,6 +26,8 @@ export const editableInputFields = [
   'recipientCustomerText',
   'price',
   'paymentStatus',
+  'prepaidMemberId',
+  'prepaidMemberPhone',
   'ironRaw',
   'siliconRaw',
   'siliconAdjust',

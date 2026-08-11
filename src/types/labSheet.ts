@@ -44,6 +44,8 @@ export interface LabSampleInput {
   recipientCustomerText?: string
   price?: number | null
   paymentStatus?: SamplePaymentStatus | ''
+  prepaidMemberId?: string
+  prepaidMemberPhone?: string
   ironRaw?: number | null
   siliconRaw?: number | null
   siliconAdjust?: number | null
@@ -101,6 +103,7 @@ export interface LabChangeLogField {
 
 export interface SampleBlockSavePayload {
   id: string
+  idempotencyKey?: string
   baseUpdatedAt?: string
   baseInputs?: Partial<LabSampleInput>
   changedFields?: Partial<LabSampleInput>

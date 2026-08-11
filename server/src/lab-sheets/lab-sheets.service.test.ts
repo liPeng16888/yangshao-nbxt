@@ -76,6 +76,7 @@ describe('LabSheetsService default sheet selection', () => {
     $transaction: vi.fn(async (operation: (tx: typeof transaction) => unknown) => operation(transaction))
   }
   const realtime = { publish: vi.fn() }
+  const prepaid = { syncSampleConsumption: vi.fn() }
   let service: LabSheetsService
 
   beforeEach(() => {
@@ -114,7 +115,9 @@ describe('LabSheetsService default sheet selection', () => {
       if (block) Object.assign(block, data)
       return { ...makeBlock(Number(String(where.id).replace('block-', ''))), ...block, ...data }
     })
-    service = new LabSheetsService(prisma as never, realtime as never)
+    prepaid.syncSampleConsumption.mockReset()
+    prepaid.syncSampleConsumption.mockResolvedValue(undefined)
+    service = new LabSheetsService(prisma as never, realtime as never, prepaid as never)
     prisma.labSheet.findFirst.mockResolvedValue(null)
     prisma.cellChangeLog.findMany.mockResolvedValue([])
     prisma.cellChangeLog.findFirst.mockResolvedValue(null)
@@ -294,6 +297,8 @@ describe('LabSheetsService default sheet selection', () => {
       ironRaw: 1.234,
       price: 88,
       paymentStatus: '已结款',
+      prepaidMemberId: 'member-sensitive',
+      prepaidMemberPhone: '13800000000',
       note: '保留备注'
     })]))
 
@@ -301,7 +306,16 @@ describe('LabSheetsService default sheet selection', () => {
     const block = result.sampleBlocks[0]
 
     expect(block.sensitiveFieldsHidden).toBe(true)
-    expect((block.inputs as Record<string, unknown>)).toMatchObject({ sampleNumber: 'KEEP-001', customerText: '保留客户', note: '保留备注', ironRaw: null, price: null, paymentStatus: null })
+    expect((block.inputs as Record<string, unknown>)).toMatchObject({
+      sampleNumber: 'KEEP-001',
+      customerText: '保留客户',
+      note: '保留备注',
+      ironRaw: null,
+      price: null,
+      paymentStatus: null,
+      prepaidMemberId: null,
+      prepaidMemberPhone: null
+    })
   })
 
   it('keeps today sheet editable even when it was stored readonly before today', async () => {
@@ -438,6 +452,187 @@ describe('LabSheetsService default sheet selection', () => {
     expect((result.inputs as Record<string, unknown>).sampleNumber).toBe('NEW')
     expect((result.inputs as Record<string, unknown>).moisture).toBe(4.268)
     expect((result.inputs as Record<string, unknown>).completed).toBe(true)
+  })
+
+  it('atomically synchronizes a new prepaid consumption before saving the sample', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, { sampleNumber: 'A-001' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...block, ...data }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'cell-save-1',
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '138-0000-0000'
+        }
+      }
+    )
+
+    expect(prepaid.syncSampleConsumption).toHaveBeenCalledWith(transaction, expect.objectContaining({
+      sheetId: `sheet-${today}`,
+      sampleBlockId: 'block-1',
+      sampleIndex: 1,
+      sheetDate: today,
+      consumingFrontendUserId: 'front-1',
+      actorUserId: 'sub-1',
+      idempotencyKey: 'cell-save-1',
+      nextInputs: expect.objectContaining({
+        paymentStatus: '预存款',
+        price: 100,
+        prepaidMemberId: 'member-1',
+        prepaidMemberPhone: '138-0000-0000'
+      })
+    }))
+    expect(prepaid.syncSampleConsumption.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.sampleBlock.update.mock.invocationCallOrder[0]
+    )
+  })
+
+  it.each([
+    ['amount', { price: 125.5 }],
+    ['member', { prepaidMemberId: 'member-2', prepaidMemberPhone: '13900000000' }],
+    ['payment status', {
+      paymentStatus: '已结款',
+      prepaidMemberId: null,
+      prepaidMemberPhone: null
+    }]
+  ])('synchronizes prepaid consumption when the %s changes', async (_label, changedFields) => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, {
+        paymentStatus: '预存款',
+        price: 100,
+        prepaidMemberId: 'member-1',
+        prepaidMemberPhone: '13800000000'
+      }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...block, ...data }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: `change-${_label}`, changedFields }
+    )
+
+    expect(prepaid.syncSampleConsumption).toHaveBeenCalledTimes(1)
+    expect(prepaid.syncSampleConsumption).toHaveBeenCalledWith(transaction, expect.objectContaining({
+      oldInputs: expect.objectContaining({
+        paymentStatus: '预存款',
+        price: 100,
+        prepaidMemberId: 'member-1'
+      }),
+      nextInputs: expect.objectContaining(changedFields)
+    }))
+  })
+
+  it('does not invoke the prepaid ledger for an unrelated field change', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, {
+        paymentStatus: '预存款',
+        price: 100,
+        prepaidMemberId: 'member-1',
+        prepaidMemberPhone: '13800000000'
+      }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...block, ...data }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'unrelated-1', changedFields: { note: '复核通过' } }
+    )
+
+    expect(prepaid.syncSampleConsumption).not.toHaveBeenCalled()
+  })
+
+  it('does not save a sample or its change log when prepaid balance is insufficient', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prepaid.syncSampleConsumption.mockRejectedValueOnce(new Error('PREPAID_BALANCE_INSUFFICIENT'))
+
+    await expect(service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'insufficient-1',
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        }
+      }
+    )).rejects.toThrow('PREPAID_BALANCE_INSUFFICIENT')
+    expect(prisma.sampleBlock.update).not.toHaveBeenCalled()
+    expect(transaction.cellChangeLog.create).not.toHaveBeenCalled()
+    expect(transaction.cellChangeLog.update).not.toHaveBeenCalled()
+  })
+
+  it('treats a response-loss retry as already saved without duplicating consumption', async () => {
+    const today = businessDateInBeijing()
+    const savedInputs = {
+      ...createEmptyInputs(1),
+      paymentStatus: '预存款',
+      price: 100,
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    }
+    const block = {
+      ...makeBlock(1, savedInputs),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+
+    const result = await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'cell-save-retry',
+        baseUpdatedAt: '2026-08-11T00:00:00.000Z',
+        baseInputs: { paymentStatus: '', price: null, prepaidMemberId: null, prepaidMemberPhone: null },
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        }
+      }
+    )
+
+    expect(result.inputs).toMatchObject(savedInputs)
+    expect(prepaid.syncSampleConsumption).not.toHaveBeenCalled()
+    expect(prisma.sampleBlock.update).not.toHaveBeenCalled()
   })
 
   it('returns granted saved data to the caller but publishes only a metadata refresh signal', async () => {

@@ -4,7 +4,13 @@ import {
   ForbiddenException,
   ValidationPipe
 } from '@nestjs/common'
-import { Prisma, SharedPrepaidLedgerKind, UserRole } from '@prisma/client'
+import {
+  Prisma,
+  SharedPrepaidConsumptionKind,
+  SharedPrepaidLedgerKind,
+  SharedPrepaidPayableStatus,
+  UserRole
+} from '@prisma/client'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { CurrentUser } from '../auth/current-user'
@@ -99,10 +105,47 @@ interface StoredLedger {
 interface StoredConsumption {
   id: string
   memberId: string
+  consumingFrontendUserId?: string
+  actorUserId?: string
+  kind?: SharedPrepaidConsumptionKind
   amount: Prisma.Decimal
+  sheetId?: string
+  sampleBlockId?: string
+  sampleIndex?: number
+  sampleNumberSnapshot?: string | null
+  sampleCountSnapshot?: number
+  elementsSnapshot?: unknown
+  phoneSnapshot?: string
+  sheetDate?: string
   active: boolean
+  reversalOfId?: string | null
+  idempotencyKey?: string
   createdAt: Date
   [key: string]: unknown
+}
+
+interface StoredAllocation {
+  id: string
+  consumptionId: string
+  rechargeId: string
+  sourceOwnerId: string
+  allocatedAmount: Prisma.Decimal
+  paidRatio: Prisma.Decimal
+  exactTransferAmount: Prisma.Decimal
+  createdAt: Date
+}
+
+interface StoredPayable {
+  id: string
+  consumptionId: string
+  sourceOwnerId: string
+  consumerOwnerId: string
+  exactAmount: Prisma.Decimal
+  amount: Prisma.Decimal
+  status: SharedPrepaidPayableStatus
+  reversalOfId: string | null
+  createdAt: Date
+  updatedAt: Date
 }
 
 class FakePrisma {
@@ -110,10 +153,13 @@ class FakePrisma {
   recharges: StoredRecharge[] = []
   ledgerEntries: StoredLedger[] = []
   consumptions: StoredConsumption[] = []
+  allocations: StoredAllocation[] = []
+  payables: StoredPayable[] = []
   lockedMemberIds: string[] = []
   memberUpsertRacePhone: string | null = null
   failNextLedgerCreate = false
   p2002AfterNextCommit: 'same-request' | 'different-request' | null = null
+  failNextMemberUpdateMany = false
   private nextId = 1
 
   private user(id: string) {
@@ -160,6 +206,8 @@ class FakePrisma {
   readonly sharedPrepaidRecharge: any = {}
   readonly sharedPrepaidLedgerEntry: any = {}
   readonly sharedPrepaidConsumption: any = {}
+  readonly sharedPrepaidAllocation: any = {}
+  readonly sharedPrepaidPayable: any = {}
 
   constructor() {
     this.sharedPrepaidMember.findUnique = async (args: any) => {
@@ -206,6 +254,21 @@ class FakePrisma {
       member.updatedAt = createdAt
       return { ...member }
     }
+    this.sharedPrepaidMember.updateMany = async (args: any) => {
+      if (this.failNextMemberUpdateMany) {
+        this.failNextMemberUpdateMany = false
+        return { count: 0 }
+      }
+      const member = this.members.find((candidate) => candidate.id === args.where.id)
+      if (!member || (args.where.version !== undefined && member.version !== args.where.version)) return { count: 0 }
+      const minimumBalance = args.where.cachedBalance?.gte
+      if (minimumBalance !== undefined && member.cachedBalance.lessThan(minimumBalance)) return { count: 0 }
+      if (args.data.cachedBalance?.increment) member.cachedBalance = member.cachedBalance.add(args.data.cachedBalance.increment)
+      if (args.data.cachedBalance?.decrement) member.cachedBalance = member.cachedBalance.sub(args.data.cachedBalance.decrement)
+      member.version += args.data.version?.increment ?? 0
+      member.updatedAt = createdAt
+      return { count: 1 }
+    }
     this.sharedPrepaidMember.findMany = async (args: any) => {
       let rows = [...this.members]
       const phoneFilter = args.where?.phone?.contains
@@ -248,8 +311,30 @@ class FakePrisma {
       Object.assign(recharge, args.data, { updatedAt: createdAt })
       return this.rechargeWithRelations(recharge)
     }
+    this.sharedPrepaidRecharge.updateMany = async (args: any) => {
+      const recharge = this.recharges.find((candidate) => candidate.id === args.where.id)
+      if (!recharge) return { count: 0 }
+      if (args.where.reversedAt === null && recharge.reversedAt !== null) return { count: 0 }
+      if (args.where.remainingAmount?.gte !== undefined && recharge.remainingAmount.lessThan(args.where.remainingAmount.gte)) {
+        return { count: 0 }
+      }
+      if (args.data.remainingAmount?.increment) {
+        recharge.remainingAmount = recharge.remainingAmount.add(args.data.remainingAmount.increment)
+      }
+      if (args.data.remainingAmount?.decrement) {
+        recharge.remainingAmount = recharge.remainingAmount.sub(args.data.remainingAmount.decrement)
+      }
+      recharge.updatedAt = createdAt
+      return { count: 1 }
+    }
     this.sharedPrepaidRecharge.findMany = async (args: any) => {
       let rows = [...this.recharges]
+      if (args.where?.memberId) rows = rows.filter((row) => row.memberId === args.where.memberId)
+      if (args.where?.id?.in) rows = rows.filter((row) => args.where.id.in.includes(row.id))
+      if (args.where?.reversedAt === null) rows = rows.filter((row) => row.reversedAt === null)
+      if (args.where?.remainingAmount?.gt !== undefined) {
+        rows = rows.filter((row) => row.remainingAmount.greaterThan(args.where.remainingAmount.gt))
+      }
       if (args.where?.member?.phone?.contains) {
         const value = args.where.member.phone.contains
         rows = rows.filter((row) => this.members.find((member) => member.id === row.memberId)?.phone.includes(value))
@@ -260,7 +345,15 @@ class FakePrisma {
       if (typeof args.where?.isOpeningBalance === 'boolean') {
         rows = rows.filter((row) => row.isOpeningBalance === args.where.isOpeningBalance)
       }
-      rows.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+      if (Array.isArray(args.orderBy)) {
+        rows.sort((left, right) => (
+          left.rechargeDate.localeCompare(right.rechargeDate) ||
+          left.createdAt.getTime() - right.createdAt.getTime() ||
+          left.id.localeCompare(right.id)
+        ))
+      } else {
+        rows.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+      }
       rows = rows.slice(args.skip ?? 0, (args.skip ?? 0) + (args.take ?? rows.length))
       return rows.map((row) => this.rechargeWithRelations(row))
     }
@@ -288,10 +381,99 @@ class FakePrisma {
       return { ...entry }
     }
 
+    const consumptionWithRelations = (row: StoredConsumption) => ({
+      ...row,
+      allocations: this.allocations
+        .filter((allocation) => allocation.consumptionId === row.id)
+        .map((allocation) => ({
+          ...allocation,
+          recharge: this.recharges.find((recharge) => recharge.id === allocation.rechargeId)
+        })),
+      payables: this.payables.filter((payable) => payable.consumptionId === row.id)
+    })
+    this.sharedPrepaidConsumption.findFirst = async (args: any) => {
+      const row = this.consumptions.find((candidate) => (
+        (!args.where?.sampleBlockId || candidate.sampleBlockId === args.where.sampleBlockId) &&
+        (typeof args.where?.active !== 'boolean' || candidate.active === args.where.active) &&
+        (!args.where?.kind || candidate.kind === args.where.kind)
+      ))
+      return row ? consumptionWithRelations(row) : null
+    }
+    this.sharedPrepaidConsumption.findUnique = async (args: any) => {
+      const row = this.consumptions.find((candidate) => (
+        args.where.id ? candidate.id === args.where.id : candidate.idempotencyKey === args.where.idempotencyKey
+      ))
+      return row ? consumptionWithRelations(row) : null
+    }
     this.sharedPrepaidConsumption.findMany = async (args: any) => this.consumptions.filter((row) => (
       (!args.where?.memberId || row.memberId === args.where.memberId) &&
       (typeof args.where?.active !== 'boolean' || row.active === args.where.active)
-    ))
+    )).map((row) => consumptionWithRelations(row))
+    this.sharedPrepaidConsumption.create = async (args: any) => {
+      if (this.consumptions.some((row) => row.idempotencyKey === args.data.idempotencyKey)) {
+        throw { code: 'P2002', meta: { target: ['idempotencyKey'] } }
+      }
+      if (args.data.kind === SharedPrepaidConsumptionKind.CONSUMPTION && args.data.active && this.consumptions.some((row) => (
+        row.sampleBlockId === args.data.sampleBlockId && row.active && row.kind === SharedPrepaidConsumptionKind.CONSUMPTION
+      ))) throw { code: 'P2002', meta: { target: ['sampleBlockId'] } }
+      const row: StoredConsumption = {
+        id: `consumption-${this.nextId++}`,
+        ...args.data,
+        reversalOfId: args.data.reversalOfId ?? null,
+        createdAt
+      }
+      this.consumptions.push(row)
+      return consumptionWithRelations(row)
+    }
+    this.sharedPrepaidConsumption.updateMany = async (args: any) => {
+      const rows = this.consumptions.filter((candidate) => (
+        candidate.id === args.where.id &&
+        (typeof args.where.active !== 'boolean' || candidate.active === args.where.active)
+      ))
+      rows.forEach((row) => Object.assign(row, args.data))
+      return { count: rows.length }
+    }
+
+    this.sharedPrepaidAllocation.createMany = async (args: any) => {
+      for (const data of args.data) {
+        this.allocations.push({ id: `allocation-${this.nextId++}`, ...data, createdAt })
+      }
+      return { count: args.data.length }
+    }
+
+    this.sharedPrepaidPayable.createMany = async (args: any) => {
+      for (const data of args.data) {
+        this.payables.push({
+          id: `payable-${this.nextId++}`,
+          status: SharedPrepaidPayableStatus.PENDING,
+          reversalOfId: null,
+          ...data,
+          createdAt,
+          updatedAt: createdAt
+        })
+      }
+      return { count: args.data.length }
+    }
+    this.sharedPrepaidPayable.create = async (args: any) => {
+      const row: StoredPayable = {
+        id: `payable-${this.nextId++}`,
+        status: SharedPrepaidPayableStatus.PENDING,
+        reversalOfId: null,
+        ...args.data,
+        createdAt,
+        updatedAt: createdAt
+      }
+      this.payables.push(row)
+      return { ...row }
+    }
+    this.sharedPrepaidPayable.updateMany = async (args: any) => {
+      const rows = this.payables.filter((candidate) => (
+        candidate.id === args.where.id &&
+        (!args.where.status || candidate.status === args.where.status)
+      ))
+      rows.forEach((row) => Object.assign(row, args.data, { updatedAt: createdAt }))
+      return { count: rows.length }
+    }
   }
 
   async $transaction<T>(callback: (tx: FakePrisma) => Promise<T>): Promise<T> {
@@ -325,6 +507,8 @@ class FakePrisma {
       recharges: this.recharges.map((row) => this.cloneValue(row)),
       ledgerEntries: this.ledgerEntries.map((row) => this.cloneValue(row)),
       consumptions: this.consumptions.map((row) => this.cloneValue(row)),
+      allocations: this.allocations.map((row) => this.cloneValue(row)),
+      payables: this.payables.map((row) => this.cloneValue(row)),
       lockedMemberIds: [...this.lockedMemberIds],
       nextId: this.nextId
     }
@@ -335,6 +519,8 @@ class FakePrisma {
     this.recharges = snapshot.recharges
     this.ledgerEntries = snapshot.ledgerEntries
     this.consumptions = snapshot.consumptions
+    this.allocations = snapshot.allocations
+    this.payables = snapshot.payables
     this.lockedMemberIds = snapshot.lockedMemberIds
     this.nextId = snapshot.nextId
   }
@@ -360,6 +546,33 @@ function rechargePayload(overrides: Record<string, unknown> = {}) {
     giftAmount: '100.00',
     isOpeningBalance: false,
     remark: '首次充值',
+    ...overrides
+  }
+}
+
+function consumptionInput(overrides: Record<string, unknown> = {}) {
+  return {
+    sheetId: 'sheet-1',
+    sampleBlockId: 'block-1',
+    sampleIndex: 1,
+    sheetDate: '2026-08-12',
+    consumingFrontendUserId: 'front-1',
+    actorUserId: 'sub-1',
+    oldInputs: {
+      sampleNumber: 'A-001',
+      ironRaw: 1,
+      paymentStatus: '',
+      price: null
+    },
+    nextInputs: {
+      sampleNumber: 'A-001',
+      ironRaw: 1,
+      paymentStatus: '预存款',
+      price: 100,
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    },
+    idempotencyKey: 'consume-1',
     ...overrides
   }
 }
@@ -659,6 +872,378 @@ describe('SharedPrepaidLedgerService', () => {
       .rejects.toBeInstanceOf(ConflictException)
     await expect(service.reverseRecharge(mainUser, second.id, '金额录错', 'idem-reversal'))
       .rejects.toBeInstanceOf(ConflictException)
+  })
+
+  it('consumes the current owner lots first, then global FIFO lots, and creates one rounded payable per source owner', async () => {
+    const otherLot = await service.createRecharge(otherMainUser, rechargePayload({
+      rechargeDate: '2026-08-01',
+      paidAmount: 100,
+      giftAmount: 10
+    }), 'lot-other')
+    const ownLot = await service.createRecharge(mainUser, rechargePayload({
+      rechargeDate: '2026-08-10',
+      paidAmount: 60,
+      giftAmount: 0
+    }), 'lot-own')
+    const memberId = prisma.members[0].id
+
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId
+      }
+    }))
+
+    expect(prisma.allocations.map((row) => ({ rechargeId: row.rechargeId, amount: row.allocatedAmount.toNumber() }))).toEqual([
+      { rechargeId: ownLot.id, amount: 60 },
+      { rechargeId: otherLot.id, amount: 40 }
+    ])
+    expect(prisma.payables).toHaveLength(1)
+    expect(prisma.payables[0]).toMatchObject({
+      sourceOwnerId: 'front-2',
+      consumerOwnerId: 'front-1',
+      exactAmount: new Prisma.Decimal('36.36363636'),
+      amount: new Prisma.Decimal('36.4'),
+      status: SharedPrepaidPayableStatus.PENDING
+    })
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(70)
+    expect(prisma.ledgerEntries.at(-1)).toMatchObject({
+      kind: SharedPrepaidLedgerKind.CONSUMPTION,
+      balanceDelta: new Prisma.Decimal(-100),
+      ownerFrontendUserId: 'front-1',
+      actorUserId: 'sub-1'
+    })
+  })
+
+  it('rejects an insufficient deduction without partial lot, member, consumption, or payable writes', async () => {
+    const recharge = await service.createRecharge(mainUser, rechargePayload({ paidAmount: 50, giftAmount: 0 }), 'lot-small')
+    const memberId = prisma.members[0].id
+
+    const operation = service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 60
+      },
+      idempotencyKey: 'consume-insufficient'
+    }))
+
+    await expect(operation).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'PREPAID_BALANCE_INSUFFICIENT',
+        availableBalance: new Prisma.Decimal(50)
+      })
+    })
+    expect(prisma.recharges.find((row) => row.id === recharge.id)?.remainingAmount.toNumber()).toBe(50)
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(50)
+    expect(prisma.consumptions).toEqual([])
+    expect(prisma.allocations).toEqual([])
+    expect(prisma.payables).toEqual([])
+    expect(prisma.ledgerEntries).toHaveLength(1)
+  })
+
+  it('reverses the exact original lots before applying a changed prepaid amount', async () => {
+    const recharge = await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'lot-change')
+    const memberId = prisma.members[0].id
+    const originalNextInputs = {
+      ...consumptionInput().nextInputs as object,
+      prepaidMemberId: memberId,
+      price: 60
+    }
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: originalNextInputs,
+      idempotencyKey: 'consume-original'
+    }))
+
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      oldInputs: originalNextInputs,
+      nextInputs: { ...originalNextInputs, price: 30 },
+      idempotencyKey: 'consume-changed'
+    }))
+
+    expect(prisma.consumptions.map((row) => ({ kind: row.kind, amount: row.amount.toNumber(), active: row.active }))).toEqual([
+      { kind: SharedPrepaidConsumptionKind.CONSUMPTION, amount: 60, active: false },
+      { kind: SharedPrepaidConsumptionKind.REVERSAL, amount: 60, active: false },
+      { kind: SharedPrepaidConsumptionKind.CONSUMPTION, amount: 30, active: true }
+    ])
+    expect(prisma.recharges.find((row) => row.id === recharge.id)?.remainingAmount.toNumber()).toBe(70)
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(70)
+    expect(prisma.ledgerEntries.slice(-3).map((row) => row.balanceDelta.toNumber())).toEqual([-60, 60, -30])
+  })
+
+  it('restores the old member and charges the normalized global phone member when selection changes', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'member-one-lot')
+    await service.createRecharge(otherMainUser, rechargePayload({
+      phone: '13900000000',
+      paidAmount: 80,
+      giftAmount: 0
+    }), 'member-two-lot')
+    const firstMember = prisma.members.find((row) => row.phone === '13800000000')!
+    const secondMember = prisma.members.find((row) => row.phone === '13900000000')!
+    const firstInputs = {
+      ...consumptionInput().nextInputs as object,
+      prepaidMemberId: firstMember.id,
+      price: 40
+    }
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: firstInputs,
+      idempotencyKey: 'member-first'
+    }))
+
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      oldInputs: firstInputs,
+      nextInputs: {
+        ...firstInputs,
+        prepaidMemberId: secondMember.id,
+        prepaidMemberPhone: '139-0000-0000',
+        price: 30
+      },
+      idempotencyKey: 'member-changed'
+    }))
+
+    expect(firstMember.cachedBalance.toNumber()).toBe(100)
+    expect(secondMember.cachedBalance.toNumber()).toBe(50)
+    expect(prisma.consumptions.filter((row) => row.active)).toMatchObject([{
+      memberId: secondMember.id,
+      phoneSnapshot: '13900000000',
+      amount: new Prisma.Decimal(30)
+    }])
+  })
+
+  it('creates an opposite payable without rewriting a completed settlement', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'cross-lot')
+    const memberId = prisma.members[0].id
+    const prepaidInputs = {
+      ...consumptionInput().nextInputs as object,
+      prepaidMemberId: memberId,
+      price: 40
+    }
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      consumingFrontendUserId: 'front-2',
+      actorUserId: 'front-2',
+      nextInputs: prepaidInputs,
+      idempotencyKey: 'cross-consume'
+    }))
+    prisma.payables[0].status = SharedPrepaidPayableStatus.COMPLETED
+
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      consumingFrontendUserId: 'front-2',
+      actorUserId: 'front-2',
+      oldInputs: prepaidInputs,
+      nextInputs: {
+        ...prepaidInputs,
+        paymentStatus: '已结款',
+        prepaidMemberId: null,
+        prepaidMemberPhone: null
+      },
+      idempotencyKey: 'cross-reversal'
+    }))
+
+    expect(prisma.payables).toHaveLength(2)
+    expect(prisma.payables[0].status).toBe(SharedPrepaidPayableStatus.COMPLETED)
+    expect(prisma.payables[1]).toMatchObject({
+      sourceOwnerId: 'front-2',
+      consumerOwnerId: 'front-1',
+      exactAmount: new Prisma.Decimal(40),
+      amount: new Prisma.Decimal(40),
+      reversalOfId: prisma.payables[0].id,
+      status: SharedPrepaidPayableStatus.PENDING
+    })
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(100)
+  })
+
+  it('returns idempotently after response loss without duplicate consumption, allocation, payable, or ledger rows', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'retry-lot')
+    const memberId = prisma.members[0].id
+    const input = consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 40
+      },
+      idempotencyKey: 'response-loss'
+    })
+
+    await service.syncSampleConsumption(prisma as never, input)
+    await service.syncSampleConsumption(prisma as never, input)
+
+    expect(prisma.consumptions).toHaveLength(1)
+    expect(prisma.allocations).toHaveLength(1)
+    expect(prisma.payables).toHaveLength(0)
+    expect(prisma.ledgerEntries.filter((row) => row.kind === SharedPrepaidLedgerKind.CONSUMPTION)).toHaveLength(1)
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(60)
+  })
+
+  it('rejects an orphan consumption idempotency row instead of appending duplicate financial rows', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'orphan-lot')
+    const memberId = prisma.members[0].id
+    prisma.consumptions.push({
+      id: 'orphan-consumption',
+      memberId,
+      consumingFrontendUserId: 'front-1',
+      actorUserId: 'sub-1',
+      kind: SharedPrepaidConsumptionKind.CONSUMPTION,
+      amount: new Prisma.Decimal(40),
+      sheetId: 'other-sheet',
+      sampleBlockId: 'other-block',
+      sampleIndex: 1,
+      sampleNumberSnapshot: null,
+      sampleCountSnapshot: 1,
+      elementsSnapshot: [],
+      phoneSnapshot: '13800000000',
+      sheetDate: '2026-08-12',
+      active: false,
+      reversalOfId: null,
+      idempotencyKey: 'orphan-consumption-key',
+      createdAt
+    })
+
+    await expect(service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 40
+      },
+      idempotencyKey: 'orphan-consumption-key'
+    }))).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_IDEMPOTENCY_STATE_INVALID' })
+    })
+    expect(prisma.consumptions).toHaveLength(1)
+    expect(prisma.allocations).toEqual([])
+  })
+
+  it('marks an unheld pending payable reversed without fabricating an opposite transfer', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'pending-lot')
+    const memberId = prisma.members[0].id
+    const prepaidInputs = {
+      ...consumptionInput().nextInputs as object,
+      prepaidMemberId: memberId,
+      price: 25
+    }
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      consumingFrontendUserId: 'front-2',
+      actorUserId: 'front-2',
+      nextInputs: prepaidInputs,
+      idempotencyKey: 'pending-consume'
+    }))
+
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      consumingFrontendUserId: 'front-2',
+      actorUserId: 'front-2',
+      oldInputs: prepaidInputs,
+      nextInputs: { ...prepaidInputs, paymentStatus: '已结款' },
+      idempotencyKey: 'pending-reversal'
+    }))
+
+    expect(prisma.payables).toHaveLength(1)
+    expect(prisma.payables[0].status).toBe(SharedPrepaidPayableStatus.REVERSED)
+  })
+
+  it('rolls back a reversed original consumption when the replacement amount is insufficient', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'replace-lot')
+    const memberId = prisma.members[0].id
+    const prepaidInputs = {
+      ...consumptionInput().nextInputs as object,
+      prepaidMemberId: memberId,
+      price: 60
+    }
+    await prisma.$transaction((tx) => service.syncSampleConsumption(tx as never, consumptionInput({
+      nextInputs: prepaidInputs,
+      idempotencyKey: 'replace-original'
+    })))
+
+    await expect(prisma.$transaction((tx) => service.syncSampleConsumption(tx as never, consumptionInput({
+      oldInputs: prepaidInputs,
+      nextInputs: { ...prepaidInputs, price: 120 },
+      idempotencyKey: 'replace-insufficient'
+    })))).rejects.toBeInstanceOf(ConflictException)
+
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(40)
+    expect(prisma.recharges[0].remainingAmount.toNumber()).toBe(40)
+    expect(prisma.consumptions).toHaveLength(1)
+    expect(prisma.consumptions[0].active).toBe(true)
+    expect(prisma.ledgerEntries.filter((row) => row.kind !== SharedPrepaidLedgerKind.RECHARGE)).toHaveLength(1)
+  })
+
+  it('rolls back lot and consumption writes when the optimistic member version update loses', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'version-lot')
+    const memberId = prisma.members[0].id
+    prisma.failNextMemberUpdateMany = true
+
+    await expect(prisma.$transaction((tx) => service.syncSampleConsumption(tx as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 40
+      },
+      idempotencyKey: 'version-conflict'
+    })))).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_BALANCE_VERSION_CONFLICT' })
+    })
+
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(100)
+    expect(prisma.recharges[0].remainingAmount.toNumber()).toBe(100)
+    expect(prisma.consumptions).toEqual([])
+    expect(prisma.allocations).toEqual([])
+  })
+
+  it('blocks reversal while a payable is held by an unfinished settlement', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'held-lot')
+    const memberId = prisma.members[0].id
+    const prepaidInputs = {
+      ...consumptionInput().nextInputs as object,
+      prepaidMemberId: memberId,
+      price: 20
+    }
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      consumingFrontendUserId: 'front-2',
+      actorUserId: 'front-2',
+      nextInputs: prepaidInputs,
+      idempotencyKey: 'held-consume'
+    }))
+    prisma.payables[0].status = SharedPrepaidPayableStatus.HELD
+
+    await expect(service.syncSampleConsumption(prisma as never, consumptionInput({
+      consumingFrontendUserId: 'front-2',
+      actorUserId: 'front-2',
+      oldInputs: prepaidInputs,
+      nextInputs: { ...prepaidInputs, paymentStatus: '已结款' },
+      idempotencyKey: 'held-reversal'
+    }))).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_CONSUMPTION_SETTLEMENT_HELD' })
+    })
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(80)
+    expect(prisma.consumptions[0].active).toBe(true)
+  })
+
+  it('rejects an incomplete or mismatched prepaid member tuple before changing balance', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'tuple-lot')
+    const memberId = prisma.members[0].id
+
+    await expect(service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: '',
+        prepaidMemberPhone: '13800000000'
+      },
+      idempotencyKey: 'tuple-missing'
+    }))).rejects.toBeInstanceOf(BadRequestException)
+    await service.createRecharge(otherMainUser, rechargePayload({
+      phone: '13900000000',
+      paidAmount: 50,
+      giftAmount: 0
+    }), 'tuple-other-member')
+    await expect(service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        prepaidMemberPhone: '13900000000'
+      },
+      idempotencyKey: 'tuple-mismatch'
+    }))).rejects.toBeInstanceOf(BadRequestException)
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(100)
+    expect(prisma.members[1].cachedBalance.toNumber()).toBe(50)
+    expect(prisma.consumptions).toEqual([])
   })
 })
 
