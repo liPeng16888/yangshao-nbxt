@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import type {
-  AttendanceOverview, AttendancePayload, AttendanceQuery, AttendanceRecord, BonusPayload, BonusRecord,
+  ActualAttendanceSegment, AttendanceOverview, AttendancePayload, AttendanceQuery, AttendanceRecord, BonusPayload, BonusRecord,
   BatchMonthlySchedulePayload,
   CommissionPayload, CommissionRecord, CommissionType, CommissionTypePayload, CompensationTotal,
   DateOverridePayload, Employee, EmployeeAttendanceInput, EmployeeAttendanceState, EmployeePayload, EmployeeQuery, LeaveRequest,
@@ -10,7 +10,7 @@ import type {
 import { breakMinutes, deriveAttendanceMetrics, normalizeClockIntervals, scheduledMinutes } from '@/utils/attendanceIntervals'
 
 const STORAGE_KEY = 'ys_employee_attendance_v2'
-const MOCK_SCHEMA_VERSION = 3
+const MOCK_SCHEMA_VERSION = 4
 const now = () => dayjs().toISOString()
 const id = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
@@ -128,11 +128,30 @@ function isProvableRoundOnePhantom(state: EmployeeAttendanceState, row: MonthlyS
   return row.isWorkday === expected.isWorkday && row.scheduledMinutes === expected.scheduledMinutes && row.breakMinutes === 0
     && JSON.stringify(row.segments) === JSON.stringify(expected.segments)
 }
+function validLegacyAttendancePair(row: Partial<AttendanceRecord>): ActualAttendanceSegment[] {
+  const checkInAt = typeof row.checkInAt === 'string' ? row.checkInAt : ''
+  const checkOutAt = typeof row.checkOutAt === 'string' ? row.checkOutAt : ''
+  const checkIn = new Date(checkInAt), checkOut = new Date(checkOutAt)
+  if (!checkInAt || !checkOutAt || Number.isNaN(checkIn.getTime()) || Number.isNaN(checkOut.getTime()) || checkOut.getTime() <= checkIn.getTime()) return []
+  return [{ sequence: 0, checkInAt, checkOutAt }]
+}
+function upgradeAttendanceRecords(state: EmployeeAttendanceState) {
+  state.attendance ||= []
+  state.attendance.forEach((record) => {
+    const actualSegments = Array.isArray(record.actualSegments)
+      ? record.actualSegments.map((segment, sequence) => ({ ...segment, sequence: Number.isFinite(Number(segment.sequence)) ? Number(segment.sequence) : sequence }))
+      : validLegacyAttendancePair(record)
+    record.actualSegments = actualSegments
+    record.explicitAbsenceMinutes = actualSegments.length ? 0 : Math.max(0, Math.round(Number(record.explicitAbsenceMinutes ?? record.absenceMinutes ?? 0)))
+  })
+}
 function upgradeState(state: EmployeeAttendanceState) {
   const version = Number(state.schemaVersion || 0)
-  if (version >= MOCK_SCHEMA_VERSION) { state.monthlySchedules ||= []; return }
-  if (!Array.isArray(state.monthlySchedules) || !state.monthlySchedules.length) state.monthlySchedules = migrateMonthlySchedules(state)
-  else state.monthlySchedules = state.monthlySchedules.filter((row) => !isProvableRoundOnePhantom(state, row))
+  if (version < 3) {
+    if (!Array.isArray(state.monthlySchedules) || !state.monthlySchedules.length) state.monthlySchedules = migrateMonthlySchedules(state)
+    else state.monthlySchedules = state.monthlySchedules.filter((row) => !isProvableRoundOnePhantom(state, row))
+  } else state.monthlySchedules ||= []
+  if (version < 4) upgradeAttendanceRecords(state)
   state.schemaVersion = MOCK_SCHEMA_VERSION
 }
 function migrateMonthlySchedules(state: EmployeeAttendanceState): MonthlyScheduleDay[] {

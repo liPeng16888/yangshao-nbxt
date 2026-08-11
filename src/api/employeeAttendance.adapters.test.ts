@@ -64,6 +64,13 @@ describe('employee attendance real API adapters', () => {
       .toMatchObject({ scheduledMinutes: 480, workedMinutes: 450, lateMinutes: 10, earlyLeaveMinutes: 20, absenceMinutes: 30, overtimeMinutes: 45, actualSegments: [{ sequence: 0 }, { sequence: 1 }] })
   })
 
+  it('preserves server absence as explicit absence only when no actual intervals exist', () => {
+    expect(normalizeAttendanceResponse({ id: 'manual-absence', employeeId: 'emp-1', date: '2026-08-03', absenceMinutes: 120, actualSegments: [] }))
+      .toMatchObject({ actualSegments: [], absenceMinutes: 120, explicitAbsenceMinutes: 120 })
+    expect(normalizeAttendanceResponse({ id: 'derived-absence', employeeId: 'emp-1', date: '2026-08-03', absenceMinutes: 120, explicitAbsenceMinutes: 45, actualSegments: [{ checkInAt: '2026-08-03T08:00:00+08:00', checkOutAt: '2026-08-03T16:00:00+08:00' }] }))
+      .toMatchObject({ absenceMinutes: 120, explicitAbsenceMinutes: 0 })
+  })
+
   it('sends the DTO-shaped actual-segment attendance payload through the public save adapter', async () => {
     vi.mocked(request.post).mockResolvedValueOnce({ id: 'att-1', employeeId: 'emp-1', date: '2026-08-03', isScheduledWorkday: true, scheduledMinutes: 480, actualSegments: [], explicitAbsenceMinutes: 30, absenceMinutes: 30 })
     await expect(saveAttendance({ employeeId: 'emp-1', date: '2026-08-03', actualSegments: [], explicitAbsenceMinutes: 30, overtimeMinutes: 0 })).resolves.toMatchObject({ actualSegments: [], absenceMinutes: 30 })

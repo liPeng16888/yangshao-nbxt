@@ -85,12 +85,19 @@ function responseActualSegments(value: unknown): ActualAttendanceSegment[] {
     }
   }).sort((left, right) => (left.sequence || 0) - (right.sequence || 0))
 }
+function legacyActualSegment(checkInAt: unknown, checkOutAt: unknown): ActualAttendanceSegment[] {
+  const checkIn = typeof checkInAt === 'string' ? checkInAt : ''
+  const checkOut = typeof checkOutAt === 'string' ? checkOutAt : ''
+  if (!checkIn || !checkOut || Number.isNaN(new Date(checkIn).getTime()) || Number.isNaN(new Date(checkOut).getTime()) || new Date(checkOut).getTime() <= new Date(checkIn).getTime()) return []
+  return [{ sequence: 0, checkInAt: checkIn, checkOutAt: checkOut }]
+}
 export function normalizeAttendanceResponse(value: unknown): AttendanceRecord {
   const row = responseObject(value)
-  const actualSegments = responseActualSegments(row.actualSegments)
+  const actualSegments = Array.isArray(row.actualSegments) ? responseActualSegments(row.actualSegments) : legacyActualSegment(row.checkInAt, row.checkOutAt)
+  const explicitAbsenceMinutes = actualSegments.length ? 0 : amount(row.explicitAbsenceMinutes ?? row.absenceMinutes)
   return {
     id: String(row.id || ''), employeeId: String(row.employeeId || ''), date: String(row.date || ''), isScheduledWorkday: Boolean(row.isScheduledWorkday),
-    scheduledMinutes: amount(row.scheduledMinutes), actualSegments, explicitAbsenceMinutes: amount(row.explicitAbsenceMinutes),
+    scheduledMinutes: amount(row.scheduledMinutes), actualSegments, explicitAbsenceMinutes,
     overtimeMinutes: amount(row.overtimeMinutes), remark: typeof row.remark === 'string' ? row.remark : undefined,
     checkInAt: typeof row.checkInAt === 'string' ? row.checkInAt : actualSegments[0]?.checkInAt || '',
     checkOutAt: typeof row.checkOutAt === 'string' ? row.checkOutAt : actualSegments.at(-1)?.checkOutAt || '',

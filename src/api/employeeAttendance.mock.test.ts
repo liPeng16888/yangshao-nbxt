@@ -196,6 +196,26 @@ describe('employee attendance mock repository', () => {
     expect(await mockGetMonthlySchedules('emp-1', month)).toEqual([])
   })
 
+  it('upgrades legacy attendance pairs into actual intervals while keeping empty legacy records safe', async () => {
+    const state = JSON.parse(window.localStorage.getItem('ys_employee_attendance_v2:mock-default')!) as Record<string, any>
+    const pair = state.attendance[0]
+    const empty = { ...state.attendance[1], id: 'legacy-empty-attendance', checkInAt: '', checkOutAt: '' }
+    delete pair.actualSegments
+    delete empty.actualSegments
+    state.schemaVersion = 3
+    state.attendance = [pair, empty]
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'legacy-attendance-pairs' }))
+    window.localStorage.setItem('ys_employee_attendance_v2:legacy-attendance-pairs', JSON.stringify(state))
+
+    const rows = await mockGetAttendance()
+    expect(rows.find((row) => row.id === pair.id)?.actualSegments).toEqual([
+      expect.objectContaining({ sequence: 0, checkInAt: pair.checkInAt, checkOutAt: pair.checkOutAt })
+    ])
+    expect(rows.find((row) => row.id === empty.id)?.actualSegments).toEqual([])
+    expect(JSON.parse(window.localStorage.getItem('ys_employee_attendance_v2:legacy-attendance-pairs')!).schemaVersion).toBeGreaterThan(3)
+    expect((await mockGetAttendance()).find((row) => row.id === pair.id)?.actualSegments).toHaveLength(1)
+  })
+
   it('prunes matching migrated seeds for any employee while retaining current-month and edited prefixed rows', async () => {
     const month = dayjs().format('YYYY-MM')
     const previousMonth = dayjs(`${month}-01`).subtract(1, 'month').format('YYYY-MM')

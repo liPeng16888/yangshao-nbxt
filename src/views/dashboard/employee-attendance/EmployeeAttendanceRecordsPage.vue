@@ -74,8 +74,9 @@ const errorText = (error: unknown, fallback: string) => error instanceof Error ?
 
 function nameOf(id: string) { return store.employees.find(row => row.id === id)?.name || '-' }
 function actualText(row: AttendanceRecord) {
-  if (!row.actualSegments.length) return '未手工录入（默认正常）'
-  return row.actualSegments.map(segment => `${punchText(segment.checkInAt)}—${punchText(segment.checkOutAt)}`).join('；')
+  const actualSegments = row.actualSegments ?? []
+  if (!actualSegments.length) return '未手工录入（默认正常）'
+  return actualSegments.map(segment => `${punchText(segment.checkInAt)}—${punchText(segment.checkOutAt)}`).join('；')
 }
 function punchText(value?: string | null) { const local = api.toBeijingDateTimeLocal(value); return local ? local.replace('T', ' ') : '未录入' }
 function disableOtherDate(value: Date) { return value && dayjs(value).format('YYYY-MM-DD') !== form.date }
@@ -106,7 +107,7 @@ function openEdit(row: AttendanceRecord) {
   Object.assign(form, {
     employeeId: row.employeeId,
     date: row.date,
-    actualSegments: row.actualSegments.map(segment => ({ ...segment, checkInAt: api.toBeijingDateTimeLocal(segment.checkInAt), checkOutAt: api.toBeijingDateTimeLocal(segment.checkOutAt) })),
+    actualSegments: (row.actualSegments ?? []).map(segment => ({ ...segment, checkInAt: api.toBeijingDateTimeLocal(segment.checkInAt), checkOutAt: api.toBeijingDateTimeLocal(segment.checkOutAt) })),
     explicitAbsenceMinutes: row.explicitAbsenceMinutes || 0,
     overtimeMinutes: row.overtimeMinutes || 0,
     remark: row.remark || ''

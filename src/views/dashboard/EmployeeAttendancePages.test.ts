@@ -389,6 +389,21 @@ describe('employee attendance navigation', () => {
     wrapper.unmount()
   })
 
+  it('renders and edits a legacy attendance response without actualSegments', async () => {
+    const existing = (await mockGetAttendance({ employeeId: 'emp-1' }))[0]!
+    const legacy = { ...existing } as Record<string, unknown>
+    delete legacy.actualSegments
+    const request = vi.spyOn(attendanceApi, 'getAttendance').mockResolvedValue([legacy as any])
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('未手工录入（默认正常）')
+    await wrapper.get('[data-testid="edit-attendance-emp-1"]').trigger('click')
+    expect(wrapper.text()).toContain('默认正常出勤')
+    request.mockRestore()
+    wrapper.unmount()
+  })
+
   it('shows default normal attendance and lets an administrator add actual intervals', async () => {
     const existing = (await mockGetAttendance({ employeeId: 'emp-1' }))[0]!
     const save = vi.spyOn(attendanceApi, 'saveAttendance')
@@ -422,15 +437,70 @@ describe('employee attendance navigation', () => {
     const pinia = createPinia()
     const wrapper = mount(EmployeeLeavePage, { global: { plugins: [pinia, ElementPlus] } })
     await flushPromises()
+    const request = vi.spyOn(attendanceApi, 'getLeaves')
+    request.mockClear()
 
     const select = wrapper.getComponent<any>('[data-testid="leave-employee-filter"]')
-    select.vm.$emit('update:modelValue', ['emp-1', 'emp-2'])
+    select.vm.$emit('update:modelValue', ['emp-1'])
+    select.vm.$emit('change', ['emp-1'])
     await flushPromises()
-    expect(useEmployeeAttendanceStore(pinia).leaveEmployeeIds).toEqual(['emp-1', 'emp-2'])
+    expect(useEmployeeAttendanceStore(pinia).leaveEmployeeIds).toEqual(['emp-1'])
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ employeeIds: ['emp-1'] }))
+    expect(useEmployeeAttendanceStore(pinia).leaves.every((row) => row.employeeId === 'emp-1')).toBe(true)
 
     select.vm.$emit('update:modelValue', [])
+    select.vm.$emit('change', [])
     await flushPromises()
     expect(useEmployeeAttendanceStore(pinia).leaveEmployeeIds).toEqual([])
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ employeeIds: [] }))
+    expect(new Set(useEmployeeAttendanceStore(pinia).leaves.map((row) => row.employeeId)).size).toBeGreaterThan(1)
+    request.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('keeps invalid same-day actual interval values visible and never submits them', async () => {
+    const existing = (await mockGetAttendance({ employeeId: 'emp-1' }))[0]!
+    const save = vi.spyOn(attendanceApi, 'saveAttendance')
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    const edit = async () => {
+      await wrapper.get('[data-testid="edit-attendance-emp-1"]').trigger('click')
+      await flushPromises()
+      return wrapper.findAll('[data-testid="actual-interval"]')[0]!.findAllComponents({ name: 'ElDatePicker' })
+    }
+    const submitInvalid = async (message: string) => {
+      await wrapper.findAll('button').find((node) => node.text() === '保存')!.trigger('click')
+      await flushPromises()
+      expect(save).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain(message)
+    }
+
+    let controls = await edit()
+    ;(controls[0]! as any).vm.$emit('update:modelValue', '2026-08-12T08:00')
+    await submitInvalid('必须在所选日期内')
+    expect((controls[0]! as any).vm.modelValue).toBe('2026-08-12T08:00')
+
+    controls = await edit()
+    ;(controls[0]! as any).vm.$emit('update:modelValue', `${existing.date}T18:00`)
+    ;(controls[1]! as any).vm.$emit('update:modelValue', `${existing.date}T08:00`)
+    await submitInvalid('下班时间必须晚于上班时间')
+    expect((controls[0]! as any).vm.modelValue).toBe(`${existing.date}T18:00`)
+
+    controls = await edit()
+    ;(controls[0]! as any).vm.$emit('update:modelValue', `${existing.date}T24:00`)
+    await submitInvalid('不支持 24:00')
+    expect((controls[0]! as any).vm.modelValue).toBe(`${existing.date}T24:00`)
+
+    controls = await edit()
+    await wrapper.get('[data-testid="add-actual-interval"]').trigger('click')
+    const intervalControls = wrapper.findAll('[data-testid="actual-interval"]').flatMap((row) => row.findAllComponents({ name: 'ElDatePicker' }))
+    ;(intervalControls[1]! as any).vm.$emit('update:modelValue', `${existing.date}T12:00`)
+    ;(intervalControls[2]! as any).vm.$emit('update:modelValue', `${existing.date}T11:00`)
+    ;(intervalControls[3]! as any).vm.$emit('update:modelValue', `${existing.date}T16:00`)
+    await submitInvalid('重叠或顺序错误')
+    expect((intervalControls[2]! as any).vm.modelValue).toBe(`${existing.date}T11:00`)
+
+    save.mockRestore()
     wrapper.unmount()
   })
 
