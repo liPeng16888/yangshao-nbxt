@@ -1,9 +1,29 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { resetEmployeeAttendanceMock } from '@/mocks/employeeAttendance'
 import { syncPendingLeaveIssue, useEmployeeAttendanceStore } from './employeeAttendance'
 
 describe('employee attendance store operation state', () => {
-  beforeEach(() => setActivePinia(createPinia()))
+  beforeEach(() => {
+    const values = new Map<string, string>()
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+      clear: () => values.clear(), getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key),
+      key: (index: number) => Array.from(values.keys())[index] ?? null, get length() { return values.size }
+    } satisfies Storage })
+    setActivePinia(createPinia())
+    resetEmployeeAttendanceMock()
+  })
+
+  it('loads leaves for multiple employees while an empty selection loads all', async () => {
+    const store = useEmployeeAttendanceStore()
+    store.leaveEmployeeIds = ['emp-1', 'emp-2']
+    await store.loadLeaves()
+    expect(store.leaves.every(row => ['emp-1', 'emp-2'].includes(row.employeeId))).toBe(true)
+    store.leaveEmployeeIds = []
+    await store.loadLeaves()
+    expect(new Set(store.leaves.map(row => row.employeeId)).size).toBeGreaterThan(1)
+  })
 
   it('keeps loading active until every concurrent load has completed', async () => {
     const store = useEmployeeAttendanceStore()

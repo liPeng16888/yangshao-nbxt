@@ -16,6 +16,7 @@ import {
   mockGetEmployees,
   mockGetLeaves,
   mockGetPayroll,
+  mockGetMonthlySchedules,
   mockGetWeeklySchedules,
   mockReadEmployeePhoto,
   mockReviewLeave,
@@ -28,6 +29,7 @@ import {
   mockSaveLeave,
   mockSaveLeaveType,
   mockSaveMonthlySetting,
+  mockBatchSaveMonthlySchedules,
   mockSaveWeeklySchedule,
   mockUploadEmployeePhoto,
   mockUpdateEmployee,
@@ -83,6 +85,34 @@ describe('employee attendance mock repository', () => {
     const rest = await mockSaveWeeklySchedule({ employeeId: 'emp-1', weekday: 0, isWorkday: false, scheduledMinutes: 480, plannedStartTime: '08:00', plannedEndTime: '17:00' })
     expect(rest).toMatchObject({ scheduledMinutes: 0, plannedStartTime: null, plannedEndTime: null })
     expect((await mockGetWeeklySchedules('emp-1')).find((row) => row.weekday === 1)?.scheduledMinutes).toBe(540)
+  })
+
+  it('batch overwrite replaces every selected day and persists intervals', async () => {
+    await mockBatchSaveMonthlySchedules({
+      employeeId: 'emp-1', dates: ['2026-08-03', '2026-08-04'], isWorkday: true,
+      segments: [{ startTime: '08:00', endTime: '12:00' }, { startTime: '13:00', endTime: '17:00' }], remark: ''
+    })
+    const rows = await mockGetMonthlySchedules('emp-1', '2026-08')
+    expect(rows.filter(row => ['2026-08-03', '2026-08-04'].includes(row.date)).every(row => row.scheduledMinutes === 480 && row.segments.length === 2)).toBe(true)
+  })
+
+  it('treats an empty actual-segment list as normal attendance unless absence is explicit', async () => {
+    let next = dayjs().add(1, 'day')
+    while (next.day() === 0 || next.day() === 6) next = next.add(1, 'day')
+    const date = next.format('YYYY-MM-DD')
+    const saved = await mockSaveAttendance({ employeeId: 'emp-1', date, actualSegments: [], explicitAbsenceMinutes: 30, overtimeMinutes: 0 })
+    expect(saved).toMatchObject({ workedMinutes: 480, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 30, actualSegments: [] })
+  })
+
+  it('derives payroll from monthly schedules and treats missing attendance as normal', async () => {
+    await mockReviewLeave('leave-1', 'APPROVED')
+    const month = dayjs().format('YYYY-MM')
+    const scheduledWorkDays = (await mockGetMonthlySchedules('emp-1', month)).filter(row => row.isWorkday).length
+    await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays, restQuotaDays: 4 })
+    const payroll = await mockGeneratePayroll(month)
+    const item = payroll.items.find(row => row.employeeId === 'emp-1')!
+    expect(item.issues).toEqual([])
+    expect(item.calculationSnapshot.result).toMatchObject({ absenceDeduction: 0, attendanceBonus: 300 })
   })
 
   it('enforces timezone-aware paired punches and full uncovered no-punch absence', async () => {

@@ -1,8 +1,16 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('@/utils/request', () => ({
+  default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
+  useMocks: false
+}))
+
+import request from '@/utils/request'
 import {
   buildEmployeeMutationPayload,
   normalizeAttendanceGenerationResponse,
+  normalizeAttendanceResponse,
   normalizeAttendanceMutationPayload,
   normalizeAttendanceQuery,
   normalizeBonusResponse,
@@ -12,6 +20,8 @@ import {
   normalizeEmployeeResponse,
   normalizeLeaveResponse,
   normalizeMonthlySettingResponse,
+  getLeaves,
+  getMonthlySchedules,
   normalizePayrollAdjustmentResponse,
   normalizePayrollResponse,
   selectEmployeeAttendanceGrant,
@@ -20,6 +30,32 @@ import {
 import { verifyAccessGuardGroup } from './accessGuard'
 
 describe('employee attendance real API adapters', () => {
+  beforeEach(() => {
+    vi.mocked(request.get).mockReset()
+    vi.mocked(request.post).mockReset()
+    vi.mocked(request.post).mockResolvedValue({ expiresAt: Date.now() + 60_000, token: 'mock-access-grant:attendance-group:1', groupId: 'attendance-group', grantVersion: 1, features: [] })
+  })
+
+  it('normalizes monthly schedules and sends selected leave employee ids', async () => {
+    vi.mocked(request.get)
+      .mockResolvedValueOnce([{ id: 'day-1', employeeId: 'emp-1', date: '2026-08-03', isWorkday: true, scheduledMinutes: '480', breakMinutes: '60', segments: [{ sequence: 1, startTime: '13:00', endTime: '17:00' }, { sequence: 0, startTime: '08:00', endTime: '12:00' }] }])
+      .mockResolvedValueOnce([])
+
+    await expect(getMonthlySchedules('emp-1', '2026-08')).resolves.toEqual([{
+      id: 'day-1', employeeId: 'emp-1', date: '2026-08-03', isWorkday: true, scheduledMinutes: 480, breakMinutes: 60,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '12:00' }, { sequence: 1, startTime: '13:00', endTime: '17:00' }]
+    }])
+    await getLeaves({ employeeIds: ['emp-1', 'emp-2'], month: '2026-08' })
+    expect(request.get).toHaveBeenCalledWith('/employee-attendance/leaves', {
+      params: expect.objectContaining({ employeeIds: 'emp-1,emp-2', month: '2026-08' })
+    })
+  })
+
+  it('normalizes ordered actual attendance segments and numeric totals', () => {
+    expect(normalizeAttendanceResponse({ id: 'att-1', employeeId: 'emp-1', date: '2026-08-03', isScheduledWorkday: true, scheduledMinutes: '480', workedMinutes: '450', lateMinutes: '10', earlyLeaveMinutes: '20', absenceMinutes: '30', overtimeMinutes: '45', actualSegments: [{ sequence: 1, checkInAt: '2026-08-03T13:00:00+08:00', checkOutAt: '2026-08-03T17:00:00+08:00' }, { sequence: 0, checkInAt: '2026-08-03T08:00:00+08:00', checkOutAt: '2026-08-03T12:00:00+08:00' }] }))
+      .toMatchObject({ scheduledMinutes: 480, workedMinutes: 450, lateMinutes: 10, earlyLeaveMinutes: 20, absenceMinutes: 30, overtimeMinutes: 45, actualSegments: [{ sequence: 0 }, { sequence: 1 }] })
+  })
+
   it('omits blank sensitive fields from edits while retaining explicit changes', () => {
     const payload = buildEmployeeMutationPayload({ employeeNumber: 'YG001', name: '张三', hireDate: '2026-01-01', idCard: '', bankCard: ' ', address: '新地址', emergencyContact: '' }, true)
     expect(payload).toEqual(expect.objectContaining({ employeeNumber: 'YG001', address: '新地址' }))

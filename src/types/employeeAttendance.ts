@@ -4,7 +4,7 @@ export type LeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
 export type PayrollStatus = 'DRAFT' | 'CONFIRMED'
 
 export interface EmployeeQuery { keyword?: string; status?: EmployeeStatus | '' }
-export interface AttendanceQuery { employeeId?: string; month?: string; startDate?: string; endDate?: string; status?: LeaveStatus | '' }
+export interface AttendanceQuery { employeeId?: string; employeeIds?: string[]; month?: string; startDate?: string; endDate?: string; status?: LeaveStatus | '' }
 
 export interface EmployeePayload {
   employeeNumber: string; name: string; status?: EmployeeStatus; phone?: string; idCard?: string; bankCard?: string;
@@ -24,11 +24,23 @@ export interface DateOverridePayload { employeeId: string; date: string; isWorkd
 export interface DateOverride extends DateOverridePayload { id: string }
 export interface MonthlySetting { id: string; employeeId: string; month: string; scheduledWorkDays: number; restQuotaDays: number }
 
+export interface ScheduleSegment { id?: string; sequence?: number; startTime: string; endTime: string }
+export interface MonthlySchedulePayload { employeeId: string; date: string; isWorkday: boolean; segments: ScheduleSegment[]; remark?: string }
+export interface MonthlyScheduleDay extends MonthlySchedulePayload { id: string; scheduledMinutes: number; breakMinutes: number }
+export interface BatchMonthlySchedulePayload extends Omit<MonthlySchedulePayload, 'date'> { dates: string[] }
+export interface ActualAttendanceSegment { id?: string; sequence?: number; checkInAt: string; checkOutAt: string }
+
+/**
+ * The optional weekly-era fields let the existing attendance-record page migrate
+ * incrementally. New monthly scheduling code uses actualSegments and
+ * explicitAbsenceMinutes exclusively.
+ */
 export interface AttendancePayload {
-  employeeId: string; date: string; isScheduledWorkday: boolean; scheduledMinutes: number; checkInAt?: string | null; checkOutAt?: string | null;
-  workedMinutes?: number; lateMinutes?: number; earlyLeaveMinutes?: number; absenceMinutes?: number; overtimeMinutes?: number; remark?: string
+  employeeId: string; date: string; actualSegments?: ActualAttendanceSegment[]; explicitAbsenceMinutes?: number; overtimeMinutes?: number; remark?: string
+  isScheduledWorkday?: boolean; scheduledMinutes?: number; checkInAt?: string | null; checkOutAt?: string | null;
+  workedMinutes?: number; lateMinutes?: number; earlyLeaveMinutes?: number; absenceMinutes?: number
 }
-export interface AttendanceRecord extends AttendancePayload { id: string; manuallyEdited: boolean; lockedAt?: string | null }
+export interface AttendanceRecord extends AttendancePayload { id: string; manuallyEdited: boolean; lockedAt?: string | null; isScheduledWorkday: boolean; scheduledMinutes: number; actualSegments: ActualAttendanceSegment[]; workedMinutes: number; lateMinutes: number; earlyLeaveMinutes: number; absenceMinutes: number }
 export interface AttendanceGenerationResult { created: number; updated: number; skippedManual: number; generated: number }
 
 export interface LeaveTypePayload { name: string; active?: boolean; countsTowardRestQuota: boolean }
@@ -65,7 +77,7 @@ export interface AttendanceOverview {
 
 export interface EmployeeAttendanceState {
   employees: Array<Employee & { sensitive?: { idCard: string; bankCard: string; address: string; emergencyContact: string } }>;
-  weeklySchedules: WeeklySchedule[]; overrides: DateOverride[]; monthSettings: MonthlySetting[]; attendance: AttendanceRecord[];
+  weeklySchedules: WeeklySchedule[]; overrides: DateOverride[]; monthlySchedules: MonthlyScheduleDay[]; monthSettings: MonthlySetting[]; attendance: AttendanceRecord[];
   leaveTypes: LeaveType[]; leaves: LeaveRequest[]; commissionTypes: CommissionType[]; commissions: CommissionRecord[];
   bonuses: BonusRecord[]; payrolls: PayrollRun[]
 }
