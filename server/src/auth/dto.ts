@@ -1,5 +1,5 @@
 import { ArrayNotEmpty, IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator'
-import { AccessGuardFeature } from '@prisma/client'
+import { AccessGuardFeature, FrontendMenuPermission } from '@prisma/client'
 
 export class LoginDto {
   @IsString()
@@ -118,4 +118,70 @@ export class AccessGuardGroupDto {
 export class VerifyAccessGuardGroupDto {
   @IsString()
   password!: string
+}
+
+export class CreateFrontendSubAccountDto {
+  @IsString()
+  @MinLength(3)
+  @MaxLength(64)
+  account!: string
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  username!: string
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72)
+  password!: string
+
+  @IsString()
+  confirmPassword!: string
+
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsEnum(FrontendMenuPermission, { each: true })
+  permissions!: FrontendMenuPermission[]
+
+  @IsBoolean()
+  requiresAccessGuardPassword!: boolean
+}
+
+export class UpdateFrontendSubAccountDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  username!: string
+
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsEnum(FrontendMenuPermission, { each: true })
+  permissions!: FrontendMenuPermission[]
+
+  @IsBoolean()
+  requiresAccessGuardPassword!: boolean
+}
+
+export class SetFrontendSubAccountStatusDto {
+  @IsBoolean()
+  disabled!: boolean
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  disabledReason?: string
+}
+
+export class ResetFrontendSubAccountPasswordDto {
+  @IsString()
+  currentPassword!: string
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72)
+  newPassword!: string
+
+  @IsString()
+  confirmPassword!: string
 }

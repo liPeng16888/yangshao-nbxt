@@ -2,13 +2,29 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@n
 import { UserRole } from '@prisma/client'
 import { AuthGuard } from './auth.guard'
 import { AuthService } from './auth.service'
+import { FrontendSubAccountsService } from './frontend-subaccounts.service'
 import { CurrentUserInfo } from './current-user.decorator'
 import type { CurrentUser } from './current-user'
-import { AccessGuardGroupDto, AccessGuardSettingsDto, LoginDto, RegisterDto, UpdateAdminProfileDto, UpdatePasswordDto, VerifyAccessGuardGroupDto } from './dto'
+import {
+  AccessGuardGroupDto,
+  AccessGuardSettingsDto,
+  CreateFrontendSubAccountDto,
+  LoginDto,
+  RegisterDto,
+  ResetFrontendSubAccountPasswordDto,
+  SetFrontendSubAccountStatusDto,
+  UpdateAdminProfileDto,
+  UpdateFrontendSubAccountDto,
+  UpdatePasswordDto,
+  VerifyAccessGuardGroupDto
+} from './dto'
 
 @Controller()
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly frontendSubAccounts: FrontendSubAccountsService
+  ) {}
 
   @Post('auth/login')
   login(@Body() dto: LoginDto) {
@@ -30,6 +46,54 @@ export class AuthController {
   @Post('auth/logout')
   logout() {
     return { ok: true }
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('auth/frontend-subaccounts')
+  listFrontendSubAccounts(@CurrentUserInfo() user: CurrentUser) {
+    return this.frontendSubAccounts.list(user)
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('auth/frontend-subaccounts')
+  createFrontendSubAccount(@CurrentUserInfo() user: CurrentUser, @Body() dto: CreateFrontendSubAccountDto) {
+    return this.frontendSubAccounts.create(user, dto)
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('auth/frontend-subaccounts/:id')
+  updateFrontendSubAccount(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateFrontendSubAccountDto
+  ) {
+    return this.frontendSubAccounts.update(user, id, dto)
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('auth/frontend-subaccounts/:id/status')
+  setFrontendSubAccountStatus(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() dto: SetFrontendSubAccountStatusDto
+  ) {
+    return this.frontendSubAccounts.setStatus(user, id, dto)
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('auth/frontend-subaccounts/:id/reset-password')
+  resetFrontendSubAccountPassword(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() dto: ResetFrontendSubAccountPasswordDto
+  ) {
+    return this.frontendSubAccounts.resetPassword(user, id, dto)
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete('auth/frontend-subaccounts/:id')
+  deleteFrontendSubAccount(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string) {
+    return this.frontendSubAccounts.softDelete(user, id)
   }
 
   @UseGuards(AuthGuard)
