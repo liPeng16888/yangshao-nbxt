@@ -2,8 +2,10 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  RequestMethod,
   ValidationPipe
 } from '@nestjs/common'
+import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import {
   Prisma,
   SharedPrepaidConsumptionKind,
@@ -14,6 +16,8 @@ import {
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { CurrentUser } from '../auth/current-user'
+import { FRONTEND_PERMISSIONS_KEY } from '../auth/frontend-permission.decorator'
+import { ROLES_KEY } from '../auth/roles.decorator'
 import {
   CreateSharedPrepaidRechargeDto,
   ReverseSharedPrepaidRechargeDto,
@@ -22,6 +26,7 @@ import {
 } from './shared-prepaid.dto'
 import { SharedPrepaidLedgerService } from './shared-prepaid-ledger.service'
 import { SharedPrepaidQueryService } from './shared-prepaid-query.service'
+import { SharedPrepaidController } from './shared-prepaid.controller'
 
 const createdAt = new Date('2026-08-11T08:00:00.000Z')
 
@@ -160,6 +165,7 @@ class FakePrisma {
   failNextLedgerCreate = false
   p2002AfterNextCommit: 'same-request' | 'different-request' | null = null
   failNextMemberUpdateMany = false
+  afterNextLock: (() => Promise<void>) | null = null
   private nextId = 1
 
   private user(id: string) {
@@ -497,7 +503,12 @@ class FakePrisma {
   }
 
   async $queryRaw(strings: TemplateStringsArray, ...values: unknown[]) {
-    if (strings.join('?').includes('FOR UPDATE')) this.lockedMemberIds.push(String(values[0]))
+    if (strings.join('?').includes('FOR UPDATE')) {
+      this.lockedMemberIds.push(String(values[0]))
+      const afterLock = this.afterNextLock
+      this.afterNextLock = null
+      if (afterLock) await afterLock()
+    }
     return []
   }
 
@@ -638,6 +649,32 @@ describe('shared prepaid runtime DTOs', () => {
     [SharedPrepaidRechargeQueryDto, { startDate: '2026/08/01' }]
   ])('rejects invalid query types and values', async (metatype, value) => {
     await expect(transform(value, metatype, 'query')).rejects.toBeInstanceOf(BadRequestException)
+  })
+})
+
+describe('SharedPrepaidController reversal routes', () => {
+  it('exposes an authorized consumption reversal route and derives owner and actor from the current user', async () => {
+    const calls: unknown[][] = []
+    const controller = new SharedPrepaidController({
+      reverseConsumption: (...args: unknown[]) => {
+        calls.push(args)
+        return Promise.resolve({ id: 'reversal-1' })
+      }
+    } as never, {} as never)
+
+    await controller.reverseConsumption(
+      mainUser,
+      'consumption-1',
+      'reversal-key',
+      { reason: '金额录错', ownerFrontendUserId: 'front-2', actorUserId: 'sub-2' } as never
+    )
+
+    const handler = SharedPrepaidController.prototype.reverseConsumption
+    expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe('consumptions/:id/reversal')
+    expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.POST)
+    expect(Reflect.getMetadata(FRONTEND_PERMISSIONS_KEY, handler)).toEqual(['PREPAID_CONSUMPTIONS'])
+    expect(Reflect.getMetadata(ROLES_KEY, SharedPrepaidController)).toEqual([UserRole.FRONTEND_USER])
+    expect(calls).toEqual([[mainUser, 'consumption-1', '金额录错', 'reversal-key']])
   })
 })
 
@@ -827,7 +864,7 @@ describe('SharedPrepaidLedgerService', () => {
     prisma.recharges[0].remainingAmount = new Prisma.Decimal(1099)
 
     await expect(service.reverseRecharge(mainUser, recharge.id, '录入错误', 'idem-cannot-reverse'))
-      .rejects.toBeInstanceOf(ConflictException)
+      .rejects.toThrow('该充值已有消费记录，请先冲正相关消费')
     expect(prisma.ledgerEntries).toHaveLength(1)
     expect(prisma.members[0].cachedBalance.toNumber()).toBe(1100)
   })
@@ -863,6 +900,18 @@ describe('SharedPrepaidLedgerService', () => {
     expect(prisma.members[0].cachedBalance.toNumber()).toBe(50)
   })
 
+  it('rechecks a recharge reversal winner after waiting for the member lock', async () => {
+    const recharge = await service.createRecharge(mainUser, rechargePayload(), 'idem-lock-source')
+    prisma.afterNextLock = async () => {
+      await service.reverseRecharge(mainUser, recharge.id, '录入错误', 'idem-lock-reversal')
+    }
+
+    const result = await service.reverseRecharge(mainUser, recharge.id, '录入错误', 'idem-lock-reversal')
+
+    expect(result).toMatchObject({ id: recharge.id, balance: 0 })
+    expect(prisma.ledgerEntries.filter((row) => row.kind === SharedPrepaidLedgerKind.RECHARGE_REVERSAL)).toHaveLength(1)
+  })
+
   it('conflicts when a reversal idempotency key is reused with a different reason or target', async () => {
     const first = await service.createRecharge(mainUser, rechargePayload(), 'idem-first')
     const second = await service.createRecharge(mainUser, rechargePayload({ paidAmount: 50, giftAmount: 0 }), 'idem-second')
@@ -872,6 +921,292 @@ describe('SharedPrepaidLedgerService', () => {
       .rejects.toBeInstanceOf(ConflictException)
     await expect(service.reverseRecharge(mainUser, second.id, '金额录错', 'idem-reversal'))
       .rejects.toBeInstanceOf(ConflictException)
+  })
+
+  it('manually reverses an unbatched consumption by restoring its exact lots and immutable snapshots', async () => {
+    const ownLot = await service.createRecharge(mainUser, rechargePayload({
+      paidAmount: 50,
+      giftAmount: 0
+    }), 'manual-own-lot')
+    const otherLot = await service.createRecharge(otherMainUser, rechargePayload({
+      paidAmount: 100,
+      giftAmount: 0,
+      rechargeDate: '2026-08-10'
+    }), 'manual-other-lot')
+    const memberId = prisma.members[0].id
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 80
+      },
+      idempotencyKey: 'manual-consume'
+    }))
+    const original = prisma.consumptions[0]
+
+    const result = await service.reverseConsumption(mainUser, original.id, '金额录错', 'manual-reversal')
+
+    expect(result).toMatchObject({
+      reversalOfId: original.id,
+      memberId,
+      consumingFrontendUserId: 'front-1',
+      actorUserId: 'front-1',
+      amount: 80,
+      balance: 150,
+      reason: '金额录错'
+    })
+    expect(prisma.recharges.find((row) => row.id === ownLot.id)?.remainingAmount.toNumber()).toBe(50)
+    expect(prisma.recharges.find((row) => row.id === otherLot.id)?.remainingAmount.toNumber()).toBe(100)
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(150)
+    expect(original).toMatchObject({
+      kind: SharedPrepaidConsumptionKind.CONSUMPTION,
+      amount: new Prisma.Decimal(80),
+      sampleNumberSnapshot: 'A-001',
+      elementsSnapshot: ['ironRaw'],
+      phoneSnapshot: '13800000000',
+      active: false
+    })
+    expect(prisma.consumptions[1]).toMatchObject({
+      kind: SharedPrepaidConsumptionKind.REVERSAL,
+      amount: new Prisma.Decimal(80),
+      reversalOfId: original.id,
+      actorUserId: 'front-1',
+      active: false
+    })
+    expect(prisma.allocations).toHaveLength(2)
+    expect(prisma.payables).toMatchObject([{ status: SharedPrepaidPayableStatus.REVERSED }])
+    expect(prisma.ledgerEntries.at(-1)).toMatchObject({
+      kind: SharedPrepaidLedgerKind.CONSUMPTION_REVERSAL,
+      balanceDelta: new Prisma.Decimal(80),
+      referenceId: prisma.consumptions[1].id,
+      ownerFrontendUserId: 'front-1',
+      actorUserId: 'front-1',
+      reason: '金额录错',
+      requestFingerprint: expect.any(String),
+      responseSnapshot: expect.any(Object)
+    })
+  })
+
+  it('rejects manual reversal while the consumption is held by an unfinished settlement', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'manual-held-lot')
+    const memberId = prisma.members[0].id
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      consumingFrontendUserId: 'front-2',
+      actorUserId: 'front-2',
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 20
+      },
+      idempotencyKey: 'manual-held-consume'
+    }))
+    prisma.payables[0].status = SharedPrepaidPayableStatus.HELD
+
+    await expect(service.reverseConsumption(
+      otherMainUser,
+      prisma.consumptions[0].id,
+      '金额录错',
+      'manual-held-reversal'
+    )).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_CONSUMPTION_SETTLEMENT_HELD' })
+    })
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(80)
+    expect(prisma.recharges[0].remainingAmount.toNumber()).toBe(80)
+    expect(prisma.consumptions).toHaveLength(1)
+    expect(prisma.consumptions[0].active).toBe(true)
+  })
+
+  it('manually reverses a completed payable with an exact opposite pending payable', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'manual-completed-lot')
+    const memberId = prisma.members[0].id
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      consumingFrontendUserId: 'front-2',
+      actorUserId: 'front-2',
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: '33.30'
+      },
+      idempotencyKey: 'manual-completed-consume'
+    }))
+    const originalPayable = prisma.payables[0]
+    originalPayable.status = SharedPrepaidPayableStatus.COMPLETED
+
+    await service.reverseConsumption(
+      otherMainUser,
+      prisma.consumptions[0].id,
+      '结算后发现金额录错',
+      'manual-completed-reversal'
+    )
+
+    expect(prisma.payables).toHaveLength(2)
+    expect(originalPayable.status).toBe(SharedPrepaidPayableStatus.COMPLETED)
+    expect(prisma.payables[1]).toMatchObject({
+      sourceOwnerId: originalPayable.consumerOwnerId,
+      consumerOwnerId: originalPayable.sourceOwnerId,
+      exactAmount: new Prisma.Decimal('33.30000000'),
+      amount: new Prisma.Decimal('33.3'),
+      status: SharedPrepaidPayableStatus.PENDING,
+      reversalOfId: originalPayable.id
+    })
+  })
+
+  it('keeps manual consumption reversal main-account-only and scoped to the consuming owner', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'manual-owner-lot')
+    const memberId = prisma.members[0].id
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 20
+      },
+      idempotencyKey: 'manual-owner-consume'
+    }))
+    const consumptionId = prisma.consumptions[0].id
+
+    await expect(service.reverseConsumption(subUser, consumptionId, '金额录错', 'manual-sub-reversal'))
+      .rejects.toBeInstanceOf(ForbiddenException)
+    await expect(service.reverseConsumption(otherMainUser, consumptionId, '金额录错', 'manual-other-reversal'))
+      .rejects.toBeInstanceOf(ForbiddenException)
+    expect(prisma.consumptions).toHaveLength(1)
+    expect(prisma.consumptions[0].active).toBe(true)
+  })
+
+  it('rejects an empty reason, a second reversal, and reversal of a reversal record', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'manual-state-lot')
+    const memberId = prisma.members[0].id
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 20
+      },
+      idempotencyKey: 'manual-state-consume'
+    }))
+    const originalId = prisma.consumptions[0].id
+
+    await expect(service.reverseConsumption(mainUser, originalId, '  ', 'manual-empty-reason'))
+      .rejects.toBeInstanceOf(BadRequestException)
+    await service.reverseConsumption(mainUser, originalId, '金额录错', 'manual-first-reversal')
+    const reversalId = prisma.consumptions[1].id
+
+    await expect(service.reverseConsumption(mainUser, originalId, '再次冲正', 'manual-second-reversal'))
+      .rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'PREPAID_CONSUMPTION_ALREADY_REVERSED' })
+      })
+    await expect(service.reverseConsumption(mainUser, reversalId, '再次冲正', 'manual-reverse-reversal'))
+      .rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'PREPAID_CONSUMPTION_REVERSAL_TARGET_INVALID' })
+      })
+  })
+
+  it('returns the original manual reversal snapshot and conflicts on any changed request field', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'manual-idempotent-lot')
+    const memberId = prisma.members[0].id
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 20
+      },
+      idempotencyKey: 'manual-idempotent-consume'
+    }))
+    const consumptionId = prisma.consumptions[0].id
+
+    const first = await service.reverseConsumption(mainUser, consumptionId, ' 金额录错 ', 'manual-idempotent-reversal')
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 50, giftAmount: 0 }), 'manual-later-balance')
+    const retry = await service.reverseConsumption(mainUser, consumptionId, '金额录错', 'manual-idempotent-reversal')
+
+    expect(retry).toEqual(first)
+    expect(first.balance).toBe(100)
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(150)
+    expect(prisma.consumptions.filter((row) => row.kind === SharedPrepaidConsumptionKind.REVERSAL)).toHaveLength(1)
+    await expect(service.reverseConsumption(mainUser, consumptionId, '日期录错', 'manual-idempotent-reversal'))
+      .rejects.toBeInstanceOf(ConflictException)
+    await expect(service.reverseConsumption(mainUser, 'another-consumption', '金额录错', 'manual-idempotent-reversal'))
+      .rejects.toBeInstanceOf(ConflictException)
+    await expect(service.reverseConsumption(otherMainUser, consumptionId, '金额录错', 'manual-idempotent-reversal'))
+      .rejects.toBeInstanceOf(ConflictException)
+  })
+
+  it('returns the committed winner after a same-request idempotency race without duplicate reversal rows', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'manual-race-lot')
+    const memberId = prisma.members[0].id
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 20
+      },
+      idempotencyKey: 'manual-race-consume'
+    }))
+    prisma.p2002AfterNextCommit = 'same-request'
+
+    const result = await service.reverseConsumption(
+      mainUser,
+      prisma.consumptions[0].id,
+      '金额录错',
+      'manual-race-reversal'
+    )
+
+    expect(result).toMatchObject({ reversalOfId: prisma.consumptions[0].id, balance: 100 })
+    expect(prisma.consumptions.filter((row) => row.kind === SharedPrepaidConsumptionKind.REVERSAL)).toHaveLength(1)
+    expect(prisma.ledgerEntries.filter((row) => row.kind === SharedPrepaidLedgerKind.CONSUMPTION_REVERSAL)).toHaveLength(1)
+  })
+
+  it('rechecks a consumption reversal winner after waiting for the member lock', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'manual-lock-lot')
+    const memberId = prisma.members[0].id
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 20
+      },
+      idempotencyKey: 'manual-lock-consume'
+    }))
+    const consumptionId = prisma.consumptions[0].id
+    prisma.afterNextLock = async () => {
+      await service.reverseConsumption(mainUser, consumptionId, '金额录错', 'manual-lock-reversal')
+    }
+
+    const result = await service.reverseConsumption(
+      mainUser,
+      consumptionId,
+      '金额录错',
+      'manual-lock-reversal'
+    )
+
+    expect(result).toMatchObject({ reversalOfId: consumptionId, balance: 100 })
+    expect(prisma.consumptions.filter((row) => row.kind === SharedPrepaidConsumptionKind.REVERSAL)).toHaveLength(1)
+    expect(prisma.ledgerEntries.filter((row) => row.kind === SharedPrepaidLedgerKind.CONSUMPTION_REVERSAL)).toHaveLength(1)
+  })
+
+  it('rolls back every manual consumption reversal write when the append-only ledger fails', async () => {
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 100, giftAmount: 0 }), 'manual-atomic-lot')
+    const memberId = prisma.members[0].id
+    await service.syncSampleConsumption(prisma as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 20
+      },
+      idempotencyKey: 'manual-atomic-consume'
+    }))
+    prisma.failNextLedgerCreate = true
+
+    await expect(service.reverseConsumption(
+      mainUser,
+      prisma.consumptions[0].id,
+      '金额录错',
+      'manual-atomic-reversal'
+    )).rejects.toThrow('injected ledger failure')
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(80)
+    expect(prisma.recharges[0].remainingAmount.toNumber()).toBe(80)
+    expect(prisma.consumptions).toHaveLength(1)
+    expect(prisma.consumptions[0].active).toBe(true)
+    expect(prisma.payables).toEqual([])
+    expect(prisma.ledgerEntries).toHaveLength(2)
   })
 
   it('consumes the current owner lots first, then global FIFO lots, and creates one rounded payable per source owner', async () => {

@@ -83,4 +83,15 @@ export class SharedPrepaidController {
   ) {
     return this.ledger.reverseRecharge(user, id, body.reason, key)
   }
+
+  @Post('consumptions/:id/reversal')
+  @FrontendPermission('PREPAID_CONSUMPTIONS')
+  reverseConsumption(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param('id') id: string,
+    @Headers('x-idempotency-key') key: string,
+    @Body() body: ReverseSharedPrepaidRechargeDto
+  ) {
+    return this.ledger.reverseConsumption(user, id, body.reason, key)
+  }
 }

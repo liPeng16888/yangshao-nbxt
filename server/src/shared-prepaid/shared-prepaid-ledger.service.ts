@@ -80,6 +80,18 @@ export interface SharedPrepaidRechargeResult {
   createdAt: Date
 }
 
+export interface SharedPrepaidConsumptionReversalResult {
+  id: string
+  reversalOfId: string
+  memberId: string
+  consumingFrontendUserId: string
+  actorUserId: string
+  amount: number
+  balance: number
+  reason: string
+  createdAt: Date
+}
+
 interface ValidatedRecharge {
   phone: string
   rechargeDate: string
@@ -110,6 +122,10 @@ type ActiveConsumptionRow = Prisma.SharedPrepaidConsumptionGetPayload<{
 }>
 
 type IdempotencyReader = Pick<Prisma.TransactionClient, 'sharedPrepaidLedgerEntry'>
+type ConsumptionIdempotencyReader = Pick<
+  Prisma.TransactionClient,
+  'sharedPrepaidLedgerEntry' | 'sharedPrepaidConsumption'
+>
 
 const rechargeReadInclude = {
   member: {
@@ -180,10 +196,7 @@ export class SharedPrepaidLedgerService {
     const key = this.requireIdempotencyKey(idempotencyKey)
     const normalizedRechargeId = String(rechargeId || '').trim()
     if (!normalizedRechargeId) throw new BadRequestException('缺少充值记录编号')
-    if (typeof reason !== 'string') throw new BadRequestException('冲正原因必须为文本')
-    const normalizedReason = reason.trim()
-    if (!normalizedReason) throw new BadRequestException('请填写冲正原因')
-    if (normalizedReason.length > 500) throw new BadRequestException('冲正原因不能超过 500 个字符')
+    const normalizedReason = this.requireReversalReason(reason)
     const expected: ExpectedIdempotencyRequest = {
       kind: SharedPrepaidLedgerKind.RECHARGE_REVERSAL,
       referenceId: normalizedRechargeId,
@@ -211,6 +224,61 @@ export class SharedPrepaidLedgerService {
       } catch (error) {
         if (!this.isUniqueConstraintError(error)) throw error
         const duplicate = await this.resolveIdempotentResponse(this.prisma, key, expected)
+        if (duplicate) return duplicate
+        if (attempt === 0) continue
+      }
+    }
+
+    throw new ConflictException({
+      code: 'PREPAID_WRITE_CONFLICT',
+      message: '共享预存款已被其他操作更新，请刷新后重试'
+    })
+  }
+
+  async reverseConsumption(
+    user: CurrentUser,
+    consumptionId: string,
+    reason: unknown,
+    idempotencyKey: string
+  ): Promise<SharedPrepaidConsumptionReversalResult> {
+    if (!user.isFrontendMainAccount) {
+      throw new ForbiddenException('只有主账号可以冲正消费')
+    }
+    const key = this.requireIdempotencyKey(idempotencyKey)
+    const normalizedConsumptionId = String(consumptionId || '').trim()
+    if (!normalizedConsumptionId) throw new BadRequestException('缺少消费记录编号')
+    const normalizedReason = this.requireReversalReason(reason)
+    const expected: ExpectedIdempotencyRequest = {
+      kind: SharedPrepaidLedgerKind.CONSUMPTION_REVERSAL,
+      fingerprint: this.fingerprint({
+        operation: 'REVERSE_CONSUMPTION',
+        ownerFrontendUserId: user.dataOwnerId,
+        actorUserId: user.id,
+        consumptionId: normalizedConsumptionId,
+        reason: normalizedReason
+      })
+    }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await this.prisma.$transaction((tx) => (
+          this.reverseConsumptionInTransaction(
+            tx,
+            user,
+            normalizedConsumptionId,
+            normalizedReason,
+            key,
+            expected
+          )
+        ))
+      } catch (error) {
+        if (!this.isUniqueConstraintError(error)) throw error
+        const duplicate = await this.resolveConsumptionReversalResponse(
+          this.prisma,
+          key,
+          normalizedConsumptionId,
+          expected
+        )
         if (duplicate) return duplicate
         if (attempt === 0) continue
       }
@@ -280,7 +348,14 @@ export class SharedPrepaidLedgerService {
       const reversalKey = nextTuple
         ? this.derivedIdempotencyKey(key, `reverse:${active.id}`)
         : key
-      await this.reverseSampleConsumption(tx, active, input, reversalKey, requestFingerprint)
+      await this.reverseSampleConsumption(
+        tx,
+        active,
+        input.actorUserId,
+        reversalKey,
+        requestFingerprint,
+        '样品预存款信息已修改'
+      )
     }
     if (nextTuple) {
       await this.createSampleConsumption(tx, input, nextTuple, key, requestFingerprint)
@@ -386,6 +461,8 @@ export class SharedPrepaidLedgerService {
     }
 
     await tx.$queryRaw`SELECT "id" FROM "SharedPrepaidMember" WHERE "id" = ${initialRecharge.memberId} FOR UPDATE`
+    const lockedDuplicate = await this.resolveIdempotentResponse(tx, idempotencyKey, expected)
+    if (lockedDuplicate) return lockedDuplicate
     const recharge = await tx.sharedPrepaidRecharge.findUnique({
       where: { id: rechargeId },
       include: rechargeReadInclude
@@ -443,6 +520,67 @@ export class SharedPrepaidLedgerService {
       })
     }
     return result
+  }
+
+  private async reverseConsumptionInTransaction(
+    tx: Prisma.TransactionClient,
+    user: CurrentUser,
+    consumptionId: string,
+    reason: string,
+    idempotencyKey: string,
+    expected: ExpectedIdempotencyRequest
+  ): Promise<SharedPrepaidConsumptionReversalResult> {
+    const duplicate = await this.resolveConsumptionReversalResponse(
+      tx,
+      idempotencyKey,
+      consumptionId,
+      expected
+    )
+    if (duplicate) return duplicate
+
+    const orphanReversal = await tx.sharedPrepaidConsumption.findUnique({
+      where: { idempotencyKey },
+      select: { id: true }
+    })
+    if (orphanReversal) throw this.idempotencyStateInvalid()
+
+    const initial = await tx.sharedPrepaidConsumption.findUnique({
+      where: { id: consumptionId },
+      include: {
+        allocations: { include: { recharge: true } },
+        payables: true
+      }
+    })
+    if (!initial) throw new NotFoundException('消费记录不存在')
+    if (initial.consumingFrontendUserId !== user.dataOwnerId) {
+      throw new ForbiddenException('只能冲正本主账号的消费')
+    }
+    if (initial.kind !== SharedPrepaidConsumptionKind.CONSUMPTION) {
+      throw new ConflictException({
+        code: 'PREPAID_CONSUMPTION_REVERSAL_TARGET_INVALID',
+        message: '冲正记录不能再次冲正'
+      })
+    }
+
+    await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "SharedPrepaidMember" WHERE "id" = ${initial.memberId} FOR UPDATE
+    `
+    const lockedDuplicate = await this.resolveConsumptionReversalResponse(
+      tx,
+      idempotencyKey,
+      consumptionId,
+      expected
+    )
+    if (lockedDuplicate) return lockedDuplicate
+    return this.reverseSampleConsumption(
+      tx,
+      initial,
+      user.id,
+      idempotencyKey,
+      expected.fingerprint,
+      reason,
+      user.dataOwnerId
+    )
   }
 
   private async createSampleConsumption(
@@ -583,10 +721,12 @@ export class SharedPrepaidLedgerService {
   private async reverseSampleConsumption(
     tx: Prisma.TransactionClient,
     initial: ActiveConsumptionRow,
-    input: SyncSampleConsumptionInput,
+    actorUserId: string,
     idempotencyKey: string,
-    requestFingerprint: string
-  ) {
+    requestFingerprint: string,
+    reason: string,
+    expectedOwnerFrontendUserId?: string
+  ): Promise<SharedPrepaidConsumptionReversalResult> {
     const rechargeIds = initial.allocations.map((row) => row.rechargeId).sort()
     for (const rechargeId of rechargeIds) {
       await tx.$queryRaw<Array<{ id: string }>>`
@@ -600,8 +740,21 @@ export class SharedPrepaidLedgerService {
         payables: true
       }
     })
-    if (!active || !active.active || active.kind !== SharedPrepaidConsumptionKind.CONSUMPTION) {
-      throw this.balanceVersionConflict()
+    if (!active) throw new NotFoundException('消费记录不存在')
+    if (active.kind !== SharedPrepaidConsumptionKind.CONSUMPTION) {
+      throw new ConflictException({
+        code: 'PREPAID_CONSUMPTION_REVERSAL_TARGET_INVALID',
+        message: '冲正记录不能再次冲正'
+      })
+    }
+    if (expectedOwnerFrontendUserId && active.consumingFrontendUserId !== expectedOwnerFrontendUserId) {
+      throw new ForbiddenException('只能冲正本主账号的消费')
+    }
+    if (!active.active) {
+      throw new ConflictException({
+        code: 'PREPAID_CONSUMPTION_ALREADY_REVERSED',
+        message: '该消费已冲正'
+      })
     }
     if (active.payables.some((payable) => payable.status === SharedPrepaidPayableStatus.HELD)) {
       throw new ConflictException({
@@ -621,16 +774,11 @@ export class SharedPrepaidLedgerService {
     })
     if (!member) throw new NotFoundException('预存款会员不存在')
 
-    const deactivated = await tx.sharedPrepaidConsumption.updateMany({
-      where: { id: active.id, active: true },
-      data: { active: false }
-    })
-    if (deactivated.count !== 1) throw this.balanceVersionConflict()
     const reversal = await tx.sharedPrepaidConsumption.create({
       data: {
         memberId: active.memberId,
         consumingFrontendUserId: active.consumingFrontendUserId,
-        actorUserId: input.actorUserId,
+        actorUserId,
         kind: SharedPrepaidConsumptionKind.REVERSAL,
         amount: active.amount,
         sheetId: active.sheetId,
@@ -648,6 +796,11 @@ export class SharedPrepaidLedgerService {
     })
 
     for (const allocation of active.allocations) {
+      if (
+        !allocation.recharge ||
+        allocation.recharge.reversedAt ||
+        allocation.recharge.remainingAmount.add(allocation.allocatedAmount).greaterThan(allocation.recharge.totalAmount)
+      ) throw this.balanceVersionConflict()
       const restored = await tx.sharedPrepaidRecharge.updateMany({
         where: { id: allocation.rechargeId, reversedAt: null },
         data: { remainingAmount: { increment: allocation.allocatedAmount } }
@@ -690,21 +843,38 @@ export class SharedPrepaidLedgerService {
         })
       }
     }
+    const result: SharedPrepaidConsumptionReversalResult = {
+      id: reversal.id,
+      reversalOfId: active.id,
+      memberId: active.memberId,
+      consumingFrontendUserId: active.consumingFrontendUserId,
+      actorUserId,
+      amount: active.amount.toNumber(),
+      balance: balanceAfter.toNumber(),
+      reason,
+      createdAt: reversal.createdAt
+    }
     await tx.sharedPrepaidLedgerEntry.create({
       data: {
         memberId: active.memberId,
         kind: SharedPrepaidLedgerKind.CONSUMPTION_REVERSAL,
         balanceDelta: active.amount,
         ownerFrontendUserId: active.consumingFrontendUserId,
-        actorUserId: input.actorUserId,
+        actorUserId,
         referenceType: 'SharedPrepaidConsumption',
         referenceId: reversal.id,
         idempotencyKey,
         requestFingerprint,
-        responseSnapshot: Prisma.JsonNull,
-        reason: '样品预存款信息已修改'
+        responseSnapshot: this.toConsumptionReversalSnapshot(result),
+        reason
       }
     })
+    const deactivated = await tx.sharedPrepaidConsumption.updateMany({
+      where: { id: active.id, active: true },
+      data: { active: false }
+    })
+    if (deactivated.count !== 1) throw this.balanceVersionConflict()
+    return result
   }
 
   private async findActiveConsumption(tx: Prisma.TransactionClient, sampleBlockId: string) {
@@ -771,6 +941,46 @@ export class SharedPrepaidLedgerService {
       const value = inputs[field]
       return value !== undefined && value !== null && value !== ''
     })
+  }
+
+  private async resolveConsumptionReversalResponse(
+    reader: ConsumptionIdempotencyReader,
+    idempotencyKey: string,
+    originalConsumptionId: string,
+    expected: ExpectedIdempotencyRequest
+  ): Promise<SharedPrepaidConsumptionReversalResult | null> {
+    const ledger = await reader.sharedPrepaidLedgerEntry.findUnique({
+      where: { idempotencyKey },
+      select: {
+        kind: true,
+        referenceId: true,
+        requestFingerprint: true,
+        responseSnapshot: true
+      }
+    })
+    if (!ledger) return null
+    if (ledger.kind !== expected.kind || ledger.requestFingerprint !== expected.fingerprint) {
+      throw this.idempotencyConflict()
+    }
+    const result = this.fromConsumptionReversalSnapshot(ledger.responseSnapshot)
+    const reversal = await reader.sharedPrepaidConsumption.findUnique({
+      where: { id: ledger.referenceId },
+      select: {
+        id: true,
+        kind: true,
+        reversalOfId: true,
+        idempotencyKey: true
+      }
+    })
+    if (
+      !reversal ||
+      reversal.kind !== SharedPrepaidConsumptionKind.REVERSAL ||
+      reversal.id !== result.id ||
+      reversal.reversalOfId !== originalConsumptionId ||
+      reversal.reversalOfId !== result.reversalOfId ||
+      reversal.idempotencyKey !== idempotencyKey
+    ) throw this.idempotencyStateInvalid()
+    return result
   }
 
   private async resolveConsumptionIdempotency(
@@ -887,6 +1097,14 @@ export class SharedPrepaidLedgerService {
     return amount
   }
 
+  private requireReversalReason(reason: unknown): string {
+    if (typeof reason !== 'string') throw new BadRequestException('冲正原因必须为文本')
+    const normalized = reason.trim()
+    if (!normalized) throw new BadRequestException('请填写冲正原因')
+    if (normalized.length > 500) throw new BadRequestException('冲正原因不能超过 500 个字符')
+    return normalized
+  }
+
   private buildRechargeResult(
     row: Omit<RechargeReadRow, 'member'>,
     phone: string,
@@ -917,6 +1135,50 @@ export class SharedPrepaidLedgerService {
       ...result,
       reversedAt: result.reversedAt?.toISOString() ?? null,
       createdAt: result.createdAt.toISOString()
+    }
+  }
+
+  private toConsumptionReversalSnapshot(
+    result: SharedPrepaidConsumptionReversalResult
+  ): Prisma.InputJsonObject {
+    return {
+      ...result,
+      createdAt: result.createdAt.toISOString()
+    }
+  }
+
+  private fromConsumptionReversalSnapshot(
+    value: Prisma.JsonValue | null
+  ): SharedPrepaidConsumptionReversalResult {
+    if (!value || Array.isArray(value) || typeof value !== 'object') throw this.idempotencyStateInvalid()
+    const snapshot = value as Record<string, Prisma.JsonValue>
+    const stringFields = [
+      'id',
+      'reversalOfId',
+      'memberId',
+      'consumingFrontendUserId',
+      'actorUserId',
+      'reason',
+      'createdAt'
+    ] as const
+    if (stringFields.some((field) => typeof snapshot[field] !== 'string')) {
+      throw this.idempotencyStateInvalid()
+    }
+    if (typeof snapshot.amount !== 'number' || typeof snapshot.balance !== 'number') {
+      throw this.idempotencyStateInvalid()
+    }
+    const createdAt = new Date(snapshot.createdAt as string)
+    if (Number.isNaN(createdAt.getTime())) throw this.idempotencyStateInvalid()
+    return {
+      id: snapshot.id as string,
+      reversalOfId: snapshot.reversalOfId as string,
+      memberId: snapshot.memberId as string,
+      consumingFrontendUserId: snapshot.consumingFrontendUserId as string,
+      actorUserId: snapshot.actorUserId as string,
+      amount: snapshot.amount,
+      balance: snapshot.balance,
+      reason: snapshot.reason as string,
+      createdAt
     }
   }
 
