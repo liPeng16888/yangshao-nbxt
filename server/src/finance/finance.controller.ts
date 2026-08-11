@@ -78,46 +78,11 @@ export class FinanceController {
     return this.finance.updateFrontendMonthlySettlement(user.dataOwnerId, user.id, body)
   }
 
-  @Get('finance/prepaid-recharges')
-  @Roles(UserRole.FRONTEND_USER)
-  @FrontendPermission('FINANCE_PREPAID_ADD')
-  prepaidRecharges(@CurrentUserInfo() user: CurrentUser) {
-    return this.finance.getFrontendPrepaidRecharges(user.dataOwnerId)
-  }
-
-  @Post('finance/prepaid-recharges')
-  @Roles(UserRole.FRONTEND_USER)
-  @FrontendPermission('FINANCE_PREPAID_ADD')
-  createPrepaidRecharge(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.createFrontendPrepaidRecharge(user.dataOwnerId, user.id, body)
-  }
-
   @Post('finance/delete-requests')
   @Roles(UserRole.FRONTEND_USER)
-  @FrontendPermission('FINANCE_EXPENSES', 'FINANCE_PREPAID_ADD')
+  @FrontendPermission('FINANCE_EXPENSES')
   createDeletionRequest(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
     return this.finance.createFrontendDeletionRequest(user.dataOwnerId, user.id, body)
-  }
-
-  @Get('finance/prepaid-report')
-  @Roles(UserRole.FRONTEND_USER)
-  @FrontendPermission('FINANCE_PREPAID_CUSTOMERS')
-  prepaidReport(@CurrentUserInfo() user: CurrentUser) {
-    return this.finance.getFrontendPrepaidReport(user.dataOwnerId)
-  }
-
-  @Patch('finance/prepaid-customers/remark')
-  @Roles(UserRole.FRONTEND_USER)
-  @FrontendPermission('FINANCE_PREPAID_CUSTOMERS')
-  updatePrepaidCustomerRemark(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.updateFrontendPrepaidCustomerRemark(user.dataOwnerId, user.id, body)
-  }
-
-  @Patch('finance/prepaid-usage-remarks')
-  @Roles(UserRole.FRONTEND_USER)
-  @FrontendPermission('FINANCE_PREPAID_CUSTOMERS')
-  updatePrepaidUsageRemark(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.updateFrontendPrepaidUsageRemark(user.dataOwnerId, user.id, body)
   }
 
   @Get('admin/finance/income')
@@ -166,18 +131,6 @@ export class FinanceController {
   @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
   adminMonthlyCustomers(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
     return this.finance.getAdminMonthlyCustomers(user, query)
-  }
-
-  @Get('admin/finance/prepaid-recharges')
-  @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
-  adminPrepaidRecharges(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
-    return this.finance.getAdminPrepaidRecharges(user, query)
-  }
-
-  @Get('admin/finance/prepaid-report')
-  @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
-  adminPrepaidReport(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
-    return this.finance.getAdminPrepaidReport(user, query)
   }
 
   @Get('admin/finance/delete-requests')

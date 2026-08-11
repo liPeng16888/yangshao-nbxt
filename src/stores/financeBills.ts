@@ -1,28 +1,17 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
-  createPrepaidRecharge,
   getIncomeBillReport,
   getMonthlySettlementReport,
-  getPrepaidRecharges,
-  getPrepaidReport,
   getUnsettledSamples,
   markSampleAsPaid,
   markSamplesAsPaid,
-  requestPrepaidRechargeDeletion,
-  updateMonthlySettlementSummary,
-  updatePrepaidCustomerRemark,
-  updatePrepaidUsageRemark
+  updateMonthlySettlementSummary
 } from '@/api/financeBills'
 import type {
   IncomeBillReport,
   MonthlySettlementReport,
   MonthlySettlementSummaryRow,
-  PrepaidCustomerRow,
-  PrepaidDailyUsageRow,
-  PrepaidRechargePayload,
-  PrepaidRechargeRow,
-  PrepaidReport,
   UnsettledSampleRow
 } from '@/types/financeBills'
 import type { SampleBlock } from '@/types/labSheet'
@@ -35,16 +24,11 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   const incomeReport = ref<IncomeBillReport | null>(null)
   const unsettledRows = ref<UnsettledSampleRow[]>([])
   const monthlySettlementReport = ref<MonthlySettlementReport | null>(null)
-  const prepaidRecharges = ref<PrepaidRechargeRow[]>([])
-  const prepaidReport = ref<PrepaidReport | null>(null)
   const loading = ref(false)
   const settlingId = ref('')
   const settlingBatch = ref(false)
   const isSettling = computed(() => Boolean(settlingId.value) || settlingBatch.value)
   const monthlySavingId = ref('')
-  const prepaidSaving = ref(false)
-  const prepaidRemarkSavingId = ref('')
-  const prepaidDeletingId = ref('')
 
   async function loadIncomeReport(nextMonth = month.value) {
     loading.value = true
@@ -126,100 +110,22 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     }
   }
 
-  async function loadPrepaidRecharges() {
-    loading.value = true
-    try {
-      prepaidRecharges.value = await getPrepaidRecharges()
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function addPrepaidRecharge(payload: PrepaidRechargePayload) {
-    prepaidSaving.value = true
-    try {
-      const row = await createPrepaidRecharge(payload)
-      prepaidRecharges.value = [row, ...prepaidRecharges.value.filter((item) => item.id !== row.id)]
-      prepaidReport.value = await getPrepaidReport()
-      return row
-    } finally {
-      prepaidSaving.value = false
-    }
-  }
-
-  async function requestPrepaidDeletion(row: PrepaidRechargeRow, reason: string) {
-    prepaidDeletingId.value = row.id
-    try {
-      const requestRow = await requestPrepaidRechargeDeletion(row.id, reason)
-      prepaidRecharges.value = prepaidRecharges.value.map((item) =>
-        item.id === row.id ? { ...item, deleteRequestId: requestRow.id, deleteRequestStatus: requestRow.status } : item
-      )
-      return requestRow
-    } finally {
-      prepaidDeletingId.value = ''
-    }
-  }
-
-  async function loadPrepaidReport() {
-    loading.value = true
-    try {
-      prepaidReport.value = await getPrepaidReport()
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function savePrepaidCustomerRemark(row: PrepaidCustomerRow, remark: string) {
-    const customer = row.customer
-    prepaidRemarkSavingId.value = `customer__${customer}`
-    try {
-      const saved = await updatePrepaidCustomerRemark(customer, remark, row.remarkUpdatedAt)
-      row.remark = saved.remark
-      row.remarkUpdatedAt = saved.updatedAt
-    } finally {
-      prepaidRemarkSavingId.value = ''
-    }
-  }
-
-  async function savePrepaidUsageRemark(row: PrepaidDailyUsageRow, remark: string) {
-    const id = row.id
-    prepaidRemarkSavingId.value = id
-    try {
-      const saved = await updatePrepaidUsageRemark(id, remark, row.remarkUpdatedAt)
-      row.remark = saved.remark
-      row.remarkUpdatedAt = saved.updatedAt
-    } finally {
-      prepaidRemarkSavingId.value = ''
-    }
-  }
-
   return {
     month,
     monthlySettlementMonth,
     incomeReport,
     unsettledRows,
     monthlySettlementReport,
-    prepaidRecharges,
-    prepaidReport,
     loading,
     settlingId,
     settlingBatch,
     isSettling,
     monthlySavingId,
-    prepaidSaving,
-    prepaidRemarkSavingId,
-    prepaidDeletingId,
     loadIncomeReport,
     loadUnsettledRows,
     loadMonthlySettlementReport,
     settleRow,
     settleRows,
-    saveMonthlySettlementRow,
-    loadPrepaidRecharges,
-    addPrepaidRecharge,
-    requestPrepaidDeletion,
-    loadPrepaidReport,
-    savePrepaidCustomerRemark,
-    savePrepaidUsageRemark
+    saveMonthlySettlementRow
   }
 })

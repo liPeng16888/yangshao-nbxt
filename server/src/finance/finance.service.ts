@@ -59,6 +59,10 @@ type FinanceDeletionSourcePayload = {
   sourceId?: string
   reason?: string
 }
+type SharedPrepaidIncomeRecharge = {
+  rechargeDate: string
+  paidAmount: unknown
+}
 
 @Injectable()
 export class FinanceService {
@@ -123,8 +127,12 @@ export class FinanceService {
     const startDate = `${month}-01`
     const endDate = dayjs(startDate).endOf('month').format('YYYY-MM-DD')
     const sheets = await this.loadSheets([frontendUserId], startDate, endDate)
-    const prepaidRecharges = await this.prisma.prepaidRechargeRecord.findMany({
-      where: { frontendUserId, rechargeDate: { gte: startDate, lte: endDate } }
+    const prepaidRecharges = await this.prisma.sharedPrepaidRecharge.findMany({
+      where: {
+        ownerFrontendUserId: frontendUserId,
+        rechargeDate: { gte: startDate, lte: endDate },
+        reversedAt: null
+      }
     })
     return this.buildIncomeReport(month, sheets, prepaidRecharges)
   }
@@ -242,39 +250,6 @@ export class FinanceService {
     return this.monthlyRecordDto(row, payload.customer, payload.month)
   }
 
-  async getFrontendPrepaidRecharges(frontendUserId: string) {
-    const rows = await this.prisma.prepaidRechargeRecord.findMany({
-      where: { frontendUserId },
-      orderBy: [{ rechargeDate: 'desc' }, { createdAt: 'desc' }]
-    })
-    const pendingMap = await this.pendingDeletionRequestMap(frontendUserId, FinanceDeletionRequestType.PREPAID_RECHARGE, rows.map((row) => row.id))
-    return rows.map((row) => this.prepaidRechargeDto(row, pendingMap.get(row.id)))
-  }
-
-  async createFrontendPrepaidRecharge(frontendUserId: string, actorUserIdOrPayload: string | { rechargeDate?: string; customer?: string; amount?: number; usableTimes?: number; remark?: string }, maybePayload?: { rechargeDate?: string; customer?: string; amount?: number; usableTimes?: number; remark?: string }) {
-    const actorUserId = typeof actorUserIdOrPayload === 'string' ? actorUserIdOrPayload : frontendUserId
-    const payload = typeof actorUserIdOrPayload === 'string' ? maybePayload! : actorUserIdOrPayload
-    const rechargeDate = String(payload.rechargeDate || '').trim()
-    const customer = String(payload.customer || '').trim()
-    const amount = Number(payload.amount)
-    const usableTimes = Math.trunc(Number(payload.usableTimes))
-    if (!rechargeDate || !customer) throw new BadRequestException('充值日期和客户名称不能为空')
-    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('预存金额必须大于 0')
-    if (!Number.isFinite(usableTimes) || usableTimes <= 0) throw new BadRequestException('可使用次数必须大于 0')
-    const row = await this.prisma.prepaidRechargeRecord.create({
-      data: {
-        frontendUserId,
-        rechargeDate,
-        customer,
-        amount: toMoney(amount),
-        usableTimes,
-        remark: payload.remark || null
-      }
-    })
-    this.publish(frontendUserId, actorUserId, 'finance-prepaid', row.id, 'create', row.createdAt)
-    return this.prepaidRechargeDto(row)
-  }
-
   async createFrontendDeletionRequest(frontendUserId: string, actorUserIdOrPayload: string | FinanceDeletionSourcePayload, maybePayload?: FinanceDeletionSourcePayload) {
     const actorUserId = typeof actorUserIdOrPayload === 'string' ? actorUserIdOrPayload : frontendUserId
     const payload = typeof actorUserIdOrPayload === 'string' ? maybePayload! : actorUserIdOrPayload
@@ -301,62 +276,16 @@ export class FinanceService {
     return this.deletionRequestDto(request)
   }
 
-  async getFrontendPrepaidReport(frontendUserId: string) {
-    const sheets = await this.loadSheets([frontendUserId])
-    const dailyRows = this.getPrepaidDailyRows(sheets)
-    const recharges = await this.prisma.prepaidRechargeRecord.findMany({ where: { frontendUserId }, orderBy: [{ rechargeDate: 'desc' }, { createdAt: 'desc' }] })
-    const customerRemarks = await this.prisma.prepaidCustomerRemark.findMany({ where: { frontendUserId } })
-    const usageRemarks = await this.prisma.prepaidUsageRemark.findMany({ where: { frontendUserId } })
-    return this.buildPrepaidReport(recharges, dailyRows, customerRemarks, usageRemarks)
-  }
-
-  async updateFrontendPrepaidCustomerRemark(frontendUserId: string, actorUserId: string, payload: { customer?: string; remark?: string; baseUpdatedAt?: string }) {
-    const customer = String(payload.customer || '').trim()
-    if (!customer) throw new BadRequestException('客户名称不能为空')
-    const key = { frontendUserId, customer }
-    const current = await this.prisma.prepaidCustomerRemark.findUnique({ where: { frontendUserId_customer: key } })
-    let row
-    if (current) {
-      const baseUpdatedAt = requiredBaseUpdatedAt(payload.baseUpdatedAt)
-      const result = await this.prisma.prepaidCustomerRemark.updateMany({
-        where: { id: current.id, frontendUserId, updatedAt: baseUpdatedAt }, data: { remark: payload.remark || null }
-      })
-      row = await this.prisma.prepaidCustomerRemark.findUnique({ where: { id: current.id } })
-      if (!result.count) staleWrite(row ? { customer: row.customer, remark: row.remark || '', updatedAt: row.updatedAt.toISOString() } : null)
-      if (!row) throw new NotFoundException('预存款客户备注不存在')
-    } else {
-      row = await this.prisma.prepaidCustomerRemark.create({ data: { frontendUserId, customer, remark: payload.remark || null } })
-    }
-    this.publish(frontendUserId, actorUserId, 'finance-prepaid', row.id, current ? 'update' : 'create', row.updatedAt)
-    return { customer: row.customer, remark: row.remark || '', updatedAt: row.updatedAt.toISOString() }
-  }
-
-  async updateFrontendPrepaidUsageRemark(frontendUserId: string, actorUserId: string, payload: { id?: string; remark?: string; baseUpdatedAt?: string }) {
-    const { usageDate, customer } = this.parsePrepaidUsageId(payload.id)
-    const key = { frontendUserId, usageDate, customer }
-    const current = await this.prisma.prepaidUsageRemark.findUnique({ where: { frontendUserId_usageDate_customer: key } })
-    let row
-    if (current) {
-      const baseUpdatedAt = requiredBaseUpdatedAt(payload.baseUpdatedAt)
-      const result = await this.prisma.prepaidUsageRemark.updateMany({
-        where: { id: current.id, frontendUserId, updatedAt: baseUpdatedAt }, data: { remark: payload.remark || null }
-      })
-      row = await this.prisma.prepaidUsageRemark.findUnique({ where: { id: current.id } })
-      if (!result.count) staleWrite(row ? { id: `${row.usageDate}__${row.customer}`, remark: row.remark || '', updatedAt: row.updatedAt.toISOString() } : null)
-      if (!row) throw new NotFoundException('预存款每日备注不存在')
-    } else {
-      row = await this.prisma.prepaidUsageRemark.create({ data: { frontendUserId, usageDate, customer, remark: payload.remark || null } })
-    }
-    this.publish(frontendUserId, actorUserId, 'finance-prepaid', row.id, current ? 'update' : 'create', row.updatedAt)
-    return { id: `${row.usageDate}__${row.customer}`, remark: row.remark || '', updatedAt: row.updatedAt.toISOString() }
-  }
-
   async getAdminIncomeReport(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string; month?: string }) {
     const range = this.resolveRange(query)
     const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, this.adminAccess.parseFrontendUserIds(query.frontendUserIds))
     const sheets = await this.loadSheets(frontendUserIds, range.startDate, range.endDate)
-    const prepaidRecharges = await this.prisma.prepaidRechargeRecord.findMany({
-      where: { frontendUserId: { in: frontendUserIds }, rechargeDate: { gte: range.startDate, lte: range.endDate } }
+    const prepaidRecharges = await this.prisma.sharedPrepaidRecharge.findMany({
+      where: {
+        ownerFrontendUserId: { in: frontendUserIds },
+        rechargeDate: { gte: range.startDate, lte: range.endDate },
+        reversedAt: null
+      }
     })
     return {
       ...this.buildIncomeReport(query.month || range.startDate.slice(0, 7), sheets, prepaidRecharges),
@@ -495,45 +424,6 @@ export class FinanceService {
     })
   }
 
-  async getAdminPrepaidRecharges(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string; month?: string }) {
-    const range = this.resolveRange(query)
-    const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, this.adminAccess.parseFrontendUserIds(query.frontendUserIds))
-    const rows = await this.prisma.prepaidRechargeRecord.findMany({
-      where: { frontendUserId: { in: frontendUserIds }, rechargeDate: { gte: range.startDate, lte: range.endDate } },
-      orderBy: [{ rechargeDate: 'desc' }, { createdAt: 'desc' }],
-      include: { frontendUser: { select: { username: true, account: true, displayRemark: true } } }
-    })
-    return rows.map((row) => ({
-      ...this.prepaidRechargeDto(row),
-      frontendUserId: row.frontendUserId,
-      name: this.displayName(row.frontendUser)
-    }))
-  }
-
-  async getAdminPrepaidReport(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string; month?: string }) {
-    const range = this.resolveRange(query)
-    const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, this.adminAccess.parseFrontendUserIds(query.frontendUserIds))
-    const allSheets = await this.loadSheets(frontendUserIds)
-    const allDailyRows = this.getPrepaidDailyRows(allSheets)
-    const recharges = await this.prisma.prepaidRechargeRecord.findMany({
-      where: { frontendUserId: { in: frontendUserIds } },
-      include: { frontendUser: { select: { username: true, account: true, displayRemark: true } } }
-    })
-    const customerRemarks = await this.prisma.prepaidCustomerRemark.findMany({ where: { frontendUserId: { in: frontendUserIds } } })
-    const usageRemarks = await this.prisma.prepaidUsageRemark.findMany({ where: { frontendUserId: { in: frontendUserIds } } })
-    const report = this.buildPrepaidReport(
-      recharges.map((row) => ({ ...row, name: this.displayName(row.frontendUser) })),
-      allDailyRows,
-      customerRemarks,
-      usageRemarks
-    )
-    return {
-      range,
-      customerRows: report.customerRows,
-      dailyRows: report.dailyRows.filter((row) => row.date >= range.startDate && row.date <= range.endDate)
-    }
-  }
-
   async getAdminDeletionRequests(admin: CurrentUser, query: { frontendUserIds?: string | string[]; status?: string }) {
     const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, this.adminAccess.parseFrontendUserIds(query.frontendUserIds))
     const status = this.parseDeletionStatus(query.status)
@@ -555,14 +445,12 @@ export class FinanceService {
   async approveDeletionRequest(admin: CurrentUser, id: string) {
     const row = await this.loadAdminDeletionRequest(admin, id)
     if (row.status !== FinanceDeletionRequestStatus.PENDING) throw new BadRequestException('删除申请已处理')
+    if (row.sourceType !== FinanceDeletionRequestType.EXPENSE) {
+      throw new BadRequestException('旧预存款删除申请不再支持审批')
+    }
     const approved = await this.prisma.$transaction(async (tx) => {
-      if (row.sourceType === FinanceDeletionRequestType.EXPENSE) {
-        const result = await tx.financeEntry.deleteMany({ where: { id: row.sourceId, frontendUserId: row.frontendUserId } })
-        if (!result.count) throw new NotFoundException('原支出记录不存在或已删除')
-      } else {
-        const result = await tx.prepaidRechargeRecord.deleteMany({ where: { id: row.sourceId, frontendUserId: row.frontendUserId } })
-        if (!result.count) throw new NotFoundException('原预存款记录不存在或已删除')
-      }
+      const result = await tx.financeEntry.deleteMany({ where: { id: row.sourceId, frontendUserId: row.frontendUserId } })
+      if (!result.count) throw new NotFoundException('原支出记录不存在或已删除')
       return tx.financeDeletionRequest.update({
         where: { id: row.id },
         data: {
@@ -635,7 +523,7 @@ export class FinanceService {
   private buildIncomeReport(
     month: string,
     sheets: Awaited<ReturnType<FinanceService['loadSheets']>>,
-    prepaidRecharges: Array<{ rechargeDate: string; amount: unknown; usableTimes: number }> = []
+    prepaidRecharges: SharedPrepaidIncomeRecharge[] = []
   ) {
     const rowMap = new Map<string, ReturnType<FinanceService['emptyIncomeRow']>>()
     sheets.forEach((sheet) => {
@@ -643,14 +531,16 @@ export class FinanceService {
       sheet.sampleBlocks.forEach((block) => {
         const inputs = block.inputs as Record<string, unknown>
         const amount = this.getSampleAmount(inputs)
-        if (!Number.isFinite(amount) || inputs.paymentStatus === '预存款') return
+        if (!Number.isFinite(amount)) return
         const status = this.getIncomeStatus(inputs)
         row.sampleCount += 1
-        row.totalAmount = toMoney(row.totalAmount + amount)
         const summary = row.statusSummaries.find((item) => item.status === status)
-        if (summary) {
-          summary.count += 1
-          summary.amount = toMoney(summary.amount + amount)
+        if (summary) summary.count += 1
+        if (status !== '预存款') {
+          row.totalAmount = toMoney(row.totalAmount + amount)
+          if (summary) {
+            summary.amount = toMoney(summary.amount + amount)
+          }
         }
       })
       rowMap.set(sheet.date, row)
@@ -658,12 +548,8 @@ export class FinanceService {
     prepaidRecharges.forEach((recharge) => {
       const row = rowMap.get(recharge.rechargeDate) || this.emptyIncomeRow(recharge.rechargeDate)
       const summary = row.statusSummaries.find((item) => item.status === '预存款')
-      const amount = toMoney(recharge.amount)
-      if (summary) {
-        summary.count += recharge.usableTimes
-        summary.amount = toMoney(summary.amount + amount)
-      }
-      row.sampleCount += recharge.usableTimes
+      const amount = toMoney(recharge.paidAmount)
+      if (summary) summary.amount = toMoney(summary.amount + amount)
       row.totalAmount = toMoney(row.totalAmount + amount)
       rowMap.set(recharge.rechargeDate, row)
     })
@@ -744,33 +630,6 @@ export class FinanceService {
         current.sampleCount += 1
         current.amount = toMoney(current.amount + amount)
         current.elementCounts = this.mergeMonthlyElementCounts(current.elementCounts, this.getMonthlyElementCounts(inputs))
-        map.set(key, current)
-      })
-    })
-    return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date) || a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
-  }
-
-  private getPrepaidDailyRows(sheets: Awaited<ReturnType<FinanceService['loadSheets']>>) {
-    const map = new Map<string, { id: string; date: string; frontendUserId: string; name: string; customer: string; deductionAmount: number; remark: string }>()
-    sheets.forEach((sheet) => {
-      sheet.sampleBlocks.forEach((block) => {
-        const inputs = block.inputs as Record<string, unknown>
-        const amount = this.getSampleAmount(inputs)
-        if (!Number.isFinite(amount) || inputs.paymentStatus !== '预存款') return
-        const customer = this.getCustomerName(inputs)
-        const key = `${sheet.date}__${sheet.frontendUserId}__${customer}`
-        const current =
-          map.get(key) ||
-          {
-            id: `${sheet.date}__${customer}`,
-            date: sheet.date,
-            frontendUserId: sheet.frontendUserId,
-            name: this.displayName(sheet.frontendUser),
-            customer,
-            deductionAmount: 0,
-            remark: ''
-          }
-        current.deductionAmount = toMoney(current.deductionAmount + amount)
         map.set(key, current)
       })
     })
@@ -917,23 +776,6 @@ export class FinanceService {
     return urls.length ? urls.join('，') : '无信息'
   }
 
-  private prepaidRechargeDto(
-    row: { id: string; rechargeDate: string; customer: string; amount: unknown; usableTimes: number; remark: string | null; createdAt: Date },
-    deletionRequest?: { id: string; status: FinanceDeletionRequestStatus } | null
-  ) {
-    return {
-      id: row.id,
-      rechargeDate: row.rechargeDate,
-      customer: row.customer,
-      amount: toMoney(row.amount),
-      usableTimes: row.usableTimes,
-      remark: row.remark || '',
-      createdAt: row.createdAt.toISOString(),
-      deleteRequestId: deletionRequest?.id || '',
-      deleteRequestStatus: deletionRequest?.status || ''
-    }
-  }
-
   private async pendingDeletionRequestMap(frontendUserId: string, sourceType: FinanceDeletionRequestType, sourceIds: string[]) {
     if (!sourceIds.length) return new Map<string, { id: string; status: FinanceDeletionRequestStatus }>()
     const rows = await this.prisma.financeDeletionRequest.findMany({
@@ -950,7 +792,6 @@ export class FinanceService {
 
   private parseDeletionSourceType(value?: string) {
     if (value === 'expense' || value === FinanceDeletionRequestType.EXPENSE) return FinanceDeletionRequestType.EXPENSE
-    if (value === 'prepaidRecharge' || value === FinanceDeletionRequestType.PREPAID_RECHARGE) return FinanceDeletionRequestType.PREPAID_RECHARGE
     throw new BadRequestException('删除记录类型无效')
   }
 
@@ -961,25 +802,15 @@ export class FinanceService {
   }
 
   private async loadDeletionSourceSnapshot(frontendUserId: string, sourceType: FinanceDeletionRequestType, sourceId: string) {
-    if (sourceType === FinanceDeletionRequestType.EXPENSE) {
-      const row = await this.prisma.financeEntry.findUnique({ where: { id: sourceId } })
-      if (!row || row.frontendUserId !== frontendUserId) throw new NotFoundException('未找到支出记录')
-      return {
-        paymentDate: row.paymentDate,
-        item: row.item,
-        amount: toMoney(row.amount),
-        paymentMethod: row.paymentMethod,
-        screenshotUrls: this.parseScreenshotUrls(row.screenshotUrl),
-        remark: row.remark || ''
-      }
-    }
-    const row = await this.prisma.prepaidRechargeRecord.findUnique({ where: { id: sourceId } })
-    if (!row || row.frontendUserId !== frontendUserId) throw new NotFoundException('未找到预存款记录')
+    if (sourceType !== FinanceDeletionRequestType.EXPENSE) throw new BadRequestException('删除记录类型无效')
+    const row = await this.prisma.financeEntry.findUnique({ where: { id: sourceId } })
+    if (!row || row.frontendUserId !== frontendUserId) throw new NotFoundException('未找到支出记录')
     return {
-      rechargeDate: row.rechargeDate,
-      customer: row.customer,
+      paymentDate: row.paymentDate,
+      item: row.item,
       amount: toMoney(row.amount),
-      usableTimes: row.usableTimes,
+      paymentMethod: row.paymentMethod,
+      screenshotUrls: this.parseScreenshotUrls(row.screenshotUrl),
       remark: row.remark || ''
     }
   }
@@ -1055,85 +886,6 @@ export class FinanceService {
     return value as Record<string, unknown>
   }
 
-  private buildPrepaidReport(
-    recharges: Array<{ frontendUserId?: string; name?: string; customer: string; amount: unknown; usableTimes: number; remark: string | null }>,
-    dailyRows: ReturnType<FinanceService['getPrepaidDailyRows']>,
-    customerRemarks: Array<{ frontendUserId?: string; customer: string; remark: string | null; updatedAt: Date }>,
-    usageRemarks: Array<{ frontendUserId?: string; usageDate: string; customer: string; remark: string | null; updatedAt: Date }>
-  ) {
-    const customerRemarkMap = new Map(customerRemarks.map((row) => [this.prepaidCustomerKey(row.frontendUserId, row.customer), {
-      remark: row.remark || '', updatedAt: row.updatedAt.toISOString()
-    }]))
-    const usageRemarkMap = new Map(usageRemarks.map((row) => [this.prepaidUsageKey(row.frontendUserId, row.usageDate, row.customer), {
-      remark: row.remark || '', updatedAt: row.updatedAt.toISOString()
-    }]))
-    const map = new Map<string, { id: string; frontendUserId: string; name: string; customer: string; totalAmount: number; totalUsableTimes: number; usedTimes: number; availableTimes: number; usedAmount: number; availableAmount: number; remark: string; remarkUpdatedAt: string }>()
-    recharges.forEach((row) => {
-      const key = this.prepaidCustomerKey(row.frontendUserId, row.customer)
-      const current =
-        map.get(key) ||
-        {
-          id: key || row.customer,
-          frontendUserId: row.frontendUserId || '',
-          name: row.name || '',
-          customer: row.customer,
-          totalAmount: 0,
-          totalUsableTimes: 0,
-          usedTimes: 0,
-          availableTimes: 0,
-          usedAmount: 0,
-          availableAmount: 0,
-          remark: '',
-          remarkUpdatedAt: ''
-        }
-      current.totalAmount = toMoney(current.totalAmount + toMoney(row.amount))
-      current.totalUsableTimes += row.usableTimes
-      if (!current.remark && row.remark) current.remark = row.remark
-      map.set(key, current)
-    })
-    dailyRows.forEach((row) => {
-      const key = this.prepaidCustomerKey(row.frontendUserId, row.customer)
-      const current =
-        map.get(key) ||
-        {
-          id: key || row.customer,
-          frontendUserId: row.frontendUserId || '',
-          name: row.name || '',
-          customer: row.customer,
-          totalAmount: 0,
-          totalUsableTimes: 0,
-          usedTimes: 0,
-          availableTimes: 0,
-          usedAmount: 0,
-          availableAmount: 0,
-          remark: '',
-          remarkUpdatedAt: ''
-        }
-      current.usedAmount = toMoney(current.usedAmount + row.deductionAmount)
-      map.set(key, current)
-    })
-    const customerRows = Array.from(map.values())
-      .map((row) => {
-        const savedRemark = customerRemarkMap.get(this.prepaidCustomerKey(row.frontendUserId, row.customer))
-        return {
-          ...row,
-          availableTimes: Math.max(0, row.totalUsableTimes - row.usedTimes),
-          usedAmount: toMoney(row.usedAmount),
-          availableAmount: toMoney(Math.max(0, row.totalAmount - row.usedAmount)),
-          remark: savedRemark?.remark ?? row.remark,
-          remarkUpdatedAt: savedRemark?.updatedAt || ''
-        }
-      })
-      .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN') || a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
-    return {
-      customerRows,
-      dailyRows: dailyRows.map((row) => {
-        const savedRemark = usageRemarkMap.get(this.prepaidUsageKey(row.frontendUserId, row.date, row.customer))
-        return { ...row, remark: savedRemark?.remark || '', remarkUpdatedAt: savedRemark?.updatedAt || '' }
-      })
-    }
-  }
-
   private displayName(user: { account: string; username: string; displayRemark?: string | null }) {
     return user.displayRemark?.trim() || user.username || user.account
   }
@@ -1181,7 +933,7 @@ export class FinanceService {
     sheets: Awaited<ReturnType<FinanceService['loadSheets']>>,
     startDate: string,
     endDate: string,
-    prepaidRecharges: Array<{ rechargeDate: string; amount: unknown; usableTimes: number }> = []
+    prepaidRecharges: SharedPrepaidIncomeRecharge[] = []
   ) {
     const allowedDates = new Set(datesBetween(startDate, endDate))
     let sampleCount = 0
@@ -1190,17 +942,15 @@ export class FinanceService {
       if (!allowedDates.has(sheet.date)) return
       sheet.sampleBlocks.forEach((block) => {
         const inputs = block.inputs as Record<string, unknown>
-        if (inputs.paymentStatus === '预存款') return
         const value = this.getSampleAmount(inputs)
         if (!Number.isFinite(value)) return
         sampleCount += 1
-        amount += value
+        if (inputs.paymentStatus !== '预存款') amount += value
       })
     })
     prepaidRecharges.forEach((row) => {
       if (!allowedDates.has(row.rechargeDate)) return
-      sampleCount += row.usableTimes
-      amount += toMoney(row.amount)
+      amount += toMoney(row.paidAmount)
     })
     return { sampleCount, amount: toMoney(amount) }
   }
@@ -1260,23 +1010,6 @@ export class FinanceService {
     if (value === MonthlySettlementStatus.PAID) return '已结款'
     if (value === MonthlySettlementStatus.PARTIAL) return '部分结款'
     return '未结款'
-  }
-
-  private parsePrepaidUsageId(id?: string) {
-    const raw = String(id || '')
-    const separatorIndex = raw.indexOf('__')
-    const usageDate = separatorIndex >= 0 ? raw.slice(0, separatorIndex) : ''
-    const customer = separatorIndex >= 0 ? raw.slice(separatorIndex + 2).trim() : ''
-    if (!usageDate || !customer) throw new BadRequestException('预存款每日明细标识无效')
-    return { usageDate, customer }
-  }
-
-  private prepaidCustomerKey(frontendUserId: string | undefined, customer: string) {
-    return frontendUserId ? `${frontendUserId}__${customer}` : customer
-  }
-
-  private prepaidUsageKey(frontendUserId: string | undefined, usageDate: string, customer: string) {
-    return frontendUserId ? `${frontendUserId}__${usageDate}__${customer}` : `${usageDate}__${customer}`
   }
 
   private jsonValue(value: unknown) {

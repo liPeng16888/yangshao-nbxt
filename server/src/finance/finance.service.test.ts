@@ -29,46 +29,53 @@ describe('FinanceService monthly element counts', () => {
   })
 })
 
-describe('FinanceService prepaid deduction amounts', () => {
-  it('aggregates exact prepaid amounts instead of truncating them into sample counts', () => {
-    const service = new FinanceService({} as never, {} as never, {} as never)
-    const rows = (service as unknown as {
-      getPrepaidDailyRows(sheets: unknown[]): Array<{ deductionAmount: number }>
-    }).getPrepaidDailyRows([{
-      date: '2026-08-12',
-      frontendUserId: 'front-1',
-      frontendUser: { name: '化验室' },
-      sampleBlocks: [
-        { inputs: { sampleNumber: 'A-1', customerText: '王总', paymentStatus: '预存款', price: 1.23 } },
-        { inputs: { sampleNumber: 'A-2', customerText: '王总', paymentStatus: '预存款', price: 2.22 } },
-        { inputs: { sampleNumber: 'A-3', customerText: '王总', paymentStatus: '已结款', price: 99.99 } }
-      ]
-    }])
+describe('FinanceService shared prepaid income', () => {
+  it('counts prepaid samples once and recognizes only active paid principal as income', async () => {
+    const prisma = {
+      labSheet: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'sheet-1',
+          date: '2026-08-12',
+          frontendUserId: 'front-1',
+          frontendUser: { id: 'front-1', username: 'lab', account: 'lab', displayRemark: null },
+          sampleBlocks: [{
+            id: 'block-1',
+            index: 1,
+            inputs: { sampleNumber: 'A-1', paymentStatus: '预存款', price: 100 }
+          }]
+        }])
+      },
+      sharedPrepaidRecharge: {
+        findMany: vi.fn().mockResolvedValue([{
+          rechargeDate: '2026-08-12',
+          paidAmount: 1000,
+          giftAmount: 100,
+          totalAmount: 1100
+        }])
+      },
+      prepaidRechargeRecord: {
+        findMany: vi.fn().mockResolvedValue([{
+          rechargeDate: '2026-08-12',
+          amount: 100,
+          usableTimes: 10
+        }])
+      }
+    }
+    const service = new FinanceService(prisma as never, {} as never, {} as never)
 
-    expect(rows).toMatchObject([{ deductionAmount: 3.45 }])
-    expect(rows[0]).not.toHaveProperty('sampleCount')
-  })
+    const report = await service.getFrontendIncomeReport('front-1', '2026-08')
 
-  it('reports used and available prepaid money from exact deduction amounts', () => {
-    const service = new FinanceService({} as never, {} as never, {} as never)
-    const report = (service as unknown as {
-      buildPrepaidReport(
-        recharges: unknown[],
-        dailyRows: unknown[],
-        customerRemarks: unknown[],
-        usageRemarks: unknown[]
-      ): { customerRows: Array<{ usedAmount: number; availableAmount: number }> }
-    }).buildPrepaidReport(
-      [{ frontendUserId: 'front-1', customer: '王总', amount: 100, usableTimes: 10, remark: null }],
-      [{
-        id: '2026-08-12__王总', date: '2026-08-12', frontendUserId: 'front-1', name: '化验室',
-        customer: '王总', deductionAmount: 3.45, remark: ''
-      }],
-      [],
-      []
-    )
-
-    expect(report.customerRows).toMatchObject([{ usedAmount: 3.45, availableAmount: 96.55 }])
+    expect(prisma.sharedPrepaidRecharge.findMany).toHaveBeenCalledWith({
+      where: {
+        ownerFrontendUserId: 'front-1',
+        rechargeDate: { gte: '2026-08-01', lte: '2026-08-31' },
+        reversedAt: null
+      }
+    })
+    expect(prisma.prepaidRechargeRecord.findMany).not.toHaveBeenCalled()
+    expect(report.statusSummaries.find((row) => row.status === '预存款')).toMatchObject({ count: 1, amount: 1000 })
+    expect(report.totalAmount).toBe(1000)
+    expect(report.totalSamples).toBe(1)
   })
 })
 
@@ -210,21 +217,5 @@ describe('FinanceService optimistic concurrency', () => {
     expect(prisma.monthlySettlementRecord.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'monthly-1', frontendUserId: 'front-1', updatedAt: new Date('2026-08-11T00:00:00.000Z') }
     }))
-  })
-
-  it('rejects a stale prepaid customer remark update', async () => {
-    const current = {
-      id: 'remark-1', frontendUserId: 'front-1', customer: '客户甲', remark: '远端备注',
-      createdAt: new Date('2026-08-01T00:00:00.000Z'), updatedAt: new Date('2026-08-11T00:05:00.000Z')
-    }
-    const prisma = { prepaidCustomerRemark: {
-      findUnique: vi.fn().mockResolvedValue(current),
-      updateMany: vi.fn().mockResolvedValue({ count: 0 })
-    } }
-    const service = new FinanceService(prisma as never, {} as never, {} as never)
-
-    await expect(service.updateFrontendPrepaidCustomerRemark('front-1', 'sub-1', {
-      customer: '客户甲', remark: '本地备注', baseUpdatedAt: '2026-08-11T00:00:00.000Z'
-    })).rejects.toMatchObject({ response: expect.objectContaining({ code: 'STALE_WRITE' }) })
   })
 })

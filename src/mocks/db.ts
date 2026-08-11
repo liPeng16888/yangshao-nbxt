@@ -15,7 +15,6 @@ import type {
   MedicineUnit
 } from '@/types/medicineInventory'
 import type { DateRange, FinanceReport, SampleDetectionReport } from '@/types/report'
-import type { PrepaidRechargeRow } from '@/types/financeBills'
 import type { LabParameter, LabParameterKey, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
 import { defaultLabParameters, DEFAULT_SAMPLE_BLOCK_COUNT } from '@/constants/labSheetTemplate'
 import { financeCategoryRules } from '@/constants/reportCategories'
@@ -31,7 +30,6 @@ import type {
   UpdateFrontendSubAccountPayload
 } from '@/types/frontendSubAccount'
 
-const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
 const MEDICINE_COMMON_NAME_STORAGE_KEY = 'ys_medicine_common_names'
 
 const mainFrontendUser: AuthUser = {
@@ -723,7 +721,7 @@ export async function mockSampleDetectionReport(range: DateRange): Promise<Sampl
   const incomeReport = summarizeIncomeRows(
     startDate.slice(0, 7),
     dates.map((date) => summarizeIncomeSheet(ensureSheet(date))),
-    loadPrepaidRecharges().filter((row) => row.rechargeDate >= startDate && row.rechargeDate <= endDate),
+    [],
     new Set(dates)
   )
   const rows = incomeReport.rows
@@ -747,17 +745,6 @@ export async function mockSampleDetectionReport(range: DateRange): Promise<Sampl
     },
     rows
   })
-}
-
-function loadPrepaidRecharges(): PrepaidRechargeRow[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(PREPAID_RECHARGE_STORAGE_KEY)
-    if (!raw) return []
-    return JSON.parse(raw) as PrepaidRechargeRow[]
-  } catch {
-    return []
-  }
 }
 
 function classifyFinanceItem(item: string) {

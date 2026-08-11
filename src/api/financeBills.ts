@@ -5,32 +5,24 @@ import type {
   IncomeBillReport,
   MonthlySettlementReport,
   MonthlySettlementSummaryRow,
-  PrepaidRechargePayload,
-  PrepaidRechargeRow,
-  PrepaidReport,
   UnsettledSampleRow
 } from '@/types/financeBills'
 import type { SampleBlock } from '@/types/labSheet'
 import {
   getMonthlySettlementDailyRowsFromSheet,
-  getPrepaidDailyRowsFromSheet,
   getUnsettledRowsFromSheet,
   summarizeIncomeRows,
   summarizeIncomeSheet,
-  summarizeMonthlySettlementReport,
-  summarizePrepaidReport
+  summarizeMonthlySettlementReport
 } from '@/utils/financeBills'
 import { businessDateInBeijing, todayInBeijing } from '@/utils/date'
 
 const MONTHLY_SETTLEMENT_STORAGE_KEY = 'ys_monthly_settlement_records'
-const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
-const PREPAID_CUSTOMER_REMARK_STORAGE_KEY = 'ys_prepaid_customer_remarks'
-const PREPAID_USAGE_REMARK_STORAGE_KEY = 'ys_prepaid_usage_remarks'
 
 export async function getIncomeBillReport(month: string): Promise<IncomeBillReport> {
   if (!useMocks) return request.get('/finance/income-bills', { params: { month } })
   const rows = await Promise.all(getMonthDates(month).map(async (date) => summarizeIncomeSheet(await getLabSheetByDate(date))))
-  return summarizeIncomeRows(month, rows, loadPrepaidRecharges())
+  return summarizeIncomeRows(month, rows)
 }
 
 export async function getUnsettledSamples(): Promise<UnsettledSampleRow[]> {
@@ -109,57 +101,6 @@ export async function updateMonthlySettlementSummary(row: MonthlySettlementSumma
   return savedRow
 }
 
-export async function getPrepaidRecharges(): Promise<PrepaidRechargeRow[]> {
-  if (!useMocks) return request.get('/finance/prepaid-recharges')
-  return loadPrepaidRecharges()
-}
-
-export async function createPrepaidRecharge(payload: PrepaidRechargePayload): Promise<PrepaidRechargeRow> {
-  if (!useMocks) return request.post('/finance/prepaid-recharges', payload)
-  const rows = loadPrepaidRecharges()
-  const row: PrepaidRechargeRow = {
-    id: `prepaid-${Date.now()}`,
-    rechargeDate: payload.rechargeDate,
-    customer: payload.customer.trim(),
-    amount: roundPayloadMoney(payload.amount),
-    usableTimes: Math.max(0, Math.trunc(Number(payload.usableTimes || 0))),
-    remark: payload.remark?.trim() || '',
-    createdAt: new Date().toISOString()
-  }
-  rows.unshift(row)
-  savePrepaidRecharges(rows)
-  return row
-}
-
-export async function requestPrepaidRechargeDeletion(sourceId: string, reason: string): Promise<{ id: string; status: 'PENDING' }> {
-  if (!useMocks) return request.post('/finance/delete-requests', { sourceType: 'prepaidRecharge', sourceId, reason })
-  return { id: `delete-request-${Date.now()}`, status: 'PENDING' }
-}
-
-export async function getPrepaidReport(): Promise<PrepaidReport> {
-  if (!useMocks) return request.get('/finance/prepaid-report')
-  await getLabSheetByDate(businessDateInBeijing())
-  const history = await getLabSheetHistory()
-  const dailyRows = await Promise.all(history.map(async (sheet) => getPrepaidDailyRowsFromSheet(await getLabSheetByDate(sheet.date))))
-  return summarizePrepaidReport(loadPrepaidRecharges(), dailyRows.flat(), loadRecord(PREPAID_CUSTOMER_REMARK_STORAGE_KEY), loadRecord(PREPAID_USAGE_REMARK_STORAGE_KEY))
-}
-
-export async function updatePrepaidCustomerRemark(customer: string, remark: string, baseUpdatedAt?: string): Promise<{ customer: string; remark: string; updatedAt: string }> {
-  if (!useMocks) return request.patch<any, { customer: string; remark: string; updatedAt: string }>('/finance/prepaid-customers/remark', { customer, remark, baseUpdatedAt })
-  const remarks = loadRecord(PREPAID_CUSTOMER_REMARK_STORAGE_KEY)
-  remarks[customer] = remark
-  saveRecord(PREPAID_CUSTOMER_REMARK_STORAGE_KEY, remarks)
-  return { customer, remark, updatedAt: new Date().toISOString() }
-}
-
-export async function updatePrepaidUsageRemark(id: string, remark: string, baseUpdatedAt?: string): Promise<{ id: string; remark: string; updatedAt: string }> {
-  if (!useMocks) return request.patch<any, { id: string; remark: string; updatedAt: string }>('/finance/prepaid-usage-remarks', { id, remark, baseUpdatedAt })
-  const remarks = loadRecord(PREPAID_USAGE_REMARK_STORAGE_KEY)
-  remarks[id] = remark
-  saveRecord(PREPAID_USAGE_REMARK_STORAGE_KEY, remarks)
-  return { id, remark, updatedAt: new Date().toISOString() }
-}
-
 function getMonthDates(month: string) {
   const start = dayjs(`${month}-01`)
   const today = dayjs(todayInBeijing())
@@ -188,40 +129,4 @@ function loadMonthlySettlementRows(): MonthlySettlementSummaryRow[] {
 function saveMonthlySettlementRows(rows: MonthlySettlementSummaryRow[]) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(MONTHLY_SETTLEMENT_STORAGE_KEY, JSON.stringify(rows))
-}
-
-export function loadPrepaidRecharges(): PrepaidRechargeRow[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(PREPAID_RECHARGE_STORAGE_KEY)
-    if (!raw) return []
-    return JSON.parse(raw) as PrepaidRechargeRow[]
-  } catch {
-    return []
-  }
-}
-
-function savePrepaidRecharges(rows: PrepaidRechargeRow[]) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(PREPAID_RECHARGE_STORAGE_KEY, JSON.stringify(rows))
-}
-
-function loadRecord(key: string): Record<string, string> {
-  if (typeof window === 'undefined') return {}
-  try {
-    const raw = window.localStorage.getItem(key)
-    if (!raw) return {}
-    return JSON.parse(raw) as Record<string, string>
-  } catch {
-    return {}
-  }
-}
-
-function saveRecord(key: string, value: Record<string, string>) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(key, JSON.stringify(value))
-}
-
-function roundPayloadMoney(value: number) {
-  return Number(Number(value || 0).toFixed(2))
 }

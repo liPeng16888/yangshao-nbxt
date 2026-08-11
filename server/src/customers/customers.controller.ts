@@ -12,7 +12,7 @@ import { CustomersService } from './customers.service'
 @Controller('customers')
 @UseGuards(AuthGuard, RolesGuard, FrontendPermissionGuard)
 @Roles(UserRole.FRONTEND_USER)
-@FrontendPermission('DATA_MAIN', 'FINANCE_PREPAID_ADD', 'CUSTOMER_OVERVIEW')
+@FrontendPermission('DATA_MAIN', 'CUSTOMER_OVERVIEW', 'PREPAID_RECHARGE', 'PREPAID_CUSTOMERS')
 export class CustomersController {
   constructor(private readonly customers: CustomersService) {}
 

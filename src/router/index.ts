@@ -8,8 +8,6 @@ import StandardSampleCalculationPage from '@/views/dashboard/StandardSampleCalcu
 import FinancePage from '@/views/dashboard/FinancePage.vue'
 import FinanceIncomePage from '@/views/dashboard/FinanceIncomePage.vue'
 import FinanceMonthlySettlementPage from '@/views/dashboard/FinanceMonthlySettlementPage.vue'
-import FinancePrepaidAddPage from '@/views/dashboard/FinancePrepaidAddPage.vue'
-import FinancePrepaidCustomersPage from '@/views/dashboard/FinancePrepaidCustomersPage.vue'
 import FinanceUnsettledPage from '@/views/dashboard/FinanceUnsettledPage.vue'
 import ReportPage from '@/views/dashboard/ReportPage.vue'
 import BlacklistPage from '@/views/dashboard/BlacklistPage.vue'
@@ -83,19 +81,6 @@ const router = createRouter({
           name: 'financeMonthlySettlement',
           component: FinanceMonthlySettlementPage,
           meta: { title: '月结款', requiresAuth: true, frontendPermission: 'FINANCE_MONTHLY_SETTLEMENT' }
-        },
-        { path: 'finance/prepaid', redirect: () => firstAllowedPath(useAuthStore().user, '/finance/prepaid') },
-        {
-          path: 'finance/prepaid/add',
-          name: 'financePrepaidAdd',
-          component: FinancePrepaidAddPage,
-          meta: { title: '预存款', requiresAuth: true, frontendPermission: 'FINANCE_PREPAID_ADD' }
-        },
-        {
-          path: 'finance/prepaid/customers',
-          name: 'financePrepaidCustomers',
-          component: FinancePrepaidCustomersPage,
-          meta: { title: '预存款', requiresAuth: true, frontendPermission: 'FINANCE_PREPAID_CUSTOMERS' }
         },
         { path: 'reports', name: 'reports', component: ReportPage, meta: { title: '报表', requiresAuth: true, frontendPermission: 'REPORTS' } },
         { path: 'medicine-inventory', redirect: () => firstAllowedPath(useAuthStore().user, '/medicine-inventory') },
