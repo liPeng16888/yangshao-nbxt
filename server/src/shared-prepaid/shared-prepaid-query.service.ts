@@ -342,13 +342,8 @@ export class SharedPrepaidQueryService {
   }
 
   async listConsumptionFilterOptions() {
-    const [allocationSources, payableSources, consumptionOwners, payableConsumers] = await Promise.all([
+    const [allocationSources, consumptionOwners] = await Promise.all([
       this.prisma.sharedPrepaidAllocation.findMany({
-        distinct: ['sourceOwnerId'],
-        select: { sourceOwner: { select: accountSelect } },
-        orderBy: { sourceOwnerId: 'asc' }
-      }),
-      this.prisma.sharedPrepaidPayable.findMany({
         distinct: ['sourceOwnerId'],
         select: { sourceOwner: { select: accountSelect } },
         orderBy: { sourceOwnerId: 'asc' }
@@ -357,22 +352,11 @@ export class SharedPrepaidQueryService {
         distinct: ['consumingFrontendUserId'],
         select: { consumingFrontendUser: { select: accountSelect } },
         orderBy: { consumingFrontendUserId: 'asc' }
-      }),
-      this.prisma.sharedPrepaidPayable.findMany({
-        distinct: ['consumerOwnerId'],
-        select: { consumerOwner: { select: accountSelect } },
-        orderBy: { consumerOwnerId: 'asc' }
       })
     ])
     return {
-      sourceOwners: this.accountOptions([
-        ...allocationSources.map((row) => row.sourceOwner),
-        ...payableSources.map((row) => row.sourceOwner)
-      ]),
-      consumingOwners: this.accountOptions([
-        ...consumptionOwners.map((row) => row.consumingFrontendUser),
-        ...payableConsumers.map((row) => row.consumerOwner)
-      ])
+      sourceOwners: this.accountOptions(allocationSources.map((row) => row.sourceOwner)),
+      consumingOwners: this.accountOptions(consumptionOwners.map((row) => row.consumingFrontendUser))
     }
   }
 

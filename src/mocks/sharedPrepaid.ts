@@ -183,14 +183,10 @@ export async function mockGetPrepaidConsumptions(
 }
 
 export async function mockGetPrepaidConsumptionFilterOptions(): Promise<PrepaidConsumptionFilterOptions> {
-  const sourceIds = new Set([
-    ...consumptions.flatMap((row) => effectiveAllocations(row).map((allocation) => allocation.sourceOwnerId)),
-    ...payables.map((payable) => payable.sourceOwnerId)
-  ])
-  const consumingIds = new Set([
-    ...consumptions.map((row) => row.consumingFrontendUserId),
-    ...payables.map((payable) => payable.consumerOwnerId)
-  ])
+  const sourceIds = new Set(consumptions.flatMap((row) => (
+    effectiveAllocations(row).map((allocation) => allocation.sourceOwnerId)
+  )))
+  const consumingIds = new Set(consumptions.map((row) => row.consumingFrontendUserId))
   const options = (ids: Set<string>) => [...ids]
     .map((id) => accounts.get(id))
     .filter((account): account is PrepaidAccountRow => Boolean(account))

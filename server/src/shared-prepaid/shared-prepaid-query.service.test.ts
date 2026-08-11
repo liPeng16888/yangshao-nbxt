@@ -197,33 +197,55 @@ describe('SharedPrepaidQueryService consumption list', () => {
     expect((result.items[0] as { allocations: unknown[] }).allocations).toHaveLength(1)
   })
 
-  it('returns deduplicated safe account filter options only from consumption and payable relations', async () => {
+  it('returns only account options that can match the list predicates after a completed-payable reversal', async () => {
+    const accountA = { id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: '北京店' }
+    const accountB = { id: 'front-2', account: 'owner-b', username: '主账号 B', displayRemark: null }
+    type FilterWhere = {
+      consumingFrontendUserId?: string
+      AND?: Array<{
+        OR?: Array<{ allocations?: { some?: { sourceOwnerId?: string } } }>
+      }>
+    }
+    const countMatches = (where: FilterWhere) => {
+      const sourceOwnerId = where.AND
+        ?.flatMap((clause) => clause.OR ?? [])
+        .find((clause) => clause.allocations)
+        ?.allocations?.some?.sourceOwnerId
+      if (sourceOwnerId && sourceOwnerId !== accountA.id) return 0
+      if (where.consumingFrontendUserId && where.consumingFrontendUserId !== accountB.id) return 0
+      return 2
+    }
+    const consumptionFindMany = vi.fn().mockImplementation((args: { distinct?: string[] }) => (
+      args.distinct ? [{ consumingFrontendUser: accountB }] : []
+    ))
     const service = new SharedPrepaidQueryService({
       sharedPrepaidAllocation: { findMany: vi.fn().mockResolvedValue([
-        { sourceOwner: { id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: '北京店' } }
+        { sourceOwner: accountA }
       ]) },
-      sharedPrepaidConsumption: { findMany: vi.fn().mockResolvedValue([
-        { consumingFrontendUser: { id: 'front-2', account: 'owner-b', username: '主账号 B', displayRemark: null } }
-      ]) },
+      sharedPrepaidConsumption: {
+        findMany: consumptionFindMany,
+        count: vi.fn().mockImplementation(({ where }: { where: FilterWhere }) => countMatches(where))
+      },
       sharedPrepaidPayable: {
         findMany: vi.fn()
-          .mockResolvedValueOnce([{ sourceOwner: { id: 'front-2', account: 'owner-b', username: '主账号 B', displayRemark: null } }])
-          .mockResolvedValueOnce([{ consumerOwner: { id: 'front-2', account: 'owner-b', username: '主账号 B', displayRemark: null } }])
+          .mockResolvedValueOnce([{ sourceOwner: accountB }])
+          .mockResolvedValueOnce([{ consumerOwner: accountA }])
       }
     } as never)
 
-    const method = (service as unknown as {
-      listConsumptionFilterOptions: () => Promise<unknown>
-    }).listConsumptionFilterOptions
-    expect(typeof method).toBe('function')
-    await expect(method.call(service)).resolves.toEqual({
-      sourceOwners: [
-        { id: 'front-1', account: 'owner-a', label: '北京店（owner-a）' },
-        { id: 'front-2', account: 'owner-b', label: '主账号 B（owner-b）' }
-      ],
-      consumingOwners: [
-        { id: 'front-2', account: 'owner-b', label: '主账号 B（owner-b）' }
-      ]
+    const options = await service.listConsumptionFilterOptions()
+    const sourceMatchTotals = await Promise.all(options.sourceOwners.map(async (option) => (
+      (await service.listConsumptions({ sourceOwnerId: option.id })).total
+    )))
+    const consumerMatchTotals = await Promise.all(options.consumingOwners.map(async (option) => (
+      (await service.listConsumptions({ consumingFrontendUserId: option.id })).total
+    )))
+
+    expect(sourceMatchTotals).toEqual([2])
+    expect(consumerMatchTotals).toEqual([2])
+    expect(options).toEqual({
+      sourceOwners: [{ id: 'front-1', account: 'owner-a', label: '北京店（owner-a）' }],
+      consumingOwners: [{ id: 'front-2', account: 'owner-b', label: '主账号 B（owner-b）' }]
     })
   })
 })

@@ -148,16 +148,34 @@ describe('shared prepaid focused mock', () => {
     })
   })
 
-  it('offers only deduplicated accounts that appear in consumption/allocation/payable history', async () => {
+  it('offers only accounts whose source and consumer filters match rows after a completed-payable reversal', async () => {
     await mockCreatePrepaidRecharge({
       phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000, giftAmount: 100
     }, 'recharge-a', ownerA)
-    await mockRecordPrepaidConsumption({
+    const original = await mockRecordPrepaidConsumption({
       phone: '13800000000', amount: 100, sheetId: 'sheet-1', sampleBlockId: 'block-1',
       sampleIndex: 0, sheetDate: '2026-08-12'
     }, 'consume-b', ownerB)
+    const settlement = await mockCreatePrepaidSettlement({
+      payableIds: [original.payables[0].id]
+    }, 'settlement-options', ownerA)
+    const submitted = await mockSubmitPrepaidSettlementPayment(settlement.id, {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00'
+    }, 'submit-options', ownerA)
+    await mockConfirmPrepaidSettlement(submitted.id, 'confirm-options', ownerB)
+    await mockReversePrepaidConsumption(original.id, { reason: '样品作废' }, 'reverse-options', ownerB)
 
-    await expect(mockGetPrepaidConsumptionFilterOptions()).resolves.toEqual({
+    const options = await mockGetPrepaidConsumptionFilterOptions()
+    const sourceMatches = await Promise.all(options.sourceOwners.map((option) => (
+      mockGetPrepaidConsumptions({ sourceOwnerId: option.id })
+    )))
+    const consumerMatches = await Promise.all(options.consumingOwners.map((option) => (
+      mockGetPrepaidConsumptions({ consumingFrontendUserId: option.id })
+    )))
+
+    expect(sourceMatches.map((page) => page.total)).toEqual([2])
+    expect(consumerMatches.map((page) => page.total)).toEqual([2])
+    expect(options).toEqual({
       sourceOwners: [{ id: 'A', account: 'account-a', label: '主账号 A（account-a）' }],
       consumingOwners: [{ id: 'B', account: 'account-b', label: '主账号 B（account-b）' }]
     })
