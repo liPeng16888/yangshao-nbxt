@@ -3,12 +3,12 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import appRouter from '@/router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import { accessGuardFeatures, featureForPath } from '@/router/guards'
-import { resetEmployeeAttendanceMock } from '@/mocks/employeeAttendance'
-import { mockCreateEmployee } from '@/mocks/employeeAttendance'
+import * as attendanceApi from '@/api/employeeAttendance'
+import { mockCreateEmployee, mockGetAttendance, mockSaveAttendance, resetEmployeeAttendanceMock } from '@/mocks/employeeAttendance'
 import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import EmployeeAttendanceOverviewPage from './employee-attendance/EmployeeAttendanceOverviewPage.vue'
@@ -169,6 +169,31 @@ describe('employee attendance navigation', () => {
       expect(pageStore.month).not.toBe('')
       page.unmount()
     }
+  })
+
+  it('keeps every actual attendance segment when saving an unchanged legacy edit form', async () => {
+    const existing = (await mockGetAttendance({ employeeId: 'emp-1' }))[0]!
+    const segments = [
+      { checkInAt: `${existing.date}T08:00:00+08:00`, checkOutAt: `${existing.date}T12:00:00+08:00` },
+      { checkInAt: `${existing.date}T13:00:00+08:00`, checkOutAt: `${existing.date}T17:00:00+08:00` }
+    ]
+    await mockSaveAttendance({ employeeId: existing.employeeId, date: existing.date, actualSegments: segments, explicitAbsenceMinutes: 0, overtimeMinutes: 0 }, existing.id)
+    const spy = vi.spyOn(attendanceApi, 'saveAttendance')
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.findAll('button').find((node) => node.text() === '编辑')!.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find((node) => node.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+      actualSegments: [
+        expect.objectContaining({ checkInAt: `${existing.date}T08:00`, checkOutAt: `${existing.date}T12:00` }),
+        expect.objectContaining({ checkInAt: `${existing.date}T13:00`, checkOutAt: `${existing.date}T17:00` })
+      ]
+    }), existing.id)
+    spy.mockRestore()
+    wrapper.unmount()
   })
 
   it('restores a valid month when navigating from date filtering to monthly pages', async () => {

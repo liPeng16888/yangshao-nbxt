@@ -161,22 +161,32 @@ describe('employee attendance mock repository', () => {
     await expect(mockGetMonthlySchedules('emp-1', month)).resolves.toEqual([expect.objectContaining({ id: 'target-preserved', remark: '保留目标' })])
   })
 
-  it('upgrades only the active account legacy schedule state without crossing accounts', async () => {
+  it('upgrades only a legacy version, prunes provable round-one phantom rows, and preserves new-version empties', async () => {
     const month = dayjs().format('YYYY-MM')
-    const defaultState = JSON.parse(window.localStorage.getItem('ys_employee_attendance_v2:mock-default')!) as Record<string, unknown>
-    delete defaultState.monthlySchedules
+    const previousMonth = dayjs(`${month}-01`).subtract(1, 'month').format('YYYY-MM')
+    const nextMonth = dayjs(`${month}-01`).add(1, 'month').format('YYYY-MM')
+    const defaultState = JSON.parse(window.localStorage.getItem('ys_employee_attendance_v2:mock-default')!) as Record<string, any>
+    const seedRows = (targetMonth: string) => defaultState.employees.flatMap((employee: { id: string }) => Array.from({ length: dayjs(`${targetMonth}-01`).daysInMonth() }, (_, index) => {
+      const date = `${targetMonth}-${String(index + 1).padStart(2, '0')}`
+      const weekly = defaultState.weeklySchedules.find((row: { employeeId: string; weekday: number }) => row.employeeId === employee.id && row.weekday === dayjs(date).day())
+      return { id: `monthly-${employee.id}-${date}`, employeeId: employee.id, date, isWorkday: weekly.isWorkday, segments: weekly.isWorkday ? [{ sequence: 0, startTime: weekly.plannedStartTime, endTime: weekly.plannedEndTime }] : [], remark: '', scheduledMinutes: weekly.scheduledMinutes, breakMinutes: 0 }
+    }))
+    defaultState.monthlySchedules = [
+      ...seedRows(previousMonth), ...seedRows(month), ...seedRows(nextMonth),
+      { id: 'manual-previous', employeeId: 'emp-1', date: `${previousMonth}-01`, isWorkday: true, segments: [{ sequence: 0, startTime: '07:00', endTime: '15:00' }], remark: '手工保留', scheduledMinutes: 480, breakMinutes: 0 }
+    ]
+    delete defaultState.schemaVersion
     window.localStorage.setItem('ys_user', JSON.stringify({ id: 'legacy-a' }))
     window.localStorage.setItem('ys_employee_attendance_v2:legacy-a', JSON.stringify(defaultState))
 
-    const migrated = await mockGetMonthlySchedules('emp-1', month)
-    expect(migrated).toHaveLength(dayjs(`${month}-01`).daysInMonth())
-    expect(await mockGetMonthlySchedules('emp-1', dayjs(`${month}-01`).subtract(1, 'month').format('YYYY-MM'))).toEqual([])
-    expect(await mockGetMonthlySchedules('emp-1', dayjs(`${month}-01`).add(1, 'month').format('YYYY-MM'))).toEqual([])
-    await mockBatchSaveMonthlySchedules({ employeeId: 'emp-1', dates: [`${month}-01`], isWorkday: false, segments: [], remark: '仅账号 A' })
+    expect((await mockGetMonthlySchedules('emp-1', previousMonth)).map((row) => row.id)).toEqual(['manual-previous'])
+    expect(await mockGetMonthlySchedules('emp-1', nextMonth)).toEqual([])
+    expect(await mockGetMonthlySchedules('emp-1', month)).toHaveLength(dayjs(`${month}-01`).daysInMonth())
+    expect(JSON.parse(window.localStorage.getItem('ys_employee_attendance_v2:legacy-a')!).schemaVersion).toBeGreaterThan(0)
 
-    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'legacy-b' }))
-    window.localStorage.setItem('ys_employee_attendance_v2:legacy-b', JSON.stringify(defaultState))
-    expect((await mockGetMonthlySchedules('emp-1', month)).find((row) => row.date === `${month}-01`)?.remark).not.toBe('仅账号 A')
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'current-empty' }))
+    window.localStorage.setItem('ys_employee_attendance_v2:current-empty', JSON.stringify({ ...defaultState, schemaVersion: 3, monthlySchedules: [] }))
+    expect(await mockGetMonthlySchedules('emp-1', month)).toEqual([])
   })
 
   it('treats an empty actual-segment list as normal attendance unless absence is explicit', async () => {

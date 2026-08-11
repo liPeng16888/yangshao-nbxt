@@ -75,6 +75,7 @@ export interface AttendanceOverview {
 }
 
 export interface EmployeeAttendanceState {
+  schemaVersion: number;
   employees: Array<Employee & { sensitive?: { idCard: string; bankCard: string; address: string; emergencyContact: string } }>;
   weeklySchedules: WeeklySchedule[]; overrides: DateOverride[]; monthlySchedules: MonthlyScheduleDay[]; monthSettings: MonthlySetting[]; attendance: AttendanceRecord[];
   leaveTypes: LeaveType[]; leaves: LeaveRequest[]; commissionTypes: CommissionType[]; commissions: CommissionRecord[];

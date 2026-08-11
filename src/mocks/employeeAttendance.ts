@@ -10,6 +10,7 @@ import type {
 import { breakMinutes, deriveAttendanceMetrics, normalizeClockIntervals, scheduledMinutes } from '@/utils/attendanceIntervals'
 
 const STORAGE_KEY = 'ys_employee_attendance_v2'
+const MOCK_SCHEMA_VERSION = 3
 const now = () => dayjs().toISOString()
 const id = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
@@ -55,6 +56,7 @@ function initialState(): EmployeeAttendanceState {
     explicitAbsenceMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: index ? 60 : 30, remark: '', manuallyEdited: true
   }))
   return {
+    schemaVersion: MOCK_SCHEMA_VERSION,
     employees, weeklySchedules, overrides: [],
     monthlySchedules, monthSettings: employees.map((row) => ({ id: `ms-${row.id}`, employeeId: row.id, month, scheduledWorkDays: 22, restQuotaDays: row.restQuotaDays })),
     attendance,
@@ -105,9 +107,32 @@ function read() {
   let state: EmployeeAttendanceState
   try { state = JSON.parse(window.localStorage.getItem(storageKey()) || '') as EmployeeAttendanceState } catch { state = initialState() }
   if (!state?.employees) state = initialState()
-  if (!state.monthlySchedules?.length) state.monthlySchedules = migrateMonthlySchedules(state)
+  upgradeState(state)
   stripAndRememberSensitive(state); seedSecrets(); memories.set(key, state); save()
   return state
+}
+function legacySeedProjection(state: EmployeeAttendanceState, row: MonthlyScheduleDay) {
+  const source = state.overrides.find((item) => item.employeeId === row.employeeId && item.date === row.date)
+    || state.weeklySchedules.find((item) => item.employeeId === row.employeeId && item.weekday === dayjs(row.date).day())
+  const isWorkday = Boolean(source?.isWorkday)
+  const segments = isWorkday && source?.plannedStartTime && source.plannedEndTime
+    ? [{ sequence: 0, startTime: source.plannedStartTime, endTime: source.plannedEndTime }]
+    : []
+  return { isWorkday, segments, scheduledMinutes: isWorkday ? source?.scheduledMinutes || 0 : 0 }
+}
+function isProvableRoundOnePhantom(state: EmployeeAttendanceState, row: MonthlyScheduleDay) {
+  const currentMonth = dayjs().format('YYYY-MM')
+  if (monthOf(row.date) === currentMonth || !['emp-1', 'emp-2'].includes(row.employeeId) || row.id !== `monthly-${row.employeeId}-${row.date}` || row.remark) return false
+  const expected = legacySeedProjection(state, row)
+  return row.isWorkday === expected.isWorkday && row.scheduledMinutes === expected.scheduledMinutes && row.breakMinutes === 0
+    && JSON.stringify(row.segments) === JSON.stringify(expected.segments)
+}
+function upgradeState(state: EmployeeAttendanceState) {
+  const version = Number(state.schemaVersion || 0)
+  if (version >= MOCK_SCHEMA_VERSION) { state.monthlySchedules ||= []; return }
+  if (!Array.isArray(state.monthlySchedules) || !state.monthlySchedules.length) state.monthlySchedules = migrateMonthlySchedules(state)
+  else state.monthlySchedules = state.monthlySchedules.filter((row) => !isProvableRoundOnePhantom(state, row))
+  state.schemaVersion = MOCK_SCHEMA_VERSION
 }
 function migrateMonthlySchedules(state: EmployeeAttendanceState): MonthlyScheduleDay[] {
   const months = new Set([dayjs().format('YYYY-MM')])
