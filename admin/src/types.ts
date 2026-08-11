@@ -133,6 +133,58 @@ export interface AdminAttendanceOverview {
   readonly: true
 }
 
+export type AdminAttendanceCalendarStatus = 'FUTURE' | 'ABSENT' | 'LEAVE' | 'REST' | 'NORMAL' | 'OVERTIME' | 'SHORT'
+export type AdminAttendanceCalendarTone = 'future' | 'normal' | 'leave' | 'absent' | 'rest' | 'overtime' | 'short'
+export interface AdminAttendanceCalendarOverview {
+  month: string
+  activeEmployees: number
+  todayPresent: number
+  todayOnLeave: number
+  todayAbsent: number
+  overtimeHours: number
+  pendingLeaves: number
+  projectedPayroll: number
+  issueCount: number
+  issues: string[]
+}
+export interface AdminAttendanceCalendarSchedule {
+  id: string
+  employeeId: string
+  date: string
+  isWorkday: boolean
+  scheduledMinutes: number
+  breakMinutes: number
+  segments: AdminScheduleSegment[]
+  remark?: string
+}
+export interface AdminAttendanceCalendarDay {
+  date: string
+  day: number
+  isFuture: boolean
+  status: AdminAttendanceCalendarStatus
+  schedule: AdminAttendanceCalendarSchedule | null
+  actualSegments: Array<{ sequence?: number; checkInAt: string; checkOutAt: string }>
+  scheduledMinutes: number
+  workedMinutes: number
+  approvedLeaveMinutes: number
+  overtimeMinutes: number
+  displayMinutes: number
+  shortageMinutes: number
+  durationText: string
+  leaveTypeName: string
+  leaveReason: string
+  absenceReason: string
+  backgroundTone: AdminAttendanceCalendarTone
+  durationTone: AdminAttendanceCalendarTone
+}
+export interface AdminScheduleAttendanceOverview {
+  month: string
+  employee: { id: string; employeeNumber: string; name: string } | null
+  days: AdminAttendanceCalendarDay[]
+  overview: AdminAttendanceCalendarOverview
+  readonly: true
+}
+
 export interface AdminAttendanceFrontendAccount {
   account: string
   username: string

@@ -6,6 +6,7 @@ import {
   getAdminAttendanceAudit,
   getAdminAttendanceEmployees,
   getAdminAttendanceSchedules,
+  getAdminScheduleAttendanceOverview,
   getFrontendOptions,
   request,
   revealAdminAttendanceEmployee
@@ -54,12 +55,25 @@ describe('admin employee attendance mock contract', () => {
   })
 
   it('rejects every attendance business mutation in Mock mode', async () => {
-    for (const path of ['/admin/employee-attendance', '/admin/employee-attendance/leaves/leave-1/approve']) {
+    for (const path of ['/admin/employee-attendance', '/admin/employee-attendance/leaves/leave-1/approve', '/admin/employee-attendance/schedule-attendance-overview', '/admin/employee-attendance/schedule-attendance-overview/day-1']) {
       await expect(request.post(path)).rejects.toThrow('只读')
       await expect(request.patch(path, {})).rejects.toThrow('只读')
       await expect(request.put(path, {})).rejects.toThrow('只读')
       await expect(request.delete(path)).rejects.toThrow('只读')
     }
+  })
+
+  it('returns the account-scoped combined calendar through the new GET-only contract', async () => {
+    const result = await getAdminScheduleAttendanceOverview({
+      frontendUserIds: ['front-1'], employeeId: 'emp-1', month: '2026-08',
+      startDate: '2099-01-01', endDate: '2099-01-31', status: 'NOPE'
+    })
+    expect(result).toMatchObject({ month: '2026-08', readonly: true, employee: { id: 'emp-1', name: '张三' } })
+    expect(result.days).toHaveLength(31)
+    expect(result.days.find((day) => day.date === '2026-08-08')).toMatchObject({ status: 'OVERTIME', backgroundTone: 'normal', durationTone: 'overtime', displayMinutes: 540 })
+
+    await adminLogin({ account: 'sub001', password: 'sub123456' })
+    await expect(getAdminScheduleAttendanceOverview({ frontendUserIds: ['front-2'], employeeId: 'emp-3', month: '2026-08' })).rejects.toThrow('员工不存在或无权查看')
   })
 
   it('matches server schedule and audit filter semantics', async () => {

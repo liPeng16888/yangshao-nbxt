@@ -13,6 +13,8 @@ import type {
   AdminAttendanceOverview,
   AdminAttendancePayrollRun,
   AdminAttendanceSchedules,
+  AdminScheduleAttendanceOverview,
+  AdminAttendanceCalendarDay,
   AdminCustomerOverviewRow,
   AdminEmployeeAttendanceQuery,
   AdminLeaveRequest,
@@ -340,6 +342,61 @@ function mockMonthlyScheduleFilter(config?: AdminRequestConfig) {
     .sort((left, right) => right.date.localeCompare(left.date) || left.employeeId.localeCompare(right.employeeId) || left.id.localeCompare(right.id))
 }
 
+function mockAdminScheduleAttendanceOverview(config?: AdminRequestConfig): AdminScheduleAttendanceOverview {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  const month = String(config?.params?.month || '')
+  const employee = employeeId ? mockEmployeeAttendance.employees.find((row) => row.id === employeeId && ids.includes(row.frontendUserId)) : undefined
+  if (employeeId && !employee) throw new Error('员工不存在或无权查看')
+  const monthRows = mockEmployeeAttendance.attendance.filter((row) => ids.includes(row.frontendUserId) && row.date.startsWith(month))
+  const pendingLeaves = mockEmployeeAttendance.leaves.filter((row) => ids.includes(row.frontendUserId) && row.status === 'PENDING' && row.startDate <= `${month}-31` && row.endDate >= `${month}-01`).length
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  const overview = {
+    month,
+    activeEmployees: mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE').length,
+    todayPresent: 0, todayOnLeave: 0, todayAbsent: 0,
+    overtimeHours: Number((monthRows.reduce((sum, row) => sum + Number(row.overtimeMinutes || 0), 0) / 60).toFixed(2)),
+    pendingLeaves, projectedPayroll: 0, issueCount: pendingLeaves, issues: pendingLeaves ? [`${pendingLeaves} 条请假待审批`] : []
+  }
+  if (!employee) return { month, employee: null, days: [], overview, readonly: true }
+  const dayCount = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate()
+  const days: AdminAttendanceCalendarDay[] = Array.from({ length: dayCount }, (_, index) => {
+    const date = `${month}-${String(index + 1).padStart(2, '0')}`
+    const sourceSchedule = mockEmployeeAttendance.schedules.days.find((row) => row.employeeId === employee.id && row.date === date)
+    const schedule = sourceSchedule ? {
+      id: sourceSchedule.id, employeeId: sourceSchedule.employeeId, date: sourceSchedule.date, isWorkday: sourceSchedule.isWorkday,
+      scheduledMinutes: sourceSchedule.scheduledMinutes, breakMinutes: sourceSchedule.breakMinutes, segments: sourceSchedule.segments, remark: sourceSchedule.remark || ''
+    } : null
+    const record = mockEmployeeAttendance.attendance.find((row) => row.employeeId === employee.id && row.date === date)
+    const leaves = mockEmployeeAttendance.leaves.filter((row) => row.employeeId === employee.id && row.status === 'APPROVED' && row.startDate <= date && row.endDate >= date)
+    const scheduledMinutes = schedule?.isWorkday ? schedule.scheduledMinutes : 0
+    const approvedLeaveMinutes = Math.min(scheduledMinutes, leaves.reduce((sum, leave) => sum + (leave.unit === 'FULL_DAY' ? scheduledMinutes : leave.unit === 'HALF_DAY' ? Math.round(scheduledMinutes / 2) : Math.round(scheduledMinutes * Number(leave.countedDays || 0))), 0))
+    const isFuture = date > today
+    const workedMinutes = record ? Math.min(scheduledMinutes, Number(record.workedMinutes || 0)) : Math.max(0, scheduledMinutes - approvedLeaveMinutes)
+    const overtimeMinutes = Number(record?.overtimeMinutes || 0)
+    const shortageMinutes = Math.max(0, scheduledMinutes - Math.min(scheduledMinutes, workedMinutes + approvedLeaveMinutes))
+    const fullAbsence = Boolean(record && !(record.actualSegments || []).length && Number(record.absenceMinutes || 0) >= scheduledMinutes && scheduledMinutes > 0 && !approvedLeaveMinutes)
+    const status = isFuture ? 'FUTURE' : !schedule?.isWorkday ? 'REST' : fullAbsence ? 'ABSENT' : approvedLeaveMinutes ? 'LEAVE' : shortageMinutes ? 'SHORT' : overtimeMinutes ? 'OVERTIME' : 'NORMAL'
+    const credited = Math.min(scheduledMinutes, workedMinutes + approvedLeaveMinutes)
+    const displayMinutes = isFuture ? scheduledMinutes : status === 'REST' ? 0 : credited + overtimeMinutes
+    const hours = (minutes: number) => { const value = minutes / 60; return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '') }
+    const parts = isFuture || status === 'REST' ? [] : [workedMinutes ? `工作${hours(workedMinutes)}` : '', approvedLeaveMinutes ? `请假${hours(approvedLeaveMinutes)}` : '', overtimeMinutes ? `加班${hours(overtimeMinutes)}` : ''].filter(Boolean)
+    return {
+      date, day: index + 1, isFuture, status, schedule, actualSegments: record?.actualSegments || [],
+      scheduledMinutes: isFuture ? scheduledMinutes : status === 'REST' ? 0 : scheduledMinutes,
+      workedMinutes: isFuture || status === 'REST' ? 0 : workedMinutes, approvedLeaveMinutes: isFuture || status === 'REST' ? 0 : approvedLeaveMinutes,
+      overtimeMinutes: isFuture || status === 'REST' ? 0 : overtimeMinutes, displayMinutes,
+      shortageMinutes: isFuture || status === 'REST' ? 0 : shortageMinutes,
+      durationText: status === 'REST' ? '公司排休' : `${hours(displayMinutes)} 小时${parts.length ? `（${parts.join('＋')}）` : ''}`,
+      leaveTypeName: leaves[0]?.leaveType?.name || '', leaveReason: leaves[0]?.reason || '',
+      absenceReason: status === 'ABSENT' ? record?.remark || '未填写原因' : '',
+      backgroundTone: status === 'FUTURE' ? 'future' : status === 'REST' ? 'rest' : status === 'LEAVE' ? 'leave' : status === 'ABSENT' ? 'absent' : 'normal',
+      durationTone: shortageMinutes && status !== 'ABSENT' ? 'short' : status === 'OVERTIME' ? 'overtime' : status === 'ABSENT' ? 'absent' : status === 'LEAVE' ? 'leave' : status === 'REST' ? 'rest' : status === 'FUTURE' ? 'future' : 'normal'
+    }
+  })
+  return { month, employee: { id: employee.id, employeeNumber: employee.employeeNumber, name: employee.name }, days, overview, readonly: true }
+}
+
 function isEmployeeAttendanceAdminPath(url: string) {
   return url === '/admin/employee-attendance' || url.startsWith('/admin/employee-attendance/')
 }
@@ -501,6 +558,7 @@ const mockRequest = {
     if (url === '/admin/employee-attendance/schedules') {
       return mockMonthlyScheduleFilter(config)
     }
+    if (url === '/admin/employee-attendance/schedule-attendance-overview') return mockAdminScheduleAttendanceOverview(config)
     if (url === '/admin/employee-attendance/attendance') return mockAttendanceFilter(mockEmployeeAttendance.attendance, config)
     if (url === '/admin/employee-attendance/leaves') return mockAttendanceFilter(mockEmployeeAttendance.leaves, config, ['startDate', 'endDate'])
     if (url === '/admin/employee-attendance/commissions') return mockAttendanceFilter(mockEmployeeAttendance.commissions, config)
@@ -813,6 +871,49 @@ export async function getAdminAttendanceEmployees(query: AdminEmployeeAttendance
 
 export async function getAdminAttendanceSchedules(query: AdminEmployeeAttendanceQuery) {
   return request.get<any, AdminAttendanceSchedules>('/admin/employee-attendance/schedules', { params: employeeAttendanceParams(query, true) })
+}
+
+function adminRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('后台排班考勤概览响应格式无效')
+  return value as Record<string, unknown>
+}
+
+export function normalizeAdminScheduleAttendanceOverview(value: unknown): AdminScheduleAttendanceOverview {
+  const row = adminRecord(value)
+  if (typeof row.month !== 'string' || row.readonly !== true || !Array.isArray(row.days)) throw new Error('后台排班考勤概览响应格式无效')
+  const overview = adminRecord(row.overview)
+  const statuses = ['FUTURE', 'ABSENT', 'LEAVE', 'REST', 'NORMAL', 'OVERTIME', 'SHORT'] as const
+  const tones = ['future', 'normal', 'leave', 'absent', 'rest', 'overtime', 'short'] as const
+  const days = row.days.map((value): AdminAttendanceCalendarDay => {
+    const day = adminRecord(value)
+    if (typeof day.date !== 'string' || !statuses.includes(day.status as typeof statuses[number]) || !tones.includes(day.backgroundTone as typeof tones[number]) || !tones.includes(day.durationTone as typeof tones[number]) || !Array.isArray(day.actualSegments)) throw new Error('后台排班考勤概览响应格式无效')
+    const scheduleRow = day.schedule ? adminRecord(day.schedule) : null
+    if (scheduleRow && (typeof scheduleRow.id !== 'string' || typeof scheduleRow.employeeId !== 'string' || typeof scheduleRow.date !== 'string' || !Array.isArray(scheduleRow.segments))) throw new Error('后台排班考勤概览响应格式无效')
+    const schedule = scheduleRow ? {
+      id: scheduleRow.id as string, employeeId: scheduleRow.employeeId as string, date: scheduleRow.date as string, isWorkday: Boolean(scheduleRow.isWorkday),
+      scheduledMinutes: Number(scheduleRow.scheduledMinutes || 0), breakMinutes: Number(scheduleRow.breakMinutes || 0), remark: String(scheduleRow.remark || ''),
+      segments: (scheduleRow.segments as unknown[]).map((value, index) => { const segment = adminRecord(value); return { sequence: Number(segment.sequence ?? index), startTime: String(segment.startTime || ''), endTime: String(segment.endTime || '') } })
+    } : null
+    return {
+      date: day.date, day: Number(day.day || 0), isFuture: Boolean(day.isFuture), status: day.status as AdminAttendanceCalendarDay['status'], schedule,
+      actualSegments: (day.actualSegments as unknown[]).map((value, index) => { const segment = adminRecord(value); return { sequence: Number(segment.sequence ?? index), checkInAt: String(segment.checkInAt || ''), checkOutAt: String(segment.checkOutAt || '') } }),
+      scheduledMinutes: Number(day.scheduledMinutes || 0), workedMinutes: Number(day.workedMinutes || 0), approvedLeaveMinutes: Number(day.approvedLeaveMinutes || 0), overtimeMinutes: Number(day.overtimeMinutes || 0), displayMinutes: Number(day.displayMinutes || 0), shortageMinutes: Number(day.shortageMinutes || 0),
+      durationText: String(day.durationText || ''), leaveTypeName: String(day.leaveTypeName || ''), leaveReason: String(day.leaveReason || ''), absenceReason: String(day.absenceReason || ''), backgroundTone: day.backgroundTone as AdminAttendanceCalendarDay['backgroundTone'], durationTone: day.durationTone as AdminAttendanceCalendarDay['durationTone']
+    }
+  })
+  const employee = row.employee ? adminRecord(row.employee) : null
+  return {
+    month: row.month, employee: employee ? { id: String(employee.id || ''), employeeNumber: String(employee.employeeNumber || ''), name: String(employee.name || '') } : null, days,
+    overview: { month: String(overview.month || row.month), activeEmployees: Number(overview.activeEmployees ?? overview.workforce ?? 0), todayPresent: Number(overview.todayPresent ?? overview.todayAttendance ?? 0), todayOnLeave: Number(overview.todayOnLeave ?? overview.todayLeave ?? 0), todayAbsent: Number(overview.todayAbsent ?? overview.todayAbsence ?? 0), overtimeHours: Number(overview.overtimeHours ?? Number(overview.overtimeMinutes || 0) / 60), pendingLeaves: Number(overview.pendingLeaves ?? overview.pendingLeave ?? 0), projectedPayroll: Number(overview.projectedPayroll || 0), issueCount: Number(overview.issueCount || 0), issues: Array.isArray(overview.issues) ? overview.issues.map(String) : [] },
+    readonly: true
+  }
+}
+
+export async function getAdminScheduleAttendanceOverview(query: AdminEmployeeAttendanceQuery) {
+  if (!query.month) throw new Error('月份必填')
+  return request.get<unknown, unknown>('/admin/employee-attendance/schedule-attendance-overview', { params: {
+    frontendUserIds: buildFrontendIds(query.frontendUserIds), ...(query.employeeId ? { employeeId: query.employeeId } : {}), month: query.month
+  } }).then(normalizeAdminScheduleAttendanceOverview)
 }
 
 export async function getAdminAttendanceRecords(query: AdminEmployeeAttendanceQuery) {
