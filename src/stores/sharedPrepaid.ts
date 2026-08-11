@@ -88,6 +88,11 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     settlements: ''
   })
   const pendingIdempotencyKeys = reactive<Partial<Record<SharedPrepaidMutation, string>>>({})
+  const loadGenerations = new Map<string, number>()
+  const mutationQueues = new Map<SharedPrepaidMutation, Promise<void>>()
+  const mutationPendingCounts = new Map<SharedPrepaidMutation, number>()
+  const mutationInvocationVersions = new Map<SharedPrepaidMutation, number>()
+  const settlementDirtyState = reactive({ selection: false, payment: false, manual: false })
   const membersPage = ref<PrepaidPage<PrepaidMemberRow>>(emptyPage())
   const rechargesPage = ref<PrepaidPage<PrepaidRechargeRow>>(emptyPage())
   const selectedMember = ref<PrepaidMemberDetail | null>(null)
@@ -124,7 +129,41 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     }
   }
 
+  async function runLatest<T>(
+    resource: string,
+    page: SharedPrepaidPage,
+    action: () => Promise<T>,
+    apply: (result: T) => void
+  ): Promise<T> {
+    const generation = (loadGenerations.get(resource) ?? 0) + 1
+    loadGenerations.set(resource, generation)
+    loadingCounts[page] += 1
+    errorsByPage[page] = ''
+    try {
+      const result = await action()
+      if (loadGenerations.get(resource) === generation) apply(result)
+      return result
+    } catch (error) {
+      if (loadGenerations.get(resource) === generation) {
+        errorsByPage[page] = error instanceof Error ? error.message : '操作失败'
+      }
+      throw error
+    } finally {
+      loadingCounts[page] -= 1
+    }
+  }
+
+  function syncSettlementDirty() {
+    dirtyByPage.settlements = settlementDirtyState.manual ||
+      settlementDirtyState.selection || settlementDirtyState.payment
+  }
+
   function setPageDirty(page: SharedPrepaidPage, dirty = true) {
+    if (page === 'settlements') {
+      settlementDirtyState.manual = dirty
+      syncSettlementDirty()
+      return
+    }
     dirtyByPage[page] = dirty
   }
 
@@ -135,38 +174,39 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
 
   function setSettlementSelection(ids: string[]) {
     settlementSelection.value = [...ids]
-    setPageDirty('settlements', ids.length > 0)
+    settlementDirtyState.selection = ids.length > 0
+    syncSettlementDirty()
   }
 
   function setSettlementPaymentDraft(draft: PrepaidSettlementPaymentPayload) {
     settlementPaymentDraft.value = { ...draft, proofUrls: draft.proofUrls ? [...draft.proofUrls] : undefined }
-    setPageDirty('settlements')
+    settlementDirtyState.payment = Boolean(
+      draft.actualTransferredAt?.trim() || draft.proofUrls?.length || draft.remark?.trim()
+    )
+    syncSettlementDirty()
   }
 
   async function loadMembers(query: PrepaidMemberQuery = {}) {
-    return runPage('members', async () => {
-      membersPage.value = await prepaidApi.getPrepaidMembers(query)
-      return membersPage.value
+    return runLatest('members:list', 'members', () => prepaidApi.getPrepaidMembers(query), (result) => {
+      membersPage.value = result
     })
   }
 
   async function lookupMember(phone: string) {
-    return runPage('members', () => prepaidApi.lookupPrepaidMember(phone))
+    return runLatest('members:lookup', 'members', () => prepaidApi.lookupPrepaidMember(phone), () => undefined)
   }
 
   async function loadMemberDetail(id: string, page: 'members' | 'consumptions' = 'members') {
-    return runPage(page, async () => {
-      selectedMember.value = await prepaidApi.getPrepaidMemberDetail(id)
-      consumptions.value = selectedMember.value.consumptions
-      payables.value = selectedMember.value.consumptions.flatMap((row) => row.payables)
-      return selectedMember.value
+    return runLatest('member:detail', page, () => prepaidApi.getPrepaidMemberDetail(id), (result) => {
+      selectedMember.value = result
+      consumptions.value = result.consumptions
+      payables.value = result.consumptions.flatMap((row) => row.payables)
     })
   }
 
   async function loadRecharges(query: PrepaidRechargeQuery = {}) {
-    return runPage('recharges', async () => {
-      rechargesPage.value = await prepaidApi.getPrepaidRecharges(query)
-      return rechargesPage.value
+    return runLatest('recharges:list', 'recharges', () => prepaidApi.getPrepaidRecharges(query), (result) => {
+      rechargesPage.value = result
     })
   }
 
@@ -175,18 +215,36 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     mutation: SharedPrepaidMutation,
     explicitKey: string | undefined,
     action: (key: string) => Promise<T>,
-    afterSuccess?: (result: T) => void
+    afterSuccess?: (result: T, isLatestInvocation: boolean) => void
   ) {
-    const key = explicitKey ?? pendingIdempotencyKeys[mutation] ?? crypto.randomUUID()
-    pendingIdempotencyKeys[mutation] = key
+    const pendingCount = mutationPendingCounts.get(mutation) ?? 0
+    const key = explicitKey ?? (pendingCount === 0 ? pendingIdempotencyKeys[mutation] : undefined) ?? crypto.randomUUID()
+    const invocationVersion = (mutationInvocationVersions.get(mutation) ?? 0) + 1
+    mutationInvocationVersions.set(mutation, invocationVersion)
+    mutationPendingCounts.set(mutation, pendingCount + 1)
+
+    const previous = mutationQueues.get(mutation) ?? Promise.resolve()
+    const execution = previous.then(() => runPage(page, () => action(key)))
+    const queueTail = execution.then(() => undefined, () => undefined)
+    mutationQueues.set(mutation, queueTail)
+
     try {
-      const result = await runPage(page, () => action(key))
-      delete pendingIdempotencyKeys[mutation]
-      afterSuccess?.(result)
+      const result = await execution
+      const isLatestInvocation = mutationInvocationVersions.get(mutation) === invocationVersion
+      if (isLatestInvocation) delete pendingIdempotencyKeys[mutation]
+      afterSuccess?.(result, isLatestInvocation)
       return result
     } catch (error) {
-      if (!isConflict(error)) delete pendingIdempotencyKeys[mutation]
+      if (mutationInvocationVersions.get(mutation) === invocationVersion) {
+        if (isConflict(error)) pendingIdempotencyKeys[mutation] = key
+        else delete pendingIdempotencyKeys[mutation]
+      }
       throw error
+    } finally {
+      const remaining = (mutationPendingCounts.get(mutation) ?? 1) - 1
+      if (remaining > 0) mutationPendingCounts.set(mutation, remaining)
+      else mutationPendingCounts.delete(mutation)
+      if (mutationQueues.get(mutation) === queueTail) mutationQueues.delete(mutation)
     }
   }
 
@@ -194,11 +252,14 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     payload: CreatePrepaidRechargePayload = rechargeDraft.value,
     idempotencyKey?: string
   ) {
+    const requestPayload = { ...payload }
     return mutate('recharges', 'createRecharge', idempotencyKey, (key) => (
-      prepaidApi.createPrepaidRecharge(payload, key)
-    ), () => {
-      rechargeDraft.value = emptyRechargeDraft()
-      setPageDirty('recharges', false)
+      prepaidApi.createPrepaidRecharge(requestPayload, key)
+    ), (_result, isLatestInvocation) => {
+      if (isLatestInvocation) {
+        rechargeDraft.value = emptyRechargeDraft()
+        setPageDirty('recharges', false)
+      }
     })
   }
 
@@ -217,20 +278,26 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   }
 
   async function previewSettlement(ids: string[] = settlementSelection.value) {
-    return runPage('settlements', async () => {
-      settlementPreview.value = await prepaidApi.previewPrepaidSettlement({ payableIds: [...ids] })
-      return settlementPreview.value
+    const payableIds = [...ids]
+    return runLatest('settlements:preview', 'settlements', () => (
+      prepaidApi.previewPrepaidSettlement({ payableIds })
+    ), (result) => {
+      settlementPreview.value = result
     })
   }
 
   async function createSettlement(ids: string[] = settlementSelection.value, idempotencyKey?: string) {
+    const payableIds = [...ids]
     return mutate('settlements', 'createSettlement', idempotencyKey, (key) => (
-      prepaidApi.createPrepaidSettlement({ payableIds: [...ids] }, key)
-    ), (row) => {
+      prepaidApi.createPrepaidSettlement({ payableIds }, key)
+    ), (row, isLatestInvocation) => {
       upsertSettlement(row)
-      settlementSelection.value = []
-      settlementPreview.value = null
-      setPageDirty('settlements', false)
+      if (isLatestInvocation) {
+        settlementSelection.value = []
+        settlementPreview.value = null
+        settlementDirtyState.selection = false
+        syncSettlementDirty()
+      }
     })
   }
 
@@ -239,12 +306,19 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     payload: PrepaidSettlementPaymentPayload = settlementPaymentDraft.value,
     idempotencyKey?: string
   ) {
+    const requestPayload = {
+      ...payload,
+      proofUrls: payload.proofUrls ? [...payload.proofUrls] : undefined
+    }
     return mutate('settlements', `submitPayment:${id}`, idempotencyKey, (key) => (
-      prepaidApi.submitPrepaidSettlementPayment(id, payload, key)
-    ), (row) => {
+      prepaidApi.submitPrepaidSettlementPayment(id, requestPayload, key)
+    ), (row, isLatestInvocation) => {
       upsertSettlement(row)
-      settlementPaymentDraft.value = { actualTransferredAt: '' }
-      setPageDirty('settlements', false)
+      if (isLatestInvocation) {
+        settlementPaymentDraft.value = { actualTransferredAt: '' }
+        settlementDirtyState.payment = false
+        syncSettlementDirty()
+      }
     })
   }
 

@@ -42,10 +42,9 @@ export interface PrepaidMemberRow {
   updatedAt: string
 }
 
-export interface PrepaidRechargeRow {
+export interface PrepaidRechargeBaseRow {
   id: string
   memberId: string
-  phone: string
   ownerFrontendUserId: string
   ownerAccount: string
   ownerUsername: string
@@ -64,6 +63,13 @@ export interface PrepaidRechargeRow {
   createdAt: string
   updatedAt: string
 }
+
+export interface PrepaidRechargeRow extends PrepaidRechargeBaseRow {
+  phone: string
+}
+
+// The member-detail endpoint already scopes recharges to one member and omits phone.
+export interface PrepaidMemberRechargeRow extends PrepaidRechargeBaseRow {}
 
 export interface PrepaidRechargeLotRow {
   id: string
@@ -154,7 +160,7 @@ export interface PrepaidLedgerEntryRow {
 }
 
 export interface PrepaidMemberDetail extends PrepaidMemberRow {
-  recharges: PrepaidRechargeRow[]
+  recharges: PrepaidMemberRechargeRow[]
   consumptions: PrepaidConsumptionRow[]
   ledgerEntries: PrepaidLedgerEntryRow[]
 }

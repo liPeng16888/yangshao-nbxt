@@ -8,6 +8,7 @@ import type {
   PrepaidLedgerEntryRow,
   PrepaidMemberDetail,
   PrepaidMemberQuery,
+  PrepaidMemberRechargeRow,
   PrepaidMemberRow,
   PrepaidPage,
   PrepaidPayableRow,
@@ -125,7 +126,7 @@ export async function mockGetPrepaidMemberDetail(id: string): Promise<PrepaidMem
     recharges: recharges
       .filter((row) => row.memberId === id)
       .sort(descendingCreatedAt)
-      .map(toRechargeRow),
+      .map(toMemberRechargeRow),
     consumptions: consumptions
       .filter((row) => row.memberId === id)
       .sort(descendingCreatedAt)
@@ -238,7 +239,7 @@ export async function mockRecordPrepaidConsumption(
         left.id.localeCompare(right.id)
       ))
     if (lots.reduce((sum, row) => sum + row.remainingCents, 0) < amountCents) {
-      throw mockError(409, '预存款余额不足', 'PREPAID_WRITE_CONFLICT')
+      throw mockError(409, '会员预付余额不足', 'PREPAID_BALANCE_INSUFFICIENT')
     }
 
     const createdAt = nextTimestamp()
@@ -371,6 +372,33 @@ export async function mockReversePrepaidConsumption(
     if (original.payables.some((row) => row.status === 'HELD')) throw mockError(409, '该消费正在结算，不能冲正')
     const member = requireMember(original.memberId)
     const createdAt = nextTimestamp()
+    registerAccount(identity)
+    const reversalId = nextId()
+    const reversalPayables: PrepaidPayableRow[] = []
+    const reversal: PrepaidConsumptionRow = {
+      id: reversalId,
+      memberId: original.memberId,
+      consumingFrontendUserId: original.consumingFrontendUserId,
+      actorUserId: identity.actorUserId,
+      kind: 'REVERSAL',
+      amount: original.amount,
+      sheetId: original.sheetId,
+      sampleBlockId: original.sampleBlockId,
+      sampleIndex: original.sampleIndex,
+      sampleNumberSnapshot: original.sampleNumberSnapshot,
+      sampleCountSnapshot: original.sampleCountSnapshot,
+      elementsSnapshot: clone(original.elementsSnapshot),
+      phoneSnapshot: original.phoneSnapshot,
+      sheetDate: original.sheetDate,
+      active: false,
+      reversalOfId: original.id,
+      idempotencyKey,
+      createdAt,
+      consumingFrontendUser: clone(original.consumingFrontendUser),
+      actorUser: actorAccount(identity),
+      allocations: [],
+      payables: reversalPayables
+    }
     for (const allocation of original.allocations) {
       const recharge = recharges.find((row) => row.id === allocation.rechargeId)
       if (recharge) {
@@ -385,6 +413,7 @@ export async function mockReversePrepaidConsumption(
         const opposite: PrepaidPayableRow = {
           ...payable,
           id: nextId(),
+          consumptionId: reversalId,
           sourceOwnerId: payable.consumerOwnerId,
           consumerOwnerId: payable.sourceOwnerId,
           status: 'PENDING',
@@ -395,12 +424,13 @@ export async function mockReversePrepaidConsumption(
           consumerOwner: payable.sourceOwner
         }
         payables.push(opposite)
+        reversalPayables.push(opposite)
       }
       payable.updatedAt = createdAt
     }
     original.active = false
+    consumptions.push(reversal)
     touchMember(member)
-    const reversalId = nextId()
     appendLedger(member.id, 'CONSUMPTION_REVERSAL', original.amount, identity, 'SharedPrepaidConsumption', reversalId, idempotencyKey, payload.reason)
     return {
       id: reversalId,
@@ -511,10 +541,7 @@ export async function mockConfirmPrepaidSettlement(
   identity: MockSharedPrepaidIdentity = readIdentity()
 ): Promise<PrepaidSettlementRow> {
   return settlementAction(id, idempotencyKey, identity, ['CONFIRM'], (row, now) => {
-    const expectedOwner = row.receiverFrontendUserId ?? (
-      row.creatorOwnerId === row.accountAId ? row.accountBId : row.accountAId
-    )
-    if (!identity.isFrontendMainAccount || identity.ownerFrontendUserId !== expectedOwner) throw mockError(403, '只有收款主账号可以确认到账')
+    assertSettlementReceiptActor(row, identity)
     if (row.status !== 'AWAITING_RECEIPT') throw mockError(409, '结算单状态已变化')
     row.status = 'COMPLETED'
     row.receiptConfirmedById = identity.actorUserId
@@ -531,7 +558,7 @@ export async function mockRejectPrepaidSettlement(
 ): Promise<PrepaidSettlementRow> {
   requireReason(payload.reason)
   return settlementAction(id, idempotencyKey, identity, ['REJECT', payload.reason.trim()], (row, now) => {
-    if (!identity.isFrontendMainAccount) throw mockError(403, '只有主账号可以驳回结算')
+    assertSettlementReceiptActor(row, identity)
     if (row.status !== 'AWAITING_RECEIPT') throw mockError(409, '结算单状态已变化')
     row.status = 'REJECTED'
     row.rejectedById = identity.actorUserId
@@ -631,6 +658,21 @@ function releaseSettlement(row: MockSettlement, now: string) {
   })
 }
 
+function assertSettlementReceiptActor(row: MockSettlement, identity: MockSharedPrepaidIdentity) {
+  if (!identity.isFrontendMainAccount) throw mockError(403, '只有收款主账号可以处理到账')
+  if (row.receiverFrontendUserId) {
+    if (identity.ownerFrontendUserId !== row.receiverFrontendUserId) {
+      throw mockError(403, '只有收款主账号可以处理到账')
+    }
+    return
+  }
+  const isParticipant = identity.ownerFrontendUserId === row.accountAId ||
+    identity.ownerFrontendUserId === row.accountBId
+  if (!isParticipant || identity.actorUserId === row.createdById) {
+    throw mockError(403, '零差额结算只能由另一参与主账号处理到账')
+  }
+}
+
 function toMemberRow(member: MockMember): PrepaidMemberRow {
   const activeRecharges = recharges.filter((row) => row.memberId === member.id && !row.reversedAt)
   const activeConsumptions = consumptions.filter((row) => row.memberId === member.id && row.active && row.kind === 'CONSUMPTION')
@@ -668,6 +710,11 @@ function toMemberRow(member: MockMember): PrepaidMemberRow {
 function toRechargeRow(row: MockRecharge): PrepaidRechargeRow {
   const { idempotencyKey: _key, paidCents: _paid, giftCents: _gift, totalCents: _total, remainingCents: _remaining, ...result } = row
   return clone(result)
+}
+
+function toMemberRechargeRow(row: MockRecharge): PrepaidMemberRechargeRow {
+  const { phone: _phone, ...result } = toRechargeRow(row)
+  return result
 }
 
 function toRechargeLotRow(row: MockRecharge): PrepaidRechargeLotRow {

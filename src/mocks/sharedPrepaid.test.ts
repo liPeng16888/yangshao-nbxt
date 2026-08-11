@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   mockCreatePrepaidRecharge,
   mockCreatePrepaidSettlement,
+  mockConfirmPrepaidSettlement,
   mockGetPrepaidMemberDetail,
   mockGetPrepaidMembers,
   mockLookupPrepaidMember,
   mockPreviewPrepaidSettlement,
   mockRecordPrepaidConsumption,
+  mockRejectPrepaidSettlement,
+  mockReversePrepaidConsumption,
   mockReversePrepaidRecharge,
+  mockSubmitPrepaidSettlementPayment,
   resetSharedPrepaidMock,
   type MockSharedPrepaidIdentity
 } from './sharedPrepaid'
@@ -19,6 +23,10 @@ const ownerA: MockSharedPrepaidIdentity = {
 }
 const ownerB: MockSharedPrepaidIdentity = {
   actorUserId: 'B', ownerFrontendUserId: 'B', account: 'account-b', username: '主账号 B',
+  isFrontendMainAccount: true
+}
+const ownerC: MockSharedPrepaidIdentity = {
+  actorUserId: 'C', ownerFrontendUserId: 'C', account: 'account-c', username: '主账号 C',
   isFrontendMainAccount: true
 }
 
@@ -42,6 +50,7 @@ describe('shared prepaid focused mock', () => {
     expect(lookup).toMatchObject({ id: first.memberId, phone: '13800000000', paidTotal: 1200, giftTotal: 100, balance: 1300 })
     expect(page).toMatchObject({ total: 1, page: 1, pageSize: 20 })
     expect(detail.recharges).toHaveLength(2)
+    expect(detail.recharges[0]).not.toHaveProperty('phone')
     expect(detail.ledgerEntries.map((row) => row.balanceDelta)).toEqual([200, 1100])
   })
 
@@ -96,6 +105,20 @@ describe('shared prepaid focused mock', () => {
     expect(consumption.payables).toEqual([])
   })
 
+  it('returns the authoritative insufficient-balance code and message', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 10, giftAmount: 0
+    }, 'small-recharge', ownerA)
+
+    await expect(mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 11, sheetId: 'sheet-1', sampleBlockId: 'block-1',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'too-large', ownerA)).rejects.toMatchObject({
+      message: '会员预付余额不足',
+      response: { status: 409, data: { code: 'PREPAID_BALANCE_INSUFFICIENT', message: '会员预付余额不足' } }
+    })
+  })
+
   it('keeps the unused historical lot amount intact when a recharge is reversed', async () => {
     const recharge = await mockCreatePrepaidRecharge({
       phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000, giftAmount: 100
@@ -141,5 +164,100 @@ describe('shared prepaid focused mock', () => {
     expect(settlement.status).toBe('AWAITING_PAYMENT')
     expect(settlement.lines.map((line) => line.payableStatus)).toEqual(['HELD', 'HELD'])
     expect(retry).toEqual(settlement)
+  })
+
+  it('appends a reversal consumption and attaches its compensating payable to that row', async () => {
+    const recharge = await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000, giftAmount: 100
+    }, 'recharge-a', ownerA)
+    const original = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 100, sheetId: 'sheet-1', sampleBlockId: 'block-1',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'consume-b', ownerB)
+    const settlement = await mockCreatePrepaidSettlement({
+      payableIds: [original.payables[0].id]
+    }, 'settlement-a-b', ownerA)
+    const submitted = await mockSubmitPrepaidSettlementPayment(settlement.id, {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00'
+    }, 'submit-a-b', ownerA)
+    await mockConfirmPrepaidSettlement(submitted.id, 'confirm-a-b', ownerB)
+
+    const reversal = await mockReversePrepaidConsumption(
+      original.id,
+      { reason: '样品作废' },
+      'reverse-consumption',
+      ownerB
+    )
+    const detail = await mockGetPrepaidMemberDetail(recharge.memberId)
+    const persistedReversal = detail.consumptions.find((row) => row.id === reversal.id)
+
+    expect(detail.consumptions).toHaveLength(2)
+    expect(detail.consumptions.find((row) => row.id === original.id)).toMatchObject({ active: false })
+    expect(persistedReversal).toMatchObject({
+      kind: 'REVERSAL', active: false, reversalOfId: original.id,
+      idempotencyKey: 'reverse-consumption'
+    })
+    expect(persistedReversal?.payables).toEqual([
+      expect.objectContaining({
+        consumptionId: reversal.id,
+        sourceOwnerId: 'B', consumerOwnerId: 'A',
+        reversalOfId: original.payables[0].id, status: 'PENDING'
+      })
+    ])
+  })
+
+  it('allows rejection only by the final receiver and forbids payer or unrelated owners', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 100, giftAmount: 0
+    }, 'recharge-a', ownerA)
+    const consumption = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 60, sheetId: 'sheet-1', sampleBlockId: 'block-1',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'consume-b', ownerB)
+    const settlement = await mockCreatePrepaidSettlement({
+      payableIds: [consumption.payables[0].id]
+    }, 'settlement-a-b', ownerA)
+    await mockSubmitPrepaidSettlementPayment(settlement.id, {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00'
+    }, 'submit-a-b', ownerA)
+
+    await expect(mockRejectPrepaidSettlement(
+      settlement.id, { reason: 'payer cannot reject' }, 'reject-a', ownerA
+    )).rejects.toMatchObject({ response: { status: 403 } })
+    await expect(mockRejectPrepaidSettlement(
+      settlement.id, { reason: 'unrelated cannot reject' }, 'reject-c', ownerC
+    )).rejects.toMatchObject({ response: { status: 403 } })
+    await expect(mockRejectPrepaidSettlement(
+      settlement.id, { reason: '金额不符' }, 'reject-b', ownerB
+    )).resolves.toMatchObject({ status: 'REJECTED', rejectedById: 'B' })
+  })
+
+  it('allows zero-net rejection only by a participating main account other than the creator', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 60, giftAmount: 0
+    }, 'recharge-a', ownerA)
+    const aToB = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 60, sheetId: 'sheet-1', sampleBlockId: 'block-1',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'consume-b', ownerB)
+    await mockCreatePrepaidRecharge({
+      phone: '13900000000', rechargeDate: '2026-08-12', paidAmount: 60, giftAmount: 0
+    }, 'recharge-b', ownerB)
+    const bToA = await mockRecordPrepaidConsumption({
+      phone: '13900000000', amount: 60, sheetId: 'sheet-2', sampleBlockId: 'block-2',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'consume-a', ownerA)
+    const settlement = await mockCreatePrepaidSettlement({
+      payableIds: [aToB.payables[0].id, bToA.payables[0].id]
+    }, 'settlement-zero', ownerA)
+    await expect(mockRejectPrepaidSettlement(
+      settlement.id, { reason: 'creator cannot reject' }, 'reject-zero-a', ownerA
+    )).rejects.toMatchObject({ response: { status: 403 } })
+    await expect(mockRejectPrepaidSettlement(
+      settlement.id, { reason: 'unrelated cannot reject' }, 'reject-zero-c', ownerC
+    )).rejects.toMatchObject({ response: { status: 403 } })
+    await expect(mockRejectPrepaidSettlement(
+      settlement.id, { reason: '另一参与方驳回' }, 'reject-zero-b', ownerB
+    )).resolves.toMatchObject({ status: 'REJECTED', rejectedById: 'B' })
   })
 })

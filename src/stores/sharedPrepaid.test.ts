@@ -41,6 +41,16 @@ function makeEventSource(): FakeEventSource {
   return { close: vi.fn(), onopen: null, onmessage: null, onerror: null }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function sendChange(source: FakeEventSource, module: 'recharges' | 'members' | 'consumptions' | 'settlements') {
   source.onmessage?.({
     data: JSON.stringify({
@@ -304,5 +314,133 @@ describe('shared prepaid realtime refresh', () => {
     expect(store.rechargeDraft.remark).toBe('待重试')
     expect(store.dirtyByPage.recharges).toBe(true)
     expect(store.pendingIdempotencyKeys.createRecharge).toBe('explicit-retry-key')
+  })
+
+  it('serializes same-slot mutations and preserves the latest selection after success then conflict', async () => {
+    const first = deferred<any>()
+    const second = deferred<any>()
+    const conflict = { response: { status: 409, data: { code: 'PREPAID_WRITE_CONFLICT' } } }
+    apiMocks.createPrepaidSettlement
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000011')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000012')
+    const store = useSharedPrepaidStore()
+    store.setSettlementSelection(['payable-1'])
+
+    const firstCall = store.createSettlement()
+    const secondCall = store.createSettlement()
+    await Promise.resolve()
+    expect(apiMocks.createPrepaidSettlement).toHaveBeenCalledTimes(1)
+
+    first.resolve({ id: 'settlement-1', status: 'AWAITING_PAYMENT', lines: [] })
+    await firstCall
+    await vi.waitFor(() => expect(apiMocks.createPrepaidSettlement).toHaveBeenCalledTimes(2))
+    const secondResult = expect(secondCall).rejects.toBe(conflict)
+    second.reject(conflict)
+    await secondResult
+
+    expect(apiMocks.createPrepaidSettlement.mock.calls.map((call) => call[1])).toEqual([
+      '00000000-0000-4000-8000-000000000011',
+      '00000000-0000-4000-8000-000000000012'
+    ])
+    expect(store.settlementSelection).toEqual(['payable-1'])
+    expect(store.dirtyByPage.settlements).toBe(true)
+    expect(store.pendingIdempotencyKeys.createSettlement).toBe('00000000-0000-4000-8000-000000000012')
+  })
+
+  it('does not let an earlier conflict overwrite a later successful same-slot mutation', async () => {
+    const first = deferred<any>()
+    const second = deferred<any>()
+    const conflict = { response: { status: 409 } }
+    apiMocks.createPrepaidSettlement
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000013')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000014')
+    const store = useSharedPrepaidStore()
+    store.setSettlementSelection(['payable-2'])
+
+    const firstCall = store.createSettlement()
+    const secondCall = store.createSettlement()
+    await Promise.resolve()
+    const firstResult = expect(firstCall).rejects.toBe(conflict)
+    first.reject(conflict)
+    await firstResult
+    await vi.waitFor(() => expect(apiMocks.createPrepaidSettlement).toHaveBeenCalledTimes(2))
+    second.resolve({ id: 'settlement-2', status: 'AWAITING_PAYMENT', lines: [] })
+    await secondCall
+
+    expect(store.settlementSelection).toEqual([])
+    expect(store.dirtyByPage.settlements).toBe(false)
+    expect(store.pendingIdempotencyKeys.createSettlement).toBeUndefined()
+  })
+
+  it('derives settlement dirty state independently from selection and payment draft', async () => {
+    apiMocks.createPrepaidSettlement.mockResolvedValue({
+      id: 'settlement-1', status: 'AWAITING_PAYMENT', lines: []
+    })
+    apiMocks.submitPrepaidSettlementPayment.mockResolvedValue({
+      id: 'settlement-1', status: 'AWAITING_RECEIPT', lines: []
+    })
+    const store = useSharedPrepaidStore()
+    store.setSettlementSelection(['payable-1'])
+    store.setSettlementPaymentDraft({
+      actualTransferredAt: '2026-08-12T16:00:00+08:00', remark: '待提交付款'
+    })
+
+    await store.createSettlement()
+    expect(store.settlementSelection).toEqual([])
+    expect(store.settlementPaymentDraft.remark).toBe('待提交付款')
+    expect(store.dirtyByPage.settlements).toBe(true)
+
+    store.setSettlementSelection(['payable-2'])
+    await store.submitSettlementPayment('settlement-1')
+    expect(store.settlementSelection).toEqual(['payable-2'])
+    expect(store.settlementPaymentDraft).toEqual({ actualTransferredAt: '' })
+    expect(store.dirtyByPage.settlements).toBe(true)
+
+    store.setSettlementSelection([])
+    expect(store.dirtyByPage.settlements).toBe(false)
+  })
+
+  it('keeps the newest recharge page when older requests resolve out of order', async () => {
+    const first = deferred<any>()
+    const second = deferred<any>()
+    apiMocks.getPrepaidRecharges
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    const store = useSharedPrepaidStore()
+
+    const oldRequest = store.loadRecharges({ phone: 'old' })
+    const newRequest = store.loadRecharges({ phone: 'new' })
+    second.resolve({ items: [{ id: 'new' }], total: 1, page: 2, pageSize: 10 })
+    await newRequest
+    first.resolve({ items: [{ id: 'old' }], total: 1, page: 1, pageSize: 10 })
+    await oldRequest
+
+    expect(store.rechargesPage).toMatchObject({ items: [{ id: 'new' }], page: 2 })
+  })
+
+  it('ignores an older recharge error after a newer request succeeds', async () => {
+    const first = deferred<any>()
+    const second = deferred<any>()
+    apiMocks.getPrepaidRecharges
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    const store = useSharedPrepaidStore()
+
+    const oldRequest = store.loadRecharges({ phone: 'old' })
+    const newRequest = store.loadRecharges({ phone: 'new' })
+    second.resolve({ items: [{ id: 'new' }], total: 1, page: 2, pageSize: 10 })
+    await newRequest
+    const oldResult = expect(oldRequest).rejects.toThrow('stale failure')
+    first.reject(new Error('stale failure'))
+    await oldResult
+
+    expect(store.rechargesPage).toMatchObject({ items: [{ id: 'new' }], page: 2 })
+    expect(store.errorsByPage.recharges).toBe('')
   })
 })

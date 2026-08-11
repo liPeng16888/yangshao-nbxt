@@ -25,7 +25,11 @@ import {
   reversePrepaidRecharge,
   submitPrepaidSettlementPayment
 } from './sharedPrepaid'
-import type { CreatePrepaidRechargePayload } from '@/types/sharedPrepaid'
+import type {
+  CreatePrepaidRechargePayload,
+  PrepaidMemberDetail,
+  PrepaidMemberRechargeRow
+} from '@/types/sharedPrepaid'
 
 describe('shared prepaid realtime transport', () => {
   beforeEach(() => {
@@ -57,6 +61,28 @@ describe('shared prepaid realtime transport', () => {
       ['/shared-prepaid/members/member-1'],
       ['/shared-prepaid/recharges', { params: { ownerFrontendUserId: 'front-1', isOpeningBalance: false } }]
     ])
+  })
+
+  it('accepts the server member-detail recharge shape without a duplicated phone', async () => {
+    const detailRecharge: PrepaidMemberRechargeRow = {
+      id: 'recharge-1', memberId: 'member-1', ownerFrontendUserId: 'front-1',
+      ownerAccount: 'front-1', ownerUsername: '主账号', actorUserId: 'front-1',
+      actorAccount: 'front-1', actorUsername: '主账号', rechargeDate: '2026-08-12',
+      paidAmount: 1000, giftAmount: 100, totalAmount: 1100, remainingAmount: 1100,
+      isOpeningBalance: false, remark: null, reversedAt: null, reversedByLedgerId: null,
+      createdAt: '2026-08-12T08:00:00.000Z', updatedAt: '2026-08-12T08:00:00.000Z'
+    }
+    const serverDetail = {
+      id: 'member-1', phone: '13800000000', paidTotal: 1000, giftTotal: 100,
+      consumedTotal: 0, balance: 1100, version: 1, ownerComposition: [],
+      latestRechargeTime: '2026-08-12T08:00:00.000Z', latestConsumptionTime: null,
+      createdAt: '2026-08-12T08:00:00.000Z', updatedAt: '2026-08-12T08:00:00.000Z',
+      recharges: [detailRecharge], consumptions: [], ledgerEntries: []
+    } satisfies PrepaidMemberDetail
+    requestMocks.get.mockResolvedValue(serverDetail)
+
+    await expect(getPrepaidMemberDetail('member-1')).resolves.toEqual(serverDetail)
+    expect(serverDetail.recharges[0]).not.toHaveProperty('phone')
   })
 
   it('creates one idempotency key per mutation and keeps an explicit retry key stable', async () => {
