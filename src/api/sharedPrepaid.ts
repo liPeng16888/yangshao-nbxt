@@ -16,7 +16,11 @@ import type {
   PrepaidRechargeQuery,
   PrepaidRechargeRow,
   PrepaidSettlementPaymentPayload,
+  PrepaidSettlementDetailRow,
+  PrepaidSettlementPayableListRow,
+  PrepaidSettlementPayableQuery,
   PrepaidSettlementPreview,
+  PrepaidSettlementQuery,
   PrepaidSettlementRow,
   PrepaidSettlementSelectionPayload
 } from '@/types/sharedPrepaid'
@@ -79,6 +83,29 @@ export function getPrepaidConsumptions(query: PrepaidConsumptionQuery = {}): Pro
 export function getPrepaidConsumptionFilterOptions(): Promise<PrepaidConsumptionFilterOptions> {
   if (useMocks) return mock.mockGetPrepaidConsumptionFilterOptions()
   return request.get('/shared-prepaid/consumptions/filter-options')
+}
+
+export function getPrepaidSettlementPayables(
+  query: PrepaidSettlementPayableQuery = {}
+): Promise<PrepaidPage<PrepaidSettlementPayableListRow>> {
+  if (useMocks) return mock.mockGetPrepaidSettlementPayables(query)
+  const params = {
+    ...query,
+    ...(query.payableIds?.length ? { payableIds: query.payableIds.join(',') } : {})
+  }
+  return request.get('/shared-prepaid/settlements/payables', { params })
+}
+
+export function getPrepaidSettlements(
+  query: PrepaidSettlementQuery = {}
+): Promise<PrepaidPage<PrepaidSettlementDetailRow>> {
+  if (useMocks) return mock.mockGetPrepaidSettlements(query)
+  return request.get('/shared-prepaid/settlements', { params: query })
+}
+
+export function getPrepaidSettlement(id: string): Promise<PrepaidSettlementDetailRow> {
+  if (useMocks) return mock.mockGetPrepaidSettlement(id)
+  return request.get(`/shared-prepaid/settlements/${id}`)
 }
 
 export function createPrepaidRecharge(

@@ -19,6 +19,9 @@ import {
   getPrepaidConsumptions,
   getPrepaidConsumptionFilterOptions,
   getPrepaidRecharges,
+  getPrepaidSettlement,
+  getPrepaidSettlementPayables,
+  getPrepaidSettlements,
   isSharedPrepaidTerminalAuthError,
   lookupPrepaidMember,
   lookupLabPrepaidMember,
@@ -173,6 +176,28 @@ describe('shared prepaid realtime transport', () => {
       ['/shared-prepaid/settlements/settlement-1/cancel', undefined, {
         headers: { 'X-Idempotency-Key': key }
       }]
+    ])
+  })
+
+  it('uses the settlement-only read routes and serializes a selected-line refresh without consumption access', async () => {
+    requestMocks.get.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 })
+
+    await getPrepaidSettlementPayables({
+      page: 2, pageSize: 10, status: 'PENDING', direction: 'OUTGOING',
+      counterpartyFrontendUserId: 'front-2', payableIds: ['payable-1', 'payable-2']
+    })
+    await getPrepaidSettlements({ page: 3, status: 'COMPLETED', counterpartyFrontendUserId: 'front-2' })
+    await getPrepaidSettlement('settlement-1')
+
+    expect(requestMocks.get.mock.calls).toEqual([
+      ['/shared-prepaid/settlements/payables', { params: {
+        page: 2, pageSize: 10, status: 'PENDING', direction: 'OUTGOING',
+        counterpartyFrontendUserId: 'front-2', payableIds: 'payable-1,payable-2'
+      } }],
+      ['/shared-prepaid/settlements', { params: {
+        page: 3, status: 'COMPLETED', counterpartyFrontendUserId: 'front-2'
+      } }],
+      ['/shared-prepaid/settlements/settlement-1']
     ])
   })
 

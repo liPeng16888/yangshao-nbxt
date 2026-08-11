@@ -12,7 +12,7 @@ import FinanceUnsettledPage from '@/views/dashboard/FinanceUnsettledPage.vue'
 import PrepaidRechargePage from '@/views/dashboard/PrepaidRechargePage.vue'
 import PrepaidCustomersPage from '@/views/dashboard/PrepaidCustomersPage.vue'
 import PrepaidConsumptionsPage from '@/views/dashboard/PrepaidConsumptionsPage.vue'
-import SharedPrepaidPlaceholderPage from '@/views/dashboard/SharedPrepaidPlaceholderPage.vue'
+import PrepaidSettlementsPage from '@/views/dashboard/PrepaidSettlementsPage.vue'
 import ReportPage from '@/views/dashboard/ReportPage.vue'
 import BlacklistPage from '@/views/dashboard/BlacklistPage.vue'
 import CustomerOverviewPage from '@/views/dashboard/CustomerOverviewPage.vue'
@@ -112,7 +112,7 @@ const router = createRouter({
         {
           path: 'prepaid/settlements',
           name: 'prepaidSettlements',
-          component: SharedPrepaidPlaceholderPage,
+          component: PrepaidSettlementsPage,
           meta: { title: '转账结算', requiresAuth: true, frontendPermission: 'PREPAID_SETTLEMENTS' }
         },
         { path: 'reports', name: 'reports', component: ReportPage, meta: { title: '报表', requiresAuth: true, frontendPermission: 'REPORTS' } },

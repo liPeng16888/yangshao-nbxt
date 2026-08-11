@@ -232,6 +232,65 @@ export interface PrepaidSettlementLineRow {
   createdAt: string
 }
 
+export type PrepaidSettlementPayableDirection = 'OUTGOING' | 'INCOMING'
+
+export interface PrepaidSettlementAssociationRow {
+  id: string
+  settlementId: string
+  direction: 'A_TO_B' | 'B_TO_A'
+  amount: number
+  releasedAt: string | null
+  createdAt: string
+  status: PrepaidSettlementStatus
+  settlementCreatedAt: string
+}
+
+export interface PrepaidSettlementRechargeBatchRow {
+  id: string
+  rechargeDate: string
+  isOpeningBalance: boolean
+}
+
+export interface PrepaidSettlementPayableConsumptionRow {
+  id: string
+  memberId: string
+  phoneSnapshot: string
+  sampleNumberSnapshot: string | null
+  sampleCountSnapshot: number
+  elementsSnapshot: unknown
+  sheetDate: string
+  createdAt: string
+  rechargeBatches: PrepaidSettlementRechargeBatchRow[]
+}
+
+export interface PrepaidSettlementPayableListRow extends PrepaidPayableRow {
+  eligible: boolean
+  direction: PrepaidSettlementPayableDirection
+  counterpartyFrontendUserId: string
+  consumption: PrepaidSettlementPayableConsumptionRow
+  settlementAssociations: PrepaidSettlementAssociationRow[]
+}
+
+export interface PrepaidSettlementDetailPayableRow extends PrepaidPayableRow {
+  consumption: PrepaidSettlementPayableConsumptionRow
+}
+
+export interface PrepaidSettlementDetailLineRow extends PrepaidSettlementLineRow {
+  payable: PrepaidSettlementDetailPayableRow
+}
+
+export type PrepaidSettlementActionOperation = 'SUBMIT_PAYMENT' | 'CONFIRM_RECEIPT' | 'REJECT' | 'CANCEL'
+
+export interface PrepaidSettlementActionRow {
+  id: string
+  operation: PrepaidSettlementActionOperation
+  actorUserId: string
+  actorFrontendUserId: string
+  createdAt: string
+  actorUser: PrepaidAccountRow
+  actorFrontendUser: PrepaidAccountRow
+}
+
 export interface PrepaidSettlementRow {
   id: string
   accountAId: string
@@ -260,6 +319,20 @@ export interface PrepaidSettlementRow {
   createdAt: string
   updatedAt: string
   lines: PrepaidSettlementLineRow[]
+}
+
+export interface PrepaidSettlementDetailRow extends Omit<PrepaidSettlementRow, 'idempotencyKey' | 'lines'> {
+  accountA: PrepaidAccountRow
+  accountB: PrepaidAccountRow
+  payerFrontendUser: PrepaidAccountRow | null
+  receiverFrontendUser: PrepaidAccountRow | null
+  createdBy: PrepaidAccountRow
+  paymentSubmittedBy: PrepaidAccountRow | null
+  receiptConfirmedBy: PrepaidAccountRow | null
+  rejectedBy: PrepaidAccountRow | null
+  cancelledBy: PrepaidAccountRow | null
+  lines: PrepaidSettlementDetailLineRow[]
+  actions: PrepaidSettlementActionRow[]
 }
 
 export interface PrepaidPage<T> {
@@ -291,6 +364,25 @@ export interface PrepaidConsumptionQuery extends PrepaidMemberQuery {
   endDate?: string
   status?: PrepaidConsumptionStatusFilter
   payableStatus?: PrepaidPayableStatus
+}
+
+export interface PrepaidSettlementPayableQuery extends PrepaidMemberQuery {
+  counterpartyFrontendUserId?: string
+  direction?: PrepaidSettlementPayableDirection
+  status?: PrepaidPayableStatus
+  startDate?: string
+  endDate?: string
+  eligibleOnly?: boolean
+  payableIds?: string[]
+}
+
+export interface PrepaidSettlementQuery {
+  page?: number
+  pageSize?: number
+  counterpartyFrontendUserId?: string
+  status?: PrepaidSettlementStatus
+  startDate?: string
+  endDate?: string
 }
 
 export interface CreatePrepaidRechargePayload {

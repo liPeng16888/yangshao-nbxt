@@ -36,6 +36,11 @@ const queryBoolean = (value: unknown) => {
   if (value === 'false' || value === false) return false
   return value
 }
+const queryUuidList = (value: unknown) => {
+  if (Array.isArray(value)) return value.flatMap((item) => String(item).split(',')).map((item) => item.trim())
+  if (typeof value === 'string') return value.split(',').map((item) => item.trim())
+  return value
+}
 
 function IsMoneyScalar(validationOptions?: ValidationOptions): PropertyDecorator {
   return ValidateBy({
@@ -245,4 +250,80 @@ export class SharedPrepaidConsumptionQueryDto extends SharedPrepaidMemberQueryDt
   @IsOptional()
   @IsIn(['PENDING', 'HELD', 'COMPLETED', 'REVERSED'], { message: '结算状态参数错误' })
   payableStatus?: 'PENDING' | 'HELD' | 'COMPLETED' | 'REVERSED'
+}
+
+export class SharedPrepaidSettlementPayableQueryDto extends SharedPrepaidMemberQueryDto {
+  @Transform(({ value }) => queryUuidList(value))
+  @IsOptional()
+  @IsArray({ message: '应转款明细筛选必须为数组' })
+  @ArrayNotEmpty({ message: '应转款明细筛选不能为空' })
+  @ArrayMaxSize(100, { message: '单次最多刷新 100 条应转款明细' })
+  @ArrayUnique({ message: '应转款明细筛选不能重复' })
+  @IsUUID('4', { each: true, message: '应转款明细编号格式错误' })
+  payableIds?: string[]
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsUUID('4', { message: '对方主账号编号格式错误' })
+  counterpartyFrontendUserId?: string
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsIn(['OUTGOING', 'INCOMING'], { message: '应转方向参数错误' })
+  direction?: 'OUTGOING' | 'INCOMING'
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsIn(['PENDING', 'HELD', 'COMPLETED', 'REVERSED'], { message: '应转状态参数错误' })
+  status?: 'PENDING' | 'HELD' | 'COMPLETED' | 'REVERSED'
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @Matches(BUSINESS_DATE_PATTERN, { message: '开始日期必须为 YYYY-MM-DD 格式' })
+  startDate?: string
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @Matches(BUSINESS_DATE_PATTERN, { message: '结束日期必须为 YYYY-MM-DD 格式' })
+  endDate?: string
+
+  @Transform(({ value }) => queryBoolean(value))
+  @IsOptional()
+  @IsBoolean({ message: '仅可结算筛选必须为布尔值' })
+  eligibleOnly?: boolean
+}
+
+export class SharedPrepaidSettlementQueryDto {
+  @Transform(({ value }) => queryNumber(value))
+  @IsOptional()
+  @IsInt({ message: '页码必须为正整数' })
+  @Min(1, { message: '页码必须为正整数' })
+  page?: number
+
+  @Transform(({ value }) => queryNumber(value))
+  @IsOptional()
+  @IsInt({ message: '每页数量必须为正整数' })
+  @Min(1, { message: '每页数量必须为正整数' })
+  @Max(100, { message: '每页最多 100 条' })
+  pageSize?: number
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsUUID('4', { message: '对方主账号编号格式错误' })
+  counterpartyFrontendUserId?: string
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsIn(['AWAITING_PAYMENT', 'AWAITING_RECEIPT', 'COMPLETED', 'REJECTED', 'CANCELLED'], { message: '结算单状态参数错误' })
+  status?: 'AWAITING_PAYMENT' | 'AWAITING_RECEIPT' | 'COMPLETED' | 'REJECTED' | 'CANCELLED'
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @Matches(BUSINESS_DATE_PATTERN, { message: '开始日期必须为 YYYY-MM-DD 格式' })
+  startDate?: string
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @Matches(BUSINESS_DATE_PATTERN, { message: '结束日期必须为 YYYY-MM-DD 格式' })
+  endDate?: string
 }

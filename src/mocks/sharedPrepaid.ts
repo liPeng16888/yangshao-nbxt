@@ -22,7 +22,13 @@ import type {
   PrepaidRechargeQuery,
   PrepaidRechargeRow,
   PrepaidSettlementPaymentPayload,
+  PrepaidSettlementActionOperation,
+  PrepaidSettlementActionRow,
+  PrepaidSettlementDetailRow,
+  PrepaidSettlementPayableListRow,
+  PrepaidSettlementPayableQuery,
   PrepaidSettlementPreview,
+  PrepaidSettlementQuery,
   PrepaidSettlementRow,
   PrepaidSettlementSelectionPayload
 } from '@/types/sharedPrepaid'
@@ -66,6 +72,7 @@ interface MockRecharge extends PrepaidRechargeRow {
 
 interface MockSettlement extends PrepaidSettlementRow {
   creatorOwnerId: string
+  actions: PrepaidSettlementActionRow[]
 }
 
 interface IdempotentRecord {
@@ -540,6 +547,64 @@ export async function mockPreviewPrepaidSettlement(
   return clone(selectSettlement(payload.payableIds, identity))
 }
 
+export async function mockGetPrepaidSettlementPayables(
+  query: PrepaidSettlementPayableQuery = {},
+  identity: MockSharedPrepaidIdentity = readIdentity()
+): Promise<PrepaidPage<PrepaidSettlementPayableListRow>> {
+  const ownerId = identity.ownerFrontendUserId
+  const ids = query.payableIds?.length ? new Set(query.payableIds) : null
+  const phone = String(query.phone ?? '').replace(/\D/g, '')
+  const rows = payables
+    .filter((row) => row.sourceOwnerId === ownerId || row.consumerOwnerId === ownerId)
+    .filter((row) => !ids || ids.has(row.id))
+    .filter((row) => !query.status || row.status === query.status)
+    .filter((row) => query.direction !== 'OUTGOING' || row.sourceOwnerId === ownerId)
+    .filter((row) => query.direction !== 'INCOMING' || row.consumerOwnerId === ownerId)
+    .filter((row) => !query.counterpartyFrontendUserId || (
+      row.sourceOwnerId === query.counterpartyFrontendUserId ||
+      row.consumerOwnerId === query.counterpartyFrontendUserId
+    ))
+    .filter((row) => {
+      const consumption = consumptions.find((item) => item.id === row.consumptionId)
+      return Boolean(consumption) &&
+        (!phone || consumption!.phoneSnapshot.includes(phone)) &&
+        (!query.startDate || consumption!.sheetDate >= query.startDate) &&
+        (!query.endDate || consumption!.sheetDate <= query.endDate)
+    })
+    .map((row) => toSettlementPayableRead(row, ownerId))
+    .filter((row) => !query.eligibleOnly || row.eligible)
+    .sort(descendingCreatedAt)
+  return paginate(rows, query.page, query.pageSize)
+}
+
+export async function mockGetPrepaidSettlements(
+  query: PrepaidSettlementQuery = {},
+  identity: MockSharedPrepaidIdentity = readIdentity()
+): Promise<PrepaidPage<PrepaidSettlementDetailRow>> {
+  const rows = settlements
+    .filter((row) => row.accountAId === identity.ownerFrontendUserId || row.accountBId === identity.ownerFrontendUserId)
+    .filter((row) => !query.status || row.status === query.status)
+    .filter((row) => !query.counterpartyFrontendUserId || (
+      row.accountAId === query.counterpartyFrontendUserId || row.accountBId === query.counterpartyFrontendUserId
+    ))
+    .filter((row) => !query.startDate || row.createdAt.slice(0, 10) >= query.startDate)
+    .filter((row) => !query.endDate || row.createdAt.slice(0, 10) <= query.endDate)
+    .sort(descendingCreatedAt)
+    .map(toSettlementDetail)
+  return paginate(rows, query.page, query.pageSize)
+}
+
+export async function mockGetPrepaidSettlement(
+  id: string,
+  identity: MockSharedPrepaidIdentity = readIdentity()
+): Promise<PrepaidSettlementDetailRow> {
+  const row = settlements.find((item) => item.id === id && (
+    item.accountAId === identity.ownerFrontendUserId || item.accountBId === identity.ownerFrontendUserId
+  ))
+  if (!row) throw mockError(404, '结算单不存在')
+  return toSettlementDetail(row)
+}
+
 export async function mockCreatePrepaidSettlement(
   payload: PrepaidSettlementSelectionPayload,
   idempotencyKey: string,
@@ -585,6 +650,7 @@ export async function mockCreatePrepaidSettlement(
       createdAt,
       updatedAt: createdAt,
       creatorOwnerId: identity.ownerFrontendUserId,
+      actions: [],
       lines: preview.lines.map((line) => ({
         id: nextId(),
         payableId: line.payableId,
@@ -609,7 +675,7 @@ export async function mockSubmitPrepaidSettlementPayment(
   idempotencyKey: string,
   identity: MockSharedPrepaidIdentity = readIdentity()
 ): Promise<PrepaidSettlementRow> {
-  return settlementAction(id, idempotencyKey, identity, ['SUBMIT_PAYMENT', payload], (row, now) => {
+  return settlementAction(id, idempotencyKey, identity, 'SUBMIT_PAYMENT', ['SUBMIT_PAYMENT', payload], (row, now) => {
     if (!identity.isFrontendMainAccount || row.payerFrontendUserId !== identity.ownerFrontendUserId) throw mockError(403, '只有付款主账号可以提交转账')
     if (row.status !== 'AWAITING_PAYMENT') throw mockError(409, '结算单状态已变化')
     if (!payload.actualTransferredAt || Number.isNaN(Date.parse(payload.actualTransferredAt))) throw mockError(400, '实际转账时间格式错误')
@@ -627,7 +693,7 @@ export async function mockConfirmPrepaidSettlement(
   idempotencyKey: string,
   identity: MockSharedPrepaidIdentity = readIdentity()
 ): Promise<PrepaidSettlementRow> {
-  return settlementAction(id, idempotencyKey, identity, ['CONFIRM'], (row, now) => {
+  return settlementAction(id, idempotencyKey, identity, 'CONFIRM_RECEIPT', ['CONFIRM'], (row, now) => {
     assertSettlementReceiptActor(row, identity)
     if (row.status !== 'AWAITING_RECEIPT') throw mockError(409, '结算单状态已变化')
     row.status = 'COMPLETED'
@@ -644,7 +710,7 @@ export async function mockRejectPrepaidSettlement(
   identity: MockSharedPrepaidIdentity = readIdentity()
 ): Promise<PrepaidSettlementRow> {
   requireReason(payload.reason)
-  return settlementAction(id, idempotencyKey, identity, ['REJECT', payload.reason.trim()], (row, now) => {
+  return settlementAction(id, idempotencyKey, identity, 'REJECT', ['REJECT', payload.reason.trim()], (row, now) => {
     assertSettlementReceiptActor(row, identity)
     if (row.status !== 'AWAITING_RECEIPT') throw mockError(409, '结算单状态已变化')
     row.status = 'REJECTED'
@@ -660,7 +726,7 @@ export async function mockCancelPrepaidSettlement(
   idempotencyKey: string,
   identity: MockSharedPrepaidIdentity = readIdentity()
 ): Promise<PrepaidSettlementRow> {
-  return settlementAction(id, idempotencyKey, identity, ['CANCEL'], (row, now) => {
+  return settlementAction(id, idempotencyKey, identity, 'CANCEL', ['CANCEL'], (row, now) => {
     if (!identity.isFrontendMainAccount || identity.ownerFrontendUserId !== row.creatorOwnerId) throw mockError(403, '只有创建主账号可以取消结算')
     if (row.status !== 'AWAITING_PAYMENT' && !(row.netAmount === 0 && row.status === 'AWAITING_RECEIPT')) {
       throw mockError(409, '当前结算单不能取消')
@@ -676,6 +742,7 @@ async function settlementAction(
   id: string,
   idempotencyKey: string,
   identity: MockSharedPrepaidIdentity,
+  operation: PrepaidSettlementActionOperation,
   fingerprint: unknown,
   mutate: (row: MockSettlement, now: string) => void
 ) {
@@ -684,6 +751,15 @@ async function settlementAction(
     if (!row) throw mockError(404, '结算单不存在')
     const now = nextTimestamp()
     mutate(row, now)
+    row.actions.push({
+      id: nextId(),
+      operation,
+      actorUserId: identity.actorUserId,
+      actorFrontendUserId: identity.ownerFrontendUserId,
+      createdAt: now,
+      actorUser: actorAccount(identity),
+      actorFrontendUser: accountFor(identity.ownerFrontendUserId)
+    })
     row.version += 1
     row.updatedAt = now
     return settlementResult(row)
@@ -730,10 +806,79 @@ function selectSettlement(payableIds: string[], identity: MockSharedPrepaidIdent
 function settlementResult(row: MockSettlement): PrepaidSettlementRow {
   const result = clone(row) as MockSettlement
   delete (result as Partial<MockSettlement>).creatorOwnerId
+  delete (result as Partial<MockSettlement>).actions
   result.lines.forEach((line) => {
     line.payableStatus = requirePayable(line.payableId).status
   })
   return result
+}
+
+function toSettlementPayableRead(row: PrepaidPayableRow, ownerId: string): PrepaidSettlementPayableListRow {
+  const consumption = consumptions.find((item) => item.id === row.consumptionId)
+  if (!consumption) throw mockError(404, '消费记录不存在')
+  const settlementAssociations = settlements.flatMap((settlement) => settlement.lines
+    .filter((line) => line.payableId === row.id)
+    .map((line) => ({
+      id: line.id,
+      settlementId: settlement.id,
+      direction: line.direction,
+      amount: line.amount,
+      releasedAt: line.releasedAt,
+      createdAt: line.createdAt,
+      status: settlement.status,
+      settlementCreatedAt: settlement.createdAt
+    })))
+  return clone({
+    ...row,
+    eligible: row.status === 'PENDING' && settlementAssociations.length === 0,
+    direction: row.sourceOwnerId === ownerId ? 'OUTGOING' : 'INCOMING',
+    counterpartyFrontendUserId: row.sourceOwnerId === ownerId ? row.consumerOwnerId : row.sourceOwnerId,
+    consumption: {
+      id: consumption.id,
+      memberId: consumption.memberId,
+      phoneSnapshot: consumption.phoneSnapshot,
+      sampleNumberSnapshot: consumption.sampleNumberSnapshot,
+      sampleCountSnapshot: consumption.sampleCountSnapshot,
+      elementsSnapshot: consumption.elementsSnapshot,
+      sheetDate: consumption.sheetDate,
+      createdAt: consumption.createdAt,
+      rechargeBatches: consumption.allocations
+        .filter((allocation) => allocation.sourceOwnerId === row.sourceOwnerId)
+        .map((allocation) => ({
+          id: allocation.recharge.id,
+          rechargeDate: allocation.recharge.rechargeDate,
+          isOpeningBalance: allocation.recharge.isOpeningBalance
+        }))
+    },
+    settlementAssociations
+  })
+}
+
+function toSettlementDetail(row: MockSettlement): PrepaidSettlementDetailRow {
+  const { idempotencyKey: _idempotencyKey, ...publicRow } = settlementResult(row)
+  const actorFor = (actorId: string | null, operation?: PrepaidSettlementActionOperation) => {
+    if (!actorId) return null
+    return row.actions.find((action) => action.operation === operation)?.actorUser ?? accountFor(actorId)
+  }
+  return clone({
+    ...publicRow,
+    accountA: accountFor(row.accountAId),
+    accountB: accountFor(row.accountBId),
+    payerFrontendUser: row.payerFrontendUserId ? accountFor(row.payerFrontendUserId) : null,
+    receiverFrontendUser: row.receiverFrontendUserId ? accountFor(row.receiverFrontendUserId) : null,
+    createdBy: accountFor(row.createdById),
+    paymentSubmittedBy: actorFor(row.paymentSubmittedById, 'SUBMIT_PAYMENT'),
+    receiptConfirmedBy: actorFor(row.receiptConfirmedById, 'CONFIRM_RECEIPT'),
+    rejectedBy: actorFor(row.rejectedById, 'REJECT'),
+    cancelledBy: actorFor(row.cancelledById, 'CANCEL'),
+    lines: row.lines.map((line) => {
+      const readable = toSettlementPayableRead(requirePayable(line.payableId), row.accountAId)
+      const { eligible: _eligible, direction: _direction, counterpartyFrontendUserId: _counterparty,
+        settlementAssociations: _associations, ...payable } = readable
+      return { ...line, payableStatus: requirePayable(line.payableId).status, payable }
+    }),
+    actions: row.actions
+  })
 }
 
 function releaseSettlement(row: MockSettlement, now: string) {

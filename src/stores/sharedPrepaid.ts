@@ -26,7 +26,11 @@ import type {
   PrepaidRechargeQuery,
   PrepaidRechargeRow,
   PrepaidSettlementPaymentPayload,
+  PrepaidSettlementDetailRow,
+  PrepaidSettlementPayableListRow,
+  PrepaidSettlementPayableQuery,
   PrepaidSettlementPreview,
+  PrepaidSettlementQuery,
   PrepaidSettlementRow
 } from '@/types/sharedPrepaid'
 
@@ -103,8 +107,11 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const consumptionFilterOptions = ref<PrepaidConsumptionFilterOptions>({ sourceOwners: [], consumingOwners: [] })
   const consumptions = ref<PrepaidConsumptionRow[]>([])
   const payables = ref<PrepaidPayableRow[]>([])
+  const settlementPayablesPage = ref<PrepaidPage<PrepaidSettlementPayableListRow>>(emptyPage())
   const settlementPreview = ref<PrepaidSettlementPreview | null>(null)
   const settlements = ref<PrepaidSettlementRow[]>([])
+  const settlementsPage = ref<PrepaidPage<PrepaidSettlementDetailRow>>(emptyPage())
+  const selectedSettlement = ref<PrepaidSettlementDetailRow | null>(null)
   const rechargeDraft = ref<CreatePrepaidRechargePayload>(emptyRechargeDraft())
   const settlementSelection = ref<string[]>([])
   const settlementPaymentDraft = ref<PrepaidSettlementPaymentPayload>({ actualTransferredAt: '' })
@@ -179,6 +186,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
 
   function setSettlementSelection(ids: string[]) {
     settlementSelection.value = [...ids]
+    settlementPreview.value = null
     settlementDirtyState.selection = ids.length > 0
     syncSettlementDirty()
   }
@@ -232,6 +240,49 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
       () => prepaidApi.getPrepaidConsumptionFilterOptions(),
       (result) => { consumptionFilterOptions.value = result }
     )
+  }
+
+  async function loadSettlementPayables(query: PrepaidSettlementPayableQuery = {}) {
+    return runLatest('settlements:payables', 'settlements', () => (
+      prepaidApi.getPrepaidSettlementPayables(query)
+    ), (result) => {
+      settlementPayablesPage.value = result
+    })
+  }
+
+  async function refreshSelectedSettlementPayables(ids: string[]) {
+    if (!ids.length) return
+    const chunks: string[][] = []
+    for (let index = 0; index < ids.length; index += 100) chunks.push(ids.slice(index, index + 100))
+    const results = await runPage('settlements', () => Promise.all(chunks.map((payableIds) => (
+      prepaidApi.getPrepaidSettlementPayables({
+        page: 1,
+        pageSize: payableIds.length,
+        payableIds
+      })
+    ))))
+    const updates = new Map(results.flatMap((result) => result.items).map((row) => [row.id, row]))
+    settlementPayablesPage.value = {
+      ...settlementPayablesPage.value,
+      items: settlementPayablesPage.value.items.map((row) => updates.get(row.id) ?? row)
+    }
+    return results
+  }
+
+  async function loadSettlements(query: PrepaidSettlementQuery = {}) {
+    return runLatest('settlements:list', 'settlements', () => (
+      prepaidApi.getPrepaidSettlements(query)
+    ), (result) => {
+      settlementsPage.value = result
+    })
+  }
+
+  async function loadSettlementDetail(id: string) {
+    return runLatest(`settlements:detail:${id}`, 'settlements', () => (
+      prepaidApi.getPrepaidSettlement(id)
+    ), (result) => {
+      selectedSettlement.value = result
+    })
   }
 
   async function mutate<T>(
@@ -368,6 +419,13 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     const index = settlements.value.findIndex((item) => item.id === row.id)
     if (index >= 0) settlements.value[index] = row
     else settlements.value.unshift(row)
+    const pageIndex = settlementsPage.value.items.findIndex((item) => item.id === row.id)
+    if (pageIndex >= 0) {
+      settlementsPage.value.items[pageIndex] = mergeSettlementDetail(settlementsPage.value.items[pageIndex], row)
+    }
+    if (selectedSettlement.value?.id === row.id) {
+      selectedSettlement.value = mergeSettlementDetail(selectedSettlement.value, row)
+    }
   }
 
   function canUseRealtime() {
@@ -553,8 +611,11 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     consumptionFilterOptions,
     consumptions,
     payables,
+    settlementPayablesPage,
     settlementPreview,
     settlements,
+    settlementsPage,
+    selectedSettlement,
     rechargeDraft,
     settlementSelection,
     settlementPaymentDraft,
@@ -573,6 +634,10 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     loadRecharges,
     loadConsumptions,
     loadConsumptionFilterOptions,
+    loadSettlementPayables,
+    refreshSelectedSettlementPayables,
+    loadSettlements,
+    loadSettlementDetail,
     createRecharge,
     reverseRecharge,
     reverseConsumption,
@@ -593,4 +658,19 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
 
 function isConflict(error: unknown) {
   return (error as { response?: { status?: unknown } } | null)?.response?.status === 409
+}
+
+function mergeSettlementDetail(detail: PrepaidSettlementDetailRow, mutation: PrepaidSettlementRow) {
+  const { lines: mutationLines, idempotencyKey: _idempotencyKey, ...fields } = mutation
+  const linesById = new Map(mutationLines.map((line) => [line.id, line]))
+  return {
+    ...detail,
+    ...fields,
+    lines: detail.lines.map((line) => {
+      const update = linesById.get(line.id)
+      return update
+        ? { ...line, ...update, payable: { ...line.payable, status: update.payableStatus } }
+        : line
+    })
+  }
 }

@@ -8,6 +8,9 @@ import {
   mockGetPrepaidMembers,
   mockGetPrepaidConsumptions,
   mockGetPrepaidConsumptionFilterOptions,
+  mockGetPrepaidSettlement,
+  mockGetPrepaidSettlementPayables,
+  mockGetPrepaidSettlements,
   mockLookupPrepaidMember,
   mockLookupLabPrepaidMember,
   mockPreviewPrepaidSettlement,
@@ -262,6 +265,47 @@ describe('shared prepaid focused mock', () => {
     expect(settlement.status).toBe('AWAITING_PAYMENT')
     expect(settlement.lines.map((line) => line.payableStatus)).toEqual(['HELD', 'HELD'])
     expect(retry).toEqual(settlement)
+  })
+
+  it('mirrors settlement-only payable and history reads with participant scope and public audit fields', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 100, giftAmount: 0
+    }, 'read-recharge-a', ownerA)
+    const consumption = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 60, sheetId: 'private-sheet', sampleBlockId: 'private-block',
+      sampleIndex: 0, sampleNumberSnapshot: 'A-001', sampleCountSnapshot: 3,
+      elementsSnapshot: ['Au'], sheetDate: '2026-08-12'
+    }, 'read-consume-b', ownerB)
+    const settlement = await mockCreatePrepaidSettlement({
+      payableIds: [consumption.payables[0].id]
+    }, 'read-settlement', ownerA)
+    await mockSubmitPrepaidSettlementPayment(settlement.id, {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00', proofUrls: ['/uploads/proof.png'], remark: '已转账'
+    }, 'read-submit', ownerA)
+
+    const payablePage = await mockGetPrepaidSettlementPayables({
+      payableIds: [consumption.payables[0].id]
+    }, { ...ownerA, actorUserId: 'sub-a', isFrontendMainAccount: false })
+    const history = await mockGetPrepaidSettlements({ status: 'AWAITING_RECEIPT' }, ownerB)
+    const detail = await mockGetPrepaidSettlement(settlement.id, ownerA)
+    const unrelated = await mockGetPrepaidSettlements({}, ownerC)
+
+    expect(payablePage.items[0]).toMatchObject({
+      status: 'HELD', eligible: false, direction: 'OUTGOING',
+      consumption: {
+        phoneSnapshot: '13800000000', sampleCountSnapshot: 3, elementsSnapshot: ['Au'],
+        rechargeBatches: [expect.objectContaining({ rechargeDate: '2026-08-12' })]
+      },
+      settlementAssociations: [expect.objectContaining({ settlementId: settlement.id, status: 'AWAITING_RECEIPT' })]
+    })
+    expect(history.total).toBe(1)
+    expect(unrelated.total).toBe(0)
+    expect(detail).toMatchObject({ proofUrls: ['/uploads/proof.png'], remark: '已转账' })
+    expect(detail.actions[0]).toMatchObject({ operation: 'SUBMIT_PAYMENT', actorUserId: 'A' })
+    expect(detail.lines[0].payable.consumption).toMatchObject({ sampleNumberSnapshot: 'A-001' })
+    expect(detail).not.toHaveProperty('idempotencyKey')
+    expect(detail.actions[0]).not.toHaveProperty('requestFingerprint')
+    expect(detail.lines[0].payable.consumption).not.toHaveProperty('sheetId')
   })
 
   it('appends a reversal consumption and attaches its compensating payable to that row', async () => {

@@ -1,7 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { Prisma, SharedPrepaidConsumptionKind, SharedPrepaidPayableStatus } from '@prisma/client'
+import {
+  Prisma,
+  SharedPrepaidConsumptionKind,
+  SharedPrepaidPayableStatus,
+  SharedPrepaidSettlementStatus
+} from '@prisma/client'
 
 import { PrismaService } from '../prisma/prisma.service'
+import type { CurrentUser } from '../auth/current-user'
 import { normalizePrepaidPhone } from './shared-prepaid-money'
 
 export interface SharedPrepaidListQuery {
@@ -24,6 +30,23 @@ export interface SharedPrepaidConsumptionQuery extends SharedPrepaidListQuery {
   endDate?: string
   status?: 'ACTIVE' | 'REVERSED'
   payableStatus?: SharedPrepaidPayableStatus
+}
+
+export interface SharedPrepaidSettlementPayableQuery extends SharedPrepaidListQuery {
+  payableIds?: string[]
+  counterpartyFrontendUserId?: string
+  direction?: 'OUTGOING' | 'INCOMING'
+  status?: SharedPrepaidPayableStatus
+  startDate?: string
+  endDate?: string
+  eligibleOnly?: boolean | string
+}
+
+export interface SharedPrepaidSettlementQuery extends SharedPrepaidListQuery {
+  counterpartyFrontendUserId?: string
+  status?: SharedPrepaidSettlementStatus
+  startDate?: string
+  endDate?: string
 }
 
 interface AccountRow {
@@ -200,6 +223,131 @@ const consumptionListSelect = {
     }
   }
 } satisfies Prisma.SharedPrepaidConsumptionSelect
+
+const settlementConsumptionSelect = {
+  id: true,
+  memberId: true,
+  phoneSnapshot: true,
+  sampleNumberSnapshot: true,
+  sampleCountSnapshot: true,
+  elementsSnapshot: true,
+  sheetDate: true,
+  createdAt: true,
+  allocations: {
+    select: {
+      id: true,
+      sourceOwnerId: true,
+      rechargeId: true,
+      recharge: {
+        select: { id: true, rechargeDate: true, isOpeningBalance: true }
+      }
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+  }
+} satisfies Prisma.SharedPrepaidConsumptionSelect
+
+const settlementPayableCoreSelect = {
+  id: true,
+  consumptionId: true,
+  sourceOwnerId: true,
+  consumerOwnerId: true,
+  exactAmount: true,
+  amount: true,
+  status: true,
+  reversalOfId: true,
+  createdAt: true,
+  updatedAt: true,
+  sourceOwner: { select: accountSelect },
+  consumerOwner: { select: accountSelect },
+  consumption: { select: settlementConsumptionSelect }
+} satisfies Prisma.SharedPrepaidPayableSelect
+
+const settlementPayableListSelect = {
+  ...settlementPayableCoreSelect,
+  settlementLines: {
+    select: {
+      id: true,
+      settlementId: true,
+      direction: true,
+      amount: true,
+      releasedAt: true,
+      createdAt: true,
+      settlement: { select: { id: true, status: true, createdAt: true } }
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+  }
+} satisfies Prisma.SharedPrepaidPayableSelect
+
+const settlementReadSelect = {
+  id: true,
+  accountAId: true,
+  accountBId: true,
+  aToBAmount: true,
+  bToAAmount: true,
+  netAmount: true,
+  payerFrontendUserId: true,
+  receiverFrontendUserId: true,
+  status: true,
+  actualTransferredAt: true,
+  proofUrls: true,
+  remark: true,
+  createdById: true,
+  paymentSubmittedById: true,
+  paymentSubmittedAt: true,
+  receiptConfirmedById: true,
+  receiptConfirmedAt: true,
+  rejectedById: true,
+  rejectedAt: true,
+  rejectionReason: true,
+  cancelledById: true,
+  cancelledAt: true,
+  version: true,
+  createdAt: true,
+  updatedAt: true,
+  accountA: { select: accountSelect },
+  accountB: { select: accountSelect },
+  payerFrontendUser: { select: accountSelect },
+  receiverFrontendUser: { select: accountSelect },
+  createdBy: { select: accountSelect },
+  paymentSubmittedBy: { select: accountSelect },
+  receiptConfirmedBy: { select: accountSelect },
+  rejectedBy: { select: accountSelect },
+  cancelledBy: { select: accountSelect },
+  lines: {
+    select: {
+      id: true,
+      payableId: true,
+      direction: true,
+      amount: true,
+      releasedAt: true,
+      createdAt: true,
+      payable: { select: settlementPayableCoreSelect }
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+  },
+  actions: {
+    select: {
+      id: true,
+      operation: true,
+      actorUserId: true,
+      actorFrontendUserId: true,
+      createdAt: true,
+      actorUser: { select: accountSelect },
+      actorFrontendUser: { select: accountSelect }
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+  }
+} satisfies Prisma.SharedPrepaidSettlementSelect
+
+type SettlementPayableDatabaseRow = Prisma.SharedPrepaidPayableGetPayload<{
+  select: typeof settlementPayableListSelect
+}>
+type SettlementPayableCoreDatabaseRow = Prisma.SharedPrepaidPayableGetPayload<{
+  select: typeof settlementPayableCoreSelect
+}>
+type SettlementReadDatabaseRow = Prisma.SharedPrepaidSettlementGetPayload<{
+  select: typeof settlementReadSelect
+}>
 
 type ConsumptionListDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
   select: typeof consumptionListSelect
@@ -379,6 +527,92 @@ export class SharedPrepaidQueryService {
     }
   }
 
+  async listSettlementPayables(user: CurrentUser, query: SharedPrepaidSettlementPayableQuery = {}) {
+    const { page, pageSize, skip } = this.pagination(query)
+    const ownerId = user.dataOwnerId
+    const counterpartyId = String(query.counterpartyFrontendUserId ?? '').trim()
+    const where: Prisma.SharedPrepaidPayableWhereInput = {}
+    if (query.payableIds?.length) where.id = { in: [...query.payableIds] }
+    if (query.direction === 'OUTGOING') {
+      where.sourceOwnerId = ownerId
+      if (counterpartyId) where.consumerOwnerId = counterpartyId
+    } else if (query.direction === 'INCOMING') {
+      where.consumerOwnerId = ownerId
+      if (counterpartyId) where.sourceOwnerId = counterpartyId
+    } else {
+      where.OR = [{ sourceOwnerId: ownerId }, { consumerOwnerId: ownerId }]
+      if (counterpartyId) {
+        where.AND = [{ OR: [{ sourceOwnerId: counterpartyId }, { consumerOwnerId: counterpartyId }] }]
+      }
+    }
+    if (query.status) where.status = query.status
+    if (this.optionalBoolean(query.eligibleOnly) === true) {
+      where.status = SharedPrepaidPayableStatus.PENDING
+      where.settlementLines = { none: {} }
+    }
+    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    if (phone || query.startDate || query.endDate) {
+      where.consumption = {
+        ...(phone ? { phoneSnapshot: { contains: phone } } : {}),
+        ...((query.startDate || query.endDate) ? {
+          sheetDate: {
+            ...(query.startDate ? { gte: String(query.startDate).trim() } : {}),
+            ...(query.endDate ? { lte: String(query.endDate).trim() } : {})
+          }
+        } : {})
+      }
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.sharedPrepaidPayable.findMany({
+        where,
+        select: settlementPayableListSelect,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: pageSize
+      }),
+      this.prisma.sharedPrepaidPayable.count({ where })
+    ])
+    return {
+      items: rows.map((row) => this.toSettlementPayableRow(row, ownerId)),
+      total,
+      page,
+      pageSize
+    }
+  }
+
+  async listSettlements(user: CurrentUser, query: SharedPrepaidSettlementQuery = {}) {
+    const { page, pageSize, skip } = this.pagination(query)
+    const where = this.settlementWhere(user, query)
+    const [rows, total] = await Promise.all([
+      this.prisma.sharedPrepaidSettlement.findMany({
+        where,
+        select: settlementReadSelect,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: pageSize
+      }),
+      this.prisma.sharedPrepaidSettlement.count({ where })
+    ])
+    return {
+      items: rows.map((row) => this.toSettlementReadRow(row)),
+      total,
+      page,
+      pageSize
+    }
+  }
+
+  async getSettlementDetail(user: CurrentUser, id: string) {
+    const row = await this.prisma.sharedPrepaidSettlement.findFirst({
+      where: {
+        id,
+        OR: [{ accountAId: user.dataOwnerId }, { accountBId: user.dataOwnerId }]
+      },
+      select: settlementReadSelect
+    })
+    if (!row) throw new NotFoundException('结算单不存在')
+    return this.toSettlementReadRow(row)
+  }
+
   async getMemberDetail(id: string) {
     const member = await this.prisma.sharedPrepaidMember.findUnique({
       where: { id },
@@ -554,6 +788,143 @@ export class SharedPrepaidQueryService {
       })
     }
     return [...options.values()].sort((left, right) => left.label.localeCompare(right.label, 'zh-CN') || left.id.localeCompare(right.id))
+  }
+
+  private settlementWhere(user: CurrentUser, query: SharedPrepaidSettlementQuery) {
+    const counterpartyId = String(query.counterpartyFrontendUserId ?? '').trim()
+    const where: Prisma.SharedPrepaidSettlementWhereInput = {
+      OR: [{ accountAId: user.dataOwnerId }, { accountBId: user.dataOwnerId }]
+    }
+    if (counterpartyId) {
+      where.AND = [{ OR: [{ accountAId: counterpartyId }, { accountBId: counterpartyId }] }]
+    }
+    if (query.status) where.status = query.status
+    if (query.startDate || query.endDate) {
+      where.createdAt = {
+        ...(query.startDate ? { gte: this.beijingDateBoundary(query.startDate, false) } : {}),
+        ...(query.endDate ? { lte: this.beijingDateBoundary(query.endDate, true) } : {})
+      }
+    }
+    return where
+  }
+
+  private toSettlementPayableRow(row: SettlementPayableDatabaseRow, ownerId: string) {
+    const core = this.toSettlementPayableCore(row)
+    return {
+      ...core,
+      eligible: row.status === SharedPrepaidPayableStatus.PENDING && row.settlementLines.length === 0,
+      direction: row.sourceOwnerId === ownerId ? 'OUTGOING' as const : 'INCOMING' as const,
+      counterpartyFrontendUserId: row.sourceOwnerId === ownerId ? row.consumerOwnerId : row.sourceOwnerId,
+      settlementAssociations: row.settlementLines.map((line) => ({
+        id: line.id,
+        settlementId: line.settlementId,
+        direction: line.direction,
+        amount: line.amount.toNumber(),
+        releasedAt: line.releasedAt,
+        createdAt: line.createdAt,
+        status: line.settlement.status,
+        settlementCreatedAt: line.settlement.createdAt
+      }))
+    }
+  }
+
+  private toSettlementPayableCore(row: SettlementPayableCoreDatabaseRow) {
+    return {
+      id: row.id,
+      consumptionId: row.consumptionId,
+      sourceOwnerId: row.sourceOwnerId,
+      consumerOwnerId: row.consumerOwnerId,
+      exactAmount: row.exactAmount.toNumber(),
+      amount: row.amount.toNumber(),
+      status: row.status,
+      reversalOfId: row.reversalOfId,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      sourceOwner: row.sourceOwner,
+      consumerOwner: row.consumerOwner,
+      consumption: {
+        id: row.consumption.id,
+        memberId: row.consumption.memberId,
+        phoneSnapshot: row.consumption.phoneSnapshot,
+        sampleNumberSnapshot: row.consumption.sampleNumberSnapshot,
+        sampleCountSnapshot: row.consumption.sampleCountSnapshot,
+        elementsSnapshot: row.consumption.elementsSnapshot,
+        sheetDate: row.consumption.sheetDate,
+        createdAt: row.consumption.createdAt,
+        rechargeBatches: row.consumption.allocations
+          .filter((allocation) => allocation.sourceOwnerId === row.sourceOwnerId)
+          .map((allocation) => allocation.recharge)
+      }
+    }
+  }
+
+  private toSettlementReadRow(row: SettlementReadDatabaseRow) {
+    return {
+      id: row.id,
+      accountAId: row.accountAId,
+      accountBId: row.accountBId,
+      aToBAmount: row.aToBAmount.toNumber(),
+      bToAAmount: row.bToAAmount.toNumber(),
+      netAmount: row.netAmount.toNumber(),
+      payerFrontendUserId: row.payerFrontendUserId,
+      receiverFrontendUserId: row.receiverFrontendUserId,
+      status: row.status,
+      actualTransferredAt: row.actualTransferredAt,
+      proofUrls: this.proofUrls(row.proofUrls),
+      remark: row.remark,
+      createdById: row.createdById,
+      paymentSubmittedById: row.paymentSubmittedById,
+      paymentSubmittedAt: row.paymentSubmittedAt,
+      receiptConfirmedById: row.receiptConfirmedById,
+      receiptConfirmedAt: row.receiptConfirmedAt,
+      rejectedById: row.rejectedById,
+      rejectedAt: row.rejectedAt,
+      rejectionReason: row.rejectionReason,
+      cancelledById: row.cancelledById,
+      cancelledAt: row.cancelledAt,
+      version: row.version,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      accountA: row.accountA,
+      accountB: row.accountB,
+      payerFrontendUser: row.payerFrontendUser,
+      receiverFrontendUser: row.receiverFrontendUser,
+      createdBy: row.createdBy,
+      paymentSubmittedBy: row.paymentSubmittedBy,
+      receiptConfirmedBy: row.receiptConfirmedBy,
+      rejectedBy: row.rejectedBy,
+      cancelledBy: row.cancelledBy,
+      lines: row.lines.map((line) => ({
+        id: line.id,
+        payableId: line.payableId,
+        consumptionId: line.payable.consumptionId,
+        sourceOwnerId: line.payable.sourceOwnerId,
+        consumerOwnerId: line.payable.consumerOwnerId,
+        direction: line.direction,
+        amount: line.amount.toNumber(),
+        payableStatus: line.payable.status,
+        releasedAt: line.releasedAt,
+        createdAt: line.createdAt,
+        payable: this.toSettlementPayableCore(line.payable)
+      })),
+      actions: row.actions.map((action) => ({
+        id: action.id,
+        operation: action.operation,
+        actorUserId: action.actorUserId,
+        actorFrontendUserId: action.actorFrontendUserId,
+        createdAt: action.createdAt,
+        actorUser: action.actorUser,
+        actorFrontendUser: action.actorFrontendUser
+      }))
+    }
+  }
+
+  private proofUrls(value: Prisma.JsonValue) {
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+  }
+
+  private beijingDateBoundary(value: string, end: boolean) {
+    return new Date(`${String(value).trim()}T${end ? '23:59:59.999' : '00:00:00.000'}+08:00`)
   }
 
   private pagination(query: SharedPrepaidListQuery) {

@@ -16,6 +16,9 @@ const apiMocks = vi.hoisted(() => ({
   getPrepaidRecharges: vi.fn(),
   getPrepaidConsumptions: vi.fn(),
   getPrepaidConsumptionFilterOptions: vi.fn(),
+  getPrepaidSettlementPayables: vi.fn(),
+  getPrepaidSettlements: vi.fn(),
+  getPrepaidSettlement: vi.fn(),
   createPrepaidRecharge: vi.fn(),
   reversePrepaidRecharge: vi.fn(),
   reversePrepaidConsumption: vi.fn(),
@@ -153,6 +156,7 @@ describe('shared prepaid realtime refresh', () => {
       'getPrepaidMembers', 'lookupPrepaidMember', 'getPrepaidMemberDetail', 'getPrepaidRecharges',
       'getPrepaidConsumptions',
       'getPrepaidConsumptionFilterOptions',
+      'getPrepaidSettlementPayables', 'getPrepaidSettlements', 'getPrepaidSettlement',
       'createPrepaidRecharge', 'reversePrepaidRecharge', 'reversePrepaidConsumption',
       'previewPrepaidSettlement', 'createPrepaidSettlement', 'submitPrepaidSettlementPayment',
       'confirmPrepaidSettlement', 'rejectPrepaidSettlement', 'cancelPrepaidSettlement'
@@ -394,6 +398,50 @@ describe('shared prepaid realtime refresh', () => {
     expect(store.pendingIdempotencyKeys.createSettlement).toBeUndefined()
   })
 
+  it('loads independently paginated settlement reads and refreshes only selected payable availability', async () => {
+    const first = {
+      items: [
+        { id: 'payable-1', status: 'PENDING', eligible: true },
+        { id: 'payable-2', status: 'PENDING', eligible: true },
+        { id: 'payable-3', status: 'COMPLETED', eligible: false }
+      ],
+      total: 3, page: 2, pageSize: 10
+    }
+    apiMocks.getPrepaidSettlementPayables
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce({
+        items: [{ id: 'payable-1', status: 'HELD', eligible: false }],
+        total: 1, page: 1, pageSize: 1
+      })
+    apiMocks.getPrepaidSettlements.mockResolvedValue({
+      items: [settlementRowFixture('settlement-1')], total: 1, page: 1, pageSize: 20
+    })
+    apiMocks.getPrepaidSettlement.mockResolvedValue(settlementRowFixture('settlement-1'))
+    const store = useSharedPrepaidStore()
+
+    await store.loadSettlementPayables({ page: 2, pageSize: 10, status: 'PENDING' })
+    await store.loadSettlements({ page: 1, pageSize: 20 })
+    await store.loadSettlementDetail('settlement-1')
+    await store.refreshSelectedSettlementPayables(['payable-1'])
+
+    expect(apiMocks.getPrepaidSettlementPayables).toHaveBeenNthCalledWith(1, {
+      page: 2, pageSize: 10, status: 'PENDING'
+    })
+    expect(apiMocks.getPrepaidSettlementPayables).toHaveBeenNthCalledWith(2, {
+      page: 1, pageSize: 1, payableIds: ['payable-1']
+    })
+    expect(store.settlementPayablesPage).toMatchObject({
+      page: 2, total: 3,
+      items: [
+        { id: 'payable-1', status: 'HELD', eligible: false },
+        { id: 'payable-2', status: 'PENDING', eligible: true },
+        { id: 'payable-3', status: 'COMPLETED', eligible: false }
+      ]
+    })
+    expect(store.settlementsPage.items[0]).toMatchObject({ id: 'settlement-1' })
+    expect(store.selectedSettlement).toMatchObject({ id: 'settlement-1' })
+  })
+
   it('allows an explicit action key and preserves a recharge form on conflict', async () => {
     const conflict = { response: { status: 409 } }
     apiMocks.createPrepaidRecharge.mockRejectedValue(conflict)
@@ -499,6 +547,36 @@ describe('shared prepaid realtime refresh', () => {
 
     store.setSettlementSelection([])
     expect(store.dirtyByPage.settlements).toBe(false)
+  })
+
+  it('preserves the entire payment draft and key on 409, then clears only that draft on retry success', async () => {
+    const conflict = { response: { status: 409, data: { code: 'PREPAID_SETTLEMENT_STATE_CONFLICT' } } }
+    apiMocks.submitPrepaidSettlementPayment
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce(settlementRowFixture('settlement-1'))
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue('00000000-0000-4000-8000-000000000019')
+    const store = useSharedPrepaidStore()
+    store.setSettlementSelection(['payable-other'])
+    store.setSettlementPaymentDraft({
+      actualTransferredAt: '2026-08-12T16:00:00+08:00',
+      proofUrls: ['/uploads/proof.png'], remark: '网银备注'
+    })
+
+    await expect(store.submitSettlementPayment('settlement-1')).rejects.toBe(conflict)
+    expect(store.settlementPaymentDraft).toEqual({
+      actualTransferredAt: '2026-08-12T16:00:00+08:00',
+      proofUrls: ['/uploads/proof.png'], remark: '网银备注'
+    })
+    expect(store.pendingIdempotencyKeys['submitPayment:settlement-1']).toBe('00000000-0000-4000-8000-000000000019')
+
+    await store.submitSettlementPayment('settlement-1')
+    expect(apiMocks.submitPrepaidSettlementPayment.mock.calls.map((call) => call[2])).toEqual([
+      '00000000-0000-4000-8000-000000000019',
+      '00000000-0000-4000-8000-000000000019'
+    ])
+    expect(store.settlementPaymentDraft).toEqual({ actualTransferredAt: '' })
+    expect(store.settlementSelection).toEqual(['payable-other'])
+    expect(store.dirtyByPage.settlements).toBe(true)
   })
 
   it('keeps the newest recharge page when older requests resolve out of order', async () => {

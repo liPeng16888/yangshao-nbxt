@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import SharedPrepaidPlaceholderPage from '@/views/dashboard/SharedPrepaidPlaceholderPage.vue'
+import PrepaidSettlementsPage from '@/views/dashboard/PrepaidSettlementsPage.vue'
 import router, { prepaidRootRedirect } from './index'
 
 describe('shared prepaid routes', () => {
@@ -24,7 +24,7 @@ describe('shared prepaid routes', () => {
     })).toBe('/prepaid/customers')
   })
 
-  it('replaces only the first three prepaid placeholder routes with their real pages', () => {
+  it('routes all prepaid leaves to their real pages', () => {
     expect(router.getRoutes().find((route) => route.path === '/prepaid/recharges')?.components?.default?.name)
       .toBe('PrepaidRechargePage')
     expect(router.getRoutes().find((route) => route.path === '/prepaid/customers')?.components?.default?.name)
@@ -32,6 +32,6 @@ describe('shared prepaid routes', () => {
     expect(router.getRoutes().find((route) => route.path === '/prepaid/consumptions')?.components?.default?.name)
       .toBe('PrepaidConsumptionsPage')
     expect(router.getRoutes().find((route) => route.path === '/prepaid/settlements')?.components?.default)
-      .toBe(SharedPrepaidPlaceholderPage)
+      .toBe(PrepaidSettlementsPage)
   })
 })

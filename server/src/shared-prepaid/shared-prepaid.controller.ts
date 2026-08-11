@@ -36,6 +36,8 @@ import {
   SharedPrepaidRechargeQueryDto,
   SharedPrepaidSettlementIdParamsDto,
   SharedPrepaidSettlementPaymentDto,
+  SharedPrepaidSettlementPayableQueryDto,
+  SharedPrepaidSettlementQueryDto,
   SharedPrepaidSettlementRejectDto,
   SharedPrepaidSettlementSelectionDto
 } from './shared-prepaid.dto'
@@ -49,6 +51,33 @@ export class SharedPrepaidController {
     private readonly queryService: SharedPrepaidQueryService,
     private readonly settlementService: SharedPrepaidSettlementService
   ) {}
+
+  @Get('settlements/payables')
+  @FrontendPermission('PREPAID_SETTLEMENTS')
+  listSettlementPayables(
+    @CurrentUserInfo() user: CurrentUser,
+    @Query() query: SharedPrepaidSettlementPayableQueryDto
+  ) {
+    return this.queryService.listSettlementPayables(user, query)
+  }
+
+  @Get('settlements')
+  @FrontendPermission('PREPAID_SETTLEMENTS')
+  listSettlements(
+    @CurrentUserInfo() user: CurrentUser,
+    @Query() query: SharedPrepaidSettlementQueryDto
+  ) {
+    return this.queryService.listSettlements(user, query)
+  }
+
+  @Get('settlements/:id')
+  @FrontendPermission('PREPAID_SETTLEMENTS')
+  getSettlementDetail(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param() params: SharedPrepaidSettlementIdParamsDto
+  ) {
+    return this.queryService.getSettlementDetail(user, params.id)
+  }
 
   @Post('settlements/preview')
   @FrontendPermission('PREPAID_SETTLEMENTS')
