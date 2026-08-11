@@ -46,6 +46,11 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
     try { return await action() } catch (reason) { error.value = reason instanceof Error ? reason.message : '操作失败'; throw reason }
     finally { if (save) pendingSaves.value -= 1; else pendingLoads.value -= 1 }
   }
+  async function runQuiet<T>(action: () => Promise<T>, save = false) {
+    if (save) pendingSaves.value += 1; else pendingLoads.value += 1
+    try { return await action() }
+    finally { if (save) pendingSaves.value -= 1; else pendingLoads.value -= 1 }
+  }
   const loadEmployees = () => run(async () => { employees.value = await api.getEmployees(); return employees.value })
   const loadOverview = () => run(async () => { overview.value = await api.getOverview(month.value); return overview.value })
   const loadSchedules = () => run(async () => { [weeklySchedules.value, overrides.value, monthSettings.value] = await Promise.all([api.getWeeklySchedules(employeeId.value || undefined), api.getDateOverrides({ employeeId: employeeId.value || undefined, month: month.value }), api.getMonthlySettings(month.value)]); return weeklySchedules.value })
@@ -91,5 +96,5 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   })
   function clearError() { error.value = '' }
   function setError(message: string) { error.value = message }
-  return { month, employeeId, startDate, endDate, leaveStatus, leaveEmployeeIds, loading, saving, error, employees, activeEmployees, overview, weeklySchedules, overrides, monthlySchedules, monthSettings, attendance, leaveTypes, leaves, commissionTypes, commissions, bonuses, payroll, run, clearError, setError, selectMonth, selectDateRange, restoreMonthMode, dateQuery, loadEmployees, loadOverview, loadSchedules, loadMonthlySchedules, loadAttendance, loadLeaves, loadCompensation, loadPayroll }
+  return { month, employeeId, startDate, endDate, leaveStatus, leaveEmployeeIds, loading, saving, error, employees, activeEmployees, overview, weeklySchedules, overrides, monthlySchedules, monthSettings, attendance, leaveTypes, leaves, commissionTypes, commissions, bonuses, payroll, run, runQuiet, clearError, setError, selectMonth, selectDateRange, restoreMonthMode, dateQuery, loadEmployees, loadOverview, loadSchedules, loadMonthlySchedules, loadAttendance, loadLeaves, loadCompensation, loadPayroll }
 })

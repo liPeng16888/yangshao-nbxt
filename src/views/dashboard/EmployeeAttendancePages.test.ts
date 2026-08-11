@@ -133,6 +133,7 @@ describe('employee attendance navigation', () => {
     expect(wrapper.find('[data-testid="monthly-schedule-calendar"]').exists()).toBe(true)
     await wrapper.get('[data-date="2026-08-03"]').trigger('click')
     expect(wrapper.get('[data-testid="schedule-day-drawer"]').text()).toContain('添加工作时段')
+    expect(wrapper.get('[data-testid="schedule-day-drawer"]').attributes('aria-label')).toBe('每日排班编辑')
     await wrapper.get('[data-testid="add-planned-interval"]').trigger('click')
     expect(wrapper.findAll('[data-testid="planned-interval"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('休息 60 分钟')
@@ -193,6 +194,34 @@ describe('employee attendance navigation', () => {
 
     expect(schedules).toHaveBeenCalledTimes(2)
     expect(store.monthlySchedules).toEqual([expect.objectContaining({ id: 'new', employeeId: 'emp-2' })])
+    wrapper.unmount()
+    schedules.mockRestore()
+  })
+
+  it('does not surface a late failure from an obsolete employee/month request', async () => {
+    let rejectFirst!: (error: Error) => void
+    let resolveSecond!: (rows: any[]) => void
+    const first = new Promise<any[]>((_resolve, reject) => { rejectFirst = reject })
+    const second = new Promise<any[]>((resolve) => { resolveSecond = resolve })
+    const schedules = vi.spyOn(attendanceApi, 'getMonthlySchedules')
+      .mockImplementationOnce(() => first)
+      .mockImplementationOnce(() => second)
+    vi.spyOn(attendanceApi, 'getMonthlySettings').mockResolvedValue([])
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    store.employeeId = 'emp-2'
+    await flushPromises()
+    resolveSecond([{ id: 'new-success', employeeId: 'emp-2', date: '2026-08-03', isWorkday: false, segments: [], scheduledMinutes: 0, breakMinutes: 0 }])
+    await flushPromises()
+    rejectFirst(new Error('旧请求失败'))
+    await flushPromises()
+
+    expect(store.monthlySchedules).toEqual([expect.objectContaining({ id: 'new-success', employeeId: 'emp-2' })])
+    expect(store.error).toBe('')
     wrapper.unmount()
     schedules.mockRestore()
   })

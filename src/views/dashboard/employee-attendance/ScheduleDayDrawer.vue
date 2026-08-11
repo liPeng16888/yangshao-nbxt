@@ -4,6 +4,8 @@
     :append-to-body="false"
     :with-header="false"
     :size="'min(560px, 100vw)'"
+    title="每日排班编辑"
+    aria-label="每日排班编辑"
     class="schedule-day-drawer"
     data-testid="schedule-day-drawer"
     @update:model-value="emit('update:visible', $event)"

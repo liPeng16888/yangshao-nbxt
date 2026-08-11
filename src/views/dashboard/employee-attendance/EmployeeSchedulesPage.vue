@@ -106,22 +106,27 @@ async function load() {
   const requestKey = `${employeeId}:${month}`
   if (activeLoad && activeLoadKey === requestKey) return activeLoad
   const requestId = ++scheduleLoadSequence
+  store.clearError()
   const request = (async () => {
     try {
       if (!employeeId) {
-        const settings = await store.run(() => api.getMonthlySettings(month))
+        const settings = await store.runQuiet(() => api.getMonthlySettings(month))
         if (requestId !== scheduleLoadSequence || store.employeeId || store.month !== month) return
         store.monthlySchedules = []
         store.monthSettings = settings
         hydrateMonthSetting()
         return
       }
-      const [rows, settings] = await store.run(() => Promise.all([api.getMonthlySchedules(employeeId, month), api.getMonthlySettings(month)]))
+      const [rows, settings] = await store.runQuiet(() => Promise.all([api.getMonthlySchedules(employeeId, month), api.getMonthlySettings(month)]))
       if (requestId !== scheduleLoadSequence || store.employeeId !== employeeId || store.month !== month) return
       store.monthlySchedules = rows
       store.monthSettings = settings
       hydrateMonthSetting()
-    } catch { /* the shell exposes the persistent store error and retains all local editors */ }
+    } catch (error) {
+      if (requestId === scheduleLoadSequence && store.employeeId === employeeId && store.month === month) {
+        store.setError(errorText(error, '月度排班加载失败'))
+      }
+    }
   })()
   activeLoadKey = requestKey
   activeLoad = request
