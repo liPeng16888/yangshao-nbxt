@@ -41,7 +41,7 @@ function initialState(): EmployeeAttendanceState {
     plannedEndTime: weekday > 0 && weekday < 6 ? '16:00' : null,
     scheduledMinutes: weekday > 0 && weekday < 6 ? 480 : 0
   })))
-  const seededMonths = [dayjs().subtract(1, 'month').format('YYYY-MM'), month, dayjs().add(1, 'month').format('YYYY-MM')]
+  const seededMonths = [month]
   const monthlySchedules: MonthlyScheduleDay[] = employees.flatMap((employeeRow) => seededMonths.flatMap((scheduleMonth) => Array.from({ length: dayjs(`${scheduleMonth}-01`).daysInMonth() }, (_, index) => {
     const date = `${scheduleMonth}-${String(index + 1).padStart(2, '0')}`
     const weekly = weeklySchedules.find((row) => row.employeeId === employeeRow.id && row.weekday === dayjs(date).day())!
@@ -110,7 +110,7 @@ function read() {
   return state
 }
 function migrateMonthlySchedules(state: EmployeeAttendanceState): MonthlyScheduleDay[] {
-  const months = new Set([dayjs().subtract(1, 'month').format('YYYY-MM'), dayjs().format('YYYY-MM'), dayjs().add(1, 'month').format('YYYY-MM'), ...state.overrides.map((row) => monthOf(row.date))])
+  const months = new Set([dayjs().format('YYYY-MM')])
   return state.employees.flatMap((employeeRow) => Array.from(months).flatMap((month) => Array.from({ length: dayjs(`${month}-01`).daysInMonth() }, (_, index) => {
     const date = `${month}-${String(index + 1).padStart(2, '0')}`
     const legacy = state.overrides.find((row) => row.employeeId === employeeRow.id && row.date === date)
@@ -194,6 +194,9 @@ export async function mockDeleteMonthlySetting(settingId: string) { const row = 
 function validateBusinessDate(date: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || dayjs(date).format('YYYY-MM-DD') !== date) throw new Error('日期格式无效')
 }
+function validateBusinessMonth(month: string) {
+  if (!/^\d{4}-\d{2}$/.test(month) || dayjs(`${month}-01`).format('YYYY-MM') !== month) throw new Error('月份格式无效')
+}
 function monthlySchedule(employeeId: string, date: string) {
   return read().monthlySchedules.find((row) => row.employeeId === employeeId && row.date === date)
 }
@@ -209,6 +212,7 @@ function monthlyScheduleDay(payload: MonthlySchedulePayload, existing?: MonthlyS
 }
 export async function mockGetMonthlySchedules(employeeId: string, month: string) {
   entity(read().employees, employeeId, '员工')
+  validateBusinessMonth(month)
   return later(read().monthlySchedules.filter((row) => row.employeeId === employeeId && monthOf(row.date) === month).sort((left, right) => left.date.localeCompare(right.date)))
 }
 export async function mockSaveMonthlyScheduleDay(payload: MonthlySchedulePayload) {
@@ -234,25 +238,26 @@ export async function mockBatchSaveMonthlySchedules(payload: BatchMonthlySchedul
   dates.forEach(ensureDraftForDate)
   const existing = dates.filter((date) => Boolean(monthlySchedule(payload.employeeId, date))).length
   for (const date of dates) await mockSaveMonthlyScheduleDay({ ...payload, date })
-  const rows = await mockGetMonthlySchedules(payload.employeeId, dates[0].slice(0, 7))
-  return { rows: rows.filter((row) => dates.includes(row.date)), updated: dates.length, overwritten: existing }
+  const rows = dates.map((date) => monthlySchedule(payload.employeeId, date)!).sort((left, right) => left.date.localeCompare(right.date))
+  return { rows, updated: dates.length, overwritten: existing }
 }
 export async function mockCopyPreviousMonthSchedules(employeeId: string, targetMonth: string, overwrite: boolean) {
   entity(read().employees, employeeId, '员工')
-  if (!/^\d{4}-\d{2}$/.test(targetMonth) || dayjs(`${targetMonth}-01`).format('YYYY-MM') !== targetMonth) throw new Error('月份格式无效')
+  validateBusinessMonth(targetMonth)
   const sourceMonth = dayjs(`${targetMonth}-01`).subtract(1, 'month').format('YYYY-MM')
   ensureDraftForDate(`${targetMonth}-01`)
   const source = read().monthlySchedules.filter((row) => row.employeeId === employeeId && monthOf(row.date) === sourceMonth).sort((left, right) => left.date.localeCompare(right.date))
   const target = read().monthlySchedules.filter((row) => row.employeeId === employeeId && monthOf(row.date) === targetMonth)
   if (!source.length) throw new Error('上月暂无可复制排班')
   if (target.length && !overwrite) throw new Error('目标月份已有排班，请确认覆盖')
-  if (target.length) read().monthlySchedules = read().monthlySchedules.filter((row) => !(row.employeeId === employeeId && monthOf(row.date) === targetMonth))
   const days = dayjs(`${targetMonth}-01`).daysInMonth()
-  const copies = source.filter((row) => Number(row.date.slice(-2)) <= days)
-  copies.forEach((row) => read().monthlySchedules.push(monthlyScheduleDay({
+  const copies = source.filter((row) => Number(row.date.slice(-2)) <= days).map((row) => monthlyScheduleDay({
     employeeId, date: `${targetMonth}-${row.date.slice(-2)}`, isWorkday: row.isWorkday,
     segments: row.segments, remark: row.remark
-  })))
+  }))
+  // Validate every source-derived target row before touching the existing target month.
+  if (target.length) read().monthlySchedules = read().monthlySchedules.filter((row) => !(row.employeeId === employeeId && monthOf(row.date) === targetMonth))
+  read().monthlySchedules.push(...copies)
   save()
   return { copied: copies.length, targetMonth }
 }
@@ -455,7 +460,7 @@ function payrollItem(emp: EmployeeAttendanceState['employees'][number], month: s
   const absenceDeduction = money(dailyRate * absenceDays)
   const attendanceBonus = excessLeaveDays > 0 || absenceDays > 0 ? 0 : emp.attendanceBonus
   const issues: string[] = []
-  if (!monthly.length) issues.push('缺少当月排班')
+  if (!monthly.length) issues.push('缺少员工月度排班')
   if (!setting) issues.push('缺少当月月休设置')
   else if (evaluations.filter((row) => !row.invalid).length < scheduledWorkDays) issues.push(`缺少 ${scheduledWorkDays - evaluations.filter((row) => !row.invalid).length} 天考勤记录`)
   const invalid = evaluations.filter((row) => row.invalid).length, lone = evaluations.filter((row) => row.lone).length, unresolved = evaluations.filter((row) => row.unresolved).length

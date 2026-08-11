@@ -234,11 +234,8 @@ export const copyPreviousMonthSchedules = (employeeId: string, targetMonth: stri
 
 export const getAttendance = (query: AttendanceQuery = {}): Promise<AttendanceRecord[]> => { const normalized = normalizeAttendanceQuery(query); return useMocks ? mock.mockGetAttendance(normalized) : attendanceRequest.get('/employee-attendance/attendance', { params: normalized }).then((rows: unknown[]) => rows.map(normalizeAttendanceResponse)) }
 export function saveAttendance(payload: EmployeeAttendanceInput, id?: string): Promise<AttendanceRecord>
-/** @deprecated Compatibility overload for the legacy weekly attendance page. */
-export function saveAttendance(payload: AttendancePayload, id?: string): Promise<AttendanceRecord>
-export function saveAttendance(payload: EmployeeAttendanceInput | AttendancePayload, id?: string): Promise<AttendanceRecord> {
-  const isModern = 'actualSegments' in payload && !('isScheduledWorkday' in payload) && !('scheduledMinutes' in payload) && !('checkInAt' in payload) && !('checkOutAt' in payload)
-  const normalized = isModern ? normalizeAttendanceMutationPayload(payload) : normalizeLegacyAttendanceMutationPayload(payload)
+export function saveAttendance(payload: EmployeeAttendanceInput, id?: string): Promise<AttendanceRecord> {
+  const normalized = normalizeAttendanceMutationPayload(payload)
   return (useMocks ? mock.mockSaveAttendance(normalized, id) : id ? attendanceRequest.put(`/employee-attendance/attendance/${id}`, normalized) : attendanceRequest.post('/employee-attendance/attendance', normalized)).then(normalizeAttendanceResponse)
 }
 export const deleteAttendance = async (id: string) => useMocks ? mock.mockDeleteAttendance(id) : attendanceRequest.delete(`/employee-attendance/attendance/${id}`)

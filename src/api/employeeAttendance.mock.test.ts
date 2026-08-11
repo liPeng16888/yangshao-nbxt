@@ -5,6 +5,7 @@ import { readEmployeePhoto, uploadEmployeePhoto } from '@/api/employeeAttendance
 import {
   mockConfirmPayroll,
   mockCreateEmployee,
+  mockCopyPreviousMonthSchedules,
   mockCreatePayrollAdjustment,
   mockDeleteEmployee,
   mockDeleteLeave,
@@ -37,6 +38,17 @@ import {
 } from '@/mocks/employeeAttendance'
 
 describe('employee attendance mock repository', () => {
+  const seedMonthlyDate = async (employeeId: string, date: string) => {
+    const isWorkday = ![0, 6].includes(dayjs(date).day())
+    await mockBatchSaveMonthlySchedules({
+      employeeId, dates: [date], isWorkday,
+      segments: isWorkday ? [{ startTime: '08:00', endTime: '16:00' }] : [], remark: ''
+    })
+  }
+  const seedMonthlyRange = async (employeeId: string, startDate: string, endDate: string) => {
+    for (let cursor = dayjs(startDate); !cursor.isAfter(dayjs(endDate), 'day'); cursor = cursor.add(1, 'day')) await seedMonthlyDate(employeeId, cursor.format('YYYY-MM-DD'))
+  }
+
   beforeEach(() => {
     const values = new Map<string, string>()
     Object.defineProperty(window, 'localStorage', { configurable: true, value: {
@@ -94,6 +106,77 @@ describe('employee attendance mock repository', () => {
     })
     const rows = await mockGetMonthlySchedules('emp-1', '2026-08')
     expect(rows.filter(row => ['2026-08-03', '2026-08-04'].includes(row.date)).every(row => row.scheduledMinutes === 480 && row.segments.length === 2)).toBe(true)
+  })
+
+  it('returns every selected cross-month batch row with exact update and overwrite counts', async () => {
+    const first = await mockBatchSaveMonthlySchedules({
+      employeeId: 'emp-1', dates: ['2026-09-01', '2026-08-31'], isWorkday: true,
+      segments: [{ startTime: '08:00', endTime: '16:00' }], remark: '跨月排班'
+    })
+    expect(first).toMatchObject({ updated: 2, overwritten: 1 })
+    expect(first.rows.map((row) => row.date)).toEqual(['2026-08-31', '2026-09-01'])
+
+    const second = await mockBatchSaveMonthlySchedules({
+      employeeId: 'emp-1', dates: ['2026-08-31', '2026-09-01'], isWorkday: true,
+      segments: [{ startTime: '09:00', endTime: '17:00' }], remark: '再次覆盖'
+    })
+    expect(second).toMatchObject({ updated: 2, overwritten: 2 })
+    expect(second.rows.map((row) => row.segments[0]?.startTime)).toEqual(['09:00', '09:00'])
+  })
+
+  it('rejects impossible business dates and months instead of silently normalizing them', async () => {
+    await expect(mockBatchSaveMonthlySchedules({
+      employeeId: 'emp-1', dates: ['2026-02-31'], isWorkday: true,
+      segments: [{ startTime: '08:00', endTime: '16:00' }], remark: ''
+    })).rejects.toThrow('日期格式无效')
+    await expect(mockGetMonthlySchedules('emp-1', '2026-13')).rejects.toThrow('月份格式无效')
+  })
+
+  it('only seeds the current business month, so a previous-month copy has no phantom source', async () => {
+    const month = dayjs().format('YYYY-MM')
+    const previousMonth = dayjs(`${month}-01`).subtract(1, 'month').format('YYYY-MM')
+    const nextMonth = dayjs(`${month}-01`).add(1, 'month').format('YYYY-MM')
+    const targetBefore = await mockGetMonthlySchedules('emp-1', month)
+    expect(targetBefore).not.toHaveLength(0)
+    expect(await mockGetMonthlySchedules('emp-1', previousMonth)).toEqual([])
+    expect(await mockGetMonthlySchedules('emp-1', nextMonth)).toEqual([])
+
+    await expect(mockCopyPreviousMonthSchedules('emp-1', month, true)).rejects.toThrow('上月暂无可复制排班')
+    expect(await mockGetMonthlySchedules('emp-1', month)).toEqual(targetBefore)
+  })
+
+  it('does not delete the target month when a persisted source row is invalid', async () => {
+    const month = dayjs().format('YYYY-MM')
+    const previousMonth = dayjs(`${month}-01`).subtract(1, 'month').format('YYYY-MM')
+    const state = JSON.parse(window.localStorage.getItem('ys_employee_attendance_v2:mock-default')!) as Record<string, any>
+    state.monthlySchedules = [
+      ...state.monthlySchedules.filter((row: { employeeId: string }) => row.employeeId !== 'emp-1'),
+      { id: 'source-invalid', employeeId: 'emp-1', date: `${previousMonth}-01`, isWorkday: true, segments: [{ sequence: 0, startTime: '24:00', endTime: '16:00' }], remark: '', scheduledMinutes: 480, breakMinutes: 0 },
+      { id: 'target-preserved', employeeId: 'emp-1', date: `${month}-01`, isWorkday: false, segments: [], remark: '保留目标', scheduledMinutes: 0, breakMinutes: 0 }
+    ]
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'copy-atomic' }))
+    window.localStorage.setItem('ys_employee_attendance_v2:copy-atomic', JSON.stringify(state))
+
+    await expect(mockCopyPreviousMonthSchedules('emp-1', month, true)).rejects.toThrow('计划时间')
+    await expect(mockGetMonthlySchedules('emp-1', month)).resolves.toEqual([expect.objectContaining({ id: 'target-preserved', remark: '保留目标' })])
+  })
+
+  it('upgrades only the active account legacy schedule state without crossing accounts', async () => {
+    const month = dayjs().format('YYYY-MM')
+    const defaultState = JSON.parse(window.localStorage.getItem('ys_employee_attendance_v2:mock-default')!) as Record<string, unknown>
+    delete defaultState.monthlySchedules
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'legacy-a' }))
+    window.localStorage.setItem('ys_employee_attendance_v2:legacy-a', JSON.stringify(defaultState))
+
+    const migrated = await mockGetMonthlySchedules('emp-1', month)
+    expect(migrated).toHaveLength(dayjs(`${month}-01`).daysInMonth())
+    expect(await mockGetMonthlySchedules('emp-1', dayjs(`${month}-01`).subtract(1, 'month').format('YYYY-MM'))).toEqual([])
+    expect(await mockGetMonthlySchedules('emp-1', dayjs(`${month}-01`).add(1, 'month').format('YYYY-MM'))).toEqual([])
+    await mockBatchSaveMonthlySchedules({ employeeId: 'emp-1', dates: [`${month}-01`], isWorkday: false, segments: [], remark: '仅账号 A' })
+
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'legacy-b' }))
+    window.localStorage.setItem('ys_employee_attendance_v2:legacy-b', JSON.stringify(defaultState))
+    expect((await mockGetMonthlySchedules('emp-1', month)).find((row) => row.date === `${month}-01`)?.remark).not.toBe('仅账号 A')
   })
 
   it('treats an empty actual-segment list as normal attendance unless absence is explicit', async () => {
@@ -159,6 +242,7 @@ describe('employee attendance mock repository', () => {
       ? dayjs(`${previousMonth}-01`).day(1).format('YYYY-MM-DD')
       : dayjs(`${previousMonth}-01`).add(1, 'week').day(1).format('YYYY-MM-DD')
     await mockReviewLeave('leave-1', 'APPROVED')
+    await seedMonthlyDate('emp-1', previousMonday)
     await mockSaveLeave({
       employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: previousMonday, endDate: previousMonday,
       unit: 'FULL_DAY', reason: '上月待审请假'
@@ -206,6 +290,7 @@ describe('employee attendance mock repository', () => {
 
     const end = dayjs().endOf('month').add(2, 'day').format('YYYY-MM-DD')
     const start = dayjs().endOf('month').subtract(4, 'day').format('YYYY-MM-DD')
+    await seedMonthlyRange('emp-1', start, end)
     const spanning = await mockSaveLeave({ employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: start, endDate: end, unit: 'FULL_DAY', reason: '跨月请假' })
     expect((await mockGetLeaves({ month: dayjs().add(1, 'month').format('YYYY-MM') })).map(row => row.id)).toContain(spanning.id)
 
@@ -266,6 +351,7 @@ describe('employee attendance mock repository', () => {
     while (start.day() === 0 || start.day() === 6) start = start.subtract(1, 'day')
     let end = dayjs(`${nextMonth}-01`)
     while (end.day() === 0 || end.day() === 6) end = end.add(1, 'day')
+    await seedMonthlyRange('emp-1', start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'))
     const leave = await mockSaveLeave({ employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: start.format('YYYY-MM-DD'), endDate: end.format('YYYY-MM-DD'), unit: 'FULL_DAY', reason: '跨月事假' })
     await mockReviewLeave(leave.id, 'APPROVED')
     await mockSaveMonthlySetting({ employeeId: 'emp-1', month, scheduledWorkDays: 1, restQuotaDays: 0 })
@@ -311,6 +397,7 @@ describe('employee attendance mock repository', () => {
     const currentMonth = dayjs().format('YYYY-MM')
     const previousMonth = dayjs().subtract(1, 'month').format('YYYY-MM')
     const previousWorkday = dayjs(`${previousMonth}-10`).format('YYYY-MM-DD')
+    await seedMonthlyDate('emp-1', previousWorkday)
     const leave = await mockSaveLeave({ employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: previousWorkday, endDate: previousWorkday, unit: 'FULL_DAY', reason: '上月请假' })
     expect(leave.status).toBe('PENDING')
     const todayRecord = (await mockGetAttendance({ employeeId: 'emp-1', month: currentMonth }))[0]
@@ -360,6 +447,7 @@ describe('employee attendance mock repository', () => {
     let nextWorkday = dayjs(`${nextMonth}-01`)
     while (nextWorkday.day() === 0 || nextWorkday.day() === 6) nextWorkday = nextWorkday.add(1, 'day')
     const nextDate = nextWorkday.format('YYYY-MM-DD')
+    await seedMonthlyDate('emp-1', nextDate)
 
     await expect(mockSaveLeaveType({ name: '事假', active: true, countsTowardRestQuota: true })).rejects.toThrow('名称已存在')
     await expect(mockSaveCommissionType({ name: '送样提成', unitName: '份', unitPrice: 10, active: true })).rejects.toThrow('名称已存在')
