@@ -237,6 +237,32 @@ describe('EmployeeAttendancePage', () => {
     expect(wrapper.findAll('button').map((button) => button.text()).join(' ')).not.toMatch(/保存|复制上月|批量覆盖|编辑|删除|审批|确认工资|导出/)
   })
 
+  it('clears an employee outside the newly selected account before loading the aggregate snapshot', async () => {
+    Object.assign(routeState, { path: '/employee-attendance/schedules', meta: { employeeAttendancePage: 'schedules' } })
+    api.getAdminAttendanceEmployees.mockImplementation(async (query: { frontendUserIds: string[] }) => query.frontendUserIds.includes('front-1') ? employees : [])
+    api.getAdminScheduleAttendanceOverview.mockImplementation(async (query: { employeeId?: string }) => ({
+      month: '2026-08', readonly: true, employee: query.employeeId ? { id: 'emp-1', employeeNumber: 'YG001', name: '张三' } : null, days: [],
+      overview: { month: '2026-08', activeEmployees: 0, todayPresent: 0, todayOnLeave: 0, todayAbsent: 0, overtimeHours: 0, pendingLeaves: 0, projectedPayroll: 0, issueCount: 0, issues: [] }
+    }))
+    const wrapper = mountPage()
+    await flushPromises()
+    const [account, employee] = wrapper.findAllComponents(SelectStub)
+    account.vm.$emit('update:modelValue', ['front-1'])
+    employee.vm.$emit('update:modelValue', 'emp-1')
+    await nextTick()
+    await wrapper.get('[data-testid="employee-attendance-search"]').trigger('click')
+    await flushPromises()
+
+    account.vm.$emit('update:modelValue', ['front-2'])
+    await nextTick()
+    await wrapper.get('[data-testid="employee-attendance-search"]').trigger('click')
+    await flushPromises()
+
+    expect(api.getAdminScheduleAttendanceOverview).toHaveBeenLastCalledWith(expect.objectContaining({ frontendUserIds: ['front-2'], employeeId: undefined }))
+    expect(wrapper.text()).toContain('请选择员工后查看每日排班考勤状态')
+    expect(wrapper.text()).toContain('在职员工')
+  })
+
   it('labels and renders a generic attendance audit with account, action and entity details', async () => {
     api.getAdminAttendanceAudit.mockResolvedValueOnce([{
       id: 'audit-1', frontendUserId: 'front-1', action: 'UPDATE', entityType: 'EmployeeAttendanceRecord',

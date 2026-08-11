@@ -310,13 +310,13 @@ async function loadSection() {
   try {
     if (section.value === 'schedules') {
       const requestQuery = query()
-      const [employeeRows, result] = await Promise.all([
-        api.getAdminAttendanceEmployees({ frontendUserIds: requestQuery.frontendUserIds }),
-        api.getAdminScheduleAttendanceOverview(requestQuery)
-      ])
+      const employeeRows = await api.getAdminAttendanceEmployees({ frontendUserIds: requestQuery.frontendUserIds })
+      if (requestId !== calendarLoadSequence || section.value !== 'schedules') return
+      const validEmployeeId = requestQuery.employeeId && employeeRows.some((item) => item.id === requestQuery.employeeId) ? requestQuery.employeeId : undefined
+      const result = await api.getAdminScheduleAttendanceOverview({ ...requestQuery, employeeId: validEmployeeId })
       if (requestId !== calendarLoadSequence || section.value !== 'schedules') return
       employeeOptions.value = employeeRows
-      if (filters.employeeId && !employeeRows.some((item) => item.id === filters.employeeId)) filters.employeeId = undefined
+      if (!validEmployeeId) filters.employeeId = undefined
       calendarView.value = result
       return
     }

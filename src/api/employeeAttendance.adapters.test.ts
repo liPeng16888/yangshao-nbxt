@@ -22,6 +22,7 @@ import {
   normalizeMonthlySettingResponse,
   getLeaves,
   getMonthlySchedules,
+  getScheduleAttendanceOverview,
   saveMonthlySetting,
   saveAttendance,
   normalizePayrollAdjustmentResponse,
@@ -89,6 +90,35 @@ describe('employee attendance real API adapters', () => {
     expect(request.get).toHaveBeenNthCalledWith(1, '/employee-attendance/monthly-schedules', { params: { employeeId: 'emp-1', month: '2026-08' }, headers })
     expect(request.post).toHaveBeenCalledWith('/employee-attendance/attendance', expect.any(Object), { headers })
     expect(request.get).toHaveBeenNthCalledWith(2, '/employee-attendance/leaves', { params: { employeeIds: 'emp-1' }, headers })
+  })
+
+  it('requests the unified schedule attendance endpoint with an optional employee and the current attendance grant', async () => {
+    window.localStorage.setItem(ACCESS_GUARD_SESSION_KEY, JSON.stringify({
+      attendance: {
+        groupId: 'attendance', grantVersion: 1, expiresAt: Date.now() + 60_000,
+        token: 'attendance-grant', features: ['EMPLOYEE_ATTENDANCE']
+      }
+    }))
+    const response = {
+      month: '2026-08', readonly: false, employee: null, days: [],
+      overview: {
+        month: '2026-08', activeEmployees: 0, todayPresent: 0, todayOnLeave: 0,
+        todayAbsent: 0, overtimeHours: 0, pendingLeaves: 0, projectedPayroll: 0,
+        issueCount: 0, issues: []
+      }
+    }
+    vi.mocked(request.get).mockResolvedValue(response)
+
+    await getScheduleAttendanceOverview('emp-1', '2026-08')
+    await getScheduleAttendanceOverview(undefined, '2026-08')
+
+    const headers = { 'X-YS-Access-Grant': 'attendance-grant' }
+    expect(request.get).toHaveBeenNthCalledWith(1, '/employee-attendance/schedule-attendance-overview', {
+      params: { employeeId: 'emp-1', month: '2026-08' }, headers
+    })
+    expect(request.get).toHaveBeenNthCalledWith(2, '/employee-attendance/schedule-attendance-overview', {
+      params: { month: '2026-08' }, headers
+    })
   })
 
   it('sends only the editable monthly rest quota and receives a server-derived workday count', async () => {

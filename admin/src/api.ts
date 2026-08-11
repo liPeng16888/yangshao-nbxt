@@ -266,10 +266,14 @@ const mockEmployeeAttendance = {
     days: [
       {
         id: 'schedule-day-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', isWorkday: true,
-        scheduledMinutes: 510, breakMinutes: 60, remark: '常规班',
-        segments: [{ sequence: 0, startTime: '08:00', endTime: '12:00' }, { sequence: 1, startTime: '13:00', endTime: '17:30' }],
+        scheduledMinutes: 600, breakMinutes: 0, remark: '常规班', segments: [{ sequence: 0, startTime: '08:00', endTime: '18:00' }],
         employee: { employeeNumber: 'YG001', name: '张三' }, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
       },
+      ...['2026-08-04', '2026-08-06', '2026-08-07', '2026-08-09', '2026-08-20'].map((date, index) => ({
+        id: `schedule-parity-${index}`, frontendUserId: 'front-1', employeeId: 'emp-1', date, isWorkday: true,
+        scheduledMinutes: 600, breakMinutes: 0, remark: '', segments: [{ sequence: 0, startTime: '08:00', endTime: '18:00' }],
+        employee: { employeeNumber: 'YG001', name: '张三' }, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+      })),
       {
         id: 'schedule-day-2', frontendUserId: 'front-1', employeeId: 'emp-2', date: '2026-08-09', isWorkday: false,
         scheduledMinutes: 0, breakMinutes: 0, remark: '休息', segments: [],
@@ -284,13 +288,16 @@ const mockEmployeeAttendance = {
   },
   attendance: [
     {
-      id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 510, lateMinutes: 0, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' },
-      actualSegments: [{ sequence: 0, checkInAt: '2026-08-08T08:00:00+08:00', checkOutAt: '2026-08-08T12:00:00+08:00' }, { sequence: 1, checkInAt: '2026-08-08T13:00:00+08:00', checkOutAt: '2026-08-08T17:30:00+08:00' }]
+      id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 600, workedMinutes: 600, lateMinutes: 0, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' },
+      actualSegments: [{ sequence: 0, checkInAt: '2026-08-08T08:00:00+08:00', checkOutAt: '2026-08-08T18:00:00+08:00' }]
     },
+    { id: 'attendance-short', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-06', scheduledMinutes: 600, workedMinutes: 540, lateMinutes: 0, earlyLeaveMinutes: 60, explicitAbsenceMinutes: 0, absenceMinutes: 60, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '张三' }, actualSegments: [{ sequence: 0, checkInAt: '2026-08-06T08:00:00+08:00', checkOutAt: '2026-08-06T17:00:00+08:00' }] },
+    { id: 'attendance-absent', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-09', scheduledMinutes: 600, workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 600, absenceMinutes: 600, overtimeMinutes: 0, remark: '无故未到', employee: { employeeNumber: 'YG001', name: '张三' }, actualSegments: [] },
     { id: 'attendance-2', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 470, lateMinutes: 10, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '王五' } }
   ],
   leaves: [
-    { id: 'leave-1', frontendUserId: 'front-1', employeeId: 'emp-2', leaveTypeId: 'leave-type-1', startDate: '2026-08-08', endDate: '2026-08-08', unit: 'HALF_DAY', countedDays: 0.5, reason: '个人事务', status: 'PENDING', reviewRemark: '', employee: { employeeNumber: 'YG002', name: '李四' }, leaveType: { id: 'leave-type-1', name: '事假' } }
+    { id: 'leave-1', frontendUserId: 'front-1', employeeId: 'emp-2', leaveTypeId: 'leave-type-1', startDate: '2026-08-08', endDate: '2026-08-08', unit: 'HALF_DAY', countedDays: 0.5, reason: '个人事务', status: 'PENDING', reviewRemark: '', employee: { employeeNumber: 'YG002', name: '李四' }, leaveType: { id: 'leave-type-1', name: '事假' } },
+    { id: 'leave-parity', frontendUserId: 'front-1', employeeId: 'emp-1', leaveTypeId: 'leave-type-1', startDate: '2026-08-07', endDate: '2026-08-07', unit: 'HOUR', countedDays: 0.4, reason: '照顾家人', status: 'APPROVED', reviewRemark: '', employee: { employeeNumber: 'YG001', name: '张三' }, leaveType: { id: 'leave-type-1', name: '事假' } }
   ],
   commissions: [
     { id: 'commission-1', frontendUserId: 'front-1', employeeId: 'emp-1', commissionTypeId: 'commission-type-1', date: '2026-08-08', quantity: 8, unitPriceSnapshot: 12, amount: 96, remark: '当日送样', employee: { employeeNumber: 'YG001', name: '张三' }, commissionType: { id: 'commission-type-1', name: '送样提成' } }
@@ -322,7 +329,10 @@ function mockAuthorizedFrontendIds() {
 function mockAttendanceIds(config?: AdminRequestConfig) {
   const permitted = mockAuthorizedFrontendIds()
   const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
-  return requested.length ? requested.filter((id) => permitted.includes(id)) : permitted
+  if (requested.length && mockAdminUser().role === 'SUB_ADMIN' && requested.some((id) => !permitted.includes(id))) {
+    throw new Error('没有访问部分前端账号的权限')
+  }
+  return requested.length ? requested : permitted
 }
 
 function assertExclusiveAttendanceDateFilter(config?: AdminRequestConfig) {
@@ -351,12 +361,28 @@ function mockAdminScheduleAttendanceOverview(config?: AdminRequestConfig): Admin
   const monthRows = mockEmployeeAttendance.attendance.filter((row) => ids.includes(row.frontendUserId) && row.date.startsWith(month))
   const pendingLeaves = mockEmployeeAttendance.leaves.filter((row) => ids.includes(row.frontendUserId) && row.status === 'PENDING' && row.startDate <= `${month}-31` && row.endDate >= `${month}-01`).length
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  const activeIds = new Set(mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE' && row.hireDate <= today && (!row.terminationDate || String(row.terminationDate) >= today)).map((row) => row.id))
+  const todayClassifications = mockEmployeeAttendance.schedules.days
+    .filter((row) => ids.includes(row.frontendUserId) && activeIds.has(row.employeeId) && row.date === today && row.isWorkday && row.scheduledMinutes > 0)
+    .map((schedule) => {
+      const leaveMinutes = mockEmployeeAttendance.leaves.filter((row) => row.employeeId === schedule.employeeId && row.status === 'APPROVED' && row.startDate <= today && row.endDate >= today)
+        .reduce((sum, leave) => sum + (leave.unit === 'FULL_DAY' ? schedule.scheduledMinutes : leave.unit === 'HALF_DAY' ? Math.round(schedule.scheduledMinutes / 2) : Math.round(schedule.scheduledMinutes * Number(leave.countedDays || 0))), 0)
+      if (leaveMinutes > 0) return 'LEAVE'
+      const record = mockEmployeeAttendance.attendance.find((row) => row.employeeId === schedule.employeeId && row.date === today)
+      return record && !(record.actualSegments || []).length && Number(record.absenceMinutes || 0) >= schedule.scheduledMinutes ? 'ABSENT' : 'PRESENT'
+    })
+  const payrollRows = mockEmployeeAttendance.payroll.filter((row) => ids.includes(row.frontendUserId) && row.month === month)
+  const projectedPayroll = payrollRows.length
+    ? payrollRows.reduce((sum, row) => sum + row.items.reduce((itemSum, item) => itemSum + Number(item.payableAmount || 0), 0), 0)
+    : mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE').reduce((sum, row) => sum + Number(row.baseSalary) + Number(row.attendanceBonus), 0)
   const overview = {
     month,
     activeEmployees: mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE').length,
-    todayPresent: 0, todayOnLeave: 0, todayAbsent: 0,
+    todayPresent: todayClassifications.filter((value) => value === 'PRESENT').length,
+    todayOnLeave: todayClassifications.filter((value) => value === 'LEAVE').length,
+    todayAbsent: todayClassifications.filter((value) => value === 'ABSENT').length,
     overtimeHours: Number((monthRows.reduce((sum, row) => sum + Number(row.overtimeMinutes || 0), 0) / 60).toFixed(2)),
-    pendingLeaves, projectedPayroll: 0, issueCount: pendingLeaves, issues: pendingLeaves ? [`${pendingLeaves} 条请假待审批`] : []
+    pendingLeaves, projectedPayroll, issueCount: pendingLeaves, issues: pendingLeaves ? [`${pendingLeaves} 条请假待审批`] : []
   }
   if (!employee) return { month, employee: null, days: [], overview, readonly: true }
   const dayCount = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate()

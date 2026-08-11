@@ -20,6 +20,7 @@ import {
   mockGetLeaves,
   mockGetPayroll,
   mockGetMonthlySchedules,
+  mockGetScheduleAttendanceOverview,
   mockGetWeeklySchedules,
   mockReadEmployeePhoto,
   mockReviewLeave,
@@ -75,6 +76,25 @@ describe('employee attendance mock repository', () => {
     expect((await mockGetEmployees({ keyword: '王五' }))[0]?.employeeNumber).toBe('YG003')
     expect(await mockUploadEmployeePhoto('emp-1', new File(['photo'], 'photo.png', { type: 'image/png' }))).toEqual({ id: 'emp-1', hasPhoto: true })
     expect(Object.values(window.localStorage).join('')).not.toContain('410000199001011234')
+  })
+
+  it('returns the full August calendar parity fixture from the unified Mock read', async () => {
+    const schedule = (date: string) => mockSaveMonthlyScheduleDay({ employeeId: 'emp-1', date, isWorkday: true, segments: [{ startTime: '08:00', endTime: '18:00' }], remark: '' })
+    for (const date of ['2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-08', '2026-08-20']) await schedule(date)
+    await mockSaveAttendance({ employeeId: 'emp-1', date: '2026-08-05', actualSegments: [{ checkInAt: '2026-08-05T08:00:00+08:00', checkOutAt: '2026-08-05T18:00:00+08:00' }], explicitAbsenceMinutes: 0, overtimeMinutes: 30 })
+    await mockSaveAttendance({ employeeId: 'emp-1', date: '2026-08-06', actualSegments: [{ checkInAt: '2026-08-06T08:00:00+08:00', checkOutAt: '2026-08-06T17:00:00+08:00' }], explicitAbsenceMinutes: 0, overtimeMinutes: 0 })
+    const leave = await mockSaveLeave({ employeeId: 'emp-1', leaveTypeId: 'leave-type-rest', startDate: '2026-08-07', endDate: '2026-08-07', unit: 'HOUR', hours: 4, reason: '照顾家人' })
+    await mockReviewLeave(leave.id, 'APPROVED')
+    await mockSaveAttendance({ employeeId: 'emp-1', date: '2026-08-08', actualSegments: [], explicitAbsenceMinutes: 600, overtimeMinutes: 0, remark: '无故未到' })
+
+    const result = await mockGetScheduleAttendanceOverview('emp-1', '2026-08')
+    const byDate = (date: string) => result.days.find((day) => day.date === date)
+    expect(byDate('2026-08-04')).toMatchObject({ status: 'NORMAL', backgroundTone: 'normal', displayMinutes: 600 })
+    expect(byDate('2026-08-05')).toMatchObject({ status: 'OVERTIME', durationTone: 'overtime', displayMinutes: 630 })
+    expect(byDate('2026-08-06')).toMatchObject({ status: 'SHORT', durationTone: 'short', displayMinutes: 540, shortageMinutes: 60 })
+    expect(byDate('2026-08-07')).toMatchObject({ status: 'LEAVE', backgroundTone: 'leave', workedMinutes: 360, approvedLeaveMinutes: 240, displayMinutes: 600, leaveReason: '照顾家人' })
+    expect(byDate('2026-08-08')).toMatchObject({ status: 'ABSENT', backgroundTone: 'absent', absenceReason: '无故未到' })
+    expect(byDate('2026-08-20')).toMatchObject({ status: 'FUTURE', backgroundTone: 'future', schedule: { segments: [{ startTime: '08:00', endTime: '18:00' }] } })
   })
 
   it('round-trips private employee photos in Mock without exposing a public URL', async () => {

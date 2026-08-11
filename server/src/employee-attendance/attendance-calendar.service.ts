@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { EmployeeLeaveStatus, EmployeeLeaveUnit } from '@prisma/client'
-import { deriveAttendanceMetrics } from './attendance-intervals'
+import { breakMinutes, deriveAttendanceMetrics } from './attendance-intervals'
 import { deriveAttendanceCalendarDay } from './attendance-calendar'
 import { PayrollService } from './payroll.service'
 import { PrismaService } from '../prisma/prisma.service'
@@ -95,7 +95,7 @@ export class AttendanceCalendarService {
         isFuture: source.isFuture,
         schedule: schedule ? {
           id: schedule.id, employeeId: schedule.employeeId, date: schedule.date, isWorkday: schedule.isWorkday,
-          scheduledMinutes: schedule.scheduledMinutes, breakMinutes: schedule.breakMinutes,
+          scheduledMinutes: schedule.scheduledMinutes, breakMinutes: schedule.isWorkday ? breakMinutes(plan) : 0,
           remark: schedule.remark || '', segments: plan
         } : null,
         actualSegments
