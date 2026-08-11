@@ -29,4 +29,10 @@ describe('attendance intervals', () => {
     const actual = [{ checkInAt: '2026-08-11T08:10:00+08:00', checkOutAt: '2026-08-11T11:50:00+08:00' }]
     expect(deriveAttendanceMetrics(plan, actual, 0, 0)).toMatchObject({ lateMinutes: 10, earlyLeaveMinutes: 10, absenceMinutes: 260 })
   })
+
+  it('uses Asia/Shanghai clock minutes for Date punches', () => {
+    const plan = normalizeClockIntervals([{ startTime: '08:00', endTime: '12:00' }])
+    const actual = [{ checkInAt: new Date('2026-08-11T08:10:00+08:00'), checkOutAt: new Date('2026-08-11T11:50:00+08:00') }]
+    expect(deriveAttendanceMetrics(plan, actual, 0, 0)).toMatchObject({ workedMinutes: 220, lateMinutes: 10, earlyLeaveMinutes: 10, absenceMinutes: 20 })
+  })
 })

@@ -15,6 +15,13 @@ export interface AttendanceMetrics {
   absenceMinutes: number
 }
 
+const SHANGHAI_CLOCK_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Shanghai',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23'
+})
+
 export function normalizeClockIntervals(input: ClockInterval[]): ClockInterval[] {
   if (!Array.isArray(input) || input.length === 0) throw new Error('工作日必须至少包含一个排班时段')
 
@@ -96,7 +103,10 @@ function formatClock(value: number): string {
 function instantMinutes(value: string | Date): number {
   const instant = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(instant.getTime())) throw new Error('实际打卡时间无效')
-  return instant.getHours() * 60 + instant.getMinutes()
+  const parts = SHANGHAI_CLOCK_FORMATTER.formatToParts(instant)
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value)
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value)
+  return hour * 60 + minute
 }
 
 function minutes(value: number): number {
