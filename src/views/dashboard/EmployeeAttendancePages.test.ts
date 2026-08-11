@@ -389,6 +389,76 @@ describe('employee attendance navigation', () => {
     wrapper.unmount()
   })
 
+  it('shows default normal attendance and lets an administrator add actual intervals', async () => {
+    const existing = (await mockGetAttendance({ employeeId: 'emp-1' }))[0]!
+    const save = vi.spyOn(attendanceApi, 'saveAttendance')
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('默认正常出勤')
+    await wrapper.get('[data-testid="edit-attendance-emp-1"]').trigger('click')
+    await wrapper.get('[data-testid="add-actual-interval"]').trigger('click')
+    expect(wrapper.findAll('[data-testid="actual-interval"]')).toHaveLength(2)
+    expect(wrapper.text()).toContain('迟到和早退由实际出勤时间计算')
+    expect(wrapper.text()).not.toContain('按排班批量生成')
+
+    const controls = wrapper.findAll('[data-testid="actual-interval"]').flatMap((row) => row.findAllComponents({ name: 'ElDatePicker' }))
+    ;(controls[1]! as any).vm.$emit('update:modelValue', `${existing.date}T12:00`)
+    ;(controls[2]! as any).vm.$emit('update:modelValue', `${existing.date}T13:00`)
+    ;(controls[3]! as any).vm.$emit('update:modelValue', `${existing.date}T16:00`)
+    await wrapper.findAll('button').find((node) => node.text() === '保存')!.trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      actualSegments: [
+        expect.objectContaining({ checkInAt: `${existing.date}T08:02`, checkOutAt: `${existing.date}T12:00` }),
+        expect.objectContaining({ checkInAt: `${existing.date}T13:00`, checkOutAt: `${existing.date}T16:00` })
+      ]
+    }), existing.id)
+    save.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('filters leave records by multiple employees and treats empty selection as all', async () => {
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+
+    const select = wrapper.getComponent<any>('[data-testid="leave-employee-filter"]')
+    select.vm.$emit('update:modelValue', ['emp-1', 'emp-2'])
+    await flushPromises()
+    expect(useEmployeeAttendanceStore(pinia).leaveEmployeeIds).toEqual(['emp-1', 'emp-2'])
+
+    select.vm.$emit('update:modelValue', [])
+    await flushPromises()
+    expect(useEmployeeAttendanceStore(pinia).leaveEmployeeIds).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('saves an explicit absence and manual overtime without actual intervals', async () => {
+    const existing = (await mockGetAttendance({ employeeId: 'emp-1' }))[0]!
+    const save = vi.spyOn(attendanceApi, 'saveAttendance')
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="edit-attendance-emp-1"]').trigger('click')
+    await wrapper.get('[data-testid="actual-interval"] button').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('默认正常出勤')
+
+    const absence = wrapper.getComponent<any>('[data-testid="attendance-explicit-absence"]')
+    const overtime = wrapper.getComponent<any>('[data-testid="attendance-overtime"]')
+    absence.vm.$emit('update:modelValue', 120)
+    overtime.vm.$emit('update:modelValue', 45)
+    await wrapper.findAll('button').find((node) => node.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      employeeId: existing.employeeId, date: existing.date, actualSegments: [], explicitAbsenceMinutes: 120, overtimeMinutes: 45
+    }), existing.id)
+    save.mockRestore()
+    wrapper.unmount()
+  })
+
   it('restores a valid month when navigating from date filtering to monthly pages', async () => {
     const pinia = createPinia()
     const store = useEmployeeAttendanceStore(pinia)

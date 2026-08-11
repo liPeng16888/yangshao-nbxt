@@ -39,6 +39,8 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   const commissions = ref<CommissionRecord[]>([])
   const bonuses = ref<BonusRecord[]>([])
   const payroll = ref<PayrollRun | null>(null)
+  let attendanceLoadVersion = 0
+  let leaveLoadVersion = 0
   const activeEmployees = computed(() => employees.value.filter((row) => row.status === 'ACTIVE'))
 
   async function run<T>(action: () => Promise<T>, save = false) {
@@ -80,12 +82,41 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
       endDate: usesDateRange ? endDate.value || undefined : undefined
     }
   }
-  const loadAttendance = () => run(async () => { attendance.value = await api.getAttendance(dateQuery()); return attendance.value })
-  const loadLeaves = () => run(async () => {
-    const query = { ...dateQuery(), employeeId: undefined, employeeIds: leaveEmployeeIds.value, status: leaveStatus.value || undefined }
-    ;[leaveTypes.value, leaves.value] = await Promise.all([api.getLeaveTypes(), api.getLeaves(query)])
-    return leaves.value
-  })
+  const loadAttendance = async () => {
+    const version = ++attendanceLoadVersion
+    const query = dateQuery()
+    error.value = ''
+    try {
+      const rows = await runQuiet(() => api.getAttendance(query))
+      if (version === attendanceLoadVersion) attendance.value = rows
+      return rows
+    } catch (reason) {
+      if (version === attendanceLoadVersion) {
+        error.value = reason instanceof Error ? reason.message : '操作失败'
+        throw reason
+      }
+      return attendance.value
+    }
+  }
+  const loadLeaves = async () => {
+    const version = ++leaveLoadVersion
+    const query = { ...dateQuery(), employeeId: undefined, employeeIds: [...leaveEmployeeIds.value], status: leaveStatus.value || undefined }
+    error.value = ''
+    try {
+      const [types, rows] = await runQuiet(() => Promise.all([api.getLeaveTypes(), api.getLeaves(query)]))
+      if (version === leaveLoadVersion) {
+        leaveTypes.value = types
+        leaves.value = rows
+      }
+      return rows
+    } catch (reason) {
+      if (version === leaveLoadVersion) {
+        error.value = reason instanceof Error ? reason.message : '操作失败'
+        throw reason
+      }
+      return leaves.value
+    }
+  }
   const loadCompensation = () => run(async () => { [commissionTypes.value, commissions.value, bonuses.value] = await Promise.all([api.getCommissionTypes(), api.getCommissions(dateQuery()), api.getBonuses(dateQuery())]); return commissions.value })
   const loadPayroll = () => run(async () => {
     const [run, summary] = await Promise.all([api.getPayroll(month.value), api.getOverview(month.value)])

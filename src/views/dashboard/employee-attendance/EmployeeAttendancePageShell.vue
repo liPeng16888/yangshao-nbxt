@@ -4,7 +4,10 @@
       <div><h2>{{ title }}</h2><p>{{ description }}</p></div>
       <div class="attendance-filters">
         <el-date-picker v-if="showMonth" :model-value="displayedMonth" type="month" value-format="YYYY-MM" placeholder="选择月份" :clearable="false" @update:model-value="selectMonth" />
-        <el-select v-if="showEmployee" v-model="store.employeeId" clearable filterable placeholder="全部员工" @change="refreshForEmployeeChange">
+        <el-select v-if="showEmployee && employeeMode === 'single'" v-model="store.employeeId" clearable filterable placeholder="全部员工" @change="refreshForEmployeeChange">
+          <el-option v-for="row in store.employees" :key="row.id" :label="`${row.employeeNumber} ${row.name}`" :value="row.id" />
+        </el-select>
+        <el-select v-else-if="showEmployee" v-model="store.leaveEmployeeIds" multiple collapse-tags collapse-tags-tooltip filterable clearable placeholder="全部员工" data-testid="leave-employee-filter" @change="refreshForEmployeeChange">
           <el-option v-for="row in store.employees" :key="row.id" :label="`${row.employeeNumber} ${row.name}`" :value="row.id" />
         </el-select>
         <el-button :loading="store.loading" @click="emit('refresh')">刷新</el-button>
@@ -21,7 +24,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
-const props = withDefaults(defineProps<{ title: string; description: string; showMonth?: boolean; showEmployee?: boolean; employeeChangeRefresh?: boolean; monthChangeRefresh?: boolean }>(), { showMonth: true, showEmployee: true, employeeChangeRefresh: true, monthChangeRefresh: true })
+const props = withDefaults(defineProps<{ title: string; description: string; showMonth?: boolean; showEmployee?: boolean; employeeMode?: 'single' | 'leave-multiple'; employeeChangeRefresh?: boolean; monthChangeRefresh?: boolean }>(), { showMonth: true, showEmployee: true, employeeMode: 'single', employeeChangeRefresh: true, monthChangeRefresh: true })
 const emit = defineEmits<{ refresh: [] }>()
 const store = useEmployeeAttendanceStore()
 const displayedMonth = computed(() => store.startDate || store.endDate ? '' : store.month)

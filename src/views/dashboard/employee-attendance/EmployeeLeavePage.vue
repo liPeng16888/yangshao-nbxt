@@ -1,5 +1,5 @@
 <template>
-  <PageShell title="请假管理" description="自定义请假类型及是否占用月休额度，录入并审批整天、半天或小时请假。" @refresh="load">
+  <PageShell title="请假管理" description="自定义请假类型及是否占用月休额度，录入并审批整天、半天或小时请假。" employee-mode="leave-multiple" @refresh="load">
     <el-tabs v-model="tab">
       <el-tab-pane label="请假记录" name="records">
         <div class="toolbar"><el-select v-model="store.leaveStatus" clearable placeholder="全部状态" style="width:130px" @change="load"><el-option label="待审批" value="PENDING"/><el-option label="已批准" value="APPROVED"/><el-option label="已驳回" value="REJECTED"/></el-select><el-date-picker :model-value="store.startDate" value-format="YYYY-MM-DD" placeholder="开始日期" clearable @update:model-value="changeStartDate"/><span>至</span><el-date-picker :model-value="store.endDate" value-format="YYYY-MM-DD" placeholder="结束日期" clearable @update:model-value="changeEndDate"/><el-button type="primary" @click="openLeave()">新增请假</el-button></div>
