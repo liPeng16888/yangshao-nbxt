@@ -12,7 +12,7 @@ export class AuthController {
 
   @Post('auth/login')
   login(@Body() dto: LoginDto) {
-    return this.auth.login(dto, [UserRole.FRONTEND_USER])
+    return this.auth.login(dto, [UserRole.FRONTEND_USER, UserRole.FRONTEND_SUB_USER])
   }
 
   @Post('auth/register')

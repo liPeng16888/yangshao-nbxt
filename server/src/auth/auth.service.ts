@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service'
 import { PasswordService } from './password.service'
 import { AccessGuardGroupDto, AccessGuardSettingsDto, LoginDto, RegisterDto, UpdateAdminProfileDto, UpdatePasswordDto } from './dto'
 import type { CurrentUser } from './current-user'
+import { resolveCurrentUserIdentity } from './current-user'
 
 interface AccessGrantClaims {
   sub?: string
@@ -34,14 +35,11 @@ export class AuthService {
     }
     const valid = await this.passwords.verify(dto.password, user.passwordHash)
     if (!valid) throw new UnauthorizedException('账号或密码错误')
+    await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
+    const identity = await resolveCurrentUserIdentity(this.prisma, user.id, user.permissionVersion)
     return {
-      token: this.sign(user.id),
-      user: {
-        id: user.id,
-        account: user.account,
-        username: user.username,
-        role: user.role
-      }
+      token: this.sign(user.id, user.permissionVersion),
+      user: identity
     }
   }
 
@@ -75,13 +73,8 @@ export class AuthService {
       return created
     })
     return {
-      token: this.sign(user.id),
-      user: {
-        id: user.id,
-        account: user.account,
-        username: user.username,
-        role: user.role
-      }
+      token: this.sign(user.id, user.permissionVersion),
+      user: await resolveCurrentUserIdentity(this.prisma, user.id, user.permissionVersion)
     }
   }
 
@@ -118,7 +111,9 @@ export class AuthService {
   }
 
   async updateFrontendPassword(currentUser: CurrentUser, dto: UpdatePasswordDto) {
-    if (currentUser.role !== UserRole.FRONTEND_USER) throw new ForbiddenException('无权修改前台账号')
+    if (currentUser.role !== UserRole.FRONTEND_USER && currentUser.role !== UserRole.FRONTEND_SUB_USER) {
+      throw new ForbiddenException('无权修改前台账号')
+    }
     const user = await this.prisma.user.findUnique({ where: { id: currentUser.id } })
     if (!user || user.deletedAt) throw new UnauthorizedException('账号不存在或已失效')
     await this.prisma.user.update({
@@ -371,7 +366,7 @@ export class AuthService {
     return Math.min(1440, Math.max(1, Math.round(numeric)))
   }
 
-  sign(userId: string) {
-    return jwt.sign({ sub: userId }, this.config.get<string>('JWT_SECRET') || 'dev-secret', { expiresIn: '7d' })
+  sign(userId: string, permissionVersion = 1) {
+    return jwt.sign({ sub: userId, permissionVersion }, this.config.get<string>('JWT_SECRET') || 'dev-secret', { expiresIn: '7d' })
   }
 }

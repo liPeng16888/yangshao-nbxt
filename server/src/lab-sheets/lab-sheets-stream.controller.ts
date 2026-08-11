@@ -14,6 +14,6 @@ export class LabSheetsStreamController {
   @Sse('stream')
   stream(@Query('date') date: string, @Query('token') token: string) {
     const targetDate = date || businessDateInBeijing()
-    return from(this.streamAuth.verifyFrontendToken(token)).pipe(mergeMap((user) => this.realtime.stream(user.id, targetDate)))
+    return from(this.streamAuth.verifyFrontendToken(token)).pipe(mergeMap((user) => this.realtime.stream(user.dataOwnerId, targetDate)))
   }
 }

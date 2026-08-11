@@ -7,7 +7,9 @@ import { EmployeeAttendanceController } from './employee-attendance.controller'
 import { EmployeeAttendanceService } from './employee-attendance.service'
 
 const frontendUser: CurrentUser = {
-  id: 'front-1', account: 'front-1', username: '前台一', role: UserRole.FRONTEND_USER
+  id: 'front-1', account: 'front-1', username: '前台一', role: UserRole.FRONTEND_USER,
+  dataOwnerId: 'front-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: true, isFrontendSubAccount: false
 }
 
 function createController(options: { protected?: boolean; grantValid?: boolean } = {}) {

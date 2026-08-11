@@ -5,8 +5,16 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CurrentUser } from '../auth/current-user'
 import { AdminEmployeeAttendanceController } from './admin-employee-attendance.controller'
 
-const root: CurrentUser = { id: 'admin-1', account: 'root', username: '主账号', role: UserRole.ROOT_ADMIN }
-const sub: CurrentUser = { id: 'admin-2', account: 'sub', username: '子账号', role: UserRole.SUB_ADMIN }
+const root: CurrentUser = {
+  id: 'admin-1', account: 'root', username: '主账号', role: UserRole.ROOT_ADMIN,
+  dataOwnerId: 'admin-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: false, isFrontendSubAccount: false
+}
+const sub: CurrentUser = {
+  id: 'admin-2', account: 'sub', username: '子账号', role: UserRole.SUB_ADMIN,
+  dataOwnerId: 'admin-2', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: false, isFrontendSubAccount: false
+}
 
 function fixture() {
   const payroll: any = Object.fromEntries([

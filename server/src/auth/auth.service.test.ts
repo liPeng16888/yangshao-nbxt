@@ -1,13 +1,16 @@
-import { ForbiddenException } from '@nestjs/common'
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common'
 import { AccessGuardFeature, UserRole } from '@prisma/client'
 import jwt from 'jsonwebtoken'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthService } from './auth.service'
+import { resolveCurrentUserIdentity } from './current-user'
 import type { CurrentUser } from './current-user'
 
 const secret = 'access-guard-test-secret'
 const frontendUser: CurrentUser = {
-  id: 'front-1', account: 'front-1', username: '前台一', role: UserRole.FRONTEND_USER
+  id: 'front-1', account: 'front-1', username: '前台一', role: UserRole.FRONTEND_USER,
+  dataOwnerId: 'front-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: true, isFrontendSubAccount: false
 }
 
 function signGrant(overrides: Record<string, unknown> = {}) {
@@ -105,5 +108,96 @@ describe('AuthService access-grant revocation', () => {
     })
 
     await expect(service.verifyAccessGuardGroup(frontendUser, 'group-1', 'wrong')).rejects.toBeInstanceOf(ForbiddenException)
+  })
+})
+
+describe('frontend account identity resolution', () => {
+  it('uses a frontend main account as its own data owner', async () => {
+    const prisma = {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'front-1', account: 'front-1', username: '主账号', role: UserRole.FRONTEND_USER,
+          permissionVersion: 4, requiresAccessGuardPassword: true, disabled: false, deletedAt: null,
+          parentFrontendUserId: null, parentFrontendUser: null, frontendSubAccountPermissions: []
+        })
+      }
+    }
+
+    await expect(resolveCurrentUserIdentity(prisma as never, 'front-1', 4)).resolves.toMatchObject({
+      id: 'front-1', dataOwnerId: 'front-1', permissionVersion: 4,
+      permissions: [], isFrontendMainAccount: true, isFrontendSubAccount: false
+    })
+  })
+
+  it('uses the active parent as a subaccount data owner and exposes only assigned permissions', async () => {
+    const prisma = {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'sub-1', account: 'sub-1', username: '子账号', role: UserRole.FRONTEND_SUB_USER,
+          permissionVersion: 7, requiresAccessGuardPassword: false, disabled: false, deletedAt: null,
+          parentFrontendUserId: 'front-1',
+          parentFrontendUser: { id: 'front-1', role: UserRole.FRONTEND_USER, disabled: false, deletedAt: null },
+          frontendSubAccountPermissions: [{ permission: 'DATA_MAIN' }]
+        })
+      }
+    }
+
+    await expect(resolveCurrentUserIdentity(prisma as never, 'sub-1', 7)).resolves.toMatchObject({
+      id: 'sub-1', dataOwnerId: 'front-1', role: UserRole.FRONTEND_SUB_USER,
+      permissionVersion: 7, permissions: ['DATA_MAIN'], requiresAccessGuardPassword: false,
+      isFrontendMainAccount: false, isFrontendSubAccount: true
+    })
+  })
+
+  it.each([
+    ['disabled parent', { disabled: true, deletedAt: null }, 7],
+    ['deleted parent', { disabled: false, deletedAt: new Date() }, 7],
+    ['stale token', { disabled: false, deletedAt: null }, 6]
+  ])('rejects a subaccount with %s', async (_caseName, parentState, tokenVersion) => {
+    const prisma = {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'sub-1', account: 'sub-1', username: '子账号', role: UserRole.FRONTEND_SUB_USER,
+          permissionVersion: 7, requiresAccessGuardPassword: true, disabled: false, deletedAt: null,
+          parentFrontendUserId: 'front-1',
+          parentFrontendUser: { id: 'front-1', role: UserRole.FRONTEND_USER, ...parentState },
+          frontendSubAccountPermissions: []
+        })
+      }
+    }
+
+    await expect(resolveCurrentUserIdentity(prisma as never, 'sub-1', tokenVersion)).rejects.toBeInstanceOf(UnauthorizedException)
+  })
+
+  it('logs in a subaccount, records its login and signs the live permission version', async () => {
+    const user = {
+      id: 'sub-1', account: 'sub-1', username: '子账号', role: UserRole.FRONTEND_SUB_USER,
+      passwordHash: 'hash', permissionVersion: 9, requiresAccessGuardPassword: false,
+      disabled: false, disabledReason: null, deletedAt: null, parentFrontendUserId: 'front-1',
+      parentFrontendUser: { id: 'front-1', role: UserRole.FRONTEND_USER, disabled: false, deletedAt: null },
+      frontendSubAccountPermissions: [{ permission: 'DATA_MAIN' }]
+    }
+    const prisma = {
+      user: { findUnique: vi.fn().mockResolvedValue(user), update: vi.fn().mockResolvedValue(user) }
+    }
+    const service = new AuthService(
+      prisma as never,
+      { verify: vi.fn().mockResolvedValue(true) } as never,
+      { get: vi.fn(() => secret) } as never
+    )
+
+    const result = await service.login(
+      { account: 'sub-1', password: 'password' },
+      [UserRole.FRONTEND_USER, UserRole.FRONTEND_SUB_USER]
+    )
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'sub-1' },
+      data: { lastLoginAt: expect.any(Date) }
+    })
+    expect(jwt.verify(result.token, secret)).toMatchObject({ sub: 'sub-1', permissionVersion: 9 })
+    expect(result.user).toMatchObject({
+      id: 'sub-1', dataOwnerId: 'front-1', permissions: ['DATA_MAIN'], requiresAccessGuardPassword: false
+    })
   })
 })

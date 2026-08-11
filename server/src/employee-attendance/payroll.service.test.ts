@@ -331,7 +331,11 @@ describe('PayrollService admin reveal', () => {
     prisma.employee.findFirst.mockResolvedValue({ ...employee, idCardCipher: 'cipher-id', bankCardCipher: 'cipher-bank' })
 
     const result: any = await service.adminRevealEmployee(
-      { id: 'admin-1', account: 'root', username: '主账号', role: UserRole.ROOT_ADMIN },
+      {
+        id: 'admin-1', account: 'root', username: '主账号', role: UserRole.ROOT_ADMIN,
+        dataOwnerId: 'admin-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+        isFrontendMainAccount: false, isFrontendSubAccount: false
+      },
       ['front-1'], employee.id, 'current-password'
     )
 
@@ -347,7 +351,11 @@ describe('PayrollService admin reveal', () => {
     passwords.verify.mockResolvedValue(false)
 
     await expect(service.adminRevealEmployee(
-      { id: 'admin-1', account: 'root', username: '主账号', role: UserRole.ROOT_ADMIN },
+      {
+        id: 'admin-1', account: 'root', username: '主账号', role: UserRole.ROOT_ADMIN,
+        dataOwnerId: 'admin-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+        isFrontendMainAccount: false, isFrontendSubAccount: false
+      },
       ['front-1'], employee.id, 'wrong'
     )).rejects.toBeInstanceOf(UnauthorizedException)
     expect(prisma.employee.findFirst).not.toHaveBeenCalled()
