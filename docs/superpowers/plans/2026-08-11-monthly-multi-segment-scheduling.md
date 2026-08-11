@@ -880,33 +880,33 @@ Extend existing page/controller suites to assert:
 - Customer records route displays default normal attendance and actual intervals.
 - Customer leave route supports multiple selected employees.
 - Admin schedules route is read-only.
-- Every customer route sends `x-ys-access-grant` and every server write checks it.
+- The representative monthly-schedule read, attendance write and leave read adapters send `x-ys-access-grant` through the shared attendance request wrapper; the server controller suite checks the grant and authenticated ownership on every public endpoint.
 
 - [x] **Step 2: Run focused cross-layer regression suites**
 
 ```bash
 ./node_modules/.bin/vitest run src/api/employeeAttendance.mock.test.ts src/stores/employeeAttendance.test.ts src/views/dashboard/EmployeeAttendancePages.test.ts admin/src/api.employeeAttendance.test.ts admin/src/views/EmployeeAttendancePage.test.ts --exclude '.worktrees/**' --exclude '.pnpm-store/**' --exclude '.superpowers/**'
-cd server && ../node_modules/.bin/vitest run src/employee-attendance
+cd server && ./node_modules/.bin/vitest run src/employee-attendance
 ```
 
 Expected: all focused customer, admin and server tests PASS.
 
 - [x] **Step 3: Verify the migration against a fresh schema diff**
 
-Run Prisma format, validate and generate with a non-production `DATABASE_URL`. Create a fresh base-to-feature diff and compare it byte-for-byte with `server/prisma/migrations/20260811000000_add_monthly_schedule_segments/migration.sql`, excluding the intentional data backfill block from the structural comparison. Confirm all new tenant ownership indexes and composite foreign keys are present and no employee/history table is dropped.
+Run Prisma format, validate and generate with a non-production `DATABASE_URL`. Create a fresh base-to-feature diff, then compare its structural SQL byte-for-byte with `server/prisma/migrations/20260811000000_add_monthly_schedule_segments/migration.sql` up to (but not including) `-- Backfill the deployment month`; use `cmp -s` and require exit code 0. Confirm all new tenant ownership indexes and composite foreign keys are present and no employee/history table is dropped.
 
 - [x] **Step 4: Run full repository verification**
 
 ```bash
 ./node_modules/.bin/vitest run --exclude '.worktrees/**' --exclude '.pnpm-store/**' --exclude '.superpowers/**'
-cd server && ../node_modules/.bin/vitest run
+cd server && ./node_modules/.bin/vitest run
 cd ..
-./node_modules/.bin/vue-tsc --noEmit -p tsconfig.app.json
+./node_modules/.bin/vue-tsc --noEmit -p tsconfig.json
 ./node_modules/.bin/vue-tsc --noEmit -p admin/tsconfig.json
 ./node_modules/.bin/vite build
 cd admin && ../node_modules/.bin/vite build
-cd ../server && ../node_modules/.bin/nest build
-DATABASE_URL='postgresql://user:pass@localhost:5432/yangshao?schema=public' ../node_modules/.bin/prisma validate
+cd ../server && ./node_modules/.bin/nest build
+DATABASE_URL='postgresql://user:pass@localhost:5432/yangshao?schema=public' ./node_modules/.bin/prisma validate
 cd .. && git diff --check
 ```
 

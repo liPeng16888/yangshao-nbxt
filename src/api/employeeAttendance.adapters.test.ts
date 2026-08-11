@@ -67,7 +67,7 @@ describe('employee attendance real API adapters', () => {
     })
   })
 
-  it('forwards the current attendance grant on monthly schedule, attendance and leave routes', async () => {
+  it('forwards the current attendance grant on representative schedule, attendance and leave routes through the shared adapter', async () => {
     window.localStorage.setItem(ACCESS_GUARD_SESSION_KEY, JSON.stringify({
       attendance: {
         groupId: 'attendance', grantVersion: 1, expiresAt: Date.now() + 60_000,
