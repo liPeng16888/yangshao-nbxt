@@ -4,12 +4,12 @@ export interface ClockInterval { startTime: string; endTime: string }
 export interface ActualInterval { checkInAt: string | Date; checkOutAt: string | Date }
 export interface AttendanceMetrics { workedMinutes: number; lateMinutes: number; earlyLeaveMinutes: number; absenceMinutes: number }
 
-const clockPattern = /^([01]\d|2[0-3]):([0-5]\d)$/
+const clockPattern = /^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/
 
 export function clockMinutes(value: string): number {
   const match = clockPattern.exec(value)
   if (!match) throw new Error('计划时间必须为 HH:mm 格式')
-  return Number(match[1]) * 60 + Number(match[2])
+  return value === '24:00' ? 1440 : Number(match[1]) * 60 + Number(match[2])
 }
 
 export function normalizeClockIntervals(input: ReadonlyArray<Pick<ScheduleSegment, 'startTime' | 'endTime'>>): ClockInterval[] {
@@ -41,7 +41,12 @@ const shanghaiClock = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shangha
 export function deriveAttendanceMetrics(planned: ReadonlyArray<ClockInterval>, actual: ReadonlyArray<ActualInterval>, approvedLeaveMinutes: number, explicitAbsenceMinutes: number): AttendanceMetrics {
   const normalizedPlan = normalizeClockIntervals(planned)
   const scheduled = scheduledMinutes(normalizedPlan)
-  if (!actual.length) return { workedMinutes: scheduled, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: positiveMinutes(explicitAbsenceMinutes) }
+  if (!actual.length) return {
+    workedMinutes: scheduled,
+    lateMinutes: 0,
+    earlyLeaveMinutes: 0,
+    absenceMinutes: Math.max(0, positiveMinutes(explicitAbsenceMinutes) - positiveMinutes(approvedLeaveMinutes))
+  }
   let workedMinutes = 0
   let lateMinutes = 0
   let earlyLeaveMinutes = 0

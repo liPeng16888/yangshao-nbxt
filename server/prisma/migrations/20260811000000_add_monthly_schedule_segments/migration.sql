@@ -1,3 +1,6 @@
+-- AlterTable
+ALTER TABLE "EmployeeAttendanceRecord" ADD COLUMN     "explicitAbsenceMinutes" INTEGER NOT NULL DEFAULT 0;
+
 -- CreateTable
 CREATE TABLE "EmployeeMonthlyScheduleDay" (
     "id" TEXT NOT NULL,
@@ -146,6 +149,13 @@ WHERE "isWorkday"
   AND "plannedEndTime" ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
   AND split_part("plannedEndTime", ':', 1)::integer * 60 + split_part("plannedEndTime", ':', 2)::integer
     > split_part("plannedStartTime", ':', 1)::integer * 60 + split_part("plannedStartTime", ':', 2)::integer;
+
+-- A legacy record with neither punch has no actual-segment history, so its stored
+-- absence is the only provable manual absence value. Paired and lone-punch rows
+-- stay at the conservative zero default to avoid treating derived absence as raw.
+UPDATE "EmployeeAttendanceRecord"
+SET "explicitAbsenceMinutes" = "absenceMinutes"
+WHERE "checkInAt" IS NULL AND "checkOutAt" IS NULL;
 
 -- Preserve legacy punch pairs as a sequence-zero actual segment without changing the parent record.
 INSERT INTO "EmployeeAttendanceSegment" ("id", "frontendUserId", "attendanceRecordId", "sequence", "checkInAt", "checkOutAt")

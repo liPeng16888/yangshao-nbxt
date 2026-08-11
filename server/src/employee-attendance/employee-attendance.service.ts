@@ -341,6 +341,7 @@ export class EmployeeAttendanceService {
       async (tx, locked) => {
         await this.owned(tx.employee, frontendUserId, locked.employeeId, '员工不存在')
         if (locked.payrollLockedAt) throw new ConflictException('该排班记录已被工资确认锁定')
+        await this.clearDeletedScheduleAttendance(tx, frontendUserId, locked.employeeId, [locked.date])
         await tx.employeeMonthlyScheduleDay.delete({ where: { id } })
         await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeMonthlyScheduleDay', id, `员工=${locked.employeeId}; 日期=${locked.date}`, tx)
         return { ok: true }
@@ -395,6 +396,13 @@ export class EmployeeAttendanceService {
       for (const targetRow of target) {
         await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeMonthlyScheduleDay', targetRow.id, `员工=${payload.employeeId}; 日期=${targetRow.date}; 覆盖复制删除`, tx)
       }
+      const copiedDates = new Set(copies.map((copy) => copy.date))
+      await this.clearDeletedScheduleAttendance(
+        tx,
+        frontendUserId,
+        payload.employeeId,
+        target.filter((row) => !copiedDates.has(row.date)).map((row) => row.date)
+      )
       if (target.length) await tx.employeeMonthlyScheduleDay.deleteMany({ where: { frontendUserId, employeeId: payload.employeeId, date: { startsWith: payload.targetMonth } } })
       for (const copy of copies) {
         const row = await this.replaceMonthlyScheduleDay(tx, frontendUserId, payload.employeeId, copy.date, copy.source.isWorkday, copy.segments, copy.source.remark)
@@ -405,12 +413,13 @@ export class EmployeeAttendanceService {
   }
 
   listAttendance(frontendUserId: string, query: AttendanceListQueryDto = {}) {
-    return this.prisma.employeeAttendanceRecord.findMany({ where: {
+    const where = {
       frontendUserId, ...(query.employeeId ? { employeeId: query.employeeId } : {}), ...this.dateWhere(query)
-    }, include: {
+    }
+    return this.prisma.employeeAttendanceRecord.findMany({ where, include: {
       employee: { select: { employeeNumber: true, name: true } },
       segments: { orderBy: { sequence: 'asc' } }
-    }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] }).then((rows) => rows.map((row) => this.attendanceDto(row)))
+    }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] }).then((rows) => this.currentAttendanceDtos(frontendUserId, rows))
   }
 
   async createAttendance(frontendUserId: string, actorUserId: string, payload: AttendanceDto) {
@@ -488,7 +497,7 @@ export class EmployeeAttendanceService {
       schedule,
       actualSegments,
       approvedLeaveMinutes,
-      attendance?.absenceMinutes || 0
+      attendance?.explicitAbsenceMinutes || 0
     )
     return {
       employeeId, date,
@@ -496,6 +505,7 @@ export class EmployeeAttendanceService {
       scheduledMinutes: schedule.isWorkday ? schedule.scheduledMinutes : 0,
       ...metrics,
       overtimeMinutes: attendance?.overtimeMinutes || 0,
+      explicitAbsenceMinutes: attendance?.explicitAbsenceMinutes || 0,
       remark: attendance?.remark || null,
       actualSegments: actualSegments.map((segment) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt }))
     }
@@ -1069,11 +1079,12 @@ export class EmployeeAttendanceService {
     if (schedule.isWorkday && this.minutes(schedule.scheduledMinutes) <= 0) throw new BadRequestException('排班工作日时长必须大于 0')
     const actualSegments = this.normalizedActualSegments(merged.actualSegments || [], merged.date)
     const approvedLeaveMinutes = await this.approvedLeaveMinutes(frontendUserId, merged.employeeId, merged.date, schedule.scheduledMinutes, db)
+    const explicitAbsenceMinutes = this.minutes(merged.explicitAbsenceMinutes ?? current?.explicitAbsenceMinutes ?? 0)
     const metrics = this.metricsForSchedule(
       schedule,
       actualSegments,
       approvedLeaveMinutes,
-      this.minutes(merged.explicitAbsenceMinutes ?? current?.absenceMinutes ?? 0)
+      explicitAbsenceMinutes
     )
     const first = actualSegments[0]
     const last = actualSegments.at(-1)
@@ -1085,6 +1096,7 @@ export class EmployeeAttendanceService {
         scheduledMinutes: schedule.isWorkday ? this.minutes(schedule.scheduledMinutes) : 0,
         checkInAt: first?.checkInAt || null,
         checkOutAt: last?.checkOutAt || null,
+        explicitAbsenceMinutes,
         ...metrics,
         overtimeMinutes: this.minutes(merged.overtimeMinutes ?? 0),
         ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
@@ -1135,12 +1147,63 @@ export class EmployeeAttendanceService {
     })) })
   }
 
+  private async clearDeletedScheduleAttendance(
+    tx: Pick<Prisma.TransactionClient, 'employeeAttendanceRecord'>,
+    frontendUserId: string,
+    employeeId: string,
+    dates: string[]
+  ) {
+    if (!dates.length) return
+    await tx.employeeAttendanceRecord.updateMany({
+      where: { frontendUserId, employeeId, date: dates.length === 1 ? dates[0] : { in: dates } },
+      data: {
+        isScheduledWorkday: false,
+        scheduledMinutes: 0,
+        workedMinutes: 0,
+        lateMinutes: 0,
+        earlyLeaveMinutes: 0,
+        absenceMinutes: 0
+      }
+    })
+  }
+
   private attendanceDto(row: any, explicitSegments?: Array<{ checkInAt: Date; checkOutAt: Date }>) {
     const actualSegments = (explicitSegments || row.segments || []).slice()
       .sort((left: any, right: any) => (left.sequence ?? 0) - (right.sequence ?? 0))
       .map((segment: any) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt }))
     const { segments: _segments, ...parent } = row
-    return { ...parent, actualSegments }
+    return { ...parent, explicitAbsenceMinutes: this.minutes(parent.explicitAbsenceMinutes ?? 0), actualSegments }
+  }
+
+  private async currentAttendanceDtos(frontendUserId: string, rows: any[]) {
+    if (!rows.length) return []
+    const employeeIds = Array.from(new Set(rows.map((row) => row.employeeId)))
+    const dates = Array.from(new Set(rows.map((row) => row.date))).sort()
+    const [schedules, leaves] = await Promise.all([
+      this.prisma.employeeMonthlyScheduleDay.findMany({
+        where: { frontendUserId, employeeId: { in: employeeIds }, date: { in: dates } },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
+      this.prisma.employeeLeaveRequest.findMany({ where: {
+        frontendUserId, employeeId: { in: employeeIds }, status: EmployeeLeaveStatus.APPROVED,
+        startDate: { lte: dates.at(-1)! }, endDate: { gte: dates[0] }
+      } })
+    ])
+    const scheduleByEmployeeDate = new Map(schedules.map((schedule) => [`${schedule.employeeId}:${schedule.date}`, schedule]))
+    return rows.map((row) => {
+      const dto = this.attendanceDto(row)
+      const schedule = scheduleByEmployeeDate.get(`${row.employeeId}:${row.date}`)
+      if (!schedule) return dto
+      const actualSegments = (row.segments || []).map((segment: any) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt }))
+      const approvedLeaveMinutes = this.approvedLeaveMinutesFromRows(leaves, row.employeeId, row.date, schedule.scheduledMinutes)
+      const metrics = this.metricsForSchedule(schedule, actualSegments, approvedLeaveMinutes, dto.explicitAbsenceMinutes)
+      return {
+        ...dto,
+        isScheduledWorkday: schedule.isWorkday,
+        scheduledMinutes: schedule.isWorkday ? this.minutes(schedule.scheduledMinutes) : 0,
+        ...metrics
+      }
+    })
   }
 
   private dateWhere(query: AttendanceListQueryDto) {
@@ -1297,7 +1360,7 @@ export class EmployeeAttendanceService {
     }
     const text = String(value ?? '').trim()
     if (!text) return null
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(text)) {
+    if (!/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(text)) {
       throw new BadRequestException(`${label}必须包含明确时区`)
     }
     const date = new Date(text)
@@ -1407,7 +1470,13 @@ export class EmployeeAttendanceService {
       frontendUserId, employeeId, status: EmployeeLeaveStatus.APPROVED,
       startDate: { lte: date }, endDate: { gte: date }
     } })
-    return Math.min(this.minutes(scheduled), leaves.reduce((sum, leave: any) => {
+    return this.approvedLeaveMinutesFromRows(leaves, employeeId, date, scheduled)
+  }
+
+  private approvedLeaveMinutesFromRows(leaves: any[], employeeId: string, date: string, scheduled: number) {
+    return Math.min(this.minutes(scheduled), leaves
+      .filter((leave) => leave.employeeId === undefined || (leave.employeeId === employeeId && leave.startDate <= date && leave.endDate >= date))
+      .reduce((sum, leave: any) => {
       if (leave.unit === EmployeeLeaveUnit.FULL_DAY) return sum + this.minutes(scheduled)
       if (leave.unit === EmployeeLeaveUnit.HALF_DAY) return sum + Math.round(this.minutes(scheduled) / 2)
       const hours = Number(leave.hours)

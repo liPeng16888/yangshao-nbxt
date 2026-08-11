@@ -672,24 +672,25 @@ model EmployeeScheduleSegment {
 }
 
 model EmployeeAttendanceRecord {
-  id                 String    @id @default(uuid())
-  frontendUserId     String
-  employeeId         String
-  date               String
-  isScheduledWorkday Boolean
-  scheduledMinutes   Int       @default(0)
-  checkInAt          DateTime?
-  checkOutAt         DateTime?
-  workedMinutes      Int       @default(0)
-  lateMinutes        Int       @default(0)
-  earlyLeaveMinutes  Int       @default(0)
-  absenceMinutes     Int       @default(0)
-  overtimeMinutes    Int       @default(0)
-  manuallyEdited     Boolean   @default(false)
-  remark             String?
-  payrollLockedAt    DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  id                     String    @id @default(uuid())
+  frontendUserId         String
+  employeeId             String
+  date                   String
+  isScheduledWorkday     Boolean
+  scheduledMinutes       Int       @default(0)
+  checkInAt              DateTime?
+  checkOutAt             DateTime?
+  workedMinutes          Int       @default(0)
+  lateMinutes            Int       @default(0)
+  earlyLeaveMinutes      Int       @default(0)
+  explicitAbsenceMinutes Int       @default(0)
+  absenceMinutes         Int       @default(0)
+  overtimeMinutes        Int       @default(0)
+  manuallyEdited         Boolean   @default(false)
+  remark                 String?
+  payrollLockedAt        DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   frontendUser User                        @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   employee     Employee                    @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)

@@ -189,7 +189,7 @@ describe('EmployeeAttendancePage', () => {
     api.getAdminAttendanceRecords.mockResolvedValueOnce([{
       id: 'attendance-1', frontendUserId: 'front-2', employeeId: 'emp-1', date: '2026-08-08',
       checkInAt: '2026-08-08T00:05:00Z', checkOutAt: null, scheduledMinutes: 480,
-      workedMinutes: 0, lateMinutes: 5, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0,
+      workedMinutes: 0, lateMinutes: 5, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0,
       actualSegments: [{ sequence: 0, checkInAt: '2026-08-08T00:05:00Z', checkOutAt: '2026-08-08T04:00:00Z' }],
       employee: { employeeNumber: 'YG001', name: '张三' }
     }])

@@ -5,7 +5,8 @@ import { IsArray, IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, Is
 export const BUSINESS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 export const BUSINESS_MONTH_PATTERN = /^\d{4}-\d{2}$/
 export const CLOCK_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
-export const ZONED_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i
+export const CLOCK_END_TIME_PATTERN = /^(?:([01]\d|2[0-3]):[0-5]\d|24:00)$/
+export const ZONED_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i
 
 const trim = (value: unknown) => typeof value === 'string' ? value.trim() : value
 const number = (value: unknown) => value === '' || value === null || value === undefined ? value : Number(value)
@@ -59,7 +60,7 @@ export class MonthlySettingDto {
 
 export class ScheduleSegmentDto {
   @Matches(CLOCK_TIME_PATTERN) startTime!: string
-  @Matches(CLOCK_TIME_PATTERN) endTime!: string
+  @Matches(CLOCK_END_TIME_PATTERN) endTime!: string
 }
 
 export class MonthlyScheduleDayDto {

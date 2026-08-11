@@ -9,7 +9,7 @@
           <span>时段 {{ index + 1 }}</span>
           <el-time-select v-model="segment.startTime" start="00:00" step="00:30" end="23:30" placeholder="上班" />
           <span>至</span>
-          <el-time-select v-model="segment.endTime" start="00:30" step="00:30" end="23:30" placeholder="下班" />
+          <el-time-select v-model="segment.endTime" start="00:30" step="00:30" end="24:00" placeholder="下班" />
           <el-button link type="danger" :disabled="form.segments.length === 1" @click="removeInterval(index)">删除</el-button>
         </div>
         <el-button plain @click="addInterval">添加工作时段</el-button>
@@ -60,8 +60,8 @@ function clockToMinutes(time: string) { return Number(time.slice(0, 2)) * 60 + N
 function timeFromMinutes(minutes: number) { return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}` }
 function addInterval() {
   const last = form.value.segments.at(-1)
-  const start = Math.min((last ? clockToMinutes(last.endTime) + 60 : 8 * 60), 23 * 60)
-  form.value.segments.push({ key: nextSegmentKey++, startTime: timeFromMinutes(start), endTime: timeFromMinutes(Math.min(start + 30, 23 * 60 + 30)) })
+  const start = Math.min((last ? clockToMinutes(last.endTime) + 60 : 8 * 60), 23 * 60 + 30)
+  form.value.segments.push({ key: nextSegmentKey++, startTime: timeFromMinutes(start), endTime: timeFromMinutes(Math.min(start + 30, 24 * 60)) })
 }
 function removeInterval(index: number) { if (form.value.segments.length > 1) form.value.segments.splice(index, 1) }
 async function confirmSave() {

@@ -178,6 +178,7 @@ export interface AdminAttendanceRecord {
   workedMinutes: number
   lateMinutes: number
   earlyLeaveMinutes: number
+  explicitAbsenceMinutes: number
   absenceMinutes: number
   overtimeMinutes: number
   remark?: string | null

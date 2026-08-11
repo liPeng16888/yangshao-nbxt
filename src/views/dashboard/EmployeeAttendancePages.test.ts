@@ -135,6 +135,10 @@ describe('employee attendance navigation', () => {
     await wrapper.get('[data-date="2026-08-03"]').trigger('click')
     expect(wrapper.get('[data-testid="schedule-day-drawer"]').text()).toContain('添加工作时段')
     expect(wrapper.get('[data-testid="schedule-day-drawer"]').attributes('aria-label')).toBe('每日排班编辑')
+    const drawerTimeControls = wrapper.get('[data-testid="schedule-day-drawer"]').findAllComponents({ name: 'ElTimeSelect' })
+    for (let index = 1; index < drawerTimeControls.length; index += 2) {
+      expect(drawerTimeControls[index]?.props('end')).toBe('24:00')
+    }
     await wrapper.get('[data-testid="add-planned-interval"]').trigger('click')
     expect(wrapper.findAll('[data-testid="planned-interval"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('休息 60 分钟')
@@ -155,6 +159,8 @@ describe('employee attendance navigation', () => {
     await wrapper.get('[data-date="2026-08-04"]').trigger('click')
     await wrapper.get('[data-testid="apply-batch"]').trigger('click')
     expect(wrapper.text()).toContain('将完整覆盖 2 个日期')
+    const batchTimeControls = wrapper.findAllComponents({ name: 'ElTimeSelect' })
+    expect(batchTimeControls.filter((_control, index) => index % 2 === 1).some((control) => control.props('end') === '24:00')).toBe(true)
     wrapper.unmount()
   })
 

@@ -94,7 +94,7 @@ function legacyActualSegment(checkInAt: unknown, checkOutAt: unknown): ActualAtt
 export function normalizeAttendanceResponse(value: unknown): AttendanceRecord {
   const row = responseObject(value)
   const actualSegments = Array.isArray(row.actualSegments) ? responseActualSegments(row.actualSegments) : legacyActualSegment(row.checkInAt, row.checkOutAt)
-  const explicitAbsenceMinutes = actualSegments.length ? 0 : amount(row.explicitAbsenceMinutes ?? row.absenceMinutes)
+  const explicitAbsenceMinutes = amount(row.explicitAbsenceMinutes)
   return {
     id: String(row.id || ''), employeeId: String(row.employeeId || ''), date: String(row.date || ''), isScheduledWorkday: Boolean(row.isScheduledWorkday),
     scheduledMinutes: amount(row.scheduledMinutes), actualSegments, explicitAbsenceMinutes,

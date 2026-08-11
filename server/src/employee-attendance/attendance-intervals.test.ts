@@ -11,6 +11,13 @@ describe('attendance intervals', () => {
     expect(breakMinutes(intervals)).toBe(60)
   })
 
+  it('allows midnight only as the end of the same natural day', () => {
+    const intervals = normalizeClockIntervals([{ startTime: '16:00', endTime: '24:00' }])
+
+    expect(scheduledMinutes(intervals)).toBe(480)
+    expect(() => normalizeClockIntervals([{ startTime: '24:00', endTime: '24:00' }])).toThrow('同一自然日')
+  })
+
   it.each([
     [[{ startTime: '20:00', endTime: '08:00' }], '同一自然日'],
     [[{ startTime: '08:00', endTime: '12:00' }, { startTime: '11:30', endTime: '15:00' }], '重叠']
@@ -22,6 +29,7 @@ describe('attendance intervals', () => {
     const plan = normalizeClockIntervals([{ startTime: '08:00', endTime: '12:00' }, { startTime: '13:00', endTime: '17:00' }])
     expect(deriveAttendanceMetrics(plan, [], 0, 0)).toMatchObject({ workedMinutes: 480, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0 })
     expect(deriveAttendanceMetrics(plan, [], 0, 60).absenceMinutes).toBe(60)
+    expect(deriveAttendanceMetrics(plan, [], 30, 60).absenceMinutes).toBe(30)
   })
 
   it('derives late, early and uncovered absence from paired actual intervals', () => {

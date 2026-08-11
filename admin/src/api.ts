@@ -282,10 +282,10 @@ const mockEmployeeAttendance = {
   },
   attendance: [
     {
-      id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 510, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' },
+      id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 510, lateMinutes: 0, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' },
       actualSegments: [{ sequence: 0, checkInAt: '2026-08-08T08:00:00+08:00', checkOutAt: '2026-08-08T12:00:00+08:00' }, { sequence: 1, checkInAt: '2026-08-08T13:00:00+08:00', checkOutAt: '2026-08-08T17:30:00+08:00' }]
     },
-    { id: 'attendance-2', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 470, lateMinutes: 10, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '王五' } }
+    { id: 'attendance-2', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 470, lateMinutes: 10, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '王五' } }
   ],
   leaves: [
     { id: 'leave-1', frontendUserId: 'front-1', employeeId: 'emp-2', leaveTypeId: 'leave-type-1', startDate: '2026-08-08', endDate: '2026-08-08', unit: 'HALF_DAY', countedDays: 0.5, reason: '个人事务', status: 'PENDING', reviewRemark: '', employee: { employeeNumber: 'YG002', name: '李四' }, leaveType: { id: 'leave-type-1', name: '事假' } }

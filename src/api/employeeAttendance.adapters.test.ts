@@ -102,10 +102,10 @@ describe('employee attendance real API adapters', () => {
   })
 
   it('preserves server absence as explicit absence only when no actual intervals exist', () => {
-    expect(normalizeAttendanceResponse({ id: 'manual-absence', employeeId: 'emp-1', date: '2026-08-03', absenceMinutes: 120, actualSegments: [] }))
-      .toMatchObject({ actualSegments: [], absenceMinutes: 120, explicitAbsenceMinutes: 120 })
+    expect(normalizeAttendanceResponse({ id: 'manual-absence', employeeId: 'emp-1', date: '2026-08-03', absenceMinutes: 120, explicitAbsenceMinutes: 45, actualSegments: [] }))
+      .toMatchObject({ actualSegments: [], absenceMinutes: 120, explicitAbsenceMinutes: 45 })
     expect(normalizeAttendanceResponse({ id: 'derived-absence', employeeId: 'emp-1', date: '2026-08-03', absenceMinutes: 120, explicitAbsenceMinutes: 45, actualSegments: [{ checkInAt: '2026-08-03T08:00:00+08:00', checkOutAt: '2026-08-03T16:00:00+08:00' }] }))
-      .toMatchObject({ absenceMinutes: 120, explicitAbsenceMinutes: 0 })
+      .toMatchObject({ absenceMinutes: 120, explicitAbsenceMinutes: 45 })
   })
 
   it('sends the DTO-shaped actual-segment attendance payload through the public save adapter', async () => {

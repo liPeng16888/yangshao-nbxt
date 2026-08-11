@@ -58,7 +58,12 @@ export function deriveAttendanceMetrics(
   const scheduled = scheduledMinutes(normalizedPlan)
 
   if (actual.length === 0) {
-    return { workedMinutes: scheduled, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: minutes(explicitAbsenceMinutes) }
+    return {
+      workedMinutes: scheduled,
+      lateMinutes: 0,
+      earlyLeaveMinutes: 0,
+      absenceMinutes: Math.max(0, minutes(explicitAbsenceMinutes) - minutes(approvedLeaveMinutes))
+    }
   }
 
   let workedMinutes = 0
