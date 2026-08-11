@@ -11,6 +11,34 @@ enum UserRole {
   ROOT_ADMIN
   SUB_ADMIN
   FRONTEND_USER
+  FRONTEND_SUB_USER
+}
+
+enum FrontendMenuPermission {
+  DATA_MAIN
+  DATA_STANDARD_SAMPLE
+  DATA_COEFFICIENT
+  LAB_REPORT_IMAGE_TEMPLATE
+  LAB_REPORT_SMS_TEMPLATE
+  ATTENDANCE_OVERVIEW
+  ATTENDANCE_EMPLOYEES
+  ATTENDANCE_SCHEDULES
+  ATTENDANCE_RECORDS
+  ATTENDANCE_LEAVE
+  ATTENDANCE_COMPENSATION
+  ATTENDANCE_PAYROLL
+  FINANCE_EXPENSES
+  FINANCE_INCOME
+  FINANCE_UNSETTLED
+  FINANCE_MONTHLY_SETTLEMENT
+  FINANCE_PREPAID_ADD
+  FINANCE_PREPAID_CUSTOMERS
+  REPORTS
+  MEDICINE_STOCK
+  MEDICINE_INBOUND
+  MEDICINE_OUTBOUND
+  CUSTOMER_OVERVIEW
+  BLACKLIST
 }
 
 enum PaymentMethod {
@@ -109,66 +137,86 @@ enum EmployeeAuditAction {
 }
 
 model User {
-  id                        String    @id @default(uuid())
-  account                   String    @unique
-  username                  String
-  displayRemark             String?
-  role                      UserRole
-  passwordHash              String
-  passwordCipher            String?
-  accessGuardEnabled        Boolean   @default(false)
-  accessGuardPassword       String?
-  accessGuardTtlMinutes     Int       @default(5)
-  accessGuardRecoveryPrompt String?
-  accessGuardRecoveryAnswer String?
-  disabled                  Boolean   @default(false)
-  disabledReason            String?
-  deletedAt                 DateTime?
-  createdAt                 DateTime  @default(now())
-  updatedAt                 DateTime  @updatedAt
+  id                          String    @id @default(uuid())
+  account                     String    @unique
+  username                    String
+  displayRemark               String?
+  role                        UserRole
+  parentFrontendUserId        String?
+  permissionVersion           Int       @default(1)
+  requiresAccessGuardPassword Boolean   @default(true)
+  lastLoginAt                 DateTime?
+  passwordHash                String
+  passwordCipher              String?
+  accessGuardEnabled          Boolean   @default(false)
+  accessGuardPassword         String?
+  accessGuardTtlMinutes       Int       @default(5)
+  accessGuardRecoveryPrompt   String?
+  accessGuardRecoveryAnswer   String?
+  disabled                    Boolean   @default(false)
+  disabledReason              String?
+  deletedAt                   DateTime?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
 
-  frontendSheets                  LabSheet[]                   @relation("FrontendSheets")
-  financeEntries                  FinanceEntry[]               @relation("FrontendFinance")
-  monthlyCustomerRemarks          MonthlyCustomerRemark[]      @relation("FrontendMonthlyCustomerRemarks")
-  prepaidRecharges                PrepaidRechargeRecord[]      @relation("FrontendPrepaidRecharges")
-  prepaidCustomerRemarks          PrepaidCustomerRemark[]      @relation("FrontendPrepaidCustomerRemarks")
-  prepaidUsageRemarks             PrepaidUsageRemark[]         @relation("FrontendPrepaidUsageRemarks")
-  customers                       Customer[]                   @relation("FrontendCustomers")
-  blacklistUploads                BlacklistRecord[]            @relation("BlacklistUploader")
-  reminders                       Reminder[]                   @relation("FrontendReminders")
-  createdReminders                Reminder[]                   @relation("ReminderCreator")
-  financeDeletionRequests         FinanceDeletionRequest[]     @relation("FrontendFinanceDeletionRequests")
-  reviewedFinanceDeletionRequests FinanceDeletionRequest[]     @relation("ReviewedFinanceDeletionRequests")
-  inviteCodes                     InviteCode[]                 @relation("InviteCreator")
-  usedInviteCodes                 InviteCode[]                 @relation("InviteUser")
-  createdSubPerms                 SubAdminFrontendPermission[] @relation("PermissionCreator")
-  subAdminPerms                   SubAdminFrontendPermission[] @relation("SubAdminPermissions")
-  frontendPerms                   SubAdminFrontendPermission[] @relation("FrontendPermissions")
-  medicineItems                   MedicineInventoryItem[]      @relation("FrontendMedicineItems")
-  medicineMovements               MedicineInventoryMovement[]  @relation("FrontendMedicineMovements")
-  medicineCommonNames             MedicineCommonName[]         @relation("FrontendMedicineCommonNames")
-  accessGuardGroups               AccessGuardGroup[]           @relation("FrontendAccessGuardGroups")
-  accessGuardGroupFeatures        AccessGuardGroupFeature[]    @relation("FrontendAccessGuardGroupFeatures")
+  frontendSheets                  LabSheet[]                     @relation("FrontendSheets")
+  financeEntries                  FinanceEntry[]                 @relation("FrontendFinance")
+  monthlyCustomerRemarks          MonthlyCustomerRemark[]        @relation("FrontendMonthlyCustomerRemarks")
+  prepaidRecharges                PrepaidRechargeRecord[]        @relation("FrontendPrepaidRecharges")
+  prepaidCustomerRemarks          PrepaidCustomerRemark[]        @relation("FrontendPrepaidCustomerRemarks")
+  prepaidUsageRemarks             PrepaidUsageRemark[]           @relation("FrontendPrepaidUsageRemarks")
+  customers                       Customer[]                     @relation("FrontendCustomers")
+  blacklistUploads                BlacklistRecord[]              @relation("BlacklistUploader")
+  reminders                       Reminder[]                     @relation("FrontendReminders")
+  createdReminders                Reminder[]                     @relation("ReminderCreator")
+  financeDeletionRequests         FinanceDeletionRequest[]       @relation("FrontendFinanceDeletionRequests")
+  reviewedFinanceDeletionRequests FinanceDeletionRequest[]       @relation("ReviewedFinanceDeletionRequests")
+  inviteCodes                     InviteCode[]                   @relation("InviteCreator")
+  usedInviteCodes                 InviteCode[]                   @relation("InviteUser")
+  createdSubPerms                 SubAdminFrontendPermission[]   @relation("PermissionCreator")
+  subAdminPerms                   SubAdminFrontendPermission[]   @relation("SubAdminPermissions")
+  frontendPerms                   SubAdminFrontendPermission[]   @relation("FrontendPermissions")
+  medicineItems                   MedicineInventoryItem[]        @relation("FrontendMedicineItems")
+  medicineMovements               MedicineInventoryMovement[]    @relation("FrontendMedicineMovements")
+  medicineCommonNames             MedicineCommonName[]           @relation("FrontendMedicineCommonNames")
+  accessGuardGroups               AccessGuardGroup[]             @relation("FrontendAccessGuardGroups")
+  accessGuardGroupFeatures        AccessGuardGroupFeature[]      @relation("FrontendAccessGuardGroupFeatures")
   employees                       Employee[]
   employeeWeeklySchedules         EmployeeWeeklySchedule[]
   employeeDateOverrides           EmployeeDateOverride[]
   employeeMonthlySettings         EmployeeMonthlySetting[]
   employeeAttendanceRecords       EmployeeAttendanceRecord[]
   employeeLeaveTypes              EmployeeLeaveType[]
-  employeeLeaveRequests           EmployeeLeaveRequest[]       @relation("FrontendEmployeeLeaveRequests")
-  reviewedEmployeeLeaveRequests   EmployeeLeaveRequest[]       @relation("EmployeeLeaveReviewer")
+  employeeLeaveRequests           EmployeeLeaveRequest[]         @relation("FrontendEmployeeLeaveRequests")
+  reviewedEmployeeLeaveRequests   EmployeeLeaveRequest[]         @relation("EmployeeLeaveReviewer")
   employeeCommissionTypes         EmployeeCommissionType[]
   employeeCommissionRecords       EmployeeCommissionRecord[]
   employeeBonuses                 EmployeeBonus[]
-  employeePayrollRuns             EmployeePayrollRun[]         @relation("FrontendEmployeePayrollRuns")
-  confirmedEmployeePayrollRuns    EmployeePayrollRun[]         @relation("EmployeePayrollConfirmer")
+  employeePayrollRuns             EmployeePayrollRun[]           @relation("FrontendEmployeePayrollRuns")
+  confirmedEmployeePayrollRuns    EmployeePayrollRun[]           @relation("EmployeePayrollConfirmer")
   employeePayrollItems            EmployeePayrollItem[]
   employeePayrollAdjustments      EmployeePayrollAdjustment[]
-  employeeAuditLogs               EmployeeAuditLog[]           @relation("FrontendEmployeeAuditLogs")
-  performedEmployeeAuditLogs      EmployeeAuditLog[]           @relation("EmployeeAuditActor")
+  employeeAuditLogs               EmployeeAuditLog[]             @relation("FrontendEmployeeAuditLogs")
+  performedEmployeeAuditLogs      EmployeeAuditLog[]             @relation("EmployeeAuditActor")
+  parentFrontendUser              User?                          @relation("FrontendSubAccounts", fields: [parentFrontendUserId], references: [id], onDelete: Restrict)
+  frontendSubAccounts             User[]                         @relation("FrontendSubAccounts")
+  frontendSubAccountPermissions   FrontendSubAccountPermission[]
 
   @@index([role])
+  @@index([parentFrontendUserId])
   @@index([deletedAt])
+}
+
+model FrontendSubAccountPermission {
+  id           String                 @id @default(uuid())
+  subAccountId String
+  permission   FrontendMenuPermission
+  createdAt    DateTime               @default(now())
+
+  subAccount User @relation(fields: [subAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([subAccountId, permission])
+  @@index([subAccountId])
 }
 
 model AccessGuardGroup {
