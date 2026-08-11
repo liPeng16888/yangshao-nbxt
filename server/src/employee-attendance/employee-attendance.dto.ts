@@ -89,18 +89,17 @@ export class MonthlyScheduleQueryDto {
   @Matches(BUSINESS_MONTH_PATTERN) month!: string
 }
 
+export class ActualAttendanceSegmentDto {
+  @Matches(ZONED_DATE_TIME_PATTERN) checkInAt!: string
+  @Matches(ZONED_DATE_TIME_PATTERN) checkOutAt!: string
+}
+
 export class AttendanceDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Matches(BUSINESS_DATE_PATTERN) date!: string
-  @IsBoolean() isScheduledWorkday!: boolean
-  @Transform(({ value }) => number(value)) @IsInt() @Min(0) @Max(1440) scheduledMinutes!: number
-  @Transform(({ value }) => trim(value)) @IsOptional() @Matches(ZONED_DATE_TIME_PATTERN) checkInAt?: string
-  @Transform(({ value }) => trim(value)) @IsOptional() @Matches(ZONED_DATE_TIME_PATTERN) checkOutAt?: string
-  @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) workedMinutes?: number
-  @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) lateMinutes?: number
-  @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) earlyLeaveMinutes?: number
-  @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) absenceMinutes?: number
-  @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) overtimeMinutes?: number
+  @ValidateNested({ each: true }) @Type(() => ActualAttendanceSegmentDto) @IsArray() actualSegments!: ActualAttendanceSegmentDto[]
+  @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) @Max(1440) explicitAbsenceMinutes?: number
+  @Transform(({ value }) => number(value)) @IsOptional() @IsInt() @Min(0) @Max(1440) overtimeMinutes?: number
   @Transform(({ value }) => trim(value)) @IsOptional() @IsString() remark?: string
 }
 
@@ -154,6 +153,11 @@ export class BonusDto {
 
 export class AttendanceListQueryDto {
   @IsOptional() @IsString() employeeId?: string
+  @Transform(({ value }) => {
+    const values = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : value
+    return Array.isArray(values) ? values.map((item) => String(item).trim()) : values
+  })
+  @IsOptional() @IsArray() @IsString({ each: true }) @IsNotEmpty({ each: true }) employeeIds?: string[]
   @IsOptional() @Matches(BUSINESS_DATE_PATTERN) startDate?: string
   @IsOptional() @Matches(BUSINESS_DATE_PATTERN) endDate?: string
   @IsOptional() @Matches(BUSINESS_MONTH_PATTERN) month?: string

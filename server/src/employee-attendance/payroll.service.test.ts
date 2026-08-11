@@ -4,12 +4,20 @@ import { describe, expect, it, vi } from 'vitest'
 import { PayrollService } from './payroll.service'
 
 const decimal = (value: number | string) => new Prisma.Decimal(value)
+const workdays = (count: number, scheduledMinutes = 480) => Array.from({ length: count }, (_, index) => ({
+  employeeId: employee.id,
+  date: `2026-08-${String(index + 1).padStart(2, '0')}`,
+  isWorkday: true,
+  scheduledMinutes,
+  segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }]
+}))
 
 function createPrisma() {
   const tx: any = {
     $executeRawUnsafe: vi.fn().mockResolvedValue(1),
     employee: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn() },
     employeeMonthlySetting: { findMany: vi.fn().mockResolvedValue([]) },
+    employeeMonthlyScheduleDay: { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     employeeAttendanceRecord: { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     employeeLeaveRequest: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     employeeCommissionRecord: { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
@@ -50,8 +58,9 @@ describe('PayrollService frontend payroll', () => {
     const { service, tx } = serviceFixture()
     tx.employee.findMany.mockResolvedValue([employee])
     tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(20), restQuotaDays: decimal(1) }])
+    tx.employeeMonthlyScheduleDay.findMany.mockResolvedValue(workdays(20))
     tx.employeeAttendanceRecord.findMany.mockResolvedValue([{ employeeId: employee.id, date: '2026-08-01', isScheduledWorkday: true, scheduledMinutes: 480, checkInAt: new Date(), checkOutAt: new Date(), absenceMinutes: 0, overtimeMinutes: 120 }])
-    tx.employeeLeaveRequest.findMany.mockResolvedValue([{ employeeId: employee.id, startDate: '2026-08-02', endDate: '2026-08-02', countedDays: decimal(2), status: EmployeeLeaveStatus.APPROVED, leaveType: { countsTowardRestQuota: true } }])
+    tx.employeeLeaveRequest.findMany.mockResolvedValue([{ employeeId: employee.id, startDate: '2026-08-02', endDate: '2026-08-03', countedDays: decimal(2), unit: EmployeeLeaveUnit.FULL_DAY, status: EmployeeLeaveStatus.APPROVED, leaveType: { countsTowardRestQuota: true } }])
     tx.employeeCommissionRecord.findMany.mockResolvedValue([{ employeeId: employee.id, amount: decimal(100) }])
     tx.employeeBonus.findMany.mockResolvedValue([{ employeeId: employee.id, amount: decimal(50) }])
     tx.employeePayrollRun.findFirst.mockResolvedValue(null)
@@ -89,28 +98,86 @@ describe('PayrollService frontend payroll', () => {
     expect(tx.employeeAttendanceRecord.updateMany).not.toHaveBeenCalled()
   })
 
-  it('blocks confirmation when scheduled workdays have no generated attendance rows', async () => {
+  it('blocks confirmation when the employee has no monthly schedule', async () => {
     const { service, tx } = serviceFixture()
     tx.employeePayrollRun.findFirst.mockResolvedValue({ id: 'run-1', frontendUserId: 'front-1', month: '2026-08', status: EmployeePayrollStatus.DRAFT })
     tx.employee.findMany.mockResolvedValue([employee])
     tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(20), restQuotaDays: decimal(2) }])
 
-    await expect(service.confirm('front-1', 'front-1', 'run-1')).rejects.toThrow('缺少考勤排班记录')
+    await expect(service.confirm('front-1', 'front-1', 'run-1')).rejects.toThrow('缺少员工月度排班')
     expect(tx.employeePayrollRun.updateMany).not.toHaveBeenCalled()
   })
 
-  it('keeps a no-punch half-day leave as unresolved absence', async () => {
+  it('treats a scheduled day without a manual attendance row as normal', async () => {
+    const { service, tx } = serviceFixture()
+    tx.employee.findMany.mockResolvedValue([employee])
+    tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(9), restQuotaDays: decimal(2) }])
+    tx.employeeMonthlyScheduleDay.findMany.mockResolvedValue([{
+      employeeId: employee.id, date: '2026-08-11', isWorkday: true, scheduledMinutes: 480,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }]
+    }])
+    tx.employeeAttendanceRecord.findMany.mockResolvedValue([])
+    tx.employeePayrollRun.findFirst.mockResolvedValue(null)
+    tx.employeePayrollRun.create.mockResolvedValue({ id: 'run-1', frontendUserId: 'front-1', month: '2026-08', status: EmployeePayrollStatus.DRAFT })
+
+    const run: any = await service.generate('front-1', 'front-1', '2026-08')
+
+    expect(run.items[0].calculationSnapshot.input).toMatchObject({ scheduledWorkDays: 1, absenceDays: 0 })
+    expect(run.items[0].issues.join('')).not.toContain('缺少考勤')
+  })
+
+  it('derives scheduled workdays from monthly plan rows inside employment bounds', async () => {
+    const { service, tx } = serviceFixture()
+    tx.employee.findMany.mockResolvedValue([{ ...employee, hireDate: '2026-08-10', terminationDate: '2026-08-20' }])
+    tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(99), restQuotaDays: decimal(2) }])
+    tx.employeeMonthlyScheduleDay.findMany.mockResolvedValue([
+      { employeeId: employee.id, date: '2026-08-09', isWorkday: true, scheduledMinutes: 480, segments: [] },
+      { employeeId: employee.id, date: '2026-08-10', isWorkday: true, scheduledMinutes: 480, segments: [] },
+      { employeeId: employee.id, date: '2026-08-20', isWorkday: true, scheduledMinutes: 480, segments: [] },
+      { employeeId: employee.id, date: '2026-08-21', isWorkday: true, scheduledMinutes: 480, segments: [] }
+    ])
+    tx.employeePayrollRun.findFirst.mockResolvedValue(null)
+    tx.employeePayrollRun.create.mockResolvedValue({ id: 'run-1', frontendUserId: 'front-1', month: '2026-08', status: EmployeePayrollStatus.DRAFT })
+
+    const run: any = await service.generate('front-1', 'front-1', '2026-08')
+
+    expect(run.items[0].scheduledWorkDays).toEqual(decimal(2))
+  })
+
+  it('does not count hourly leave outside the employee schedule bounds', async () => {
+    const { service, tx } = serviceFixture()
+    tx.employee.findMany.mockResolvedValue([{ ...employee, hireDate: '2026-08-10' }])
+    tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(1), restQuotaDays: decimal(0) }])
+    tx.employeeMonthlyScheduleDay.findMany.mockResolvedValue([
+      { ...workdays(1)[0], date: '2026-08-10' }
+    ])
+    tx.employeeLeaveRequest.findMany.mockResolvedValue([{
+      employeeId: employee.id, startDate: '2026-08-01', endDate: '2026-08-01', unit: EmployeeLeaveUnit.HOUR,
+      hours: decimal(2), countedDays: decimal(0.25), leaveType: { countsTowardRestQuota: true }
+    }])
+    tx.employeePayrollRun.findFirst.mockResolvedValue(null)
+    tx.employeePayrollRun.create.mockResolvedValue({ id: 'run-1', frontendUserId: 'front-1', month: '2026-08', status: EmployeePayrollStatus.DRAFT })
+
+    const run: any = await service.generate('front-1', 'front-1', '2026-08')
+
+    expect(run.items[0].countedLeaveDays).toEqual(decimal(0))
+  })
+
+  it('keeps explicit zero absence when a no-punch day has approved leave', async () => {
     const { service, tx } = serviceFixture()
     tx.employeePayrollRun.findFirst.mockResolvedValue({ id: 'run-1', frontendUserId: 'front-1', month: '2026-08', status: EmployeePayrollStatus.DRAFT })
     tx.employee.findMany.mockResolvedValue([employee])
     tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(1), restQuotaDays: decimal(2) }])
+    tx.employeeMonthlyScheduleDay.findMany.mockResolvedValue(workdays(1))
     tx.employeeAttendanceRecord.findMany.mockResolvedValue([{ employeeId: employee.id, date: '2026-08-01', isScheduledWorkday: true, scheduledMinutes: 480, checkInAt: null, checkOutAt: null, absenceMinutes: 0, overtimeMinutes: 0 }])
     tx.employeeLeaveRequest.findMany.mockResolvedValue([{
       employeeId: employee.id, startDate: '2026-08-01', endDate: '2026-08-01', countedDays: decimal(0.5),
       unit: EmployeeLeaveUnit.HALF_DAY, status: EmployeeLeaveStatus.APPROVED, leaveType: { countsTowardRestQuota: true }
     }])
 
-    await expect(service.confirm('front-1', 'front-1', 'run-1')).rejects.toThrow('未处理缺勤')
+    await expect(service.generate('front-1', 'front-1', '2026-08')).resolves.toMatchObject({
+      items: [expect.objectContaining({ absenceDays: decimal(0) })]
+    })
   })
 
   it('confirms atomically and locks all payroll source rows', async () => {
@@ -129,6 +196,9 @@ describe('PayrollService frontend payroll', () => {
     expect(tx.employeeLeaveRequest.updateMany).toHaveBeenCalled()
     expect(tx.employeeCommissionRecord.updateMany).toHaveBeenCalled()
     expect(tx.employeeBonus.updateMany).toHaveBeenCalled()
+    expect(tx.employeeMonthlyScheduleDay.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { frontendUserId: 'front-1', date: { startsWith: '2026-08' } }
+    }))
     expect(tx.employeeLeaveRequest.count).toHaveBeenCalledWith({ where: {
       frontendUserId: 'front-1', status: EmployeeLeaveStatus.PENDING,
       startDate: { lte: '2026-08-31' }, endDate: { gte: '2026-08-01' }
@@ -156,6 +226,7 @@ describe('PayrollService frontend payroll', () => {
 
     expect(result.status).toBe(EmployeePayrollStatus.DRAFT)
     expect(tx.employeeAttendanceRecord.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { payrollLockedAt: null } }))
+    expect(tx.employeeMonthlyScheduleDay.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { payrollLockedAt: null } }))
     expect(tx.employeeAuditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'REOPEN', reason: '补录考勤' }) })
   })
 
@@ -189,6 +260,7 @@ describe('PayrollService frontend payroll', () => {
     const { service, tx } = serviceFixture()
     tx.employee.findMany.mockResolvedValue([employee])
     tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(1), restQuotaDays: decimal(2) }])
+    tx.employeeMonthlyScheduleDay.findMany.mockResolvedValue(workdays(1))
     tx.employeeAttendanceRecord.findMany.mockResolvedValue([{
       employeeId: employee.id, date: '2026-08-01', isScheduledWorkday: true, scheduledMinutes: 480,
       checkInAt: null, checkOutAt: null, absenceMinutes: 480, overtimeMinutes: 0
@@ -217,12 +289,12 @@ describe('PayrollService frontend payroll', () => {
 
   it.each([
     ['zero-minute workday', { scheduledMinutes: 0, checkInAt: null, checkOutAt: null, absenceMinutes: 0 }, '排班工作日时长必须大于 0'],
-    ['lone punch', { scheduledMinutes: 480, checkInAt: new Date('2026-08-01T00:00:00Z'), checkOutAt: null, absenceMinutes: 0 }, '打卡必须成对'],
-    ['one-minute fake absence', { scheduledMinutes: 480, checkInAt: null, checkOutAt: null, absenceMinutes: 1 }, '未处理缺勤']
+    ['lone punch', { scheduledMinutes: 480, checkInAt: new Date('2026-08-01T00:00:00Z'), checkOutAt: null, absenceMinutes: 0 }, '打卡必须成对']
   ])('blocks %s instead of allowing full pay', async (_label, attendance, issue) => {
     const { service, tx } = serviceFixture()
     tx.employee.findMany.mockResolvedValue([employee])
     tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(1), restQuotaDays: decimal(0) }])
+    tx.employeeMonthlyScheduleDay.findMany.mockResolvedValue(workdays(1, attendance.scheduledMinutes))
     tx.employeeAttendanceRecord.findMany.mockResolvedValue([{ employeeId: employee.id, date: '2026-08-01', isScheduledWorkday: true, overtimeMinutes: 0, ...attendance }])
     tx.employeePayrollRun.findFirst.mockResolvedValue(null)
     tx.employeePayrollRun.create.mockResolvedValue({ id: 'run-1', frontendUserId: 'front-1', month: '2026-08', status: EmployeePayrollStatus.DRAFT })
@@ -230,16 +302,16 @@ describe('PayrollService frontend payroll', () => {
     const result: any = await service.generate('front-1', 'front-1', '2026-08')
 
     expect(result.items[0].issues.join('')).toContain(issue)
-    if (_label === 'one-minute fake absence') expect(result.items[0].absenceDays).toEqual(decimal(1))
   })
 
   it('deducts only the uncovered portion after partial approved leave and requires the full uncovered absence', async () => {
     const { service, tx } = serviceFixture()
     tx.employee.findMany.mockResolvedValue([employee])
     tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(1), restQuotaDays: decimal(2) }])
+    tx.employeeMonthlyScheduleDay.findMany.mockResolvedValue(workdays(1))
     tx.employeeAttendanceRecord.findMany.mockResolvedValue([{
       employeeId: employee.id, date: '2026-08-01', isScheduledWorkday: true, scheduledMinutes: 480,
-      checkInAt: null, checkOutAt: null, absenceMinutes: 120, overtimeMinutes: 0
+      checkInAt: null, checkOutAt: null, absenceMinutes: 480, overtimeMinutes: 0
     }])
     tx.employeeLeaveRequest.findMany.mockResolvedValue([{
       employeeId: employee.id, startDate: '2026-08-01', endDate: '2026-08-01', countedDays: decimal(0.5),
@@ -250,7 +322,7 @@ describe('PayrollService frontend payroll', () => {
 
     const result: any = await service.generate('front-1', 'front-1', '2026-08')
     expect(result.items[0].absenceDays).toEqual(decimal(0.5))
-    expect(result.items[0].issues.join('')).toContain('未处理缺勤')
+    expect(result.items[0].issues.join('')).not.toContain('未处理缺勤')
   })
 
   it('preserves existing draft employees and manual adjustments across eligibility edits and regeneration', async () => {
@@ -263,6 +335,7 @@ describe('PayrollService frontend payroll', () => {
     tx.employeePayrollItem.findMany.mockResolvedValue([existing])
     tx.employee.findMany.mockResolvedValue([{ ...employee, status: EmployeeStatus.INACTIVE, terminationDate: null, hireDate: '2026-09-01' }])
     tx.employeeMonthlySetting.findMany.mockResolvedValue([{ employeeId: employee.id, scheduledWorkDays: decimal(1), restQuotaDays: decimal(0) }])
+    tx.employeeMonthlyScheduleDay.findMany.mockResolvedValue(workdays(1))
     tx.employeeAttendanceRecord.findMany.mockResolvedValue([{
       employeeId: employee.id, date: '2026-08-01', isScheduledWorkday: true, scheduledMinutes: 480,
       checkInAt: new Date('2026-08-01T00:00:00Z'), checkOutAt: new Date('2026-08-01T09:00:00Z'), absenceMinutes: 0, overtimeMinutes: 0
@@ -292,6 +365,21 @@ describe('PayrollService frontend payroll', () => {
     expect(prisma.employeeAttendanceRecord.findMany).toHaveBeenLastCalledWith({ where: { frontendUserId: 'front-1', date: { startsWith: '2026-08' } } })
     expect(result.overtimeMinutes).toBe(150)
     expect(result.issues).toContain('本月考勤提醒：迟到 1 天，早退 1 天（不自动扣薪）')
+  })
+
+  it('counts a scheduled employee as present today when no attendance row or approved leave exists', async () => {
+    const { service, prisma } = serviceFixture()
+    prisma.employee.count = vi.fn().mockResolvedValue(1)
+    prisma.employeeAttendanceRecord.findMany.mockResolvedValue([])
+    prisma.employeeMonthlyScheduleDay.findMany.mockResolvedValue([{ employeeId: employee.id, isWorkday: true, scheduledMinutes: 480 }])
+    prisma.employeeLeaveRequest.findMany.mockResolvedValue([])
+    prisma.employeeLeaveRequest.count.mockResolvedValue(0)
+    prisma.employeePayrollRun.findFirst.mockResolvedValue(null)
+
+    const result = await service.overview('front-1', '2026-08')
+
+    expect(result.todayAttendance).toBe(1)
+    expect(result.todayAbsence).toBe(0)
   })
 
   it('scopes the admin overview pending leave count to the selected month', async () => {

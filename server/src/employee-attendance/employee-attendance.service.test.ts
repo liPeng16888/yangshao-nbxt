@@ -1,7 +1,10 @@
 import { BadRequestException, ConflictException } from '@nestjs/common'
 import { EmployeeLeaveStatus, EmployeePayrollStatus, EmployeeStatus, Prisma } from '@prisma/client'
+import { plainToInstance } from 'class-transformer'
+import { validate } from 'class-validator'
 import { describe, expect, it, vi } from 'vitest'
 import { EmployeeDataCipherService } from './employee-data-cipher.service'
+import { AttendanceListQueryDto } from './employee-attendance.dto'
 import { EmployeeAttendanceService } from './employee-attendance.service'
 
 function createService(overrides: Record<string, unknown> = {}) {
@@ -10,8 +13,9 @@ function createService(overrides: Record<string, unknown> = {}) {
       findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn()
     },
     employeeAttendanceRecord: {
-      findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0)
+      findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), upsert: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0)
     },
+    employeeAttendanceSegment: { createMany: vi.fn().mockResolvedValue({ count: 0 }), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
     employeeLeaveRequest: {
       findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0)
     },
@@ -218,6 +222,34 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     expect(prisma.employeeLeaveRequest.findMany).not.toHaveBeenCalled()
   })
 
+  it('returns ordered actualSegments in attendance list responses', async () => {
+    const { service, prisma } = createService()
+    prisma.employeeAttendanceRecord.findMany.mockResolvedValue([{
+      id: 'attendance-1', employeeId: 'employee-1', date: '2026-08-11',
+      segments: [
+        { sequence: 1, checkInAt: new Date('2026-08-11T05:00:00Z'), checkOutAt: new Date('2026-08-11T09:00:00Z') },
+        { sequence: 0, checkInAt: new Date('2026-08-11T00:00:00Z'), checkOutAt: new Date('2026-08-11T04:00:00Z') }
+      ]
+    }])
+
+    await expect(service.listAttendance('front-1')).resolves.toMatchObject([{
+      actualSegments: [
+        { checkInAt: new Date('2026-08-11T00:00:00Z'), checkOutAt: new Date('2026-08-11T04:00:00Z') },
+        { checkInAt: new Date('2026-08-11T05:00:00Z'), checkOutAt: new Date('2026-08-11T09:00:00Z') }
+      ]
+    }])
+  })
+
+  it('transforms comma-separated leave employeeIds and validates each non-empty value', async () => {
+    const query = plainToInstance(AttendanceListQueryDto, { employeeIds: ' employee-1,employee-2 ' })
+
+    expect(await validate(query)).toHaveLength(0)
+    expect(query.employeeIds).toEqual(['employee-1', 'employee-2'])
+
+    const invalid = plainToInstance(AttendanceListQueryDto, { employeeIds: 'employee-1, ,employee-2' })
+    expect(await validate(invalid)).not.toHaveLength(0)
+  })
+
   it('rejects a duplicate employee number inside the current frontend account', async () => {
     const { service, prisma } = createService()
     prisma.employee.findFirst.mockResolvedValue({ id: 'existing', frontendUserId: 'front-1', employeeNumber: '001' })
@@ -238,15 +270,85 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     }))
   })
 
-  it('rejects a duplicate attendance date before writing', async () => {
+  it('upserts a manual attendance date and replaces its interval children', async () => {
     const { service, prisma } = createService()
     prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
-    prisma.employeeAttendanceRecord.findFirst.mockResolvedValue({ id: 'existing' })
+    prisma.employeeMonthlyScheduleDay.findFirst.mockResolvedValue({
+      id: 'schedule-1', employeeId: 'employee-1', date: '2026-08-10', isWorkday: true, scheduledMinutes: 480,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }]
+    })
+    prisma.employeeAttendanceRecord.upsert.mockResolvedValue({ id: 'existing', employeeId: 'employee-1', date: '2026-08-10' })
 
-    await expect(service.createAttendance('front-1', 'front-1', {
-      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480, absenceMinutes: 480
-    })).rejects.toBeInstanceOf(ConflictException)
-    expect(prisma.employeeAttendanceRecord.create).not.toHaveBeenCalled()
+    await service.createAttendance('front-1', 'front-1', {
+      employeeId: 'employee-1', date: '2026-08-10', actualSegments: [], explicitAbsenceMinutes: 480
+    })
+
+    expect(prisma.employeeAttendanceRecord.upsert).toHaveBeenCalled()
+    expect(prisma.employeeAttendanceSegment.deleteMany).toHaveBeenCalledWith({
+      where: { frontendUserId: 'front-1', attendanceRecordId: 'existing' }
+    })
+  })
+
+  it('derives punctuality from ordered manual actual intervals against the monthly plan', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeAttendanceRecord.findFirst.mockResolvedValue(null)
+    prisma.employeeMonthlyScheduleDay.findFirst.mockResolvedValue({
+      id: 'schedule-1', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-11',
+      isWorkday: true, scheduledMinutes: 480,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '12:00' }, { sequence: 1, startTime: '13:00', endTime: '17:00' }]
+    })
+    prisma.employeeAttendanceRecord.upsert.mockImplementation(async ({ create }: any) => ({ id: 'attendance-1', ...create }))
+
+    const saved = await service.createAttendance('front-1', 'front-1', {
+      employeeId: 'employee-1', date: '2026-08-11', explicitAbsenceMinutes: 999, overtimeMinutes: 37, remark: '',
+      actualSegments: [
+        { checkInAt: '2026-08-11T08:10:00+08:00', checkOutAt: '2026-08-11T12:00:00+08:00' },
+        { checkInAt: '2026-08-11T13:00:00+08:00', checkOutAt: '2026-08-11T16:50:00+08:00' }
+      ]
+    })
+
+    expect(saved).toMatchObject({ workedMinutes: 460, lateMinutes: 10, earlyLeaveMinutes: 10, absenceMinutes: 20, overtimeMinutes: 37 })
+    expect(saved.actualSegments).toHaveLength(2)
+  })
+
+  it('subtracts approved hourly leave minutes from uncovered planned minutes', async () => {
+    const { service, prisma } = createService()
+    prisma.employeeMonthlyScheduleDay.findFirst.mockResolvedValue({
+      id: 'schedule-1', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-11',
+      isWorkday: true, scheduledMinutes: 480,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }]
+    })
+    prisma.employeeAttendanceRecord.findFirst.mockResolvedValue({
+      id: 'attendance-1', employeeId: 'employee-1', date: '2026-08-11', absenceMinutes: 120,
+      segments: [{ sequence: 0, checkInAt: new Date('2026-08-11T00:00:00Z'), checkOutAt: new Date('2026-08-11T06:00:00Z') }]
+    })
+    prisma.employeeLeaveRequest.findMany.mockResolvedValue([{
+      unit: 'HOUR', hours: new Prisma.Decimal(2), countedDays: new Prisma.Decimal(0.25)
+    }])
+
+    await expect((service as any).calculateAttendanceForDate('front-1', 'employee-1', '2026-08-11'))
+      .resolves.toMatchObject({ absenceMinutes: 0 })
+  })
+
+  it('rejects actual intervals that overlap or leave the Beijing business date', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeAttendanceRecord.findFirst.mockResolvedValue(null)
+    prisma.employeeMonthlyScheduleDay.findFirst.mockResolvedValue({
+      id: 'schedule-1', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-11',
+      isWorkday: true, scheduledMinutes: 480,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '12:00' }, { sequence: 1, startTime: '13:00', endTime: '17:00' }]
+    })
+    const base = { employeeId: 'employee-1', date: '2026-08-11', explicitAbsenceMinutes: 0, overtimeMinutes: 0 }
+
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, actualSegments: [
+      { checkInAt: '2026-08-11T08:00:00+08:00', checkOutAt: '2026-08-11T13:30:00+08:00' },
+      { checkInAt: '2026-08-11T13:00:00+08:00', checkOutAt: '2026-08-11T17:00:00+08:00' }
+    ] })).rejects.toThrow('重叠')
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, actualSegments: [
+      { checkInAt: '2026-08-10T23:50:00+08:00', checkOutAt: '2026-08-11T08:00:00+08:00' }
+    ] })).rejects.toThrow('北京业务考勤日期')
   })
 
   it('rejects overlapping pending or approved leave for the same employee', async () => {
@@ -298,9 +400,9 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     prisma.employeePayrollRun.findFirst.mockResolvedValue({ id: 'run-1', status: EmployeePayrollStatus.CONFIRMED })
 
     await expect(service.createAttendance('front-1', 'front-1', {
-      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480, absenceMinutes: 480
+      employeeId: 'employee-1', date: '2026-08-10', actualSegments: [], explicitAbsenceMinutes: 480
     })).rejects.toBeInstanceOf(ConflictException)
-    expect(prisma.employeeAttendanceRecord.create).not.toHaveBeenCalled()
+    expect(prisma.employeeAttendanceRecord.upsert).not.toHaveBeenCalled()
   })
 
   it('deactivates a used leave type instead of deleting historical configuration', async () => {
@@ -396,13 +498,16 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
   it('maps a concurrent attendance unique constraint to HTTP 409', async () => {
     const { service, prisma } = createService()
     prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
-    prisma.employeeAttendanceRecord.findFirst.mockResolvedValue(null)
-    prisma.employeeAttendanceRecord.create.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('duplicate', {
+    prisma.employeeMonthlyScheduleDay.findFirst.mockResolvedValue({
+      id: 'schedule-1', employeeId: 'employee-1', date: '2026-08-10', isWorkday: true, scheduledMinutes: 480,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }]
+    })
+    prisma.employeeAttendanceRecord.upsert.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('duplicate', {
       code: 'P2002', clientVersion: 'test'
     }))
 
     await expect(service.createAttendance('front-1', 'front-1', {
-      employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480, absenceMinutes: 480
+      employeeId: 'employee-1', date: '2026-08-10', actualSegments: [], explicitAbsenceMinutes: 480
     })).rejects.toBeInstanceOf(ConflictException)
   })
 
@@ -584,6 +689,21 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     expect(() => service.listLeaveRequests('front-1', { month: '2026-13' })).toThrow(BadRequestException)
   })
 
+  it('filters leave requests for multiple employees without narrowing an empty employee list', async () => {
+    const { service, prisma } = createService()
+
+    await service.listLeaveRequests('front-1', {
+      employeeIds: ['employee-1', 'employee-2'], startDate: '2026-08-10', endDate: '2026-08-20', status: EmployeeLeaveStatus.APPROVED
+    })
+    expect(prisma.employeeLeaveRequest.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: {
+      frontendUserId: 'front-1', employeeId: { in: ['employee-1', 'employee-2'] }, status: EmployeeLeaveStatus.APPROVED,
+      startDate: { lte: '2026-08-20' }, endDate: { gte: '2026-08-10' }
+    } }))
+
+    await service.listLeaveRequests('front-1', { employeeIds: [] })
+    expect(prisma.employeeLeaveRequest.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: { frontendUserId: 'front-1' } }))
+  })
+
   it('deactivates an employee with historical records instead of deleting the employee', async () => {
     const { service, prisma } = createService()
     prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1', status: EmployeeStatus.ACTIVE })
@@ -652,17 +772,21 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     } as any)).rejects.toThrow('暂不支持跨日排班')
   })
 
-  it('rejects invalid workday duration, punch pairing, chronology, timezone and Beijing business date', async () => {
+  it('rejects a zero-minute monthly workday and invalid actual interval endpoints', async () => {
     const { service, prisma } = createService()
     prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
-    prisma.employeeAttendanceRecord.findFirst.mockResolvedValue(null)
+    prisma.employeeMonthlyScheduleDay.findFirst.mockResolvedValueOnce({
+      id: 'schedule-1', employeeId: 'employee-1', date: '2026-08-10', isWorkday: true, scheduledMinutes: 0, segments: []
+    }).mockResolvedValue({
+      id: 'schedule-1', employeeId: 'employee-1', date: '2026-08-10', isWorkday: true, scheduledMinutes: 480,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }]
+    })
 
-    const base = { employeeId: 'employee-1', date: '2026-08-10', isScheduledWorkday: true, scheduledMinutes: 480 }
-    await expect(service.createAttendance('front-1', 'front-1', { ...base, scheduledMinutes: 0, absenceMinutes: 0 } as any)).rejects.toThrow('排班工作日时长必须大于 0')
-    await expect(service.createAttendance('front-1', 'front-1', { ...base, checkInAt: '2026-08-10T08:00:00+08:00' } as any)).rejects.toThrow('必须同时填写')
-    await expect(service.createAttendance('front-1', 'front-1', { ...base, checkInAt: '2026-08-10T08:00:00', checkOutAt: '2026-08-10T17:00:00' } as any)).rejects.toThrow('时区')
-    await expect(service.createAttendance('front-1', 'front-1', { ...base, checkInAt: '2026-08-10T17:00:00+08:00', checkOutAt: '2026-08-10T08:00:00+08:00' } as any)).rejects.toThrow('下班时间必须晚于上班时间')
-    await expect(service.createAttendance('front-1', 'front-1', { ...base, checkInAt: '2026-08-09T23:00:00+08:00', checkOutAt: '2026-08-10T01:00:00+08:00' } as any)).rejects.toThrow('北京业务考勤日期')
+    const base = { employeeId: 'employee-1', date: '2026-08-10', explicitAbsenceMinutes: 0 }
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, actualSegments: [] })).rejects.toThrow('排班工作日时长必须大于 0')
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, actualSegments: [{ checkInAt: '2026-08-10T08:00:00+08:00' } as any] })).rejects.toThrow('必须同时填写')
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, actualSegments: [{ checkInAt: '2026-08-10T08:00:00', checkOutAt: '2026-08-10T17:00:00' }] })).rejects.toThrow('时区')
+    await expect(service.createAttendance('front-1', 'front-1', { ...base, actualSegments: [{ checkInAt: '2026-08-10T17:00:00+08:00', checkOutAt: '2026-08-10T08:00:00+08:00' }] })).rejects.toThrow('下班时间必须晚于上班时间')
   })
 
   it('keeps trusted stored punch instants valid when a partial update changes only the remark', async () => {
@@ -672,8 +796,13 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
       isScheduledWorkday: true, scheduledMinutes: 480,
       checkInAt: new Date('2026-08-10T00:00:00.000Z'), checkOutAt: new Date('2026-08-10T09:00:00.000Z'),
       workedMinutes: 480, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0,
-      remark: null, payrollLockedAt: null
+      remark: null, payrollLockedAt: null,
+      segments: [{ sequence: 0, checkInAt: new Date('2026-08-10T00:00:00.000Z'), checkOutAt: new Date('2026-08-10T09:00:00.000Z') }]
     }
+    prisma.employeeMonthlyScheduleDay.findFirst.mockResolvedValue({
+      id: 'schedule-1', employeeId: 'employee-1', date: '2026-08-10', isWorkday: true, scheduledMinutes: 480,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }]
+    })
     prisma.employeeAttendanceRecord.findFirst
       .mockResolvedValueOnce(current)
       .mockResolvedValueOnce(current)

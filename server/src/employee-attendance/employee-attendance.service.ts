@@ -29,7 +29,7 @@ import type {
   MonthlySettingDto,
   WeeklyScheduleDto
 } from './employee-attendance.dto'
-import { breakMinutes, normalizeClockIntervals, scheduledMinutes, type ClockInterval } from './attendance-intervals'
+import { breakMinutes, deriveAttendanceMetrics, normalizeClockIntervals, scheduledMinutes, type ActualInterval, type ClockInterval } from './attendance-intervals'
 
 type PrismaDelegate = { findFirst(args: any): Promise<any> }
 
@@ -407,27 +407,25 @@ export class EmployeeAttendanceService {
   listAttendance(frontendUserId: string, query: AttendanceListQueryDto = {}) {
     return this.prisma.employeeAttendanceRecord.findMany({ where: {
       frontendUserId, ...(query.employeeId ? { employeeId: query.employeeId } : {}), ...this.dateWhere(query)
-    }, include: { employee: { select: { employeeNumber: true, name: true } } }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] })
+    }, include: {
+      employee: { select: { employeeNumber: true, name: true } },
+      segments: { orderBy: { sequence: 'asc' } }
+    }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] }).then((rows) => rows.map((row) => this.attendanceDto(row)))
   }
 
   async createAttendance(frontendUserId: string, actorUserId: string, payload: AttendanceDto) {
-    await this.assertEmployee(frontendUserId, payload.employeeId)
     this.assertDate(payload.date)
-    await this.assertMonthWritable(frontendUserId, payload.date)
-    const duplicate = await this.prisma.employeeAttendanceRecord.findFirst({ where: { frontendUserId, employeeId: payload.employeeId, date: payload.date } })
-    if (duplicate) throw new ConflictException('该员工当日考勤已存在')
     try {
       return await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'EmployeeAttendanceRecord', (created) => created.id, async (tx) => {
-        const data = await this.attendanceData(frontendUserId, payload, undefined, tx)
-        return tx.employeeAttendanceRecord.create({ data: {
-          frontendUserId,
-          ...data,
-          employeeId: payload.employeeId,
-          date: payload.date,
-          isScheduledWorkday: payload.isScheduledWorkday,
-          scheduledMinutes: this.minutes(payload.scheduledMinutes),
-          manuallyEdited: true
-        } })
+        await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
+        const prepared = await this.prepareAttendance(frontendUserId, payload, undefined, tx)
+        const row = await tx.employeeAttendanceRecord.upsert({
+          where: { employeeId_date: { employeeId: payload.employeeId, date: payload.date } },
+          create: { frontendUserId, employeeId: payload.employeeId, date: payload.date, ...prepared.data, manuallyEdited: true },
+          update: { ...prepared.data, manuallyEdited: true }
+        })
+        await this.replaceAttendanceSegments(tx, frontendUserId, row.id, prepared.actualSegments)
+        return this.attendanceDto(row, prepared.actualSegments)
       }, undefined, [payload.date])
     } catch (error) { this.rethrowConflict(error, '该员工当日考勤已存在') }
   }
@@ -441,7 +439,13 @@ export class EmployeeAttendanceService {
       return await this.withCurrentPayrollSource(
         frontendUserId,
         [current.date, date],
-        (tx) => this.owned(tx.employeeAttendanceRecord, frontendUserId, id, '考勤记录不存在'),
+        async (tx) => {
+          const row = await tx.employeeAttendanceRecord.findFirst({
+            where: { id, frontendUserId }, include: { segments: { orderBy: { sequence: 'asc' } } }
+          })
+          if (!row) throw new NotFoundException('考勤记录不存在')
+          return row
+        },
         (locked) => [locked.date, payload.date || locked.date],
         async (tx, locked) => {
           if (locked.payrollLockedAt) throw new ConflictException('该考勤记录已被工资确认锁定')
@@ -453,14 +457,48 @@ export class EmployeeAttendanceService {
             frontendUserId, employeeId: payload.employeeId || locked.employeeId, date: targetDate, id: { not: id }
           } })
           if (duplicate) throw new ConflictException('该员工当日考勤已存在')
-          const row = await tx.employeeAttendanceRecord.update({ where: { id }, data: {
-            ...await this.attendanceData(frontendUserId, payload, locked, tx), manuallyEdited: true
-          } })
+          const prepared = await this.prepareAttendance(frontendUserId, payload, locked, tx)
+          const row = await tx.employeeAttendanceRecord.update({ where: { id }, data: { ...prepared.data, manuallyEdited: true } })
+          await this.replaceAttendanceSegments(tx, frontendUserId, id, prepared.actualSegments)
           await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeAttendanceRecord', id, undefined, tx)
-          return row
+          return this.attendanceDto(row, prepared.actualSegments)
         }
       )
     } catch (error) { this.rethrowConflict(error, '该员工当日考勤已存在') }
+  }
+
+  async calculateAttendanceForDate(frontendUserId: string, employeeId: string, date: string) {
+    this.assertDate(date)
+    const [schedule, attendance] = await Promise.all([
+      this.prisma.employeeMonthlyScheduleDay.findFirst({
+        where: { frontendUserId, employeeId, date },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
+      this.prisma.employeeAttendanceRecord.findFirst({
+        where: { frontendUserId, employeeId, date },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      })
+    ])
+    if (!schedule) throw new ConflictException(`缺少 ${date} 的员工月度排班`)
+    const actualSegments = (attendance?.segments || []).map((segment: any) => ({
+      checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt
+    }))
+    const approvedLeaveMinutes = await this.approvedLeaveMinutes(frontendUserId, employeeId, date, schedule.scheduledMinutes, this.prisma)
+    const metrics = this.metricsForSchedule(
+      schedule,
+      actualSegments,
+      approvedLeaveMinutes,
+      attendance?.absenceMinutes || 0
+    )
+    return {
+      employeeId, date,
+      isScheduledWorkday: schedule.isWorkday,
+      scheduledMinutes: schedule.isWorkday ? schedule.scheduledMinutes : 0,
+      ...metrics,
+      overtimeMinutes: attendance?.overtimeMinutes || 0,
+      remark: attendance?.remark || null,
+      actualSegments: actualSegments.map((segment) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt }))
+    }
   }
 
   async deleteAttendance(frontendUserId: string, actorUserId: string, id: string) {
@@ -599,7 +637,9 @@ export class EmployeeAttendanceService {
       ...(lowerBound ? { endDate: { gte: lowerBound } } : {})
     }
     return this.prisma.employeeLeaveRequest.findMany({ where: {
-      frontendUserId, ...(query.employeeId ? { employeeId: query.employeeId } : {}), ...(query.status ? { status: query.status } : {}),
+      frontendUserId,
+      ...(query.employeeIds?.length ? { employeeId: { in: query.employeeIds } } : query.employeeId ? { employeeId: query.employeeId } : {}),
+      ...(query.status ? { status: query.status } : {}),
       ...dateFilter
     }, include: { employee: { select: { employeeNumber: true, name: true } }, leaveType: true }, orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }] })
   }
@@ -1012,41 +1052,98 @@ export class EmployeeAttendanceService {
     }
   }
 
-  private async attendanceData(
+  private async prepareAttendance(
     frontendUserId: string,
     payload: Partial<AttendanceDto>,
-    current?: Partial<AttendanceDto>,
-    db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest'> = this.prisma
+    current: any | undefined,
+    db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest' | 'employeeMonthlyScheduleDay'> = this.prisma
   ) {
-    const merged = { ...current, ...payload } as AttendanceDto
+    const currentActualSegments = (current?.segments || current?.actualSegments || []).map((segment: any) => ({
+      checkInAt: segment.checkInAt,
+      checkOutAt: segment.checkOutAt
+    }))
+    const merged = { ...current, ...payload, actualSegments: payload.actualSegments ?? currentActualSegments } as AttendanceDto
     this.assertDate(merged.date)
-    const scheduledMinutes = this.minutes(merged.scheduledMinutes)
-    if (merged.isScheduledWorkday && scheduledMinutes <= 0) throw new BadRequestException('排班工作日时长必须大于 0')
-    if (!merged.isScheduledWorkday && scheduledMinutes !== 0) throw new BadRequestException('休息日排班时长必须为 0')
-    const checkInAt = this.optionalDateTime(merged.checkInAt, merged.date, '上班时间')
-    const checkOutAt = this.optionalDateTime(merged.checkOutAt, merged.date, '下班时间')
-    if (Boolean(checkInAt) !== Boolean(checkOutAt)) throw new BadRequestException('必须同时填写上班和下班时间')
-    if (checkInAt && checkOutAt && checkOutAt.getTime() <= checkInAt.getTime()) throw new BadRequestException('下班时间必须晚于上班时间')
-    const absenceMinutes = this.minutes(merged.absenceMinutes)
-    if (merged.isScheduledWorkday && !checkInAt && !checkOutAt) {
-      const coverage = await this.approvedLeaveCoverage(frontendUserId, merged.employeeId, merged.date, db)
-      const uncoveredMinutes = Math.max(0, Math.round(scheduledMinutes * (1 - coverage)))
-      if (absenceMinutes < uncoveredMinutes) throw new BadRequestException(`未打卡时必须完整记录未被批准请假覆盖的缺勤时长（${uncoveredMinutes} 分钟）`)
-    }
+    const schedule = await db.employeeMonthlyScheduleDay.findFirst({
+      where: { frontendUserId, employeeId: merged.employeeId, date: merged.date },
+      include: { segments: { orderBy: { sequence: 'asc' } } }
+    })
+    if (!schedule) throw new ConflictException(`缺少 ${merged.date} 的员工月度排班`)
+    if (schedule.isWorkday && this.minutes(schedule.scheduledMinutes) <= 0) throw new BadRequestException('排班工作日时长必须大于 0')
+    const actualSegments = this.normalizedActualSegments(merged.actualSegments || [], merged.date)
+    const approvedLeaveMinutes = await this.approvedLeaveMinutes(frontendUserId, merged.employeeId, merged.date, schedule.scheduledMinutes, db)
+    const metrics = this.metricsForSchedule(
+      schedule,
+      actualSegments,
+      approvedLeaveMinutes,
+      this.minutes(merged.explicitAbsenceMinutes ?? current?.absenceMinutes ?? 0)
+    )
+    const first = actualSegments[0]
+    const last = actualSegments.at(-1)
     return {
-      ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
-      ...(payload.date !== undefined ? { date: payload.date } : {}),
-      ...(payload.isScheduledWorkday !== undefined ? { isScheduledWorkday: payload.isScheduledWorkday } : {}),
-      ...(payload.scheduledMinutes !== undefined ? { scheduledMinutes } : {}),
-      ...(payload.checkInAt !== undefined ? { checkInAt } : {}),
-      ...(payload.checkOutAt !== undefined ? { checkOutAt } : {}),
-      ...(payload.workedMinutes !== undefined ? { workedMinutes: this.minutes(payload.workedMinutes) } : {}),
-      ...(payload.lateMinutes !== undefined ? { lateMinutes: this.minutes(payload.lateMinutes) } : {}),
-      ...(payload.earlyLeaveMinutes !== undefined ? { earlyLeaveMinutes: this.minutes(payload.earlyLeaveMinutes) } : {}),
-      ...(payload.absenceMinutes !== undefined ? { absenceMinutes } : {}),
-      ...(payload.overtimeMinutes !== undefined ? { overtimeMinutes: this.minutes(payload.overtimeMinutes) } : {}),
-      ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
+      data: {
+        ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
+        ...(payload.date !== undefined ? { date: payload.date } : {}),
+        isScheduledWorkday: schedule.isWorkday,
+        scheduledMinutes: schedule.isWorkday ? this.minutes(schedule.scheduledMinutes) : 0,
+        checkInAt: first?.checkInAt || null,
+        checkOutAt: last?.checkOutAt || null,
+        ...metrics,
+        overtimeMinutes: this.minutes(merged.overtimeMinutes ?? 0),
+        ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
+      },
+      actualSegments
     }
+  }
+
+  private normalizedActualSegments(input: AttendanceDto['actualSegments'], businessDate: string) {
+    if (!Array.isArray(input)) throw new BadRequestException('实际考勤时段必须为数组')
+    let previousStart = Number.NEGATIVE_INFINITY
+    let previousEnd = Number.NEGATIVE_INFINITY
+    return input.map((segment, index) => {
+      const checkInAt = this.optionalDateTime(segment?.checkInAt, businessDate, `第 ${index + 1} 段上班时间`)
+      const checkOutAt = this.optionalDateTime(segment?.checkOutAt, businessDate, `第 ${index + 1} 段下班时间`)
+      if (!checkInAt || !checkOutAt) throw new BadRequestException(`第 ${index + 1} 段必须同时填写上班和下班时间`)
+      if (checkOutAt.getTime() <= checkInAt.getTime()) throw new BadRequestException(`第 ${index + 1} 段下班时间必须晚于上班时间`)
+      if (checkInAt.getTime() <= previousStart) throw new BadRequestException('实际考勤时段必须严格按上班时间升序')
+      if (checkInAt.getTime() < previousEnd) throw new BadRequestException('实际考勤时段不能重叠')
+      previousStart = checkInAt.getTime()
+      previousEnd = checkOutAt.getTime()
+      return { checkInAt, checkOutAt }
+    })
+  }
+
+  private metricsForSchedule(schedule: any, actualSegments: ActualInterval[], approvedLeaveMinutes: number, explicitAbsenceMinutes: number) {
+    if (!schedule.isWorkday) {
+      return { workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: this.minutes(explicitAbsenceMinutes) }
+    }
+    const plan = (schedule.segments || []).slice().sort((left: any, right: any) => left.sequence - right.sequence)
+      .map((segment: any) => ({ startTime: segment.startTime, endTime: segment.endTime }))
+    try {
+      return deriveAttendanceMetrics(plan, actualSegments, approvedLeaveMinutes, explicitAbsenceMinutes)
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '考勤时段无效')
+    }
+  }
+
+  private async replaceAttendanceSegments(
+    tx: Pick<Prisma.TransactionClient, 'employeeAttendanceSegment'>,
+    frontendUserId: string,
+    attendanceRecordId: string,
+    segments: Array<{ checkInAt: Date; checkOutAt: Date }>
+  ) {
+    await tx.employeeAttendanceSegment.deleteMany({ where: { frontendUserId, attendanceRecordId } })
+    if (segments.length) await tx.employeeAttendanceSegment.createMany({ data: segments.map((segment, sequence) => ({
+      frontendUserId, attendanceRecordId, sequence, checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt
+    })) })
+  }
+
+  private attendanceDto(row: any, explicitSegments?: Array<{ checkInAt: Date; checkOutAt: Date }>) {
+    const actualSegments = (explicitSegments || row.segments || []).slice()
+      .sort((left: any, right: any) => (left.sequence ?? 0) - (right.sequence ?? 0))
+      .map((segment: any) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt }))
+    const { segments: _segments, ...parent } = row
+    return { ...parent, actualSegments }
   }
 
   private dateWhere(query: AttendanceListQueryDto) {
@@ -1302,18 +1399,25 @@ export class EmployeeAttendanceService {
     return hour * 60 + minute
   }
 
-  private async approvedLeaveCoverage(frontendUserId: string, employeeId: string, date: string, db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest'>) {
+  private async approvedLeaveMinutes(
+    frontendUserId: string,
+    employeeId: string,
+    date: string,
+    scheduled: number,
+    db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest'>
+  ) {
     const leaves = await db.employeeLeaveRequest.findMany({ where: {
       frontendUserId, employeeId, status: EmployeeLeaveStatus.APPROVED,
       startDate: { lte: date }, endDate: { gte: date }
     } })
-    return Math.min(1, leaves.reduce((sum, leave: any) => sum + Number(this.leaveCoverageForAttendance(leave)), 0))
-  }
-
-  private leaveCoverageForAttendance(leave: any) {
-    if (leave.unit === EmployeeLeaveUnit.FULL_DAY) return 1
-    if (leave.unit === EmployeeLeaveUnit.HALF_DAY) return 0.5
-    return Math.min(1, Number(leave.countedDays || 0))
+    return Math.min(this.minutes(scheduled), leaves.reduce((sum, leave: any) => {
+      if (leave.unit === EmployeeLeaveUnit.FULL_DAY) return sum + this.minutes(scheduled)
+      if (leave.unit === EmployeeLeaveUnit.HALF_DAY) return sum + Math.round(this.minutes(scheduled) / 2)
+      const hours = Number(leave.hours)
+      return sum + (Number.isFinite(hours) && hours > 0
+        ? Math.round(hours * 60)
+        : Math.round(this.minutes(scheduled) * Number(leave.countedDays || 0)))
+    }, 0))
   }
 
   private referencedLeaveTypeUpdateAllowed(current: any, payload: Partial<LeaveTypeDto>) {
