@@ -15,7 +15,7 @@ const workdays = (count: number, scheduledMinutes = 480) => Array.from({ length:
 function createPrisma() {
   const tx: any = {
     $executeRawUnsafe: vi.fn().mockResolvedValue(1),
-    employee: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn() },
+    employee: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn() },
     employeeMonthlySetting: { findMany: vi.fn().mockResolvedValue([]) },
     employeeMonthlyScheduleDay: { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     employeeAttendanceRecord: { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
@@ -54,6 +54,31 @@ const employee = {
 }
 
 describe('PayrollService frontend payroll', () => {
+  it('uses full-absence conditions rather than counting a partial short day as absent in the shared calendar overview', async () => {
+    const { service, prisma } = serviceFixture()
+    vi.spyOn(service as any, 'today').mockReturnValue('2026-08-11')
+    const scheduled = {
+      frontendUserId: 'front-1', employeeId: employee.id, date: '2026-08-11', isWorkday: true, scheduledMinutes: 600,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '12:00' }, { sequence: 1, startTime: '13:00', endTime: '19:00' }]
+    }
+    const shortRow = {
+      frontendUserId: 'front-1', employeeId: employee.id, date: '2026-08-11', explicitAbsenceMinutes: 0, overtimeMinutes: 0,
+      segments: [{ sequence: 0, checkInAt: '2026-08-11T08:00:00+08:00', checkOutAt: '2026-08-11T12:00:00+08:00' }, { sequence: 1, checkInAt: '2026-08-11T13:00:00+08:00', checkOutAt: '2026-08-11T18:00:00+08:00' }]
+    }
+    prisma.employee.count.mockResolvedValue(1)
+    prisma.employeeAttendanceRecord.findMany.mockImplementation(({ where }: any) => Promise.resolve(where.date === '2026-08-11' ? [shortRow] : [shortRow]))
+    prisma.employeeMonthlyScheduleDay.findMany.mockImplementation(({ where }: any) => Promise.resolve(where.date === '2026-08-11' ? [scheduled] : [scheduled]))
+    prisma.employeeLeaveRequest.findMany.mockResolvedValue([])
+    prisma.employeeLeaveRequest.count.mockResolvedValue(0)
+    prisma.employeePayrollRun.findMany.mockResolvedValue([])
+
+    await expect(service.calendarOverviewForAccounts(['front-1'], '2026-08', '2026-08-11')).resolves.toMatchObject({
+      todayAttendance: 1,
+      todayLeave: 0,
+      todayAbsence: 0
+    })
+  })
+
   it('generates a decimal-safe formula snapshot from current monthly records', async () => {
     const { service, tx } = serviceFixture()
     tx.employee.findMany.mockResolvedValue([employee])

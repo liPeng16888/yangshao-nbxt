@@ -5,6 +5,7 @@ import { AdminEmployeeAttendanceController } from './admin-employee-attendance.c
 import { EmployeeDataCipherService } from './employee-data-cipher.service'
 import { EmployeeAttendanceController } from './employee-attendance.controller'
 import { EmployeeAttendanceService } from './employee-attendance.service'
+import { AttendanceCalendarService } from './attendance-calendar.service'
 import { PrivateEmployeePhotoService } from './private-employee-photo.service'
 import { PayrollService } from './payroll.service'
 import { PayrollMonthLockService } from './payroll-month-lock.service'
@@ -12,7 +13,7 @@ import { PayrollMonthLockService } from './payroll-month-lock.service'
 @Module({
   imports: [AuthModule, AdminModule],
   controllers: [EmployeeAttendanceController, AdminEmployeeAttendanceController],
-  providers: [EmployeeAttendanceService, EmployeeDataCipherService, PrivateEmployeePhotoService, PayrollMonthLockService, PayrollService],
-  exports: [EmployeeAttendanceService, PayrollService]
+  providers: [EmployeeAttendanceService, EmployeeDataCipherService, PrivateEmployeePhotoService, PayrollMonthLockService, PayrollService, AttendanceCalendarService],
+  exports: [EmployeeAttendanceService, PayrollService, AttendanceCalendarService]
 })
 export class EmployeeAttendanceModule {}
