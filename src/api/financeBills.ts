@@ -16,13 +16,20 @@ import {
   summarizeMonthlySettlementReport
 } from '@/utils/financeBills'
 import { businessDateInBeijing, todayInBeijing } from '@/utils/date'
+import { getMockSharedPrepaidOwnerId, listMockSharedPrepaidIncomeRecharges } from '@/mocks/sharedPrepaidLedger'
 
 const MONTHLY_SETTLEMENT_STORAGE_KEY = 'ys_monthly_settlement_records'
 
 export async function getIncomeBillReport(month: string): Promise<IncomeBillReport> {
   if (!useMocks) return request.get('/finance/income-bills', { params: { month } })
-  const rows = await Promise.all(getMonthDates(month).map(async (date) => summarizeIncomeSheet(await getLabSheetByDate(date))))
-  return summarizeIncomeRows(month, rows)
+  const dates = getMonthDates(month)
+  const rows = await Promise.all(dates.map(async (date) => summarizeIncomeSheet(await getLabSheetByDate(date))))
+  const recharges = listMockSharedPrepaidIncomeRecharges(
+    getMockSharedPrepaidOwnerId(),
+    dates[0] || `${month}-01`,
+    dates.at(-1) || dayjs(`${month}-01`).endOf('month').format('YYYY-MM-DD')
+  )
+  return summarizeIncomeRows(month, rows, recharges, new Set(dates))
 }
 
 export async function getUnsettledSamples(): Promise<UnsettledSampleRow[]> {

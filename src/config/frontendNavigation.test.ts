@@ -10,6 +10,7 @@ import {
 
 const main = { role: 'FRONTEND_USER', permissions: [] as string[], isFrontendSubAccount: false }
 const incomeOnly = { role: 'FRONTEND_SUB_USER', permissions: ['FINANCE_INCOME'], isFrontendSubAccount: true }
+const prepaidCustomersOnly = { role: 'FRONTEND_SUB_USER', permissions: ['PREPAID_CUSTOMERS'], isFrontendSubAccount: true }
 
 describe('frontend navigation permissions', () => {
   it('covers every approved leaf exactly once', () => {
@@ -61,6 +62,13 @@ describe('frontend navigation permissions', () => {
     expect(permissionForPath('/prepaid/settlements')).toBe('PREPAID_SETTLEMENTS')
     expect(canAccessPath(incomeOnly, '/finance/income')).toBe(true)
     expect(canAccessPath(incomeOnly, '/finance/expenses')).toBe(false)
+  })
+
+  it('sends a prepaid-only subaccount to its first permitted prepaid leaf without looping', () => {
+    expect(firstAllowedPath(prepaidCustomersOnly)).toBe('/prepaid/customers')
+    expect(firstAllowedPath(prepaidCustomersOnly, '/prepaid')).toBe('/prepaid/customers')
+    expect(canAccessPath(prepaidCustomersOnly, '/prepaid/customers')).toBe(true)
+    expect(canAccessPath(prepaidCustomersOnly, '/prepaid/recharges')).toBe(false)
   })
 
   it('uses a dedicated authenticated fallback when no leaf is assigned', () => {

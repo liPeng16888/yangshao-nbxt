@@ -15,7 +15,7 @@ vi.mock('@/utils/request', () => ({
 }))
 vi.mock('./labSheet', () => labSheetMocks)
 
-import { markSamplesAsPaid } from './financeBills'
+import { getIncomeBillReport, markSamplesAsPaid } from './financeBills'
 
 function makeBlock(id: string, paymentStatus: SampleBlock['inputs']['paymentStatus']): SampleBlock {
   return {
@@ -97,5 +97,23 @@ describe('finance bills batch payment mock API', () => {
     await expect(markSamplesAsPaid([makeRow('block-1'), makeRow('block-2')])).rejects.toThrow('部分样品已不是未结款状态')
 
     expect(labSheetMocks.saveSampleBlock).not.toHaveBeenCalled()
+  })
+})
+
+describe('finance bills mock shared prepaid income', () => {
+  it('counts only the owner/date active paid principal and does not double-count gift or consumption', async () => {
+    labSheetMocks.getLabSheetByDate.mockImplementation(async (date: string): Promise<LabSheet> => ({
+      id: `sheet-${date}`,
+      date,
+      readonly: true,
+      parameters: defaultLabParameters,
+      sampleBlocks: date === '2026-08-10' ? [makeBlock('block-1', '预存款')] : []
+    }))
+
+    const report = await getIncomeBillReport('2026-08')
+
+    expect(report.statusSummaries.find((row) => row.status === '预存款')).toMatchObject({ count: 1, amount: 1000 })
+    expect(report.totalAmount).toBe(1000)
+    expect(report.totalSamples).toBe(1)
   })
 })

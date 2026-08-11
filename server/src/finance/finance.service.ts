@@ -279,21 +279,23 @@ export class FinanceService {
   async getAdminIncomeReport(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string; month?: string }) {
     const range = this.resolveRange(query)
     const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, this.adminAccess.parseFrontendUserIds(query.frontendUserIds))
-    const sheets = await this.loadSheets(frontendUserIds, range.startDate, range.endDate)
-    const prepaidRecharges = await this.prisma.sharedPrepaidRecharge.findMany({
-      where: {
-        ownerFrontendUserId: { in: frontendUserIds },
-        rechargeDate: { gte: range.startDate, lte: range.endDate },
-        reversedAt: null
-      }
-    })
+    const today = todayInBeijing()
+    const weekStart = dayjs(today).startOf('week').format('YYYY-MM-DD')
+    const monthStart = dayjs(today).startOf('month').format('YYYY-MM-DD')
+    const cardsStart = weekStart < monthStart ? weekStart : monthStart
+    const [sheets, prepaidRecharges, cardsSheets, cardsPrepaidRecharges] = await Promise.all([
+      this.loadSheets(frontendUserIds, range.startDate, range.endDate),
+      this.loadSharedPrepaidIncomeRecharges(frontendUserIds, range.startDate, range.endDate),
+      this.loadSheets(frontendUserIds, cardsStart, today),
+      this.loadSharedPrepaidIncomeRecharges(frontendUserIds, cardsStart, today)
+    ])
     return {
       ...this.buildIncomeReport(query.month || range.startDate.slice(0, 7), sheets, prepaidRecharges),
       range,
       totals: {
-        today: this.sumIncomeByRange(sheets, todayInBeijing(), todayInBeijing(), prepaidRecharges),
-        week: this.sumIncomeByRange(sheets, dayjs().startOf('week').format('YYYY-MM-DD'), todayInBeijing(), prepaidRecharges),
-        month: this.sumIncomeByRange(sheets, dayjs().startOf('month').format('YYYY-MM-DD'), todayInBeijing(), prepaidRecharges)
+        today: this.sumIncomeByRange(cardsSheets, today, today, cardsPrepaidRecharges),
+        week: this.sumIncomeByRange(cardsSheets, weekStart, today, cardsPrepaidRecharges),
+        month: this.sumIncomeByRange(cardsSheets, monthStart, today, cardsPrepaidRecharges)
       }
     }
   }
@@ -516,6 +518,16 @@ export class FinanceService {
       include: {
         frontendUser: { select: { id: true, username: true, account: true, displayRemark: true } },
         sampleBlocks: { orderBy: { index: 'asc' } }
+      }
+    })
+  }
+
+  private loadSharedPrepaidIncomeRecharges(frontendUserIds: string[], startDate: string, endDate: string) {
+    return this.prisma.sharedPrepaidRecharge.findMany({
+      where: {
+        ownerFrontendUserId: { in: frontendUserIds },
+        rechargeDate: { gte: startDate, lte: endDate },
+        reversedAt: null
       }
     })
   }

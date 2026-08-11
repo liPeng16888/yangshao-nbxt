@@ -9,6 +9,7 @@ import FinancePage from '@/views/dashboard/FinancePage.vue'
 import FinanceIncomePage from '@/views/dashboard/FinanceIncomePage.vue'
 import FinanceMonthlySettlementPage from '@/views/dashboard/FinanceMonthlySettlementPage.vue'
 import FinanceUnsettledPage from '@/views/dashboard/FinanceUnsettledPage.vue'
+import SharedPrepaidPlaceholderPage from '@/views/dashboard/SharedPrepaidPlaceholderPage.vue'
 import ReportPage from '@/views/dashboard/ReportPage.vue'
 import BlacklistPage from '@/views/dashboard/BlacklistPage.vue'
 import CustomerOverviewPage from '@/views/dashboard/CustomerOverviewPage.vue'
@@ -27,6 +28,10 @@ import { canAccessPath, firstAllowedPath } from '@/config/frontendNavigation'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { featureForPath, resolveAuthRedirect } from './guards'
+
+export function prepaidRootRedirect(user: Parameters<typeof firstAllowedPath>[0]) {
+  return firstAllowedPath(user, '/prepaid')
+}
 
 const router = createRouter({
   history: createWebHistory(),
@@ -81,6 +86,31 @@ const router = createRouter({
           name: 'financeMonthlySettlement',
           component: FinanceMonthlySettlementPage,
           meta: { title: '月结款', requiresAuth: true, frontendPermission: 'FINANCE_MONTHLY_SETTLEMENT' }
+        },
+        { path: 'prepaid', redirect: () => prepaidRootRedirect(useAuthStore().user) },
+        {
+          path: 'prepaid/recharges',
+          name: 'prepaidRecharges',
+          component: SharedPrepaidPlaceholderPage,
+          meta: { title: '预存款充值', requiresAuth: true, frontendPermission: 'PREPAID_RECHARGE' }
+        },
+        {
+          path: 'prepaid/customers',
+          name: 'prepaidCustomers',
+          component: SharedPrepaidPlaceholderPage,
+          meta: { title: '预存款客户', requiresAuth: true, frontendPermission: 'PREPAID_CUSTOMERS' }
+        },
+        {
+          path: 'prepaid/consumptions',
+          name: 'prepaidConsumptions',
+          component: SharedPrepaidPlaceholderPage,
+          meta: { title: '消费明细', requiresAuth: true, frontendPermission: 'PREPAID_CONSUMPTIONS' }
+        },
+        {
+          path: 'prepaid/settlements',
+          name: 'prepaidSettlements',
+          component: SharedPrepaidPlaceholderPage,
+          meta: { title: '转账结算', requiresAuth: true, frontendPermission: 'PREPAID_SETTLEMENTS' }
         },
         { path: 'reports', name: 'reports', component: ReportPage, meta: { title: '报表', requiresAuth: true, frontendPermission: 'REPORTS' } },
         { path: 'medicine-inventory', redirect: () => firstAllowedPath(useAuthStore().user, '/medicine-inventory') },

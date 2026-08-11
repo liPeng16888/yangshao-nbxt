@@ -23,6 +23,7 @@ import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
 import { businessDateInBeijing, getReportRange, todayInBeijing } from '@/utils/date'
 import { medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
 import { hasLabDetectionInput } from '@/utils/sampleReport'
+import { getMockSharedPrepaidOwnerId, listMockSharedPrepaidIncomeRecharges } from './sharedPrepaidLedger'
 import type {
   CreateFrontendSubAccountPayload,
   FrontendSubAccountDto,
@@ -721,7 +722,7 @@ export async function mockSampleDetectionReport(range: DateRange): Promise<Sampl
   const incomeReport = summarizeIncomeRows(
     startDate.slice(0, 7),
     dates.map((date) => summarizeIncomeSheet(ensureSheet(date))),
-    [],
+    listMockSharedPrepaidIncomeRecharges(getMockSharedPrepaidOwnerId(currentUser), startDate, endDate),
     new Set(dates)
   )
   const rows = incomeReport.rows

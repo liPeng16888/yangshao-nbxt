@@ -1,4 +1,7 @@
+import { FinanceDeletionRequestStatus, FinanceDeletionRequestType, Prisma, UserRole } from '@prisma/client'
+import dayjs from 'dayjs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { CurrentUser } from '../auth/current-user'
 import { defaultLabParameters } from '../common/lab'
 import { FinanceService } from './finance.service'
 
@@ -76,6 +79,145 @@ describe('FinanceService shared prepaid income', () => {
     expect(report.statusSummaries.find((row) => row.status === '预存款')).toMatchObject({ count: 1, amount: 1000 })
     expect(report.totalAmount).toBe(1000)
     expect(report.totalSamples).toBe(1)
+  })
+})
+
+describe('FinanceService admin income cards', () => {
+  it('keeps daily detail scoped while week/month cards use all authorized active rows', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-12T04:00:00.000Z'))
+    const today = '2026-08-12'
+    const earlier = '2026-08-10'
+    const sheets = [
+      {
+        id: 'sheet-today', date: today, frontendUserId: 'front-1',
+        frontendUser: { id: 'front-1', username: 'front-1', account: 'front-1', displayRemark: null },
+        sampleBlocks: [{ id: 'block-today', index: 1, inputs: { paymentStatus: '预存款', price: 100 } }]
+      },
+      {
+        id: 'sheet-earlier', date: earlier, frontendUserId: 'front-2',
+        frontendUser: { id: 'front-2', username: 'front-2', account: 'front-2', displayRemark: null },
+        sampleBlocks: [{ id: 'block-earlier', index: 1, inputs: { paymentStatus: '已结款', price: 25.35 } }]
+      },
+      {
+        id: 'sheet-denied', date: earlier, frontendUserId: 'front-3',
+        frontendUser: { id: 'front-3', username: 'front-3', account: 'front-3', displayRemark: null },
+        sampleBlocks: [{ id: 'block-denied', index: 1, inputs: { paymentStatus: '已结款', price: 500 } }]
+      }
+    ]
+    const recharges = [
+      { ownerFrontendUserId: 'front-1', rechargeDate: today, paidAmount: new Prisma.Decimal('1000.25'), reversedAt: null },
+      { ownerFrontendUserId: 'front-2', rechargeDate: earlier, paidAmount: new Prisma.Decimal('200.10'), reversedAt: null },
+      { ownerFrontendUserId: 'front-2', rechargeDate: earlier, paidAmount: new Prisma.Decimal('999.99'), reversedAt: new Date() },
+      { ownerFrontendUserId: 'front-3', rechargeDate: earlier, paidAmount: new Prisma.Decimal('777.77'), reversedAt: null }
+    ]
+    const inRequestedRange = (date: string, range: { gte: string; lte: string }) => date >= range.gte && date <= range.lte
+    const prisma = {
+      labSheet: {
+        findMany: vi.fn(async ({ where }: any) => sheets.filter((row) => (
+          where.frontendUserId.in.includes(row.frontendUserId) && inRequestedRange(row.date, where.date)
+        )))
+      },
+      sharedPrepaidRecharge: {
+        findMany: vi.fn(async ({ where }: any) => recharges.filter((row) => (
+          where.ownerFrontendUserId.in.includes(row.ownerFrontendUserId) &&
+          inRequestedRange(row.rechargeDate, where.rechargeDate) &&
+          (where.reversedAt !== null || row.reversedAt === null)
+        )))
+      }
+    }
+    const adminAccess = {
+      parseFrontendUserIds: vi.fn().mockReturnValue(['front-1', 'front-2']),
+      getAllowedFrontendUserIds: vi.fn().mockResolvedValue(['front-1', 'front-2'])
+    }
+    const admin = {
+      id: 'admin-1', account: 'root', username: 'root', role: UserRole.ROOT_ADMIN,
+      dataOwnerId: 'admin-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+      isFrontendMainAccount: false, isFrontendSubAccount: false
+    } satisfies CurrentUser
+    const service = new FinanceService(prisma as never, adminAccess as never, {} as never)
+
+    try {
+      const report = await service.getAdminIncomeReport(admin, { frontendUserIds: 'front-1,front-2' })
+
+      expect(report.range).toEqual({ startDate: today, endDate: today })
+      expect(report.rows).toHaveLength(1)
+      expect(report.rows[0]).toMatchObject({ date: today, sampleCount: 1, totalAmount: 1000.25 })
+      expect(report.totals.today).toEqual({ sampleCount: 1, amount: 1000.25 })
+      expect(report.totals.week).toEqual({ sampleCount: 2, amount: 1225.7 })
+      expect(report.totals.month).toEqual({ sampleCount: 2, amount: 1225.7 })
+      expect(prisma.labSheet.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ frontendUserId: { in: ['front-1', 'front-2'] } })
+      }))
+      expect(prisma.sharedPrepaidRecharge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ ownerFrontendUserId: { in: ['front-1', 'front-2'] }, reversedAt: null })
+      }))
+      expect(prisma.sharedPrepaidRecharge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ rechargeDate: { gte: dayjs(today).startOf('month').format('YYYY-MM-DD'), lte: today } })
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('FinanceService deletion approval cutover', () => {
+  const admin = {
+    id: 'admin-1', account: 'root', username: 'root', role: UserRole.ROOT_ADMIN,
+    dataOwnerId: 'admin-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+    isFrontendMainAccount: false, isFrontendSubAccount: false
+  } satisfies CurrentUser
+
+  function deletionRequest(sourceType: FinanceDeletionRequestType) {
+    const now = new Date('2026-08-12T00:00:00.000Z')
+    return {
+      id: 'delete-1', frontendUserId: 'front-1', sourceType, sourceId: 'source-1', reason: '录入错误',
+      sourceSnapshot: sourceType === FinanceDeletionRequestType.EXPENSE
+        ? { paymentDate: '2026-08-12', item: '耗材', amount: 88 }
+        : { rechargeDate: '2026-08-12', customer: '客户甲', amount: 1000, usableTimes: 10 },
+      status: FinanceDeletionRequestStatus.PENDING, reviewRemark: null, reviewedAt: null,
+      reviewedById: null, createdAt: now, updatedAt: now,
+      frontendUser: { username: 'front-1', account: 'front-1', displayRemark: null }, reviewedBy: null
+    }
+  }
+
+  it('still approves and deletes an ordinary expense in one transaction', async () => {
+    const row = deletionRequest(FinanceDeletionRequestType.EXPENSE)
+    const tx = {
+      financeEntry: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      financeDeletionRequest: {
+        update: vi.fn().mockImplementation(async ({ data }: any) => ({
+          ...row, ...data, reviewedAt: new Date('2026-08-12T01:00:00.000Z'), reviewedBy: { username: 'root', account: 'root' }
+        }))
+      }
+    }
+    const prisma = {
+      financeDeletionRequest: { findUnique: vi.fn().mockResolvedValue(row) },
+      $transaction: vi.fn(async (operation: (client: typeof tx) => unknown) => operation(tx))
+    }
+    const reminders = { createPaymentReminder: vi.fn().mockResolvedValue({}) }
+    const adminAccess = { getAllowedFrontendUserIds: vi.fn().mockResolvedValue(['front-1']) }
+    const service = new FinanceService(prisma as never, adminAccess as never, reminders as never)
+
+    const result = await service.approveDeletionRequest(admin, row.id)
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1)
+    expect(tx.financeEntry.deleteMany).toHaveBeenCalledWith({ where: { id: 'source-1', frontendUserId: 'front-1' } })
+    expect(result.status).toBe(FinanceDeletionRequestStatus.APPROVED)
+  })
+
+  it('rejects a legacy prepaid approval before opening a transaction', async () => {
+    const row = deletionRequest(FinanceDeletionRequestType.PREPAID_RECHARGE)
+    const prisma = {
+      financeDeletionRequest: { findUnique: vi.fn().mockResolvedValue(row) },
+      $transaction: vi.fn()
+    }
+    const adminAccess = { getAllowedFrontendUserIds: vi.fn().mockResolvedValue(['front-1']) }
+    const service = new FinanceService(prisma as never, adminAccess as never, {} as never)
+
+    await expect(service.approveDeletionRequest(admin, row.id)).rejects.toThrow('旧预存款删除申请不再支持审批')
+
+    expect(prisma.$transaction).not.toHaveBeenCalled()
   })
 })
 
