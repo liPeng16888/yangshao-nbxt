@@ -1,11 +1,17 @@
 import { Transform } from 'class-transformer'
 import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  ArrayUnique,
+  IsArray,
   IsBoolean,
   IsDefined,
+  IsISO8601,
   IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -18,6 +24,7 @@ import {
 import type { CreateRechargePayload } from './shared-prepaid-ledger.service'
 
 const BUSINESS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+export const SHARED_PREPAID_ZONED_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i
 
 const trim = (value: unknown) => typeof value === 'string' ? value.trim() : value
 const queryNumber = (value: unknown) => (
@@ -37,6 +44,91 @@ function IsMoneyScalar(validationOptions?: ValidationOptions): PropertyDecorator
       defaultMessage: () => '金额必须为数字或数字文本'
     }
   }, validationOptions)
+}
+
+export function isSharedPrepaidProofUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || !value || value.length > 2000) return false
+  if (value.startsWith('/uploads/')) {
+    if (value.includes('\\') || value.includes('?') || value.includes('#') || !/^\/[A-Za-z0-9._/-]+$/.test(value)) {
+      return false
+    }
+    try {
+      const segments = decodeURIComponent(value).split('/')
+      return !segments.some((segment) => segment === '.' || segment === '..')
+    } catch {
+      return false
+    }
+  }
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password
+  } catch {
+    return false
+  }
+}
+
+function IsSharedPrepaidProofUrl(validationOptions?: ValidationOptions): PropertyDecorator {
+  return ValidateBy({
+    name: 'isSharedPrepaidProofUrl',
+    validator: {
+      validate: isSharedPrepaidProofUrl,
+      defaultMessage: () => '转账凭证必须为上传地址或 HTTP(S) 地址'
+    }
+  }, validationOptions)
+}
+
+export class SharedPrepaidSettlementSelectionDto {
+  @Transform(({ value }) => Array.isArray(value) ? value.map((item) => trim(item)) : value)
+  @IsArray({ message: '应转款明细必须为数组' })
+  @ArrayNotEmpty({ message: '请选择待结算的应转款明细' })
+  @ArrayMaxSize(1000, { message: '单次最多结算 1000 条明细' })
+  @ArrayUnique({ message: '应转款明细不能重复' })
+  @IsUUID('4', { each: true, message: '应转款明细编号格式错误' })
+  payableIds!: string[]
+}
+
+export class SharedPrepaidSettlementPaymentDto {
+  @Transform(({ value }) => trim(value))
+  @IsString({ message: '实际转账时间必须为文本' })
+  @Matches(SHARED_PREPAID_ZONED_DATE_TIME_PATTERN, { message: '实际转账时间必须包含时区' })
+  @IsISO8601({ strict: true, strictSeparator: true }, { message: '实际转账时间格式错误' })
+  actualTransferredAt!: string
+
+  @Transform(({ value }) => Array.isArray(value) ? value.map((item) => trim(item)) : value)
+  @IsOptional()
+  @IsArray({ message: '转账凭证必须为数组' })
+  @ArrayMaxSize(10, { message: '转账凭证最多 10 张' })
+  @ArrayUnique({ message: '转账凭证不能重复' })
+  @IsSharedPrepaidProofUrl({ each: true })
+  proofUrls?: string[]
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsString({ message: '备注必须为文本' })
+  @MaxLength(500, { message: '备注不能超过 500 个字符' })
+  remark?: string
+}
+
+export class SharedPrepaidSettlementRejectDto {
+  @Transform(({ value }) => trim(value))
+  @IsString({ message: '驳回原因必须为文本' })
+  @IsNotEmpty({ message: '请填写驳回原因' })
+  @MaxLength(500, { message: '驳回原因不能超过 500 个字符' })
+  reason!: string
+}
+
+export class SharedPrepaidSettlementIdParamsDto {
+  @Transform(({ value }) => trim(value))
+  @IsUUID('4', { message: '结算单编号格式错误' })
+  id!: string
+}
+
+export class SharedPrepaidIdempotencyHeadersDto {
+  @Transform(({ value }) => trim(value))
+  @IsString({ message: '幂等请求编号必须为文本' })
+  @IsNotEmpty({ message: '缺少幂等请求编号' })
+  @MaxLength(200, { message: '幂等请求编号过长' })
+  'x-idempotency-key'!: string
 }
 
 export class CreateSharedPrepaidRechargeDto implements CreateRechargePayload {

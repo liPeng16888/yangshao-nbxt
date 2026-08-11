@@ -8,11 +8,18 @@ import {
 import {
   Prisma,
   SharedPrepaidPayableStatus,
+  SharedPrepaidSettlementActionOperation,
   SharedPrepaidSettlementStatus
 } from '@prisma/client'
+import { createHash } from 'node:crypto'
+import { isISO8601 } from 'class-validator'
 
 import type { CurrentUser } from '../auth/current-user'
 import { PrismaService } from '../prisma/prisma.service'
+import {
+  isSharedPrepaidProofUrl,
+  SHARED_PREPAID_ZONED_DATE_TIME_PATTERN
+} from './shared-prepaid.dto'
 
 export interface SubmitSettlementPaymentPayload {
   actualTransferredAt?: unknown
@@ -54,6 +61,17 @@ interface SettlementSelection {
   receiverFrontendUserId: string | null
   payables: PayableRow[]
 }
+
+interface ExpectedSettlementAction {
+  settlementId: string
+  operation: SharedPrepaidSettlementActionOperation
+  actorUserId: string
+  actorFrontendUserId: string
+  idempotencyKey: string
+  requestFingerprint: string
+}
+
+type SettlementActionReader = Pick<Prisma.TransactionClient, 'sharedPrepaidSettlementAction'>
 
 const payableSelectionInclude = {
   settlementLines: {
@@ -173,18 +191,32 @@ export class SharedPrepaidSettlementService {
   ) {
     this.assertMainAccount(user, '只有主账号可以提交转账')
     const id = this.requireSettlementId(settlementId)
-    this.requireIdempotencyKey(idempotencyKey)
+    const key = this.requireIdempotencyKey(idempotencyKey)
+    const current = await this.prisma.sharedPrepaidSettlement.findUnique({
+      where: { id },
+      include: settlementReadInclude
+    })
+    if (current?.netAmount.isZero()) throw this.stateConflict('零净额结算不需要提交转账')
+    const input = this.validatePaymentPayload(payload)
+    const expected = this.expectedAction(
+      SharedPrepaidSettlementActionOperation.SUBMIT_PAYMENT,
+      user,
+      id,
+      key,
+      {
+        actualTransferredAt: input.actualTransferredAt.toISOString(),
+        proofUrls: input.proofUrls,
+        remark: input.remark
+      }
+    )
 
-    return this.prisma.$transaction(async (tx) => {
-      const settlement = await this.lockAndReadSettlement(tx, id)
+    return this.executeAction(expected, async (tx, settlement) => {
       if (settlement.netAmount.isZero()) {
         throw this.stateConflict('零净额结算不需要提交转账')
       }
       if (settlement.payerFrontendUserId !== user.dataOwnerId) {
         throw new ForbiddenException('只有最终付款主账号可以提交转账')
       }
-      const input = this.validatePaymentPayload(payload)
-      if (this.samePayment(settlement, user, input)) return this.toResult(settlement)
       if (settlement.status === SharedPrepaidSettlementStatus.COMPLETED) {
         throw this.completedImmutable()
       }
@@ -211,17 +243,17 @@ export class SharedPrepaidSettlementService {
   ) {
     this.assertMainAccount(user, '只有主账号可以确认到账')
     const id = this.requireSettlementId(settlementId)
-    this.requireIdempotencyKey(idempotencyKey)
+    const key = this.requireIdempotencyKey(idempotencyKey)
+    const expected = this.expectedAction(
+      SharedPrepaidSettlementActionOperation.CONFIRM_RECEIPT,
+      user,
+      id,
+      key,
+      null
+    )
 
-    return this.prisma.$transaction(async (tx) => {
-      const settlement = await this.lockAndReadSettlement(tx, id)
+    return this.executeAction(expected, async (tx, settlement) => {
       this.assertReceiptActor(settlement, user)
-      if (
-        settlement.status === SharedPrepaidSettlementStatus.COMPLETED &&
-        settlement.receiptConfirmedById === user.id
-      ) {
-        return this.toResult(settlement)
-      }
       if (settlement.status === SharedPrepaidSettlementStatus.COMPLETED) {
         throw this.completedImmutable()
       }
@@ -260,18 +292,17 @@ export class SharedPrepaidSettlementService {
     this.assertMainAccount(user, '只有主账号可以驳回结算')
     const id = this.requireSettlementId(settlementId)
     const normalizedReason = this.requireReason(reason)
-    this.requireIdempotencyKey(idempotencyKey)
+    const key = this.requireIdempotencyKey(idempotencyKey)
+    const expected = this.expectedAction(
+      SharedPrepaidSettlementActionOperation.REJECT,
+      user,
+      id,
+      key,
+      { reason: normalizedReason }
+    )
 
-    return this.prisma.$transaction(async (tx) => {
-      const settlement = await this.lockAndReadSettlement(tx, id)
+    return this.executeAction(expected, async (tx, settlement) => {
       this.assertReceiptActor(settlement, user)
-      if (
-        settlement.status === SharedPrepaidSettlementStatus.REJECTED &&
-        settlement.rejectedById === user.id &&
-        settlement.rejectionReason === normalizedReason
-      ) {
-        return this.toResult(settlement)
-      }
       if (settlement.status === SharedPrepaidSettlementStatus.COMPLETED) {
         throw this.completedImmutable()
       }
@@ -297,18 +328,18 @@ export class SharedPrepaidSettlementService {
   ) {
     this.assertMainAccount(user, '只有主账号可以取消结算')
     const id = this.requireSettlementId(settlementId)
-    this.requireIdempotencyKey(idempotencyKey)
+    const key = this.requireIdempotencyKey(idempotencyKey)
+    const expected = this.expectedAction(
+      SharedPrepaidSettlementActionOperation.CANCEL,
+      user,
+      id,
+      key,
+      null
+    )
 
-    return this.prisma.$transaction(async (tx) => {
-      const settlement = await this.lockAndReadSettlement(tx, id)
+    return this.executeAction(expected, async (tx, settlement) => {
       if (settlement.createdById !== user.id) {
         throw new ForbiddenException('只有创建该结算单的主账号可以取消')
-      }
-      if (
-        settlement.status === SharedPrepaidSettlementStatus.CANCELLED &&
-        settlement.cancelledById === user.id
-      ) {
-        return this.toResult(settlement)
       }
       if (settlement.status === SharedPrepaidSettlementStatus.COMPLETED) {
         throw this.completedImmutable()
@@ -503,6 +534,113 @@ export class SharedPrepaidSettlementService {
     return this.toResult(settlement)
   }
 
+  private expectedAction(
+    operation: SharedPrepaidSettlementActionOperation,
+    user: CurrentUser,
+    settlementId: string,
+    idempotencyKey: string,
+    payload: unknown
+  ): ExpectedSettlementAction {
+    const identity = {
+      operation,
+      settlementId,
+      actorUserId: user.id,
+      actorFrontendUserId: user.dataOwnerId,
+      payload
+    }
+    return {
+      operation,
+      settlementId,
+      actorUserId: user.id,
+      actorFrontendUserId: user.dataOwnerId,
+      idempotencyKey,
+      requestFingerprint: createHash('sha256').update(JSON.stringify(identity)).digest('hex')
+    }
+  }
+
+  private async executeAction<T extends Record<string, unknown>>(
+    expected: ExpectedSettlementAction,
+    mutation: (tx: Prisma.TransactionClient, settlement: SettlementRow) => Promise<T>
+  ): Promise<T> {
+    const existing = await this.resolveActionRetry<T>(this.prisma, expected)
+    if (existing) return existing
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const duplicate = await this.resolveActionRetry<T>(tx, expected)
+        if (duplicate) return duplicate
+
+        const settlement = await this.lockAndReadSettlement(tx, expected.settlementId)
+        const committedWhileWaiting = await this.resolveActionRetry<T>(tx, expected)
+        if (committedWhileWaiting) return committedWhileWaiting
+
+        const result = await mutation(tx, settlement)
+        await tx.sharedPrepaidSettlementAction.create({
+          data: {
+            settlementId: expected.settlementId,
+            operation: expected.operation,
+            actorUserId: expected.actorUserId,
+            actorFrontendUserId: expected.actorFrontendUserId,
+            idempotencyKey: expected.idempotencyKey,
+            requestFingerprint: expected.requestFingerprint,
+            responseSnapshot: this.toActionSnapshot(result)
+          }
+        })
+        return result
+      })
+    } catch (error) {
+      if (!this.isUniqueConstraintError(error)) throw error
+      const winner = await this.resolveActionRetry<T>(this.prisma, expected)
+      if (winner) return winner
+      throw this.idempotencyConflict()
+    }
+  }
+
+  private async resolveActionRetry<T extends Record<string, unknown>>(
+    reader: SettlementActionReader,
+    expected: ExpectedSettlementAction
+  ): Promise<T | null> {
+    const action = await reader.sharedPrepaidSettlementAction.findUnique({
+      where: { idempotencyKey: expected.idempotencyKey }
+    })
+    if (!action) return null
+    if (
+      action.operation !== expected.operation ||
+      action.settlementId !== expected.settlementId ||
+      action.actorUserId !== expected.actorUserId ||
+      action.actorFrontendUserId !== expected.actorFrontendUserId ||
+      action.requestFingerprint !== expected.requestFingerprint
+    ) throw this.idempotencyConflict()
+    return this.fromActionSnapshot<T>(action.responseSnapshot)
+  }
+
+  private toActionSnapshot(value: Record<string, unknown>): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
+  }
+
+  private fromActionSnapshot<T extends Record<string, unknown>>(value: Prisma.JsonValue): T {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new ConflictException({
+        code: 'PREPAID_IDEMPOTENCY_STATE_INVALID',
+        message: '幂等响应快照缺失或损坏，请联系管理员'
+      })
+    }
+    const revive = (item: unknown, key?: string): unknown => {
+      if (Array.isArray(item)) return item.map((entry) => revive(entry))
+      if (item && typeof item === 'object') {
+        return Object.fromEntries(Object.entries(item).map(([childKey, child]) => (
+          [childKey, revive(child, childKey)]
+        )))
+      }
+      if (typeof item === 'string' && key?.endsWith('At')) {
+        const parsed = new Date(item)
+        if (!Number.isNaN(parsed.getTime())) return parsed
+      }
+      return item
+    }
+    return revive(value) as T
+  }
+
   private async updateSettlement(
     tx: Prisma.TransactionClient,
     settlement: SettlementRow,
@@ -568,7 +706,11 @@ export class SharedPrepaidSettlementService {
       throw new BadRequestException('转账信息格式错误')
     }
     const rawTransferredAt = payload.actualTransferredAt
-    if (!(typeof rawTransferredAt === 'string' || rawTransferredAt instanceof Date)) {
+    if (
+      typeof rawTransferredAt !== 'string' ||
+      !SHARED_PREPAID_ZONED_DATE_TIME_PATTERN.test(rawTransferredAt) ||
+      !isISO8601(rawTransferredAt, { strict: true, strictSeparator: true })
+    ) {
       throw new BadRequestException('请填写实际转账时间')
     }
     const actualTransferredAt = new Date(rawTransferredAt)
@@ -581,26 +723,19 @@ export class SharedPrepaidSettlementService {
   }
 
   private validateProofUrls(value: unknown): string[] {
-    if (!Array.isArray(value) || value.length > 20) {
+    if (!Array.isArray(value) || value.length > 10) {
       throw new BadRequestException('转账凭证格式错误')
     }
-    return value.map((item) => {
-      if (typeof item !== 'string' || !item.trim() || item.trim().length > 2000) {
+    const normalized = value.map((item) => {
+      if (typeof item !== 'string' || !isSharedPrepaidProofUrl(item.trim())) {
         throw new BadRequestException('转账凭证地址格式错误')
       }
       return item.trim()
     })
-  }
-
-  private samePayment(
-    settlement: SettlementRow,
-    user: CurrentUser,
-    input: ValidatedPaymentPayload
-  ) {
-    return settlement.paymentSubmittedById === user.id &&
-      settlement.actualTransferredAt?.getTime() === input.actualTransferredAt.getTime() &&
-      JSON.stringify(this.readProofUrls(settlement.proofUrls)) === JSON.stringify(input.proofUrls) &&
-      settlement.remark === input.remark
+    if (new Set(normalized).size !== normalized.length) {
+      throw new BadRequestException('转账凭证不能重复')
+    }
+    return normalized
   }
 
   private readProofUrls(value: Prisma.JsonValue): string[] {

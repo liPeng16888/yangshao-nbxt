@@ -165,6 +165,13 @@ enum SharedPrepaidSettlementStatus {
   CANCELLED
 }
 
+enum SharedPrepaidSettlementActionOperation {
+  SUBMIT_PAYMENT
+  CONFIRM_RECEIPT
+  REJECT
+  CANCEL
+}
+
 model User {
   id                          String    @id @default(uuid())
   account                     String    @unique
@@ -188,67 +195,69 @@ model User {
   createdAt                   DateTime  @default(now())
   updatedAt                   DateTime  @updatedAt
 
-  frontendSheets                    LabSheet[]                     @relation("FrontendSheets")
-  financeEntries                    FinanceEntry[]                 @relation("FrontendFinance")
-  monthlyCustomerRemarks            MonthlyCustomerRemark[]        @relation("FrontendMonthlyCustomerRemarks")
-  prepaidRecharges                  PrepaidRechargeRecord[]        @relation("FrontendPrepaidRecharges")
-  prepaidCustomerRemarks            PrepaidCustomerRemark[]        @relation("FrontendPrepaidCustomerRemarks")
-  prepaidUsageRemarks               PrepaidUsageRemark[]           @relation("FrontendPrepaidUsageRemarks")
-  customers                         Customer[]                     @relation("FrontendCustomers")
-  blacklistUploads                  BlacklistRecord[]              @relation("BlacklistUploader")
-  reminders                         Reminder[]                     @relation("FrontendReminders")
-  createdReminders                  Reminder[]                     @relation("ReminderCreator")
-  financeDeletionRequests           FinanceDeletionRequest[]       @relation("FrontendFinanceDeletionRequests")
-  reviewedFinanceDeletionRequests   FinanceDeletionRequest[]       @relation("ReviewedFinanceDeletionRequests")
-  inviteCodes                       InviteCode[]                   @relation("InviteCreator")
-  usedInviteCodes                   InviteCode[]                   @relation("InviteUser")
-  createdSubPerms                   SubAdminFrontendPermission[]   @relation("PermissionCreator")
-  subAdminPerms                     SubAdminFrontendPermission[]   @relation("SubAdminPermissions")
-  frontendPerms                     SubAdminFrontendPermission[]   @relation("FrontendPermissions")
-  medicineItems                     MedicineInventoryItem[]        @relation("FrontendMedicineItems")
-  medicineMovements                 MedicineInventoryMovement[]    @relation("FrontendMedicineMovements")
-  medicineCommonNames               MedicineCommonName[]           @relation("FrontendMedicineCommonNames")
-  accessGuardGroups                 AccessGuardGroup[]             @relation("FrontendAccessGuardGroups")
-  accessGuardGroupFeatures          AccessGuardGroupFeature[]      @relation("FrontendAccessGuardGroupFeatures")
-  employees                         Employee[]
-  employeeWeeklySchedules           EmployeeWeeklySchedule[]
-  employeeDateOverrides             EmployeeDateOverride[]
-  employeeMonthlySettings           EmployeeMonthlySetting[]
-  employeeAttendanceRecords         EmployeeAttendanceRecord[]
-  employeeLeaveTypes                EmployeeLeaveType[]
-  employeeLeaveRequests             EmployeeLeaveRequest[]         @relation("FrontendEmployeeLeaveRequests")
-  reviewedEmployeeLeaveRequests     EmployeeLeaveRequest[]         @relation("EmployeeLeaveReviewer")
-  employeeCommissionTypes           EmployeeCommissionType[]
-  employeeCommissionRecords         EmployeeCommissionRecord[]
-  employeeBonuses                   EmployeeBonus[]
-  employeePayrollRuns               EmployeePayrollRun[]           @relation("FrontendEmployeePayrollRuns")
-  confirmedEmployeePayrollRuns      EmployeePayrollRun[]           @relation("EmployeePayrollConfirmer")
-  employeePayrollItems              EmployeePayrollItem[]
-  employeePayrollAdjustments        EmployeePayrollAdjustment[]
-  employeeAuditLogs                 EmployeeAuditLog[]             @relation("FrontendEmployeeAuditLogs")
-  performedEmployeeAuditLogs        EmployeeAuditLog[]             @relation("EmployeeAuditActor")
-  createdSharedPrepaidMembers       SharedPrepaidMember[]          @relation("SharedPrepaidMemberCreator")
-  ownedSharedPrepaidRecharges       SharedPrepaidRecharge[]        @relation("SharedPrepaidRechargeOwner")
-  actedSharedPrepaidRecharges       SharedPrepaidRecharge[]        @relation("SharedPrepaidRechargeActor")
-  ownedSharedPrepaidLedgerEntries   SharedPrepaidLedgerEntry[]     @relation("SharedPrepaidLedgerEntryOwner")
-  actedSharedPrepaidLedgerEntries   SharedPrepaidLedgerEntry[]     @relation("SharedPrepaidLedgerEntryActor")
-  sharedPrepaidConsumptions         SharedPrepaidConsumption[]     @relation("SharedPrepaidConsumptionOwner")
-  actedSharedPrepaidConsumptions    SharedPrepaidConsumption[]     @relation("SharedPrepaidConsumptionActor")
-  sharedPrepaidAllocationSources    SharedPrepaidAllocation[]      @relation("SharedPrepaidAllocationSourceOwner")
-  sourceSharedPrepaidPayables       SharedPrepaidPayable[]         @relation("SharedPrepaidPayableSourceOwner")
-  consumerSharedPrepaidPayables     SharedPrepaidPayable[]         @relation("SharedPrepaidPayableConsumerOwner")
-  sharedPrepaidSettlementsAsA       SharedPrepaidSettlement[]      @relation("SharedPrepaidSettlementAccountA")
-  sharedPrepaidSettlementsAsB       SharedPrepaidSettlement[]      @relation("SharedPrepaidSettlementAccountB")
-  paidSharedPrepaidSettlements      SharedPrepaidSettlement[]      @relation("SharedPrepaidSettlementPayer")
-  receivedSharedPrepaidSettlements  SharedPrepaidSettlement[]      @relation("SharedPrepaidSettlementReceiver")
-  createdSharedPrepaidSettlements   SharedPrepaidSettlement[]      @relation("SharedPrepaidSettlementCreator")
-  submittedSharedPrepaidPayments    SharedPrepaidSettlement[]      @relation("SharedPrepaidSettlementPaymentSubmitter")
-  confirmedSharedPrepaidReceipts    SharedPrepaidSettlement[]      @relation("SharedPrepaidSettlementReceiptConfirmer")
-  rejectedSharedPrepaidSettlements  SharedPrepaidSettlement[]      @relation("SharedPrepaidSettlementRejector")
-  cancelledSharedPrepaidSettlements SharedPrepaidSettlement[]      @relation("SharedPrepaidSettlementCanceller")
-  parentFrontendUser                User?                          @relation("FrontendSubAccounts", fields: [parentFrontendUserId], references: [id], onDelete: Restrict)
-  frontendSubAccounts               User[]                         @relation("FrontendSubAccounts")
-  frontendSubAccountPermissions     FrontendSubAccountPermission[]
+  frontendSheets                      LabSheet[]                      @relation("FrontendSheets")
+  financeEntries                      FinanceEntry[]                  @relation("FrontendFinance")
+  monthlyCustomerRemarks              MonthlyCustomerRemark[]         @relation("FrontendMonthlyCustomerRemarks")
+  prepaidRecharges                    PrepaidRechargeRecord[]         @relation("FrontendPrepaidRecharges")
+  prepaidCustomerRemarks              PrepaidCustomerRemark[]         @relation("FrontendPrepaidCustomerRemarks")
+  prepaidUsageRemarks                 PrepaidUsageRemark[]            @relation("FrontendPrepaidUsageRemarks")
+  customers                           Customer[]                      @relation("FrontendCustomers")
+  blacklistUploads                    BlacklistRecord[]               @relation("BlacklistUploader")
+  reminders                           Reminder[]                      @relation("FrontendReminders")
+  createdReminders                    Reminder[]                      @relation("ReminderCreator")
+  financeDeletionRequests             FinanceDeletionRequest[]        @relation("FrontendFinanceDeletionRequests")
+  reviewedFinanceDeletionRequests     FinanceDeletionRequest[]        @relation("ReviewedFinanceDeletionRequests")
+  inviteCodes                         InviteCode[]                    @relation("InviteCreator")
+  usedInviteCodes                     InviteCode[]                    @relation("InviteUser")
+  createdSubPerms                     SubAdminFrontendPermission[]    @relation("PermissionCreator")
+  subAdminPerms                       SubAdminFrontendPermission[]    @relation("SubAdminPermissions")
+  frontendPerms                       SubAdminFrontendPermission[]    @relation("FrontendPermissions")
+  medicineItems                       MedicineInventoryItem[]         @relation("FrontendMedicineItems")
+  medicineMovements                   MedicineInventoryMovement[]     @relation("FrontendMedicineMovements")
+  medicineCommonNames                 MedicineCommonName[]            @relation("FrontendMedicineCommonNames")
+  accessGuardGroups                   AccessGuardGroup[]              @relation("FrontendAccessGuardGroups")
+  accessGuardGroupFeatures            AccessGuardGroupFeature[]       @relation("FrontendAccessGuardGroupFeatures")
+  employees                           Employee[]
+  employeeWeeklySchedules             EmployeeWeeklySchedule[]
+  employeeDateOverrides               EmployeeDateOverride[]
+  employeeMonthlySettings             EmployeeMonthlySetting[]
+  employeeAttendanceRecords           EmployeeAttendanceRecord[]
+  employeeLeaveTypes                  EmployeeLeaveType[]
+  employeeLeaveRequests               EmployeeLeaveRequest[]          @relation("FrontendEmployeeLeaveRequests")
+  reviewedEmployeeLeaveRequests       EmployeeLeaveRequest[]          @relation("EmployeeLeaveReviewer")
+  employeeCommissionTypes             EmployeeCommissionType[]
+  employeeCommissionRecords           EmployeeCommissionRecord[]
+  employeeBonuses                     EmployeeBonus[]
+  employeePayrollRuns                 EmployeePayrollRun[]            @relation("FrontendEmployeePayrollRuns")
+  confirmedEmployeePayrollRuns        EmployeePayrollRun[]            @relation("EmployeePayrollConfirmer")
+  employeePayrollItems                EmployeePayrollItem[]
+  employeePayrollAdjustments          EmployeePayrollAdjustment[]
+  employeeAuditLogs                   EmployeeAuditLog[]              @relation("FrontendEmployeeAuditLogs")
+  performedEmployeeAuditLogs          EmployeeAuditLog[]              @relation("EmployeeAuditActor")
+  createdSharedPrepaidMembers         SharedPrepaidMember[]           @relation("SharedPrepaidMemberCreator")
+  ownedSharedPrepaidRecharges         SharedPrepaidRecharge[]         @relation("SharedPrepaidRechargeOwner")
+  actedSharedPrepaidRecharges         SharedPrepaidRecharge[]         @relation("SharedPrepaidRechargeActor")
+  ownedSharedPrepaidLedgerEntries     SharedPrepaidLedgerEntry[]      @relation("SharedPrepaidLedgerEntryOwner")
+  actedSharedPrepaidLedgerEntries     SharedPrepaidLedgerEntry[]      @relation("SharedPrepaidLedgerEntryActor")
+  sharedPrepaidConsumptions           SharedPrepaidConsumption[]      @relation("SharedPrepaidConsumptionOwner")
+  actedSharedPrepaidConsumptions      SharedPrepaidConsumption[]      @relation("SharedPrepaidConsumptionActor")
+  sharedPrepaidAllocationSources      SharedPrepaidAllocation[]       @relation("SharedPrepaidAllocationSourceOwner")
+  sourceSharedPrepaidPayables         SharedPrepaidPayable[]          @relation("SharedPrepaidPayableSourceOwner")
+  consumerSharedPrepaidPayables       SharedPrepaidPayable[]          @relation("SharedPrepaidPayableConsumerOwner")
+  sharedPrepaidSettlementsAsA         SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementAccountA")
+  sharedPrepaidSettlementsAsB         SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementAccountB")
+  paidSharedPrepaidSettlements        SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementPayer")
+  receivedSharedPrepaidSettlements    SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementReceiver")
+  createdSharedPrepaidSettlements     SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementCreator")
+  submittedSharedPrepaidPayments      SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementPaymentSubmitter")
+  confirmedSharedPrepaidReceipts      SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementReceiptConfirmer")
+  rejectedSharedPrepaidSettlements    SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementRejector")
+  cancelledSharedPrepaidSettlements   SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementCanceller")
+  actedSharedPrepaidSettlementActions SharedPrepaidSettlementAction[] @relation("SharedPrepaidSettlementActionActor")
+  ownedSharedPrepaidSettlementActions SharedPrepaidSettlementAction[] @relation("SharedPrepaidSettlementActionOwner")
+  parentFrontendUser                  User?                           @relation("FrontendSubAccounts", fields: [parentFrontendUserId], references: [id], onDelete: Restrict)
+  frontendSubAccounts                 User[]                          @relation("FrontendSubAccounts")
+  frontendSubAccountPermissions       FrontendSubAccountPermission[]
 
   @@index([role])
   @@index([parentFrontendUserId])
@@ -698,16 +707,17 @@ model SharedPrepaidSettlement {
   createdAt              DateTime                      @default(now())
   updatedAt              DateTime                      @updatedAt
 
-  accountA             User                          @relation("SharedPrepaidSettlementAccountA", fields: [accountAId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  accountB             User                          @relation("SharedPrepaidSettlementAccountB", fields: [accountBId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  payerFrontendUser    User?                         @relation("SharedPrepaidSettlementPayer", fields: [payerFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  receiverFrontendUser User?                         @relation("SharedPrepaidSettlementReceiver", fields: [receiverFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  createdBy            User                          @relation("SharedPrepaidSettlementCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  paymentSubmittedBy   User?                         @relation("SharedPrepaidSettlementPaymentSubmitter", fields: [paymentSubmittedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  receiptConfirmedBy   User?                         @relation("SharedPrepaidSettlementReceiptConfirmer", fields: [receiptConfirmedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  rejectedBy           User?                         @relation("SharedPrepaidSettlementRejector", fields: [rejectedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  cancelledBy          User?                         @relation("SharedPrepaidSettlementCanceller", fields: [cancelledById], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  lines                SharedPrepaidSettlementLine[] @relation("SharedPrepaidSettlementLineSettlement")
+  accountA             User                            @relation("SharedPrepaidSettlementAccountA", fields: [accountAId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  accountB             User                            @relation("SharedPrepaidSettlementAccountB", fields: [accountBId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  payerFrontendUser    User?                           @relation("SharedPrepaidSettlementPayer", fields: [payerFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  receiverFrontendUser User?                           @relation("SharedPrepaidSettlementReceiver", fields: [receiverFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdBy            User                            @relation("SharedPrepaidSettlementCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  paymentSubmittedBy   User?                           @relation("SharedPrepaidSettlementPaymentSubmitter", fields: [paymentSubmittedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  receiptConfirmedBy   User?                           @relation("SharedPrepaidSettlementReceiptConfirmer", fields: [receiptConfirmedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  rejectedBy           User?                           @relation("SharedPrepaidSettlementRejector", fields: [rejectedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  cancelledBy          User?                           @relation("SharedPrepaidSettlementCanceller", fields: [cancelledById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  lines                SharedPrepaidSettlementLine[]   @relation("SharedPrepaidSettlementLineSettlement")
+  actions              SharedPrepaidSettlementAction[]
 
   @@index([accountAId, accountBId, status, createdAt])
 }
@@ -726,6 +736,24 @@ model SharedPrepaidSettlementLine {
 
   @@unique([settlementId, payableId])
   @@index([payableId, releasedAt])
+}
+
+model SharedPrepaidSettlementAction {
+  id                  String                                 @id @default(uuid())
+  settlementId        String
+  operation           SharedPrepaidSettlementActionOperation
+  actorUserId         String
+  actorFrontendUserId String
+  idempotencyKey      String                                 @unique
+  requestFingerprint  String
+  responseSnapshot    Json
+  createdAt           DateTime                               @default(now())
+
+  settlement        SharedPrepaidSettlement @relation(fields: [settlementId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorUser         User                    @relation("SharedPrepaidSettlementActionActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorFrontendUser User                    @relation("SharedPrepaidSettlementActionOwner", fields: [actorFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([settlementId, createdAt])
 }
 
 model BlacklistRecord {

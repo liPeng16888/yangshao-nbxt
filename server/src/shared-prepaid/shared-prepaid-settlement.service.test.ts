@@ -3,9 +3,15 @@ import {
   ConflictException,
   ForbiddenException,
   NotFoundException,
-  RequestMethod
+  RequestMethod,
+  ValidationPipe
 } from '@nestjs/common'
-import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
+import {
+  CUSTOM_ROUTE_ARGS_METADATA,
+  METHOD_METADATA,
+  PATH_METADATA,
+  ROUTE_ARGS_METADATA
+} from '@nestjs/common/constants'
 import {
   Prisma,
   SharedPrepaidPayableStatus,
@@ -17,6 +23,13 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { CurrentUser } from '../auth/current-user'
 import { FRONTEND_PERMISSIONS_KEY } from '../auth/frontend-permission.decorator'
 import { SharedPrepaidController } from './shared-prepaid.controller'
+import {
+  SharedPrepaidIdempotencyHeadersDto,
+  SharedPrepaidSettlementIdParamsDto,
+  SharedPrepaidSettlementPaymentDto,
+  SharedPrepaidSettlementRejectDto,
+  SharedPrepaidSettlementSelectionDto
+} from './shared-prepaid.dto'
 import { SharedPrepaidSettlementService } from './shared-prepaid-settlement.service'
 
 const fixedTime = new Date('2026-08-12T08:00:00.000Z')
@@ -114,19 +127,37 @@ interface StoredLine {
   createdAt: Date
 }
 
+interface StoredAction {
+  id: string
+  settlementId: string
+  operation: string
+  actorUserId: string
+  actorFrontendUserId: string
+  idempotencyKey: string
+  requestFingerprint: string
+  responseSnapshot: unknown
+  createdAt: Date
+}
+
 class FakeSettlementPrisma {
   payables: StoredPayable[] = []
   settlements: StoredSettlement[] = []
   lines: StoredLine[] = []
+  actions: StoredAction[] = []
   lockedPayableIds: string[] = []
   lockedSettlementIds: string[] = []
   failPayableUpdateId: string | null = null
   afterNextPayableLock: (() => Promise<void>) | null = null
+  afterNextSettlementLock: (() => Promise<void>) | null = null
+  p2002OnNextActiveLineCreate = false
+  p2002AfterNextActionCreate: 'same-request' | 'different-request' | null = null
+  private preserveNextRollback = false
   private nextId = 1
 
   readonly sharedPrepaidPayable: any = {}
   readonly sharedPrepaidSettlement: any = {}
   readonly sharedPrepaidSettlementLine: any = {}
+  readonly sharedPrepaidSettlementAction: any = {}
 
   constructor() {
     this.sharedPrepaidPayable.findMany = async (args: any) => {
@@ -198,6 +229,13 @@ class FakeSettlementPrisma {
     }
 
     this.sharedPrepaidSettlementLine.createMany = async (args: any) => {
+      if (this.p2002OnNextActiveLineCreate) {
+        this.p2002OnNextActiveLineCreate = false
+        throw {
+          code: 'P2002',
+          meta: { target: 'SharedPrepaidSettlementLine_one_active_per_payable' }
+        }
+      }
       for (const data of args.data) {
         if (this.lines.some((line) => line.payableId === data.payableId && line.releasedAt === null)) {
           throw { code: 'P2002', meta: { target: ['payableId'] } }
@@ -218,6 +256,29 @@ class FakeSettlementPrisma {
       ))
       rows.forEach((line) => Object.assign(line, args.data))
       return { count: rows.length }
+    }
+
+    this.sharedPrepaidSettlementAction.findUnique = async (args: any) => {
+      const row = this.actions.find((candidate) => candidate.idempotencyKey === args.where.idempotencyKey)
+      return row ? { ...row } : null
+    }
+    this.sharedPrepaidSettlementAction.create = async (args: any) => {
+      if (this.actions.some((row) => row.idempotencyKey === args.data.idempotencyKey)) {
+        throw { code: 'P2002', meta: { target: ['idempotencyKey'] } }
+      }
+      const row: StoredAction = {
+        id: `action-${this.nextId++}`,
+        createdAt: fixedTime,
+        ...args.data
+      }
+      this.actions.push(row)
+      const injected = this.p2002AfterNextActionCreate
+      this.p2002AfterNextActionCreate = null
+      if (injected) {
+        if (injected === 'different-request') row.requestFingerprint = 'different-concurrent-request'
+        throw { code: 'P2002', meta: { target: ['idempotencyKey'] }, preserveState: true }
+      }
+      return { ...row }
     }
   }
 
@@ -247,6 +308,7 @@ class FakeSettlementPrisma {
       payables: this.payables.map((row) => ({ ...row })),
       settlements: this.settlements.map((row) => ({ ...row })),
       lines: this.lines.map((row) => ({ ...row })),
+      actions: this.actions.map((row) => ({ ...row })),
       lockedPayableIds: [...this.lockedPayableIds],
       lockedSettlementIds: [...this.lockedSettlementIds],
       nextId: this.nextId
@@ -254,9 +316,15 @@ class FakeSettlementPrisma {
     try {
       return await callback(this)
     } catch (error) {
+      const preserveState = Boolean(
+        error && typeof error === 'object' && 'preserveState' in error && error.preserveState
+      ) || this.preserveNextRollback
+      this.preserveNextRollback = false
+      if (preserveState) throw error
       this.payables = snapshot.payables
       this.settlements = snapshot.settlements
       this.lines = snapshot.lines
+      this.actions = snapshot.actions
       this.lockedPayableIds = snapshot.lockedPayableIds
       this.lockedSettlementIds = snapshot.lockedSettlementIds
       this.nextId = snapshot.nextId
@@ -272,7 +340,15 @@ class FakeSettlementPrisma {
       this.afterNextPayableLock = null
       if (afterLock) await afterLock()
     }
-    if (sql.includes('SharedPrepaidSettlement')) this.lockedSettlementIds.push(String(values[0]))
+    if (sql.includes('SharedPrepaidSettlement')) {
+      this.lockedSettlementIds.push(String(values[0]))
+      const afterLock = this.afterNextSettlementLock
+      this.afterNextSettlementLock = null
+      if (afterLock) {
+        await afterLock()
+        this.preserveNextRollback = true
+      }
+    }
     return []
   }
 
@@ -418,6 +494,21 @@ describe('SharedPrepaidSettlementService', () => {
     expect(prisma.payables.every((row) => row.status === SharedPrepaidPayableStatus.PENDING)).toBe(true)
   })
 
+  it('maps the active-line partial unique index race to a payable conflict and rolls back freezes', async () => {
+    prisma.p2002OnNextActiveLineCreate = true
+
+    await expect(service.createSettlement(
+      mainA,
+      ['a-to-b-100'],
+      'active-line-index-race'
+    )).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_SETTLEMENT_PAYABLE_CONFLICT' })
+    })
+    expect(prisma.settlements).toHaveLength(0)
+    expect(prisma.lines).toHaveLength(0)
+    expect(prisma.payables[0]!.status).toBe(SharedPrepaidPayableStatus.PENDING)
+  })
+
   it('requires the final payer main account and an actual transfer time while keeping proof optional', async () => {
     const settlement = await service.createSettlement(mainA, ['a-to-b-100'], 'payment-source')
 
@@ -425,6 +516,24 @@ describe('SharedPrepaidSettlementService', () => {
       .rejects.toBeInstanceOf(ForbiddenException)
     await expect(service.submitPayment(mainA, settlement.id, {}, 'missing-time'))
       .rejects.toBeInstanceOf(BadRequestException)
+    await expect(service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: '2026-08-12T07:30:00' },
+      'timezone-required'
+    )).rejects.toBeInstanceOf(BadRequestException)
+    await expect(service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: '2026-02-30T07:30:00.000Z' },
+      'valid-calendar-date-required'
+    )).rejects.toBeInstanceOf(BadRequestException)
+    await expect(service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: transferredAt, proofUrls: ['proof://one'] },
+      'invalid-proof-url'
+    )).rejects.toBeInstanceOf(BadRequestException)
 
     const submitted = await service.submitPayment(
       mainA,
@@ -443,10 +552,10 @@ describe('SharedPrepaidSettlementService', () => {
 
   it('only lets the receiver confirm and completes every held payable exactly once', async () => {
     const settlement = await service.createSettlement(mainA, ['a-to-b-100'], 'confirm-source')
-    await service.submitPayment(
+    const submitted = await service.submitPayment(
       mainA,
       settlement.id,
-      { actualTransferredAt: transferredAt, proofUrls: ['proof://one'] },
+      { actualTransferredAt: transferredAt, proofUrls: ['/uploads/2026-08/proof.jpg'] },
       'confirm-payment'
     )
 
@@ -457,17 +566,33 @@ describe('SharedPrepaidSettlementService', () => {
     const delayedPaymentRetry = await service.submitPayment(
       mainA,
       settlement.id,
-      { actualTransferredAt: transferredAt, proofUrls: ['proof://one'] },
+      { actualTransferredAt: transferredAt, proofUrls: ['/uploads/2026-08/proof.jpg'] },
       'confirm-payment'
     )
 
     expect(completed).toMatchObject({
       status: SharedPrepaidSettlementStatus.COMPLETED,
       receiptConfirmedById: 'B',
-      proofUrls: ['proof://one']
+      proofUrls: ['/uploads/2026-08/proof.jpg']
     })
     expect(retry).toEqual(completed)
-    expect(delayedPaymentRetry).toEqual(completed)
+    expect(delayedPaymentRetry).toEqual(submitted)
+    expect(prisma.actions).toMatchObject([
+      {
+        settlementId: settlement.id,
+        operation: 'SUBMIT_PAYMENT',
+        actorUserId: 'A',
+        actorFrontendUserId: 'A',
+        idempotencyKey: 'confirm-payment'
+      },
+      {
+        settlementId: settlement.id,
+        operation: 'CONFIRM_RECEIPT',
+        actorUserId: 'B',
+        actorFrontendUserId: 'B',
+        idempotencyKey: 'confirm-receipt'
+      }
+    ])
     expect(prisma.payables[0]!.status).toBe(SharedPrepaidPayableStatus.COMPLETED)
   })
 
@@ -511,11 +636,19 @@ describe('SharedPrepaidSettlementService', () => {
     await service.submitPayment(mainA, settlement.id, { actualTransferredAt: transferredAt }, 'reject-payment')
 
     const rejected = await service.rejectSettlement(mainB, settlement.id, '未收到转账', 'reject-receipt')
+    const retry = await service.rejectSettlement(mainB, settlement.id, '未收到转账', 'reject-receipt')
 
     expect(rejected).toMatchObject({
       status: SharedPrepaidSettlementStatus.REJECTED,
       rejectedById: 'B',
       rejectionReason: '未收到转账'
+    })
+    expect(retry).toEqual(rejected)
+    expect(prisma.actions.at(-1)).toMatchObject({
+      operation: 'REJECT',
+      idempotencyKey: 'reject-receipt',
+      actorUserId: 'B',
+      responseSnapshot: expect.any(Object)
     })
     expect(prisma.payables.every((row) => row.status === SharedPrepaidPayableStatus.PENDING)).toBe(true)
     expect(prisma.lines.every((line) => line.releasedAt instanceof Date)).toBe(true)
@@ -527,10 +660,18 @@ describe('SharedPrepaidSettlementService', () => {
     await expect(service.cancelSettlement(mainB, settlement.id, 'wrong-canceller'))
       .rejects.toBeInstanceOf(ForbiddenException)
     const cancelled = await service.cancelSettlement(mainA, settlement.id, 'cancel-settlement')
+    const retry = await service.cancelSettlement(mainA, settlement.id, 'cancel-settlement')
 
     expect(cancelled).toMatchObject({
       status: SharedPrepaidSettlementStatus.CANCELLED,
       cancelledById: 'A'
+    })
+    expect(retry).toEqual(cancelled)
+    expect(prisma.actions.at(-1)).toMatchObject({
+      operation: 'CANCEL',
+      idempotencyKey: 'cancel-settlement',
+      actorUserId: 'A',
+      responseSnapshot: expect.any(Object)
     })
     expect(prisma.payables[0]!.status).toBe(SharedPrepaidPayableStatus.PENDING)
     expect(prisma.lines[0]!.releasedAt).toBeInstanceOf(Date)
@@ -558,9 +699,187 @@ describe('SharedPrepaidSettlementService', () => {
     expect(prisma.payables[0]!.status).toBe(SharedPrepaidPayableStatus.COMPLETED)
     expect(prisma.lines[0]!.releasedAt).toBeNull()
   })
+
+  it('conflicts when an action key is reused with a different payload, action, actor, or settlement', async () => {
+    const settlement = await service.createSettlement(mainA, ['a-to-b-100'], 'reuse-source-1')
+    await service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: transferredAt, proofUrls: ['/uploads/2026-08/proof.jpg'] },
+      'globally-reused-action-key'
+    )
+
+    const expectIdempotencyConflict = (promise: Promise<unknown>) => expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_IDEMPOTENCY_CONFLICT' })
+    })
+    await expectIdempotencyConflict(service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: '2026-08-12T07:31:00.000Z', proofUrls: ['/uploads/2026-08/proof.jpg'] },
+      'globally-reused-action-key'
+    ))
+    await expectIdempotencyConflict(service.confirmReceipt(
+      mainB,
+      settlement.id,
+      'globally-reused-action-key'
+    ))
+    await expectIdempotencyConflict(service.submitPayment(
+      mainB,
+      settlement.id,
+      { actualTransferredAt: transferredAt, proofUrls: ['/uploads/2026-08/proof.jpg'] },
+      'globally-reused-action-key'
+    ))
+
+    prisma.addPayable('a-to-b-20', 'A', 'B', 20)
+    const second = await service.createSettlement(mainA, ['a-to-b-20'], 'reuse-source-2')
+    await expectIdempotencyConflict(service.submitPayment(
+      mainA,
+      second.id,
+      { actualTransferredAt: transferredAt, proofUrls: ['/uploads/2026-08/proof.jpg'] },
+      'globally-reused-action-key'
+    ))
+  })
+
+  it('recovers a matching action P2002 winner and rejects a different concurrent winner deterministically', async () => {
+    const settlement = await service.createSettlement(mainA, ['a-to-b-100'], 'p2002-source')
+    prisma.p2002AfterNextActionCreate = 'same-request'
+
+    const recovered = await service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: transferredAt },
+      'action-p2002-same'
+    )
+
+    expect(recovered).toMatchObject({ status: SharedPrepaidSettlementStatus.AWAITING_RECEIPT })
+    expect(prisma.actions).toHaveLength(1)
+    expect(prisma.lockedSettlementIds).toContain(settlement.id)
+
+    prisma.addPayable('a-to-b-20', 'A', 'B', 20)
+    const second = await service.createSettlement(mainA, ['a-to-b-20'], 'p2002-source-2')
+    prisma.p2002AfterNextActionCreate = 'different-request'
+    await expect(service.submitPayment(
+      mainA,
+      second.id,
+      { actualTransferredAt: transferredAt },
+      'action-p2002-different'
+    )).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_IDEMPOTENCY_CONFLICT' })
+    })
+  })
+
+  it('rechecks a reused action key after waiting for the settlement row lock', async () => {
+    const settlement = await service.createSettlement(mainA, ['a-to-b-100'], 'lock-recheck-source')
+    prisma.afterNextSettlementLock = async () => {
+      await service.submitPayment(
+        mainA,
+        settlement.id,
+        { actualTransferredAt: transferredAt, remark: '赛跑赢家' },
+        'lock-recheck-action'
+      )
+    }
+
+    await expect(service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: transferredAt, remark: '赛跑输家' },
+      'lock-recheck-action'
+    )).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_IDEMPOTENCY_CONFLICT' })
+    })
+    expect(prisma.actions).toHaveLength(1)
+    expect(prisma.actions[0]).toMatchObject({ requestFingerprint: expect.any(String) })
+  })
+})
+
+describe('shared prepaid settlement runtime DTOs', () => {
+  const pipe = new ValidationPipe({ whitelist: true, transform: true })
+  const payableId = '11111111-1111-4111-8111-111111111111'
+  const settlementId = '22222222-2222-4222-8222-222222222222'
+
+  async function transform(value: unknown, metatype: new () => object, type: 'body' | 'param' = 'body') {
+    return pipe.transform(value, { type, metatype }) as Promise<Record<string, unknown>>
+  }
+
+  it('validates selection, payment, params, and idempotency headers while stripping unknown fields', async () => {
+    const selection = await transform({ payableIds: [` ${payableId} `], ownerId: 'forged' }, SharedPrepaidSettlementSelectionDto)
+    const payment = await transform({
+      actualTransferredAt: '2026-08-12T07:30:00.000Z',
+      proofUrls: ['/uploads/2026-08/proof.jpg', 'https://files.example.com/proof.png'],
+      remark: ' 已转账 ',
+      paymentSubmittedById: 'forged'
+    }, SharedPrepaidSettlementPaymentDto)
+    const params = await transform({ id: settlementId, accountAId: 'forged' }, SharedPrepaidSettlementIdParamsDto, 'param')
+    const headers = await transform({
+      'x-idempotency-key': ' action-key ',
+      authorization: 'secret'
+    }, SharedPrepaidIdempotencyHeadersDto)
+
+    expect(selection).toEqual({ payableIds: [payableId] })
+    expect(payment).toEqual({
+      actualTransferredAt: '2026-08-12T07:30:00.000Z',
+      proofUrls: ['/uploads/2026-08/proof.jpg', 'https://files.example.com/proof.png'],
+      remark: '已转账'
+    })
+    expect(params).toEqual({ id: settlementId })
+    expect(headers).toEqual({ 'x-idempotency-key': 'action-key' })
+  })
+
+  it.each([
+    ['null selection', null, SharedPrepaidSettlementSelectionDto],
+    ['string payable list', { payableIds: payableId }, SharedPrepaidSettlementSelectionDto],
+    ['empty payable list', { payableIds: [] }, SharedPrepaidSettlementSelectionDto],
+    ['duplicate payable IDs', { payableIds: [payableId, payableId] }, SharedPrepaidSettlementSelectionDto],
+    ['malformed payable ID', { payableIds: ['payable-1'] }, SharedPrepaidSettlementSelectionDto],
+    ['null payment', null, SharedPrepaidSettlementPaymentDto],
+    ['missing transfer time', {}, SharedPrepaidSettlementPaymentDto],
+    ['object transfer time', { actualTransferredAt: { value: transferredAt } }, SharedPrepaidSettlementPaymentDto],
+    ['transfer time without timezone', { actualTransferredAt: '2026-08-12T07:30:00' }, SharedPrepaidSettlementPaymentDto],
+    ['impossible transfer date', { actualTransferredAt: '2026-02-30T07:30:00.000Z' }, SharedPrepaidSettlementPaymentDto],
+    ['proof scalar', { actualTransferredAt: transferredAt, proofUrls: '/uploads/proof.jpg' }, SharedPrepaidSettlementPaymentDto],
+    ['unsupported proof scheme', { actualTransferredAt: transferredAt, proofUrls: ['proof://one'] }, SharedPrepaidSettlementPaymentDto],
+    ['non-upload relative proof', { actualTransferredAt: transferredAt, proofUrls: ['/private/proof.jpg'] }, SharedPrepaidSettlementPaymentDto],
+    ['upload traversal proof', { actualTransferredAt: transferredAt, proofUrls: ['/uploads/../secret.jpg'] }, SharedPrepaidSettlementPaymentDto],
+    ['object payment remark', { actualTransferredAt: transferredAt, remark: { text: '备注' } }, SharedPrepaidSettlementPaymentDto],
+    ['oversized payment remark', { actualTransferredAt: transferredAt, remark: 'x'.repeat(501) }, SharedPrepaidSettlementPaymentDto],
+    ['null rejection', null, SharedPrepaidSettlementRejectDto],
+    ['empty rejection', { reason: ' ' }, SharedPrepaidSettlementRejectDto],
+    ['object rejection', { reason: { text: '原因' } }, SharedPrepaidSettlementRejectDto],
+    ['oversized rejection', { reason: 'x'.repeat(501) }, SharedPrepaidSettlementRejectDto],
+    ['malformed settlement param', { id: 'settlement-1' }, SharedPrepaidSettlementIdParamsDto],
+    ['missing idempotency header', {}, SharedPrepaidIdempotencyHeadersDto],
+    ['object idempotency header', { 'x-idempotency-key': { value: 'key' } }, SharedPrepaidIdempotencyHeadersDto],
+    ['oversized idempotency header', { 'x-idempotency-key': 'x'.repeat(201) }, SharedPrepaidIdempotencyHeadersDto]
+  ])('rejects %s', async (_label, value, metatype) => {
+    await expect(transform(value, metatype)).rejects.toBeInstanceOf(BadRequestException)
+  })
 })
 
 describe('SharedPrepaidController settlement routes', () => {
+  it('uses a runtime validation pipe for the idempotency header custom parameter', async () => {
+    const routeArguments = Reflect.getMetadata(
+      ROUTE_ARGS_METADATA,
+      SharedPrepaidController,
+      'createSettlement'
+    ) as Record<string, { index: number, pipes: ValidationPipe[] }>
+    const headerArgument = Object.entries(routeArguments).find(([key, value]) => (
+      key.includes(CUSTOM_ROUTE_ARGS_METADATA) && value.index === 1
+    ))?.[1]
+
+    expect(headerArgument?.pipes).toHaveLength(1)
+    await expect(headerArgument!.pipes[0]!.transform({}, {
+      type: 'custom',
+      metatype: SharedPrepaidIdempotencyHeadersDto
+    })).rejects.toBeInstanceOf(BadRequestException)
+    await expect(headerArgument!.pipes[0]!.transform({
+      'x-idempotency-key': ' action-key ',
+      authorization: 'secret'
+    }, {
+      type: 'custom',
+      metatype: SharedPrepaidIdempotencyHeadersDto
+    })).resolves.toEqual({ 'x-idempotency-key': 'action-key' })
+  })
+
   it('exposes settlement write routes with settlement permission and trusted user context', async () => {
     const calls: unknown[][] = []
     const settlement = {
@@ -572,13 +891,19 @@ describe('SharedPrepaidController settlement routes', () => {
       cancelSettlement: (...args: unknown[]) => { calls.push(['cancel', ...args]) }
     }
     const controller = new SharedPrepaidController({} as never, {} as never, settlement as never)
+    const createHeaders = { 'x-idempotency-key': 'create-key' }
+    const payHeaders = { 'x-idempotency-key': 'pay-key' }
+    const confirmHeaders = { 'x-idempotency-key': 'confirm-key' }
+    const rejectHeaders = { 'x-idempotency-key': 'reject-key' }
+    const cancelHeaders = { 'x-idempotency-key': 'cancel-key' }
+    const params = { id: 's-1' }
 
     controller.previewSettlement(mainA, { payableIds: ['p-1'] })
-    controller.createSettlement(mainA, 'create-key', { payableIds: ['p-1'] })
-    controller.submitSettlementPayment(mainA, 's-1', 'pay-key', { actualTransferredAt: transferredAt })
-    controller.confirmSettlementReceipt(mainB, 's-1', 'confirm-key')
-    controller.rejectSettlement(mainB, 's-1', 'reject-key', { reason: '未收到' })
-    controller.cancelSettlement(mainA, 's-1', 'cancel-key')
+    controller.createSettlement(mainA, createHeaders, { payableIds: ['p-1'] })
+    controller.submitSettlementPayment(mainA, params, payHeaders, { actualTransferredAt: transferredAt })
+    controller.confirmSettlementReceipt(mainB, params, confirmHeaders)
+    controller.rejectSettlement(mainB, params, rejectHeaders, { reason: '未收到' })
+    controller.cancelSettlement(mainA, params, cancelHeaders)
 
     expect(calls).toEqual([
       ['preview', mainA, ['p-1']],
