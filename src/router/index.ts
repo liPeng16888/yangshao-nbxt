@@ -24,6 +24,8 @@ import EmployeeAttendanceRecordsPage from '@/views/dashboard/employee-attendance
 import EmployeeLeavePage from '@/views/dashboard/employee-attendance/EmployeeLeavePage.vue'
 import EmployeeCompensationPage from '@/views/dashboard/employee-attendance/EmployeeCompensationPage.vue'
 import EmployeePayrollPage from '@/views/dashboard/employee-attendance/EmployeePayrollPage.vue'
+import NoMenuPermissionPage from '@/views/dashboard/NoMenuPermissionPage.vue'
+import { canAccessPath, firstAllowedPath } from '@/config/frontendNavigation'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { featureForPath, resolveAuthRedirect } from './guards'
@@ -31,100 +33,101 @@ import { featureForPath, resolveAuthRedirect } from './guards'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/data' },
+    { path: '/', redirect: () => firstAllowedPath(useAuthStore().user) },
     { path: '/login', name: 'login', component: LoginRegister },
     {
       path: '/',
       component: AppLayout,
       meta: { requiresAuth: true },
       children: [
-        { path: 'data', name: 'data', component: LabDataPage, meta: { title: '数据计算', requiresAuth: true } },
+        { path: 'data', name: 'data', component: LabDataPage, meta: { title: '数据计算', requiresAuth: true, frontendPermission: 'DATA_MAIN' } },
         {
           path: 'data/standard-sample',
           name: 'standardSampleCalculation',
           component: StandardSampleCalculationPage,
-          meta: { title: '标样计算', requiresAuth: true }
+          meta: { title: '标样计算', requiresAuth: true, frontendPermission: 'DATA_STANDARD_SAMPLE' }
         },
         {
           path: 'data/coefficient',
           name: 'coefficientCalculation',
           component: CoefficientCalculationPage,
-          meta: { title: '系数计算', requiresAuth: true }
+          meta: { title: '系数计算', requiresAuth: true, frontendPermission: 'DATA_COEFFICIENT' }
         },
-        { path: 'lab-report', redirect: '/lab-report/image-template' },
+        { path: 'lab-report', redirect: () => firstAllowedPath(useAuthStore().user, '/lab-report') },
         {
           path: 'lab-report/image-template',
           name: 'labReportImageTemplate',
           component: LabReportPage,
-          meta: { title: '化验报告', requiresAuth: true }
+          meta: { title: '化验报告', requiresAuth: true, frontendPermission: 'LAB_REPORT_IMAGE_TEMPLATE' }
         },
         {
           path: 'lab-report/sms-template',
           name: 'labReportSmsTemplate',
           component: LabReportPage,
-          meta: { title: '化验报告', requiresAuth: true }
+          meta: { title: '化验报告', requiresAuth: true, frontendPermission: 'LAB_REPORT_SMS_TEMPLATE' }
         },
-        { path: 'employee-attendance', redirect: '/employee-attendance/overview' },
-        { path: 'employee-attendance/overview', name: 'employeeAttendanceOverview', component: EmployeeAttendanceOverviewPage, meta: { title: '考勤概览', requiresAuth: true } },
-        { path: 'employee-attendance/employees', name: 'employeeAttendanceEmployees', component: EmployeeDirectoryPage, meta: { title: '员工档案', requiresAuth: true } },
-        { path: 'employee-attendance/schedules', name: 'employeeAttendanceSchedules', component: EmployeeSchedulesPage, meta: { title: '排班管理', requiresAuth: true } },
-        { path: 'employee-attendance/records', name: 'employeeAttendanceRecords', component: EmployeeAttendanceRecordsPage, meta: { title: '考勤记录', requiresAuth: true } },
-        { path: 'employee-attendance/leave', name: 'employeeAttendanceLeave', component: EmployeeLeavePage, meta: { title: '请假管理', requiresAuth: true } },
-        { path: 'employee-attendance/compensation', name: 'employeeAttendanceCompensation', component: EmployeeCompensationPage, meta: { title: '提成与奖金', requiresAuth: true } },
-        { path: 'employee-attendance/payroll', name: 'employeeAttendancePayroll', component: EmployeePayrollPage, meta: { title: '工资统计', requiresAuth: true } },
-        { path: 'finance', redirect: '/finance/expenses' },
-        { path: 'finance/expenses', name: 'financeExpenses', component: FinancePage, meta: { title: '支出账单', requiresAuth: true } },
-        { path: 'finance/income', name: 'financeIncome', component: FinanceIncomePage, meta: { title: '收入账单', requiresAuth: true } },
-        { path: 'finance/unsettled', name: 'financeUnsettled', component: FinanceUnsettledPage, meta: { title: '未结款', requiresAuth: true } },
+        { path: 'employee-attendance', redirect: () => firstAllowedPath(useAuthStore().user, '/employee-attendance') },
+        { path: 'employee-attendance/overview', name: 'employeeAttendanceOverview', component: EmployeeAttendanceOverviewPage, meta: { title: '考勤概览', requiresAuth: true, frontendPermission: 'ATTENDANCE_OVERVIEW' } },
+        { path: 'employee-attendance/employees', name: 'employeeAttendanceEmployees', component: EmployeeDirectoryPage, meta: { title: '员工档案', requiresAuth: true, frontendPermission: 'ATTENDANCE_EMPLOYEES' } },
+        { path: 'employee-attendance/schedules', name: 'employeeAttendanceSchedules', component: EmployeeSchedulesPage, meta: { title: '排班管理', requiresAuth: true, frontendPermission: 'ATTENDANCE_SCHEDULES' } },
+        { path: 'employee-attendance/records', name: 'employeeAttendanceRecords', component: EmployeeAttendanceRecordsPage, meta: { title: '考勤记录', requiresAuth: true, frontendPermission: 'ATTENDANCE_RECORDS' } },
+        { path: 'employee-attendance/leave', name: 'employeeAttendanceLeave', component: EmployeeLeavePage, meta: { title: '请假管理', requiresAuth: true, frontendPermission: 'ATTENDANCE_LEAVE' } },
+        { path: 'employee-attendance/compensation', name: 'employeeAttendanceCompensation', component: EmployeeCompensationPage, meta: { title: '提成与奖金', requiresAuth: true, frontendPermission: 'ATTENDANCE_COMPENSATION' } },
+        { path: 'employee-attendance/payroll', name: 'employeeAttendancePayroll', component: EmployeePayrollPage, meta: { title: '工资统计', requiresAuth: true, frontendPermission: 'ATTENDANCE_PAYROLL' } },
+        { path: 'finance', redirect: () => firstAllowedPath(useAuthStore().user, '/finance') },
+        { path: 'finance/expenses', name: 'financeExpenses', component: FinancePage, meta: { title: '支出账单', requiresAuth: true, frontendPermission: 'FINANCE_EXPENSES' } },
+        { path: 'finance/income', name: 'financeIncome', component: FinanceIncomePage, meta: { title: '收入账单', requiresAuth: true, frontendPermission: 'FINANCE_INCOME' } },
+        { path: 'finance/unsettled', name: 'financeUnsettled', component: FinanceUnsettledPage, meta: { title: '未结款', requiresAuth: true, frontendPermission: 'FINANCE_UNSETTLED' } },
         {
           path: 'finance/monthly-settlement',
           name: 'financeMonthlySettlement',
           component: FinanceMonthlySettlementPage,
-          meta: { title: '月结款', requiresAuth: true }
+          meta: { title: '月结款', requiresAuth: true, frontendPermission: 'FINANCE_MONTHLY_SETTLEMENT' }
         },
-        { path: 'finance/prepaid', redirect: '/finance/prepaid/add' },
+        { path: 'finance/prepaid', redirect: () => firstAllowedPath(useAuthStore().user, '/finance/prepaid') },
         {
           path: 'finance/prepaid/add',
           name: 'financePrepaidAdd',
           component: FinancePrepaidAddPage,
-          meta: { title: '预存款', requiresAuth: true }
+          meta: { title: '预存款', requiresAuth: true, frontendPermission: 'FINANCE_PREPAID_ADD' }
         },
         {
           path: 'finance/prepaid/customers',
           name: 'financePrepaidCustomers',
           component: FinancePrepaidCustomersPage,
-          meta: { title: '预存款', requiresAuth: true }
+          meta: { title: '预存款', requiresAuth: true, frontendPermission: 'FINANCE_PREPAID_CUSTOMERS' }
         },
-        { path: 'reports', name: 'reports', component: ReportPage, meta: { title: '报表', requiresAuth: true } },
-        { path: 'medicine-inventory', redirect: '/medicine-inventory/stock' },
+        { path: 'reports', name: 'reports', component: ReportPage, meta: { title: '报表', requiresAuth: true, frontendPermission: 'REPORTS' } },
+        { path: 'medicine-inventory', redirect: () => firstAllowedPath(useAuthStore().user, '/medicine-inventory') },
         {
           path: 'medicine-inventory/stock',
           name: 'medicineInventoryStock',
           component: MedicineInventoryStockPage,
-          meta: { title: '药品库存', requiresAuth: true }
+          meta: { title: '药品库存', requiresAuth: true, frontendPermission: 'MEDICINE_STOCK' }
         },
         {
           path: 'medicine-inventory/inbound',
           name: 'medicineInventoryInbound',
           component: MedicineInventoryInboundPage,
-          meta: { title: '药品入库', requiresAuth: true }
+          meta: { title: '药品入库', requiresAuth: true, frontendPermission: 'MEDICINE_INBOUND' }
         },
         {
           path: 'medicine-inventory/outbound',
           name: 'medicineInventoryOutbound',
           component: MedicineInventoryOutboundPage,
-          meta: { title: '药品出库', requiresAuth: true }
+          meta: { title: '药品出库', requiresAuth: true, frontendPermission: 'MEDICINE_OUTBOUND' }
         },
         {
           path: 'customers-overview',
           name: 'customerOverview',
           component: CustomerOverviewPage,
-          meta: { title: '客户总览', requiresAuth: true }
+          meta: { title: '客户总览', requiresAuth: true, frontendPermission: 'CUSTOMER_OVERVIEW' }
         },
-        { path: 'blacklist', name: 'blacklist', component: BlacklistPage, meta: { title: '黑名单', requiresAuth: true } }
+        { path: 'blacklist', name: 'blacklist', component: BlacklistPage, meta: { title: '黑名单', requiresAuth: true, frontendPermission: 'BLACKLIST' } },
+        { path: 'no-menu-permission', name: 'noMenuPermission', component: NoMenuPermissionPage, meta: { title: '暂无菜单权限', requiresAuth: true } }
       ]
     },
-    { path: '/:pathMatch(.*)*', redirect: '/data' }
+    { path: '/:pathMatch(.*)*', redirect: () => firstAllowedPath(useAuthStore().user) }
   ]
 })
 
@@ -133,13 +136,19 @@ router.beforeEach(async (to) => {
   const redirect = resolveAuthRedirect({
     isLoggedIn: authStore.isLoggedIn,
     toPath: to.path,
-    requiresAuth: to.matched.some((record) => record.meta.requiresAuth)
+    requiresAuth: to.matched.some((record) => record.meta.requiresAuth),
+    authenticatedHome: firstAllowedPath(authStore.user)
   })
   if (redirect) return redirect
 
+  if (authStore.user && !canAccessPath(authStore.user, to.path)) {
+    return firstAllowedPath(authStore.user)
+  }
+
   const accessGuard = useAccessGuardStore()
-  if (accessGuard.isProtectedPath(to.path)) await accessGuard.loadGroups()
-  if (accessGuard.requiresAccessForPath(to.path)) {
+  const followsAccessPassword = authStore.user?.requiresAccessGuardPassword !== false
+  if (followsAccessPassword && accessGuard.isProtectedPath(to.path)) await accessGuard.loadGroups()
+  if (followsAccessPassword && accessGuard.requiresAccessForPath(to.path)) {
     const feature = featureForPath(to.path)
     if (!feature) return true
     accessGuard.requestFeatureAccess(feature, {
