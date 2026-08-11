@@ -18,14 +18,17 @@ import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
 import { Roles } from '../auth/roles.decorator'
 import { RolesGuard } from '../auth/roles.guard'
 import {
-  type CreateRechargePayload,
   SharedPrepaidLedgerService
 } from './shared-prepaid-ledger.service'
 import {
-  type SharedPrepaidListQuery,
-  type SharedPrepaidRechargeQuery,
   SharedPrepaidQueryService
 } from './shared-prepaid-query.service'
+import {
+  CreateSharedPrepaidRechargeDto,
+  ReverseSharedPrepaidRechargeDto,
+  SharedPrepaidMemberQueryDto,
+  SharedPrepaidRechargeQueryDto
+} from './shared-prepaid.dto'
 
 @Controller('shared-prepaid')
 @UseGuards(AuthGuard, RolesGuard, FrontendPermissionGuard)
@@ -38,7 +41,7 @@ export class SharedPrepaidController {
 
   @Get('members')
   @FrontendPermission('PREPAID_CUSTOMERS')
-  listMembers(@Query() query: SharedPrepaidListQuery) {
+  listMembers(@Query() query: SharedPrepaidMemberQueryDto) {
     return this.queryService.listMembers(query)
   }
 
@@ -56,7 +59,7 @@ export class SharedPrepaidController {
 
   @Get('recharges')
   @FrontendPermission('PREPAID_RECHARGE')
-  listRecharges(@Query() query: SharedPrepaidRechargeQuery) {
+  listRecharges(@Query() query: SharedPrepaidRechargeQueryDto) {
     return this.queryService.listRecharges(query)
   }
 
@@ -65,7 +68,7 @@ export class SharedPrepaidController {
   createRecharge(
     @CurrentUserInfo() user: CurrentUser,
     @Headers('x-idempotency-key') key: string,
-    @Body() body: CreateRechargePayload
+    @Body() body: CreateSharedPrepaidRechargeDto
   ) {
     return this.ledger.createRecharge(user, body, key)
   }
@@ -76,8 +79,8 @@ export class SharedPrepaidController {
     @CurrentUserInfo() user: CurrentUser,
     @Param('id') id: string,
     @Headers('x-idempotency-key') key: string,
-    @Body('reason') reason: string
+    @Body() body: ReverseSharedPrepaidRechargeDto
   ) {
-    return this.ledger.reverseRecharge(user, id, reason, key)
+    return this.ledger.reverseRecharge(user, id, body.reason, key)
   }
 }

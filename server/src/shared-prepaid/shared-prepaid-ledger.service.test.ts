@@ -1,12 +1,19 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException
+  ForbiddenException,
+  ValidationPipe
 } from '@nestjs/common'
 import { Prisma, SharedPrepaidLedgerKind, UserRole } from '@prisma/client'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { CurrentUser } from '../auth/current-user'
+import {
+  CreateSharedPrepaidRechargeDto,
+  ReverseSharedPrepaidRechargeDto,
+  SharedPrepaidMemberQueryDto,
+  SharedPrepaidRechargeQueryDto
+} from './shared-prepaid.dto'
 import { SharedPrepaidLedgerService } from './shared-prepaid-ledger.service'
 import { SharedPrepaidQueryService } from './shared-prepaid-query.service'
 
@@ -83,6 +90,9 @@ interface StoredLedger {
   referenceType: string
   referenceId: string
   idempotencyKey: string
+  requestFingerprint?: string | null
+  responseSnapshot?: unknown
+  reason?: string | null
   createdAt: Date
 }
 
@@ -92,6 +102,7 @@ interface StoredConsumption {
   amount: Prisma.Decimal
   active: boolean
   createdAt: Date
+  [key: string]: unknown
 }
 
 class FakePrisma {
@@ -101,6 +112,8 @@ class FakePrisma {
   consumptions: StoredConsumption[] = []
   lockedMemberIds: string[] = []
   memberUpsertRacePhone: string | null = null
+  failNextLedgerCreate = false
+  p2002AfterNextCommit: 'same-request' | 'different-request' | null = null
   private nextId = 1
 
   private user(id: string) {
@@ -169,7 +182,7 @@ class FakePrisma {
           createdAt,
           updatedAt: createdAt
         })
-        throw { code: 'P2002', meta: { target: ['phone'] } }
+        throw { code: 'P2002', meta: { target: ['phone'] }, preserveState: true }
       }
       const member: StoredMember = {
         id: `member-${this.nextId++}`,
@@ -215,6 +228,9 @@ class FakePrisma {
       return recharge ? this.rechargeWithRelations(recharge) : null
     }
     this.sharedPrepaidRecharge.create = async (args: any) => {
+      if (this.recharges.some((row) => row.idempotencyKey === args.data.idempotencyKey)) {
+        throw { code: 'P2002', meta: { target: ['idempotencyKey'] } }
+      }
       const recharge: StoredRecharge = {
         id: `recharge-${this.nextId++}`,
         ...args.data,
@@ -256,6 +272,13 @@ class FakePrisma {
       this.ledgerEntries.find((entry) => entry.idempotencyKey === args.where.idempotencyKey) ?? null
     )
     this.sharedPrepaidLedgerEntry.create = async (args: any) => {
+      if (this.failNextLedgerCreate) {
+        this.failNextLedgerCreate = false
+        throw new Error('injected ledger failure')
+      }
+      if (this.ledgerEntries.some((row) => row.idempotencyKey === args.data.idempotencyKey)) {
+        throw { code: 'P2002', meta: { target: ['idempotencyKey'] } }
+      }
       const entry: StoredLedger = {
         id: `ledger-${this.nextId++}`,
         ...args.data,
@@ -272,12 +295,60 @@ class FakePrisma {
   }
 
   async $transaction<T>(callback: (tx: FakePrisma) => Promise<T>): Promise<T> {
-    return callback(this)
+    const snapshot = this.captureState()
+    try {
+      const result = await callback(this)
+      if (this.p2002AfterNextCommit) {
+        const race = this.p2002AfterNextCommit
+        this.p2002AfterNextCommit = null
+        if (race === 'different-request') {
+          this.ledgerEntries.at(-1)!.requestFingerprint = 'different-concurrent-request'
+        }
+        throw { code: 'P2002', meta: { target: ['idempotencyKey'] }, preserveState: true }
+      }
+      return result
+    } catch (error) {
+      const preserveState = Boolean(error && typeof error === 'object' && 'preserveState' in error && error.preserveState)
+      if (!preserveState) this.restoreState(snapshot)
+      throw error
+    }
   }
 
   async $queryRaw(strings: TemplateStringsArray, ...values: unknown[]) {
     if (strings.join('?').includes('FOR UPDATE')) this.lockedMemberIds.push(String(values[0]))
     return []
+  }
+
+  private captureState() {
+    return {
+      members: this.members.map((row) => this.cloneValue(row)),
+      recharges: this.recharges.map((row) => this.cloneValue(row)),
+      ledgerEntries: this.ledgerEntries.map((row) => this.cloneValue(row)),
+      consumptions: this.consumptions.map((row) => this.cloneValue(row)),
+      lockedMemberIds: [...this.lockedMemberIds],
+      nextId: this.nextId
+    }
+  }
+
+  private restoreState(snapshot: ReturnType<FakePrisma['captureState']>) {
+    this.members = snapshot.members
+    this.recharges = snapshot.recharges
+    this.ledgerEntries = snapshot.ledgerEntries
+    this.consumptions = snapshot.consumptions
+    this.lockedMemberIds = snapshot.lockedMemberIds
+    this.nextId = snapshot.nextId
+  }
+
+  private cloneValue<T>(value: T): T {
+    if (value instanceof Prisma.Decimal) return new Prisma.Decimal(value) as T
+    if (value instanceof Date) return new Date(value) as T
+    if (Array.isArray(value)) return value.map((item) => this.cloneValue(item)) as T
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, this.cloneValue(item)])
+      ) as T
+    }
+    return value
   }
 }
 
@@ -293,6 +364,70 @@ function rechargePayload(overrides: Record<string, unknown> = {}) {
   }
 }
 
+describe('shared prepaid runtime DTOs', () => {
+  const pipe = new ValidationPipe({ whitelist: true, transform: true })
+
+  async function transform<T>(value: unknown, metatype: new () => T, type: 'body' | 'query' = 'body') {
+    return pipe.transform(value, { type, metatype }) as Promise<T>
+  }
+
+  it('validates a recharge body and strips client-supplied owner and actor fields', async () => {
+    const dto = await transform({
+      ...rechargePayload(),
+      ownerFrontendUserId: 'front-2',
+      actorUserId: 'sub-2'
+    }, CreateSharedPrepaidRechargeDto)
+
+    expect(dto).toBeInstanceOf(CreateSharedPrepaidRechargeDto)
+    expect(dto).toMatchObject(rechargePayload())
+    expect(dto).not.toHaveProperty('ownerFrontendUserId')
+    expect(dto).not.toHaveProperty('actorUserId')
+  })
+
+  it.each([
+    ['null body', null],
+    ['object phone', rechargePayload({ phone: { value: '13800000000' } })],
+    ['object paid amount', rechargePayload({ paidAmount: { value: 1000 } })],
+    ['array gift amount', rechargePayload({ giftAmount: [100] })],
+    ['string opening flag', rechargePayload({ isOpeningBalance: 'false' })],
+    ['object remark', rechargePayload({ remark: { text: '备注' } })]
+  ])('rejects an invalid recharge DTO %s', async (_label, value) => {
+    await expect(transform(value, CreateSharedPrepaidRechargeDto)).rejects.toBeInstanceOf(BadRequestException)
+  })
+
+  it.each([null, {}, { reason: null }, { reason: { text: '原因' } }, { reason: '' }])(
+    'rejects an invalid reversal DTO %j',
+    async (value) => {
+      await expect(transform(value, ReverseSharedPrepaidRechargeDto)).rejects.toBeInstanceOf(BadRequestException)
+    }
+  )
+
+  it('transforms and whitelists member and recharge query parameters', async () => {
+    const members = await transform({ page: '2', pageSize: '50', phone: '138', ignored: 'x' }, SharedPrepaidMemberQueryDto, 'query')
+    const recharges = await transform({
+      page: '1',
+      pageSize: '20',
+      isOpeningBalance: 'true',
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+      ignored: 'x'
+    }, SharedPrepaidRechargeQueryDto, 'query')
+
+    expect(members).toMatchObject({ page: 2, pageSize: 50, phone: '138' })
+    expect(members).not.toHaveProperty('ignored')
+    expect(recharges).toMatchObject({ page: 1, pageSize: 20, isOpeningBalance: true })
+    expect(recharges).not.toHaveProperty('ignored')
+  })
+
+  it.each([
+    [SharedPrepaidMemberQueryDto, { page: {} }],
+    [SharedPrepaidRechargeQueryDto, { isOpeningBalance: 'yes' }],
+    [SharedPrepaidRechargeQueryDto, { startDate: '2026/08/01' }]
+  ])('rejects invalid query types and values', async (metatype, value) => {
+    await expect(transform(value, metatype, 'query')).rejects.toBeInstanceOf(BadRequestException)
+  })
+})
+
 describe('SharedPrepaidLedgerService', () => {
   let prisma: FakePrisma
   let service: SharedPrepaidLedgerService
@@ -300,6 +435,24 @@ describe('SharedPrepaidLedgerService', () => {
   beforeEach(() => {
     prisma = new FakePrisma()
     service = new SharedPrepaidLedgerService(prisma as never)
+  })
+
+  it.each([
+    ['null body', null],
+    ['object phone', rechargePayload({ phone: { value: '13800000000' } })],
+    ['object amount', rechargePayload({ paidAmount: { value: 1000 } })],
+    ['string opening flag', rechargePayload({ isOpeningBalance: 'false' })],
+    ['object remark', rechargePayload({ remark: { text: '备注' } })]
+  ])('rejects an invalid service payload %s with 400', async (_label, payload) => {
+    await expect(service.createRecharge(mainUser, payload as never, 'idem-invalid-type'))
+      .rejects.toBeInstanceOf(BadRequestException)
+  })
+
+  it('rejects a non-string reversal reason with 400', async () => {
+    const recharge = await service.createRecharge(mainUser, rechargePayload(), 'idem-reason-source')
+
+    await expect(service.reverseRecharge(mainUser, recharge.id, { text: '原因' }, 'idem-object-reason'))
+      .rejects.toBeInstanceOf(BadRequestException)
   })
 
   it.each([
@@ -333,7 +486,9 @@ describe('SharedPrepaidLedgerService', () => {
       kind: SharedPrepaidLedgerKind.RECHARGE,
       balanceDelta: new Prisma.Decimal(1100),
       ownerFrontendUserId: 'front-1',
-      actorUserId: 'sub-1'
+      actorUserId: 'sub-1',
+      requestFingerprint: expect.any(String),
+      responseSnapshot: expect.any(Object)
     }])
   })
 
@@ -358,18 +513,58 @@ describe('SharedPrepaidLedgerService', () => {
     expect(firstView).toMatchObject({ phone: '13800000000', paidTotal: 1050, giftTotal: 105, balance: 1155 })
   })
 
-  it('returns the original result for a duplicate idempotency key without a second write', async () => {
+  it('returns the original response snapshot for the same canonical request after later balance changes', async () => {
     const first = await service.createRecharge(mainUser, rechargePayload(), 'idem-retry')
+    await service.reverseRecharge(mainUser, first.id, '录入错误', 'idem-later-reversal')
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 50, giftAmount: 0 }), 'idem-later')
     const retry = await service.createRecharge(
-      otherMainUser,
-      rechargePayload({ phone: '13900000000', paidAmount: 1, giftAmount: 0 }),
+      mainUser,
+      rechargePayload({ phone: '138-0000-0000', paidAmount: 1000, giftAmount: '100.0' }),
       'idem-retry'
     )
 
     expect(retry).toEqual(first)
     expect(prisma.members).toHaveLength(1)
+    expect(prisma.recharges).toHaveLength(2)
+    expect(prisma.ledgerEntries).toHaveLength(3)
+  })
+
+  it.each([
+    ['actor', mainUser, subUser, rechargePayload()],
+    ['owner', mainUser, otherMainUser, rechargePayload()],
+    ['phone', mainUser, mainUser, rechargePayload({ phone: '13900000000' })],
+    ['date', mainUser, mainUser, rechargePayload({ rechargeDate: '2026-08-12' })],
+    ['paid amount', mainUser, mainUser, rechargePayload({ paidAmount: 999 })],
+    ['gift amount', mainUser, mainUser, rechargePayload({ giftAmount: 99 })],
+    ['opening flag', mainUser, mainUser, rechargePayload({ isOpeningBalance: true })],
+    ['remark', mainUser, mainUser, rechargePayload({ remark: '其他备注' })]
+  ])('rejects idempotency-key reuse with a different %s', async (_label, firstUser, retryUser, retryPayload) => {
+    await service.createRecharge(firstUser, rechargePayload(), 'idem-conflict')
+
+    await expect(service.createRecharge(retryUser, retryPayload, 'idem-conflict'))
+      .rejects.toBeInstanceOf(ConflictException)
     expect(prisma.recharges).toHaveLength(1)
     expect(prisma.ledgerEntries).toHaveLength(1)
+  })
+
+  it('returns an identical concurrent P2002 winner and rejects a different concurrent winner', async () => {
+    prisma.p2002AfterNextCommit = 'same-request'
+    const winner = await service.createRecharge(mainUser, rechargePayload(), 'idem-race-same')
+    expect(winner).toMatchObject({ balance: 1100, actorUserId: 'front-1' })
+
+    prisma.p2002AfterNextCommit = 'different-request'
+    await expect(service.createRecharge(mainUser, rechargePayload({ paidAmount: 1, giftAmount: 0 }), 'idem-race-different'))
+      .rejects.toBeInstanceOf(ConflictException)
+  })
+
+  it('rolls back member, recharge, and balance changes after an intermediate ledger failure', async () => {
+    prisma.failNextLedgerCreate = true
+
+    await expect(service.createRecharge(mainUser, rechargePayload(), 'idem-rollback'))
+      .rejects.toThrow('injected ledger failure')
+    expect(prisma.members).toEqual([])
+    expect(prisma.recharges).toEqual([])
+    expect(prisma.ledgerEntries).toEqual([])
   })
 
   it('retries a global member uniqueness race and reuses the concurrently created member', async () => {
@@ -407,7 +602,10 @@ describe('SharedPrepaidLedgerService', () => {
     expect(prisma.ledgerEntries[1]).toMatchObject({
       kind: SharedPrepaidLedgerKind.RECHARGE_REVERSAL,
       balanceDelta: new Prisma.Decimal(-1100),
-      referenceId: recharge.id
+      referenceId: recharge.id,
+      reason: '充值录入错误',
+      requestFingerprint: expect.any(String),
+      responseSnapshot: expect.any(Object)
     })
   })
 
@@ -428,7 +626,7 @@ describe('SharedPrepaidLedgerService', () => {
       .rejects.toBeInstanceOf(ForbiddenException)
   })
 
-  it('checks recharge ownership before returning an idempotent reversal', async () => {
+  it('conflicts when another authenticated account reuses a reversal idempotency key', async () => {
     const recharge = await service.createRecharge(mainUser, rechargePayload(), 'idem-main')
     await service.reverseRecharge(mainUser, recharge.id, '录入错误', 'idem-owner-reversal')
 
@@ -437,7 +635,30 @@ describe('SharedPrepaidLedgerService', () => {
       recharge.id,
       '录入错误',
       'idem-owner-reversal'
-    )).rejects.toBeInstanceOf(ForbiddenException)
+    )).rejects.toBeInstanceOf(ConflictException)
+  })
+
+  it('returns the original reversal response after later balance changes', async () => {
+    const recharge = await service.createRecharge(mainUser, rechargePayload(), 'idem-original')
+    const first = await service.reverseRecharge(mainUser, recharge.id, ' 录入错误 ', 'idem-reversal')
+    await service.createRecharge(mainUser, rechargePayload({ paidAmount: 50, giftAmount: 0 }), 'idem-later')
+
+    const retry = await service.reverseRecharge(mainUser, recharge.id, '录入错误', 'idem-reversal')
+
+    expect(retry).toEqual(first)
+    expect(first.balance).toBe(0)
+    expect(prisma.members[0].cachedBalance.toNumber()).toBe(50)
+  })
+
+  it('conflicts when a reversal idempotency key is reused with a different reason or target', async () => {
+    const first = await service.createRecharge(mainUser, rechargePayload(), 'idem-first')
+    const second = await service.createRecharge(mainUser, rechargePayload({ paidAmount: 50, giftAmount: 0 }), 'idem-second')
+    await service.reverseRecharge(mainUser, first.id, '金额录错', 'idem-reversal')
+
+    await expect(service.reverseRecharge(mainUser, first.id, '日期录错', 'idem-reversal'))
+      .rejects.toBeInstanceOf(ConflictException)
+    await expect(service.reverseRecharge(mainUser, second.id, '金额录错', 'idem-reversal'))
+      .rejects.toBeInstanceOf(ConflictException)
   })
 })
 
@@ -507,5 +728,32 @@ describe('SharedPrepaidQueryService', () => {
     expect(detail.ownerComposition).toEqual([])
     expect(detail.recharges).toHaveLength(1)
     expect(detail.recharges[0].reversedAt).toBeInstanceOf(Date)
+  })
+
+  it('preserves Date instances while converting nested Decimal detail values to numbers', async () => {
+    const prisma = new FakePrisma()
+    const ledger = new SharedPrepaidLedgerService(prisma as never)
+    const recharge = await ledger.createRecharge(mainUser, rechargePayload(), 'idem-dates')
+    const consumptionCreatedAt = new Date('2026-08-12T03:00:00.000Z')
+    const allocationCreatedAt = new Date('2026-08-12T03:00:01.000Z')
+    prisma.consumptions.push({
+      id: 'consumption-dates',
+      memberId: recharge.memberId,
+      amount: new Prisma.Decimal('12.50'),
+      active: true,
+      createdAt: consumptionCreatedAt,
+      allocations: [{
+        id: 'allocation-dates',
+        allocatedAmount: new Prisma.Decimal('12.50'),
+        createdAt: allocationCreatedAt
+      }]
+    })
+    const query = new SharedPrepaidQueryService(prisma as never)
+
+    const detail = await query.getMemberDetail(recharge.memberId) as any
+
+    expect(detail.consumptions[0].createdAt).toEqual(consumptionCreatedAt)
+    expect(detail.consumptions[0].allocations[0].createdAt).toEqual(allocationCreatedAt)
+    expect(detail.consumptions[0].allocations[0].allocatedAmount).toBe(12.5)
   })
 })

@@ -568,6 +568,9 @@ model SharedPrepaidLedgerEntry {
   referenceType       String
   referenceId         String
   idempotencyKey      String                  @unique
+  requestFingerprint  String?
+  responseSnapshot    Json?
+  reason              String?
   createdAt           DateTime                @default(now())
 
   member            SharedPrepaidMember    @relation("SharedPrepaidLedgerEntryMember", fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Cascade)

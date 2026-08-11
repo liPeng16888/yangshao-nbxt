@@ -6,6 +6,7 @@ import {
   NotFoundException
 } from '@nestjs/common'
 import { Prisma, SharedPrepaidLedgerKind } from '@prisma/client'
+import { createHash } from 'node:crypto'
 
 import type { CurrentUser } from '../auth/current-user'
 import { PrismaService } from '../prisma/prisma.service'
@@ -16,7 +17,7 @@ export interface CreateRechargePayload {
   rechargeDate: unknown
   paidAmount: unknown
   giftAmount: unknown
-  isOpeningBalance?: boolean
+  isOpeningBalance?: unknown
   remark?: unknown
 }
 
@@ -41,15 +42,6 @@ interface RechargeReadRow {
     phone: string
     cachedBalance: Prisma.Decimal
   }
-  ownerFrontendUser?: AccountReadRow
-  actorUser?: AccountReadRow
-}
-
-interface AccountReadRow {
-  id: string
-  account: string
-  username: string
-  displayRemark?: string | null
 }
 
 export interface SharedPrepaidRechargeResult {
@@ -80,12 +72,13 @@ interface ValidatedRecharge {
   remark: string | null
 }
 
-const accountSelect = {
-  id: true,
-  account: true,
-  username: true,
-  displayRemark: true
-} satisfies Prisma.UserSelect
+interface ExpectedIdempotencyRequest {
+  kind: SharedPrepaidLedgerKind
+  fingerprint: string
+  referenceId?: string
+}
+
+type IdempotencyReader = Pick<Prisma.TransactionClient, 'sharedPrepaidLedgerEntry'>
 
 const rechargeReadInclude = {
   member: {
@@ -93,10 +86,7 @@ const rechargeReadInclude = {
       phone: true,
       cachedBalance: true
     }
-  },
-  ownerFrontendUser: { select: accountSelect },
-  actorUser: { select: accountSelect },
-  reversedByLedger: true
+  }
 } satisfies Prisma.SharedPrepaidRechargeInclude
 
 @Injectable()
@@ -113,20 +103,30 @@ export class SharedPrepaidLedgerService {
     if (input.isOpeningBalance && !user.isFrontendMainAccount) {
       throw new ForbiddenException('只有主账号可以录入期初余额')
     }
+    const expected: ExpectedIdempotencyRequest = {
+      kind: SharedPrepaidLedgerKind.RECHARGE,
+      fingerprint: this.fingerprint({
+        operation: 'CREATE_RECHARGE',
+        ownerFrontendUserId: user.dataOwnerId,
+        actorUserId: user.id,
+        phone: input.phone,
+        rechargeDate: input.rechargeDate,
+        paidAmount: input.paidAmount.toFixed(2),
+        giftAmount: input.giftAmount.toFixed(2),
+        isOpeningBalance: input.isOpeningBalance,
+        remark: input.remark
+      })
+    }
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         return await this.prisma.$transaction((tx) => (
-          this.createRechargeInTransaction(tx, user, input, key)
+          this.createRechargeInTransaction(tx, user, input, key, expected)
         ))
       } catch (error) {
         if (!this.isUniqueConstraintError(error)) throw error
-
-        const existing = await this.prisma.sharedPrepaidRecharge.findUnique({
-          where: { idempotencyKey: key },
-          include: rechargeReadInclude
-        })
-        if (existing) return this.toRechargeResult(existing as RechargeReadRow)
+        const duplicate = await this.resolveIdempotentResponse(this.prisma, key, expected)
+        if (duplicate) return duplicate
         if (attempt === 0) continue
       }
     }
@@ -147,18 +147,39 @@ export class SharedPrepaidLedgerService {
       throw new ForbiddenException('只有主账号可以冲正充值')
     }
     const key = this.requireIdempotencyKey(idempotencyKey)
-    const normalizedReason = String(reason ?? '').trim()
+    const normalizedRechargeId = String(rechargeId || '').trim()
+    if (!normalizedRechargeId) throw new BadRequestException('缺少充值记录编号')
+    if (typeof reason !== 'string') throw new BadRequestException('冲正原因必须为文本')
+    const normalizedReason = reason.trim()
     if (!normalizedReason) throw new BadRequestException('请填写冲正原因')
-    if (!String(rechargeId || '').trim()) throw new BadRequestException('缺少充值记录编号')
+    if (normalizedReason.length > 500) throw new BadRequestException('冲正原因不能超过 500 个字符')
+    const expected: ExpectedIdempotencyRequest = {
+      kind: SharedPrepaidLedgerKind.RECHARGE_REVERSAL,
+      referenceId: normalizedRechargeId,
+      fingerprint: this.fingerprint({
+        operation: 'REVERSE_RECHARGE',
+        ownerFrontendUserId: user.dataOwnerId,
+        actorUserId: user.id,
+        rechargeId: normalizedRechargeId,
+        reason: normalizedReason
+      })
+    }
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         return await this.prisma.$transaction((tx) => (
-          this.reverseRechargeInTransaction(tx, user, rechargeId, normalizedReason, key)
+          this.reverseRechargeInTransaction(
+            tx,
+            user,
+            normalizedRechargeId,
+            normalizedReason,
+            key,
+            expected
+          )
         ))
       } catch (error) {
         if (!this.isUniqueConstraintError(error)) throw error
-        const duplicate = await this.loadIdempotentReversal(rechargeId, key)
+        const duplicate = await this.resolveIdempotentResponse(this.prisma, key, expected)
         if (duplicate) return duplicate
         if (attempt === 0) continue
       }
@@ -174,13 +195,16 @@ export class SharedPrepaidLedgerService {
     tx: Prisma.TransactionClient,
     user: CurrentUser,
     input: ValidatedRecharge,
-    idempotencyKey: string
+    idempotencyKey: string,
+    expected: ExpectedIdempotencyRequest
   ): Promise<SharedPrepaidRechargeResult> {
-    const existing = await tx.sharedPrepaidRecharge.findUnique({
-      where: { idempotencyKey },
-      include: rechargeReadInclude
+    const duplicate = await this.resolveIdempotentResponse(tx, idempotencyKey, expected)
+    if (duplicate) return duplicate
+
+    const orphanRecharge = await tx.sharedPrepaidRecharge.findUnique({
+      where: { idempotencyKey }
     })
-    if (existing) return this.toRechargeResult(existing as RechargeReadRow)
+    if (orphanRecharge) throw this.idempotencyStateInvalid()
 
     const member = await tx.sharedPrepaidMember.upsert({
       where: { phone: input.phone },
@@ -191,12 +215,12 @@ export class SharedPrepaidLedgerService {
       update: {}
     })
     await tx.$queryRaw`SELECT "id" FROM "SharedPrepaidMember" WHERE "id" = ${member.id} FOR UPDATE`
-
-    const duplicateAfterLock = await tx.sharedPrepaidRecharge.findUnique({
-      where: { idempotencyKey },
-      include: rechargeReadInclude
+    const lockedMember = await tx.sharedPrepaidMember.findUnique({
+      where: { id: member.id },
+      select: { cachedBalance: true }
     })
-    if (duplicateAfterLock) return this.toRechargeResult(duplicateAfterLock as RechargeReadRow)
+    if (!lockedMember) throw new NotFoundException('预存款会员不存在')
+    const balanceAfter = lockedMember.cachedBalance.add(input.totalAmount)
 
     const recharge = await tx.sharedPrepaidRecharge.create({
       data: {
@@ -213,6 +237,20 @@ export class SharedPrepaidLedgerService {
         idempotencyKey
       }
     })
+    const updatedMember = await tx.sharedPrepaidMember.update({
+      where: { id: member.id },
+      data: {
+        cachedBalance: { increment: input.totalAmount },
+        version: { increment: 1 }
+      }
+    })
+    if (!updatedMember.cachedBalance.equals(balanceAfter)) {
+      throw new ConflictException({
+        code: 'PREPAID_BALANCE_VERSION_CONFLICT',
+        message: '会员余额已变化，请重试'
+      })
+    }
+    const result = this.buildRechargeResult(recharge, input.phone, balanceAfter)
     await tx.sharedPrepaidLedgerEntry.create({
       data: {
         memberId: member.id,
@@ -222,24 +260,13 @@ export class SharedPrepaidLedgerService {
         actorUserId: user.id,
         referenceType: 'SharedPrepaidRecharge',
         referenceId: recharge.id,
-        idempotencyKey
+        idempotencyKey,
+        requestFingerprint: expected.fingerprint,
+        responseSnapshot: this.toResponseSnapshot(result),
+        reason: null
       }
     })
-    const updatedMember = await tx.sharedPrepaidMember.update({
-      where: { id: member.id },
-      data: {
-        cachedBalance: { increment: input.totalAmount },
-        version: { increment: 1 }
-      }
-    })
-
-    return this.toRechargeResult({
-      ...recharge,
-      member: {
-        phone: input.phone,
-        cachedBalance: updatedMember.cachedBalance
-      }
-    } as RechargeReadRow)
+    return result
   }
 
   private async reverseRechargeInTransaction(
@@ -247,8 +274,12 @@ export class SharedPrepaidLedgerService {
     user: CurrentUser,
     rechargeId: string,
     reason: string,
-    idempotencyKey: string
+    idempotencyKey: string,
+    expected: ExpectedIdempotencyRequest
   ): Promise<SharedPrepaidRechargeResult> {
+    const duplicate = await this.resolveIdempotentResponse(tx, idempotencyKey, expected)
+    if (duplicate) return duplicate
+
     const initialRecharge = await tx.sharedPrepaidRecharge.findUnique({
       where: { id: rechargeId },
       include: rechargeReadInclude
@@ -258,34 +289,12 @@ export class SharedPrepaidLedgerService {
       throw new ForbiddenException('只能冲正本主账号录入的充值')
     }
 
-    const duplicateLedger = await tx.sharedPrepaidLedgerEntry.findUnique({
-      where: { idempotencyKey }
-    })
-    if (duplicateLedger) {
-      if (
-        duplicateLedger.kind !== SharedPrepaidLedgerKind.RECHARGE_REVERSAL ||
-        duplicateLedger.referenceId !== rechargeId
-      ) {
-        throw new ConflictException({
-          code: 'PREPAID_IDEMPOTENCY_KEY_REUSED',
-          message: '幂等请求编号已用于其他操作'
-        })
-      }
-      const duplicateRecharge = await tx.sharedPrepaidRecharge.findUnique({
-        where: { id: rechargeId },
-        include: rechargeReadInclude
-      })
-      if (duplicateRecharge?.reversedByLedgerId === duplicateLedger.id) {
-        return this.toRechargeResult(duplicateRecharge as RechargeReadRow)
-      }
-    }
-
     await tx.$queryRaw`SELECT "id" FROM "SharedPrepaidMember" WHERE "id" = ${initialRecharge.memberId} FOR UPDATE`
     const recharge = await tx.sharedPrepaidRecharge.findUnique({
       where: { id: rechargeId },
       include: rechargeReadInclude
     })
-    if (!recharge) throw new NotFoundException('充值记录不存在')
+    if (!recharge?.member) throw new NotFoundException('充值记录不存在')
     if (recharge.reversedAt) {
       throw new ConflictException({
         code: 'PREPAID_RECHARGE_ALREADY_REVERSED',
@@ -295,10 +304,13 @@ export class SharedPrepaidLedgerService {
     if (!recharge.remainingAmount.equals(recharge.totalAmount)) {
       throw new ConflictException({
         code: 'PREPAID_RECHARGE_ALREADY_USED',
-        message: '该充值额度已被消费，不能直接冲正'
+        message: '该充值已有消费记录，请先冲正相关消费'
       })
     }
 
+    const reversedAt = new Date()
+    const balanceAfter = recharge.member.cachedBalance.sub(recharge.totalAmount)
+    const result = this.buildRechargeResult(recharge, recharge.member.phone, balanceAfter, reversedAt)
     const reversal = await tx.sharedPrepaidLedgerEntry.create({
       data: {
         memberId: recharge.memberId,
@@ -308,20 +320,18 @@ export class SharedPrepaidLedgerService {
         actorUserId: user.id,
         referenceType: 'SharedPrepaidRecharge',
         referenceId: recharge.id,
-        idempotencyKey
+        idempotencyKey,
+        requestFingerprint: expected.fingerprint,
+        responseSnapshot: this.toResponseSnapshot(result),
+        reason
       }
     })
-    const reversedAt = new Date()
-    const reversedRecharge = await tx.sharedPrepaidRecharge.update({
+    await tx.sharedPrepaidRecharge.update({
       where: { id: recharge.id },
       data: {
         reversedAt,
-        reversedByLedgerId: reversal.id,
-        remark: recharge.remark
-          ? `${recharge.remark}\n[冲正原因] ${reason}`
-          : `[冲正原因] ${reason}`
-      },
-      include: rechargeReadInclude
+        reversedByLedgerId: reversal.id
+      }
     })
     const member = await tx.sharedPrepaidMember.update({
       where: { id: recharge.memberId },
@@ -330,38 +340,43 @@ export class SharedPrepaidLedgerService {
         version: { increment: 1 }
       }
     })
-
-    return this.toRechargeResult({
-      ...reversedRecharge,
-      member: {
-        phone: reversedRecharge.member.phone,
-        cachedBalance: member.cachedBalance
-      }
-    } as RechargeReadRow)
+    if (!member.cachedBalance.equals(balanceAfter)) {
+      throw new ConflictException({
+        code: 'PREPAID_BALANCE_VERSION_CONFLICT',
+        message: '会员余额已变化，请重试'
+      })
+    }
+    return result
   }
 
-  private async loadIdempotentReversal(
-    rechargeId: string,
-    idempotencyKey: string
+  private async resolveIdempotentResponse(
+    reader: IdempotencyReader,
+    idempotencyKey: string,
+    expected: ExpectedIdempotencyRequest
   ): Promise<SharedPrepaidRechargeResult | null> {
-    const ledger = await this.prisma.sharedPrepaidLedgerEntry.findUnique({
-      where: { idempotencyKey }
+    const ledger = await reader.sharedPrepaidLedgerEntry.findUnique({
+      where: { idempotencyKey },
+      select: {
+        kind: true,
+        referenceId: true,
+        requestFingerprint: true,
+        responseSnapshot: true
+      }
     })
+    if (!ledger) return null
     if (
-      !ledger ||
-      ledger.kind !== SharedPrepaidLedgerKind.RECHARGE_REVERSAL ||
-      ledger.referenceId !== rechargeId
-    ) return null
-
-    const recharge = await this.prisma.sharedPrepaidRecharge.findUnique({
-      where: { id: rechargeId },
-      include: rechargeReadInclude
-    })
-    if (!recharge || recharge.reversedByLedgerId !== ledger.id) return null
-    return this.toRechargeResult(recharge as RechargeReadRow)
+      ledger.kind !== expected.kind ||
+      ledger.requestFingerprint !== expected.fingerprint ||
+      (expected.referenceId !== undefined && ledger.referenceId !== expected.referenceId)
+    ) throw this.idempotencyConflict()
+    return this.fromResponseSnapshot(ledger.responseSnapshot)
   }
 
   private validateRecharge(payload: CreateRechargePayload): ValidatedRecharge {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new BadRequestException('充值请求体格式错误')
+    }
+    if (typeof payload.phone !== 'string') throw new BadRequestException('会员手机号必须为文本')
     let phone: string
     try {
       phone = normalizePrepaidPhone(payload.phone)
@@ -369,15 +384,20 @@ export class SharedPrepaidLedgerService {
       throw new BadRequestException(error instanceof Error ? error.message : '会员手机号格式错误')
     }
 
-    const rechargeDate = String(payload.rechargeDate ?? '').trim()
+    if (typeof payload.rechargeDate !== 'string') throw new BadRequestException('充值日期必须为文本')
+    const rechargeDate = payload.rechargeDate.trim()
     if (!this.isCalendarDate(rechargeDate)) throw new BadRequestException('请填写有效的充值日期')
     const paidAmount = this.requireMoney(payload.paidAmount, '充值金额')
     if (paidAmount.lessThanOrEqualTo(0)) throw new BadRequestException('充值金额必须大于 0')
     const giftAmount = this.requireMoney(payload.giftAmount, '赠送金额')
     if (giftAmount.lessThan(0)) throw new BadRequestException('赠送金额不能为负数')
-    const remark = payload.remark === undefined || payload.remark === null
-      ? null
-      : String(payload.remark).trim() || null
+    if (payload.isOpeningBalance !== undefined && typeof payload.isOpeningBalance !== 'boolean') {
+      throw new BadRequestException('期初余额标记必须为布尔值')
+    }
+    if (payload.remark !== undefined && payload.remark !== null && typeof payload.remark !== 'string') {
+      throw new BadRequestException('备注必须为文本')
+    }
+    const remark = typeof payload.remark === 'string' ? payload.remark.trim() || null : null
     if (remark && remark.length > 500) throw new BadRequestException('备注不能超过 500 个字符')
 
     return {
@@ -395,9 +415,12 @@ export class SharedPrepaidLedgerService {
     if (value === undefined || value === null || String(value).trim() === '') {
       throw new BadRequestException(`${label}必填`)
     }
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      throw new BadRequestException(`${label}格式错误`)
+    }
     let amount: Prisma.Decimal
     try {
-      amount = new Prisma.Decimal(value as Prisma.Decimal.Value)
+      amount = new Prisma.Decimal(value)
     } catch {
       throw new BadRequestException(`${label}格式错误`)
     }
@@ -407,6 +430,97 @@ export class SharedPrepaidLedgerService {
       throw new BadRequestException(`${label}超出允许范围`)
     }
     return amount
+  }
+
+  private buildRechargeResult(
+    row: Omit<RechargeReadRow, 'member'>,
+    phone: string,
+    balance: Prisma.Decimal,
+    reversedAt: Date | null = row.reversedAt
+  ): SharedPrepaidRechargeResult {
+    return {
+      id: row.id,
+      memberId: row.memberId,
+      phone,
+      ownerFrontendUserId: row.ownerFrontendUserId,
+      actorUserId: row.actorUserId,
+      rechargeDate: row.rechargeDate,
+      paidAmount: row.paidAmount.toNumber(),
+      giftAmount: row.giftAmount.toNumber(),
+      totalAmount: row.totalAmount.toNumber(),
+      remainingAmount: row.remainingAmount.toNumber(),
+      balance: balance.toNumber(),
+      isOpeningBalance: row.isOpeningBalance,
+      remark: row.remark,
+      reversedAt,
+      createdAt: row.createdAt
+    }
+  }
+
+  private toResponseSnapshot(result: SharedPrepaidRechargeResult): Prisma.InputJsonObject {
+    return {
+      ...result,
+      reversedAt: result.reversedAt?.toISOString() ?? null,
+      createdAt: result.createdAt.toISOString()
+    }
+  }
+
+  private fromResponseSnapshot(value: Prisma.JsonValue | null): SharedPrepaidRechargeResult {
+    if (!value || Array.isArray(value) || typeof value !== 'object') throw this.idempotencyStateInvalid()
+    const snapshot = value as Record<string, Prisma.JsonValue>
+    const stringFields = [
+      'id',
+      'memberId',
+      'phone',
+      'ownerFrontendUserId',
+      'actorUserId',
+      'rechargeDate',
+      'createdAt'
+    ] as const
+    const numberFields = [
+      'paidAmount',
+      'giftAmount',
+      'totalAmount',
+      'remainingAmount',
+      'balance'
+    ] as const
+    if (stringFields.some((field) => typeof snapshot[field] !== 'string')) {
+      throw this.idempotencyStateInvalid()
+    }
+    if (numberFields.some((field) => typeof snapshot[field] !== 'number')) {
+      throw this.idempotencyStateInvalid()
+    }
+    if (typeof snapshot.isOpeningBalance !== 'boolean') throw this.idempotencyStateInvalid()
+    if (snapshot.remark !== null && typeof snapshot.remark !== 'string') throw this.idempotencyStateInvalid()
+    if (snapshot.reversedAt !== null && typeof snapshot.reversedAt !== 'string') {
+      throw this.idempotencyStateInvalid()
+    }
+    const createdAt = new Date(snapshot.createdAt as string)
+    const reversedAt = snapshot.reversedAt === null ? null : new Date(snapshot.reversedAt as string)
+    if (Number.isNaN(createdAt.getTime()) || (reversedAt && Number.isNaN(reversedAt.getTime()))) {
+      throw this.idempotencyStateInvalid()
+    }
+    return {
+      id: snapshot.id as string,
+      memberId: snapshot.memberId as string,
+      phone: snapshot.phone as string,
+      ownerFrontendUserId: snapshot.ownerFrontendUserId as string,
+      actorUserId: snapshot.actorUserId as string,
+      rechargeDate: snapshot.rechargeDate as string,
+      paidAmount: snapshot.paidAmount as number,
+      giftAmount: snapshot.giftAmount as number,
+      totalAmount: snapshot.totalAmount as number,
+      remainingAmount: snapshot.remainingAmount as number,
+      balance: snapshot.balance as number,
+      isOpeningBalance: snapshot.isOpeningBalance,
+      remark: snapshot.remark as string | null,
+      reversedAt,
+      createdAt
+    }
+  }
+
+  private fingerprint(value: Record<string, unknown>): string {
+    return createHash('sha256').update(JSON.stringify(value)).digest('hex')
   }
 
   private isCalendarDate(value: string): boolean {
@@ -426,24 +540,17 @@ export class SharedPrepaidLedgerService {
     return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'P2002')
   }
 
-  private toRechargeResult(row: RechargeReadRow): SharedPrepaidRechargeResult {
-    if (!row.member) throw new Error('充值读模型缺少会员信息')
-    return {
-      id: row.id,
-      memberId: row.memberId,
-      phone: row.member.phone,
-      ownerFrontendUserId: row.ownerFrontendUserId,
-      actorUserId: row.actorUserId,
-      rechargeDate: row.rechargeDate,
-      paidAmount: row.paidAmount.toNumber(),
-      giftAmount: row.giftAmount.toNumber(),
-      totalAmount: row.totalAmount.toNumber(),
-      remainingAmount: row.remainingAmount.toNumber(),
-      balance: row.member.cachedBalance.toNumber(),
-      isOpeningBalance: row.isOpeningBalance,
-      remark: row.remark,
-      reversedAt: row.reversedAt,
-      createdAt: row.createdAt
-    }
+  private idempotencyConflict(): ConflictException {
+    return new ConflictException({
+      code: 'PREPAID_IDEMPOTENCY_CONFLICT',
+      message: '幂等请求编号已用于不同的预存款操作'
+    })
+  }
+
+  private idempotencyStateInvalid(): ConflictException {
+    return new ConflictException({
+      code: 'PREPAID_IDEMPOTENCY_STATE_INVALID',
+      message: '幂等请求记录不完整，请使用新的请求编号'
+    })
   }
 }
