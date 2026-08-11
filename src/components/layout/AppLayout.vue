@@ -4,6 +4,14 @@
     <div class="app-main">
       <AppTopbar />
       <main class="app-content">
+        <el-alert
+          v-if="tenantRealtime.hasRemoteChanges"
+          class="remote-change-alert"
+          type="warning"
+          show-icon
+          :closable="false"
+          title="其他账号已更新数据；当前未保存内容已保留，请保存后再刷新页面。"
+        />
         <router-view />
       </main>
     </div>
@@ -11,19 +19,24 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
+import { useTenantRealtimeStore } from '@/stores/tenantRealtime'
 import AppSidebar from './AppSidebar.vue'
 import AppTopbar from './AppTopbar.vue'
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'ys_sidebar_collapsed'
 const sidebarCollapsed = ref(false)
 const accessGuard = useAccessGuardStore()
+const tenantRealtime = useTenantRealtimeStore()
 
 onMounted(() => {
   sidebarCollapsed.value = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'
   void accessGuard.loadGroups()
+  tenantRealtime.connect()
 })
+
+onBeforeUnmount(() => tenantRealtime.disconnect())
 
 watch(sidebarCollapsed, (collapsed) => {
   window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(collapsed))
@@ -33,3 +46,9 @@ function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 </script>
+
+<style scoped>
+.remote-change-alert {
+  margin-bottom: 12px;
+}
+</style>

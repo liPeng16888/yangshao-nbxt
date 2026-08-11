@@ -13,6 +13,7 @@ import { ReportsModule } from './reports/reports.module'
 import { CustomerOverviewModule } from './customer-overview/customer-overview.module'
 import { MedicineInventoryModule } from './medicine-inventory/medicine-inventory.module'
 import { EmployeeAttendanceModule } from './employee-attendance/employee-attendance.module'
+import { TenantRealtimeModule } from './realtime/tenant-realtime.module'
 
 @Module({
   imports: [
@@ -29,7 +30,8 @@ import { EmployeeAttendanceModule } from './employee-attendance/employee-attenda
     CustomerOverviewModule,
     AdminModule,
     MedicineInventoryModule,
-    EmployeeAttendanceModule
+    EmployeeAttendanceModule,
+    TenantRealtimeModule
   ]
 })
 export class AppModule {}
