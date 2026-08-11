@@ -92,7 +92,7 @@ beforeEach(() => {
   ])
   api.getAdminAttendanceEmployees.mockResolvedValue(employees)
   api.getAdminAttendanceOverview.mockResolvedValue({ month: '2026-08', workforce: 2, attendanceRecords: 20, pendingLeave: 1, payrollRuns: 1, readonly: true })
-  api.getAdminAttendanceSchedules.mockResolvedValue({ weekly: [], overrides: [], monthly: [] })
+  api.getAdminAttendanceSchedules.mockResolvedValue([])
   api.getAdminAttendanceRecords.mockResolvedValue([])
   api.getAdminAttendanceLeaves.mockResolvedValue([])
   api.getAdminAttendanceCommissions.mockResolvedValue([])
@@ -200,19 +200,22 @@ describe('EmployeeAttendancePage', () => {
     })
   })
 
-  it('shows planned start/end times on the read-only schedule table', async () => {
+  it('renders monthly plan intervals and rest minutes without mutation controls', async () => {
     Object.assign(routeState, { path: '/employee-attendance/schedules', meta: { employeeAttendancePage: 'schedules' } })
-    api.getAdminAttendanceSchedules.mockResolvedValueOnce({
-      weekly: [{ id: 'weekly-1', frontendUserId: 'front-1', employeeId: 'emp-1', weekday: 1, isWorkday: true, plannedStartTime: '08:30', plannedEndTime: '17:30', scheduledMinutes: 540 }],
-      overrides: [], monthly: []
-    })
+    api.getAdminAttendanceSchedules.mockResolvedValueOnce([{
+      id: 'day-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-11', isWorkday: true,
+      scheduledMinutes: 510, breakMinutes: 60, remark: '常规班',
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '12:00' }, { sequence: 1, startTime: '13:00', endTime: '17:30' }],
+      employee: { employeeNumber: 'YG001', name: '张三' }
+    }])
     const wrapper = mountPage()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('开始时间')
-    expect(wrapper.text()).toContain('结束时间')
-    expect(wrapper.text()).toContain('08:30')
-    expect(wrapper.text()).toContain('17:30')
+    expect(wrapper.text()).toContain('工作时段')
+    expect(wrapper.text()).toContain('08:00—12:00')
+    expect(wrapper.text()).toContain('13:00—17:30')
+    expect(wrapper.text()).toContain('休息 60 分钟')
+    expect(wrapper.text()).not.toMatch(/保存|复制上月|批量覆盖|编辑|删除/)
   })
 
   it('labels and renders a generic attendance audit with account, action and entity details', async () => {

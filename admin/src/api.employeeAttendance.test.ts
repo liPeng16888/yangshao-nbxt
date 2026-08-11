@@ -65,9 +65,7 @@ describe('admin employee attendance mock contract', () => {
     const schedules = await getAdminAttendanceSchedules({
       frontendUserIds: ['front-1'], startDate: '2099-01-01', endDate: '2099-01-31'
     })
-    expect(schedules.weekly).toHaveLength(1)
-    expect(schedules.overrides).toHaveLength(0)
-    expect(schedules.monthly).toHaveLength(1)
+    expect(schedules).toHaveLength(0)
 
     const [employee] = await getAdminAttendanceEmployees({ frontendUserIds: ['front-1'] })
     await revealAdminAttendanceEmployee(employee.id, 'admin123456', ['front-1'])
@@ -77,15 +75,18 @@ describe('admin employee attendance mock contract', () => {
     expect(audits.some((row) => row.entityId === employee.id)).toBe(true)
   })
 
-  it('rejects mixed month/date filters, exposes planned shifts and ignores irrelevant status', async () => {
-    await expect(getAdminAttendanceSchedules({
+  it('gives the month filter precedence over date range, exposes planned shifts and ignores irrelevant status', async () => {
+    const monthFirst = await getAdminAttendanceSchedules({
       frontendUserIds: ['front-1'], month: '2026-08', startDate: '2099-01-01', endDate: '2099-01-31'
-    })).rejects.toThrow('月份和日期范围不能同时筛选')
+    })
+    expect(monthFirst).toHaveLength(2)
 
     const statusIgnored = await getAdminAttendanceSchedules({ frontendUserIds: ['front-1'], status: 'NOPE' })
-    expect(statusIgnored.weekly).toHaveLength(1)
-    expect(statusIgnored.overrides).toHaveLength(1)
-    expect(statusIgnored.monthly).toHaveLength(1)
-    expect(statusIgnored.weekly[0]).toMatchObject({ plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480 })
+    expect(statusIgnored).toHaveLength(2)
+    expect(statusIgnored[0]).toMatchObject({ date: '2026-08-08', scheduledMinutes: 510, breakMinutes: 60 })
+    expect(statusIgnored[0].segments).toEqual([
+      { sequence: 0, startTime: '08:00', endTime: '12:00' },
+      { sequence: 1, startTime: '13:00', endTime: '17:30' }
+    ])
   })
 })

@@ -260,19 +260,30 @@ const mockEmployeeAttendance = {
     'emp-3': { idCard: '410000199303033456', bankCard: '6222023456789012', address: '郑州市金水区', emergencyContact: '王父 13800001003' }
   } as Record<string, { idCard: string; bankCard: string; address: string; emergencyContact: string }>,
   schedules: {
-    weekly: [
-      { id: 'weekly-1', frontendUserId: 'front-1', employeeId: 'emp-1', weekday: 1, isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480 },
-      { id: 'weekly-2', frontendUserId: 'front-2', employeeId: 'emp-3', weekday: 1, isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480 }
-    ],
-    overrides: [
-      { id: 'override-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-09', isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '14:00', scheduledMinutes: 360, remark: '临时值班' }
-    ],
-    monthly: [
-      { id: 'month-1', frontendUserId: 'front-1', employeeId: 'emp-1', month: '2026-08', scheduledWorkDays: 22, restQuotaDays: 4 }
+    days: [
+      {
+        id: 'schedule-day-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', isWorkday: true,
+        scheduledMinutes: 510, breakMinutes: 60, remark: '常规班',
+        segments: [{ sequence: 0, startTime: '08:00', endTime: '12:00' }, { sequence: 1, startTime: '13:00', endTime: '17:30' }],
+        employee: { employeeNumber: 'YG001', name: '张三' }, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+      },
+      {
+        id: 'schedule-day-2', frontendUserId: 'front-1', employeeId: 'emp-2', date: '2026-08-09', isWorkday: false,
+        scheduledMinutes: 0, breakMinutes: 0, remark: '休息', segments: [],
+        employee: { employeeNumber: 'YG002', name: '李四' }, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+      },
+      {
+        id: 'schedule-day-3', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', isWorkday: true,
+        scheduledMinutes: 480, breakMinutes: 0, remark: '', segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }],
+        employee: { employeeNumber: 'YG001', name: '王五' }, frontendUser: { account: 'yangshao002', username: '仰韶客户二', displayRemark: '' }
+      }
     ]
   },
   attendance: [
-    { id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 510, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' } },
+    {
+      id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 510, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' },
+      segments: [{ sequence: 0, checkInAt: '2026-08-08T08:00:00+08:00', checkOutAt: '2026-08-08T12:00:00+08:00' }, { sequence: 1, checkInAt: '2026-08-08T13:00:00+08:00', checkOutAt: '2026-08-08T17:30:00+08:00' }]
+    },
     { id: 'attendance-2', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 470, lateMinutes: 10, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '王五' } }
   ],
   leaves: [
@@ -315,28 +326,13 @@ function assertExclusiveAttendanceDateFilter(config?: AdminRequestConfig) {
   if (config?.params?.month && (config.params.startDate || config.params.endDate)) throw new Error('月份和日期范围不能同时筛选')
 }
 
-function mockAttendanceEntityFilter<T extends Record<string, unknown>>(rows: T[], config?: AdminRequestConfig) {
-  const ids = mockAttendanceIds(config)
-  const employeeId = String(config?.params?.employeeId || '')
-  return rows.filter((row) => ids.includes(String(row.frontendUserId)) && (!employeeId || row.employeeId === employeeId))
-}
-
 function mockMonthlyScheduleFilter(config?: AdminRequestConfig) {
-  const ids = mockAttendanceIds(config)
-  const employeeId = String(config?.params?.employeeId || '')
-  const month = String(config?.params?.month || '')
-  return mockEmployeeAttendance.schedules.monthly.filter((row) => ids.includes(row.frontendUserId)
-    && (!employeeId || row.employeeId === employeeId)
-    && (!month || row.month === month))
-}
-
-function mockScheduleOverrideFilter(config?: AdminRequestConfig) {
   const ids = mockAttendanceIds(config)
   const employeeId = String(config?.params?.employeeId || '')
   const month = String(config?.params?.month || '')
   const startDate = String(config?.params?.startDate || '')
   const endDate = String(config?.params?.endDate || '')
-  return mockEmployeeAttendance.schedules.overrides.filter((row) => ids.includes(row.frontendUserId)
+  return mockEmployeeAttendance.schedules.days.filter((row) => ids.includes(row.frontendUserId)
     && (!employeeId || row.employeeId === employeeId)
     && (month ? row.date.startsWith(month) : (!startDate || row.date >= startDate) && (!endDate || row.date <= endDate)))
 }
@@ -470,7 +466,7 @@ function parseHistoryFields(value: unknown) {
 
 const mockRequest = {
   async get(url: string, config?: AdminRequestConfig) {
-    if (isEmployeeAttendanceAdminPath(url)) assertExclusiveAttendanceDateFilter(config)
+    if (isEmployeeAttendanceAdminPath(url) && url !== '/admin/employee-attendance/schedules') assertExclusiveAttendanceDateFilter(config)
     if (url === '/admin/auth/me') return mockAdminUser()
     if (url === '/admin/frontend-users/options') {
       const allowed = mockAuthorizedFrontendIds()
@@ -500,11 +496,7 @@ const mockRequest = {
       return mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && (!employeeId || row.id === employeeId) && (!status || row.status === status))
     }
     if (url === '/admin/employee-attendance/schedules') {
-      return {
-        weekly: mockAttendanceEntityFilter(mockEmployeeAttendance.schedules.weekly, config),
-        overrides: mockScheduleOverrideFilter(config),
-        monthly: mockMonthlyScheduleFilter(config)
-      }
+      return mockMonthlyScheduleFilter(config)
     }
     if (url === '/admin/employee-attendance/attendance') return mockAttendanceFilter(mockEmployeeAttendance.attendance, config)
     if (url === '/admin/employee-attendance/leaves') return mockAttendanceFilter(mockEmployeeAttendance.leaves, config, ['startDate', 'endDate'])
@@ -780,14 +772,14 @@ export function getAdminMedicineOutbounds(
   })
 }
 
-function employeeAttendanceParams(query: AdminEmployeeAttendanceQuery) {
-  if (query.month && (query.startDate || query.endDate)) throw new Error('月份和日期范围不能同时筛选')
+function employeeAttendanceParams(query: AdminEmployeeAttendanceQuery, monthWins = false) {
+  if (!monthWins && query.month && (query.startDate || query.endDate)) throw new Error('月份和日期范围不能同时筛选')
   return {
     frontendUserIds: buildFrontendIds(query.frontendUserIds),
     ...(query.employeeId ? { employeeId: query.employeeId } : {}),
     ...(query.month ? { month: query.month } : {}),
-    ...(query.startDate ? { startDate: query.startDate } : {}),
-    ...(query.endDate ? { endDate: query.endDate } : {}),
+    ...(!monthWins || !query.month ? (query.startDate ? { startDate: query.startDate } : {}) : {}),
+    ...(!monthWins || !query.month ? (query.endDate ? { endDate: query.endDate } : {}) : {}),
     ...(query.status ? { status: query.status } : {})
   }
 }
@@ -813,7 +805,7 @@ export async function getAdminAttendanceEmployees(query: AdminEmployeeAttendance
 }
 
 export async function getAdminAttendanceSchedules(query: AdminEmployeeAttendanceQuery) {
-  return request.get<any, AdminAttendanceSchedules>('/admin/employee-attendance/schedules', { params: employeeAttendanceParams(query) })
+  return request.get<any, AdminAttendanceSchedules>('/admin/employee-attendance/schedules', { params: employeeAttendanceParams(query, true) })
 }
 
 export async function getAdminAttendanceRecords(query: AdminEmployeeAttendanceQuery) {

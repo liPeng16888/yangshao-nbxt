@@ -410,6 +410,55 @@ describe('PayrollService frontend payroll', () => {
     expect(prisma.employeeAttendanceRecord.findMany).not.toHaveBeenCalled()
   })
 
+  it('returns only allowed monthly schedule days with ordered intervals and derived rest minutes', async () => {
+    const { service, prisma } = serviceFixture()
+    prisma.employeeMonthlyScheduleDay.findMany.mockResolvedValue([{
+      id: 'schedule-1', frontendUserId: 'front-1', employeeId: employee.id, date: '2026-08-11',
+      isWorkday: true, scheduledMinutes: 510, remark: '常规班',
+      segments: [
+        { sequence: 0, startTime: '08:00', endTime: '12:00' },
+        { sequence: 1, startTime: '13:00', endTime: '17:30' }
+      ],
+      employee: { employeeNumber: '001', name: '张三' },
+      frontendUser: { account: 'front', username: '前台', displayRemark: null }
+    }])
+
+    const rows: any[] = await service.adminSchedules(['front-1'], { employeeId: employee.id, month: '2026-08', status: 'IGNORED' })
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      date: '2026-08-11', scheduledMinutes: 510, breakMinutes: 60,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '12:00' }, { sequence: 1, startTime: '13:00', endTime: '17:30' }]
+    })
+    expect(prisma.employeeMonthlyScheduleDay.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { frontendUserId: { in: ['front-1'] }, employeeId: employee.id, date: { startsWith: '2026-08' } },
+      include: expect.objectContaining({ segments: { orderBy: { sequence: 'asc' } } })
+    }))
+    expect(prisma.employeeWeeklySchedule).toBeUndefined()
+    expect(prisma.employeeDateOverride).toBeUndefined()
+  })
+
+  it('gives the monthly schedule filter precedence over a supplied date range', async () => {
+    const { service, prisma } = serviceFixture()
+
+    await service.adminSchedules(['front-1'], { month: '2026-08', startDate: '2099-01-01', endDate: '2099-01-31' })
+
+    expect(prisma.employeeMonthlyScheduleDay.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ date: { startsWith: '2026-08' } })
+    }))
+  })
+
+  it('includes ordered actual attendance intervals in readonly admin records', async () => {
+    const { service, prisma } = serviceFixture()
+    prisma.employeeAttendanceRecord.findMany.mockResolvedValue([])
+
+    await service.adminAttendance(['front-1'], { month: '2026-08' })
+
+    expect(prisma.employeeAttendanceRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({ segments: { orderBy: { sequence: 'asc' } } })
+    }))
+  })
+
   it('rejects unsupported admin employee status instead of silently returning all rows', async () => {
     const { service, prisma } = serviceFixture()
     await expect(service.adminEmployees(['front-1'], { status: 'TERMINATED' })).rejects.toThrow('员工状态无效')

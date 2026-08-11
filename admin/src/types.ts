@@ -133,12 +133,6 @@ export interface AdminAttendanceOverview {
   readonly: true
 }
 
-export interface AdminAttendanceSchedules {
-  weekly: AdminWeeklySchedule[]
-  overrides: AdminDateOverride[]
-  monthly: AdminMonthlyAttendanceSetting[]
-}
-
 export interface AdminAttendanceFrontendAccount {
   account: string
   username: string
@@ -150,37 +144,27 @@ export interface AdminAttendanceEmbeddedEmployee {
   name: string
 }
 
-export interface AdminWeeklySchedule {
-  id: string
-  frontendUserId: string
-  employeeId: string
-  weekday: number
-  isWorkday: boolean
-  plannedStartTime?: string | null
-  plannedEndTime?: string | null
-  scheduledMinutes: number
+export interface AdminScheduleSegment {
+  sequence: number
+  startTime: string
+  endTime: string
 }
 
-export interface AdminDateOverride {
+export interface AdminMonthlyScheduleDay {
   id: string
   frontendUserId: string
   employeeId: string
   date: string
   isWorkday: boolean
-  plannedStartTime?: string | null
-  plannedEndTime?: string | null
   scheduledMinutes: number
+  breakMinutes: number
+  segments: AdminScheduleSegment[]
   remark?: string | null
+  employee: AdminAttendanceEmbeddedEmployee
+  frontendUser?: AdminAttendanceFrontendAccount
 }
 
-export interface AdminMonthlyAttendanceSetting {
-  id: string
-  frontendUserId: string
-  employeeId: string
-  month: string
-  scheduledWorkDays: AdminAttendanceNumeric
-  restQuotaDays: AdminAttendanceNumeric
-}
+export type AdminAttendanceSchedules = AdminMonthlyScheduleDay[]
 
 export interface AdminAttendanceRecord {
   id: string
@@ -198,6 +182,7 @@ export interface AdminAttendanceRecord {
   overtimeMinutes: number
   remark?: string | null
   employee: AdminAttendanceEmbeddedEmployee
+  segments?: Array<{ sequence: number; checkInAt: string; checkOutAt: string }>
 }
 
 export interface AdminLeaveTypeSummary {
@@ -339,17 +324,15 @@ export interface AdminAttendanceTableRow {
   attendanceBonus?: AdminAttendanceNumeric
   categoryLabel?: string
   employeeLabel?: string
-  scheduleDate?: string
-  weekdayLabel?: string | number
-  isWorkday?: boolean
-  plannedStartTime?: string | null
-  plannedEndTime?: string | null
+  workdayLabel?: string
+  intervalsText?: string
+  restText?: string
+  scheduledHoursText?: string
   scheduledMinutes?: number
-  scheduledWorkDays?: AdminAttendanceNumeric
-  restQuotaDays?: AdminAttendanceNumeric
   date?: string
   checkInText?: string
   checkOutText?: string
+  actualIntervalsText?: string
   workedMinutes?: number
   lateMinutes?: number
   earlyLeaveMinutes?: number

@@ -203,12 +203,15 @@ function normalizeEmployee(row: AdminAttendanceEmployee) {
 }
 
 function normalizeSchedule(data: AdminAttendanceSchedules): AdminAttendanceTableRow[] {
-  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-  return [
-    ...data.weekly.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '周排班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: weekdays[row.weekday] || row.weekday, scheduleDate: '-' })),
-    ...data.overrides.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '临时调班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.date })),
-    ...data.monthly.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '月度设置', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.month, plannedStartTime: '-', plannedEndTime: '-' }))
-  ]
+  return data.map((row) => ({
+    ...row,
+    accountName: accountLabel(row),
+    employeeLabel: employeeLabel(row.employeeId, row.employee),
+    workdayLabel: row.isWorkday ? '工作日' : '休息日',
+    intervalsText: row.segments.length ? row.segments.map((segment) => `${segment.startTime}—${segment.endTime}`).join('；') : '-',
+    restText: row.isWorkday ? `休息 ${row.breakMinutes} 分钟` : '-',
+    scheduledHoursText: `${(row.scheduledMinutes / 60).toFixed(2)} 小时`
+  }))
 }
 
 function normalizeCommon<T extends AdminAttendanceRecord | AdminLeaveRequest | AdminCommissionRecord | AdminBonusRecord>(row: T) {
@@ -216,10 +219,14 @@ function normalizeCommon<T extends AdminAttendanceRecord | AdminLeaveRequest | A
 }
 
 function normalizeAttendance(row: AdminAttendanceRecord): AdminAttendanceTableRow {
+  const actualIntervals = row.segments || []
   return {
     ...normalizeCommon(row),
-    checkInText: formatPunchTime(row.checkInAt),
-    checkOutText: formatPunchTime(row.checkOutAt)
+    checkInText: formatPunchTime(actualIntervals[0]?.checkInAt || row.checkInAt),
+    checkOutText: formatPunchTime(actualIntervals.at(-1)?.checkOutAt || row.checkOutAt),
+    actualIntervalsText: actualIntervals.length
+      ? actualIntervals.map((segment) => `${formatPunchTime(segment.checkInAt)}—${formatPunchTime(segment.checkOutAt)}`).join('；')
+      : '未手工录入（按排班正常）'
   }
 }
 

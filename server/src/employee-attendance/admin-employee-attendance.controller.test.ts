@@ -50,6 +50,14 @@ describe('AdminEmployeeAttendanceController', () => {
     expect(payroll.adminPayroll).toHaveBeenCalledWith(['front-1'], expect.objectContaining({ month: '2026-08', employeeId: 'employee-1' }))
   })
 
+  it('passes the permitted account set and monthly schedule filter to the readonly schedules query', async () => {
+    const { controller, payroll } = fixture()
+
+    await controller.schedules(sub, { frontendUserIds: 'front-1,front-2', employeeId: 'employee-1', month: '2026-08' })
+
+    expect(payroll.adminSchedules).toHaveBeenCalledWith(['front-1'], expect.objectContaining({ employeeId: 'employee-1', month: '2026-08' }))
+  })
+
   it('applies account filtering before password-gated reveal', async () => {
     const { controller, payroll, access } = fixture()
 

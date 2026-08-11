@@ -13,7 +13,7 @@ import { PasswordService } from '../auth/password.service'
 import { PrismaService } from '../prisma/prisma.service'
 import type { AdminEmployeeAttendanceQueryDto } from './employee-attendance.dto'
 import { EmployeeDataCipherService } from './employee-data-cipher.service'
-import { deriveAttendanceMetrics } from './attendance-intervals'
+import { breakMinutes, deriveAttendanceMetrics } from './attendance-intervals'
 import { calculatePayroll, type PayrollCalculationInput } from './payroll-calculator'
 import { PayrollMonthLockService } from './payroll-month-lock.service'
 
@@ -222,20 +222,26 @@ export class PayrollService {
   }
 
   async adminSchedules(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
-    this.assertExclusiveDateFilter(query)
-    const where = this.adminEmployeeWhere(frontendUserIds, query)
-    return {
-      weekly: await this.prisma.employeeWeeklySchedule.findMany({ where, orderBy: [{ employeeId: 'asc' }, { weekday: 'asc' }] }),
-      overrides: await this.prisma.employeeDateOverride.findMany({ where: { ...where, ...this.adminDateWhere(query) }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] }),
-      monthly: await this.prisma.employeeMonthlySetting.findMany({ where: { ...where, ...(query.month ? { month: query.month } : {}) }, orderBy: [{ month: 'desc' }, { employeeId: 'asc' }] })
-    }
+    const rows = await this.prisma.employeeMonthlyScheduleDay.findMany({
+      where: { ...this.adminEmployeeWhere(frontendUserIds, query), ...this.adminScheduleDateWhere(query) },
+      include: {
+        segments: { orderBy: { sequence: 'asc' } },
+        employee: { select: { employeeNumber: true, name: true } },
+        frontendUser: { select: { account: true, username: true, displayRemark: true } }
+      },
+      orderBy: [{ date: 'desc' }, { employeeId: 'asc' }]
+    })
+    return rows.map((row) => ({ ...row, breakMinutes: breakMinutes(row.segments) }))
   }
 
   adminAttendance(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
     this.assertExclusiveDateFilter(query)
     return this.prisma.employeeAttendanceRecord.findMany({ where: {
       ...this.adminEmployeeWhere(frontendUserIds, query), ...this.adminDateWhere(query)
-    }, include: { employee: { select: { employeeNumber: true, name: true } } }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] })
+    }, include: {
+      employee: { select: { employeeNumber: true, name: true } },
+      segments: { orderBy: { sequence: 'asc' } }
+    }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] })
   }
 
   adminLeaves(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
@@ -507,6 +513,16 @@ export class PayrollService {
     this.assertExclusiveDateFilter(query)
     if (query.month) { this.assertMonth(query.month); return { date: { startsWith: query.month } } }
     return query.startDate || query.endDate ? { date: { ...(query.startDate ? { gte: query.startDate } : {}), ...(query.endDate ? { lte: query.endDate } : {}) } } : {}
+  }
+
+  private adminScheduleDateWhere(query: AdminEmployeeAttendanceQueryDto) {
+    if (query.month) {
+      this.assertMonth(query.month)
+      return { date: { startsWith: query.month } }
+    }
+    return query.startDate || query.endDate
+      ? { date: { ...(query.startDate ? { gte: query.startDate } : {}), ...(query.endDate ? { lte: query.endDate } : {}) } }
+      : {}
   }
 
   private adminOverlapWhere(query: AdminEmployeeAttendanceQueryDto) {
