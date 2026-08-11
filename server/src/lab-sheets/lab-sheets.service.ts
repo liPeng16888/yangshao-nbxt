@@ -7,7 +7,11 @@ import { businessDateInBeijing } from '../common/date'
 import { calculateResults, createEmptyInputs, defaultLabParameters, defaultSampleBlockCount, editableInputFields, hasLabDetectionInput } from '../common/lab'
 import { LabSheetRealtimeService } from './lab-sheet-realtime.service'
 import { collapseConsecutiveFieldChanges } from '../common/change-log'
-import { SharedPrepaidLedgerService } from '../shared-prepaid/shared-prepaid-ledger.service'
+import {
+  SharedPrepaidLedgerService,
+  type SharedPrepaidSampleMutation
+} from '../shared-prepaid/shared-prepaid-ledger.service'
+import { SharedPrepaidRealtimeService } from '../shared-prepaid/shared-prepaid-realtime.service'
 
 const prepaidTupleFields = ['paymentStatus', 'price', 'prepaidMemberId', 'prepaidMemberPhone']
 
@@ -35,7 +39,8 @@ export class LabSheetsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: LabSheetRealtimeService,
-    private readonly sharedPrepaid: SharedPrepaidLedgerService
+    private readonly sharedPrepaid: SharedPrepaidLedgerService,
+    private readonly sharedPrepaidRealtime: SharedPrepaidRealtimeService
   ) {}
 
   async getSheetForFrontendUser(frontendUserId: string, date = businessDateInBeijing(), canViewCompletedSensitiveData = true) {
@@ -200,7 +205,12 @@ export class LabSheetsService {
       canViewCompletedSensitiveData,
       blockPayload
     })
-    let outcome: { response: LabSaveResponse; sheet?: { frontendUserId: string; date: string }; changed: boolean }
+    let outcome: {
+      response: LabSaveResponse
+      sheet?: { frontendUserId: string; date: string }
+      changed: boolean
+      prepaidMutation?: SharedPrepaidSampleMutation | null
+    }
     try {
       outcome = await this.withSheetWriteLock(sheetId, idempotencyKey, async (tx) => {
         const sheet = await tx.labSheet.findUnique({ where: { id: sheetId } })
@@ -232,11 +242,12 @@ export class LabSheetsService {
         }
         this.assertNoInputConflict(block, blockPayload, effectiveChangedFields)
         const nextInputs = { ...oldInputs, ...effectiveChangedFields }
+        let prepaidMutation: SharedPrepaidSampleMutation | null = null
         const prepaidTupleChanged = prepaidTupleFields.some((field) => (
           Object.prototype.hasOwnProperty.call(effectiveChangedFields, field)
         ))
         if (prepaidTupleChanged && (oldInputs.paymentStatus === '预存款' || nextInputs.paymentStatus === '预存款')) {
-          await this.sharedPrepaid.syncSampleConsumption(tx, {
+          prepaidMutation = await this.sharedPrepaid.syncSampleConsumption(tx, {
             sheetId: sheet.id,
             sampleBlockId: block.id,
             sampleIndex: block.index,
@@ -268,7 +279,7 @@ export class LabSheetsService {
         await this.createLabSaveRequest(tx as unknown as LabSaveRequestWriter, {
           idempotencyKey, requestFingerprint, sheetId: sheet.id, sampleBlockId: block.id, responseSnapshot: response
         })
-        return { response, sheet, changed: true }
+        return { response, sheet, changed: true, prepaidMutation }
       })
     } catch (error) {
       if (!this.isPrismaUniqueConflict(error)) throw error
@@ -281,6 +292,9 @@ export class LabSheetsService {
       outcome = { response: duplicate, changed: false }
     }
     if (outcome.changed) {
+      if (outcome.prepaidMutation) {
+        this.publishSharedPrepaidMutation(outcome.prepaidMutation, user.id)
+      }
       this.realtime.publish({
         type: 'block-saved',
         frontendUserId: outcome.sheet!.frontendUserId,
@@ -292,6 +306,34 @@ export class LabSheetsService {
       })
     }
     return outcome.response
+  }
+
+  private publishSharedPrepaidMutation(
+    mutation: SharedPrepaidSampleMutation,
+    changedById: string
+  ) {
+    const updatedAt = new Date().toISOString()
+    this.sharedPrepaidRealtime.publish({
+      module: 'consumptions',
+      entityId: mutation.consumptionId,
+      operation: mutation.operation,
+      changedById,
+      updatedAt
+    })
+    this.sharedPrepaidRealtime.publish({
+      module: 'members',
+      entityId: mutation.memberId,
+      operation: 'update',
+      changedById,
+      updatedAt
+    })
+    this.sharedPrepaidRealtime.publish({
+      module: 'settlements',
+      entityId: mutation.consumptionId,
+      operation: 'update',
+      changedById,
+      updatedAt
+    })
   }
 
   private async withSheetWriteLock<T>(

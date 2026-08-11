@@ -91,6 +91,7 @@ describe('LabSheetsService default sheet selection', () => {
   }
   const realtime = { publish: vi.fn() }
   const prepaid = { syncSampleConsumption: vi.fn() }
+  const prepaidRealtime = { publish: vi.fn() }
   let service: LabSheetsService
 
   beforeEach(() => {
@@ -148,7 +149,12 @@ describe('LabSheetsService default sheet selection', () => {
     })
     prepaid.syncSampleConsumption.mockReset()
     prepaid.syncSampleConsumption.mockResolvedValue(undefined)
-    service = new LabSheetsService(prisma as never, realtime as never, prepaid as never)
+    service = new LabSheetsService(
+      prisma as never,
+      realtime as never,
+      prepaid as never,
+      prepaidRealtime as never
+    )
     prisma.labSheet.findFirst.mockResolvedValue(null)
     prisma.cellChangeLog.findMany.mockResolvedValue([])
     prisma.cellChangeLog.findFirst.mockResolvedValue(null)
@@ -896,6 +902,55 @@ describe('LabSheetsService default sheet selection', () => {
     expect(labSaveRequests.size).toBe(0)
     expect(block.inputs.paymentStatus).toBe('')
     expect(transaction.cellChangeLog.create).not.toHaveBeenCalled()
+    expect(prepaidRealtime.publish).not.toHaveBeenCalled()
+  })
+
+  it('publishes prepaid invalidations only after the enclosing sample transaction commits', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+    prepaid.syncSampleConsumption.mockResolvedValueOnce({
+      memberId: 'member-1',
+      consumptionId: 'consumption-1',
+      operation: 'create'
+    })
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'committed-prepaid-signal',
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        }
+      }
+    )
+
+    expect(prepaidRealtime.publish.mock.calls).toEqual([
+      [expect.objectContaining({
+        module: 'consumptions', entityId: 'consumption-1', operation: 'create', changedById: 'sub-1'
+      })],
+      [expect.objectContaining({
+        module: 'members', entityId: 'member-1', operation: 'update', changedById: 'sub-1'
+      })],
+      [expect.objectContaining({
+        module: 'settlements', entityId: 'consumption-1', operation: 'update', changedById: 'sub-1'
+      })]
+    ])
   })
 
   it('returns granted saved data to the caller but publishes only a metadata refresh signal', async () => {

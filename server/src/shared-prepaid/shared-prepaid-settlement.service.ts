@@ -20,6 +20,7 @@ import {
   isSharedPrepaidProofUrl,
   SHARED_PREPAID_ZONED_DATE_TIME_PATTERN
 } from './shared-prepaid.dto'
+import { SharedPrepaidRealtimeService } from './shared-prepaid-realtime.service'
 
 export interface SubmitSettlementPaymentPayload {
   actualTransferredAt?: unknown
@@ -89,7 +90,10 @@ const settlementReadInclude = {
 
 @Injectable()
 export class SharedPrepaidSettlementService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtime: SharedPrepaidRealtimeService
+  ) {}
 
   async previewSettlement(user: CurrentUser, payableIds: unknown) {
     this.assertCanView(user)
@@ -108,19 +112,25 @@ export class SharedPrepaidSettlementService {
     const key = this.requireIdempotencyKey(idempotencyKey)
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const outcome = await this.prisma.$transaction(async (tx) => {
         const duplicate = await tx.sharedPrepaidSettlement.findUnique({
           where: { idempotencyKey: key },
           include: settlementReadInclude
         })
-        if (duplicate) return this.resolveCreateRetry(duplicate, user, ids)
+        if (duplicate) return {
+          result: this.resolveCreateRetry(duplicate, user, ids),
+          changed: false
+        }
 
         await this.lockPayables(tx, ids)
         const committedWhileWaiting = await tx.sharedPrepaidSettlement.findUnique({
           where: { idempotencyKey: key },
           include: settlementReadInclude
         })
-        if (committedWhileWaiting) return this.resolveCreateRetry(committedWhileWaiting, user, ids)
+        if (committedWhileWaiting) return {
+          result: this.resolveCreateRetry(committedWhileWaiting, user, ids),
+          changed: false
+        }
 
         const payables = await this.readPayables(tx, ids)
         const selection = this.selectSettlement(user, ids, payables)
@@ -170,8 +180,13 @@ export class SharedPrepaidSettlementService {
           }))
         })
 
-        return this.requireSettlement(tx, settlement.id)
+        return {
+          result: await this.requireSettlement(tx, settlement.id),
+          changed: true
+        }
       })
+      if (outcome.changed) this.publishSettlement(outcome.result.id, user.id, 'create')
+      return outcome.result
     } catch (error) {
       if (!this.isUniqueConstraintError(error)) throw error
       const duplicate = await this.prisma.sharedPrepaidSettlement.findUnique({
@@ -566,13 +581,13 @@ export class SharedPrepaidSettlementService {
     if (existing) return existing
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const outcome = await this.prisma.$transaction(async (tx) => {
         const duplicate = await this.resolveActionRetry<T>(tx, expected)
-        if (duplicate) return duplicate
+        if (duplicate) return { result: duplicate, changed: false }
 
         const settlement = await this.lockAndReadSettlement(tx, expected.settlementId)
         const committedWhileWaiting = await this.resolveActionRetry<T>(tx, expected)
-        if (committedWhileWaiting) return committedWhileWaiting
+        if (committedWhileWaiting) return { result: committedWhileWaiting, changed: false }
 
         const result = await mutation(tx, settlement)
         await tx.sharedPrepaidSettlementAction.create({
@@ -586,14 +601,32 @@ export class SharedPrepaidSettlementService {
             responseSnapshot: this.toActionSnapshot(result)
           }
         })
-        return result
+        return { result, changed: true }
       })
+      if (outcome.changed) {
+        this.publishSettlement(expected.settlementId, expected.actorUserId, 'update')
+      }
+      return outcome.result
     } catch (error) {
       if (!this.isUniqueConstraintError(error)) throw error
       const winner = await this.resolveActionRetry<T>(this.prisma, expected)
       if (winner) return winner
       throw this.idempotencyConflict()
     }
+  }
+
+  private publishSettlement(
+    settlementId: string,
+    changedById: string,
+    operation: 'create' | 'update'
+  ) {
+    this.realtime.publish({
+      module: 'settlements',
+      entityId: settlementId,
+      operation,
+      changedById,
+      updatedAt: new Date().toISOString()
+    })
   }
 
   private async resolveActionRetry<T extends Record<string, unknown>>(

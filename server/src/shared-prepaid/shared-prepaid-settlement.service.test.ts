@@ -18,7 +18,7 @@ import {
   SharedPrepaidSettlementStatus,
   UserRole
 } from '@prisma/client'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { CurrentUser } from '../auth/current-user'
 import { FRONTEND_PERMISSIONS_KEY } from '../auth/frontend-permission.decorator'
@@ -369,12 +369,43 @@ class FakeSettlementPrisma {
 describe('SharedPrepaidSettlementService', () => {
   let prisma: FakeSettlementPrisma
   let service: SharedPrepaidSettlementService
+  let realtime: { publish: ReturnType<typeof vi.fn> }
 
   beforeEach(() => {
     prisma = new FakeSettlementPrisma()
     prisma.addPayable('a-to-b-100', 'A', 'B', 100)
     prisma.addPayable('b-to-a-60', 'B', 'A', 60)
-    service = new SharedPrepaidSettlementService(prisma as never)
+    realtime = { publish: vi.fn() }
+    service = new SharedPrepaidSettlementService(prisma as never, realtime as never)
+  })
+
+  it('publishes one global settlement invalidation after each committed mutation, excluding retries and rollback', async () => {
+    const settlement = await service.createSettlement(mainA, ['a-to-b-100'], 'realtime-create')
+    expect(realtime.publish).toHaveBeenLastCalledWith(expect.objectContaining({
+      module: 'settlements', entityId: settlement.id, operation: 'create', changedById: mainA.id
+    }))
+
+    realtime.publish.mockClear()
+    await service.createSettlement(mainA, ['a-to-b-100'], 'realtime-create')
+    expect(realtime.publish).not.toHaveBeenCalled()
+
+    await service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: transferredAt },
+      'realtime-submit'
+    )
+    expect(realtime.publish).toHaveBeenCalledTimes(1)
+    expect(realtime.publish).toHaveBeenLastCalledWith(expect.objectContaining({
+      module: 'settlements', entityId: settlement.id, operation: 'update', changedById: mainA.id
+    }))
+
+    realtime.publish.mockClear()
+    prisma.addPayable('a-to-b-20', 'A', 'B', 20)
+    prisma.failPayableUpdateId = 'a-to-b-20'
+    await expect(service.createSettlement(mainA, ['a-to-b-20'], 'realtime-rollback'))
+      .rejects.toBeInstanceOf(ConflictException)
+    expect(realtime.publish).not.toHaveBeenCalled()
   })
 
   it('previews both gross directions, source lines, and the Decimal net without mutation', async () => {

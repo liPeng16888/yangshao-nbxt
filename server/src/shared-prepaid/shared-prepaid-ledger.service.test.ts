@@ -13,7 +13,7 @@ import {
   SharedPrepaidPayableStatus,
   UserRole
 } from '@prisma/client'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { CurrentUser } from '../auth/current-user'
 import { FRONTEND_PERMISSIONS_KEY } from '../auth/frontend-permission.decorator'
@@ -681,10 +681,83 @@ describe('SharedPrepaidController reversal routes', () => {
 describe('SharedPrepaidLedgerService', () => {
   let prisma: FakePrisma
   let service: SharedPrepaidLedgerService
+  let realtime: { publish: ReturnType<typeof vi.fn> }
 
   beforeEach(() => {
     prisma = new FakePrisma()
-    service = new SharedPrepaidLedgerService(prisma as never)
+    realtime = { publish: vi.fn() }
+    service = new SharedPrepaidLedgerService(prisma as never, realtime as never)
+  })
+
+  it('publishes global recharge and member invalidations only after commit and not for retries or rollback', async () => {
+    const recharge = await service.createRecharge(mainUser, rechargePayload(), 'realtime-recharge')
+
+    expect(realtime.publish).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      module: 'recharges', entityId: recharge.id, operation: 'create', changedById: mainUser.id
+    }))
+    expect(realtime.publish).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      module: 'members', entityId: recharge.memberId, operation: 'update', changedById: mainUser.id
+    }))
+
+    realtime.publish.mockClear()
+    await service.createRecharge(mainUser, rechargePayload(), 'realtime-recharge')
+    expect(realtime.publish).not.toHaveBeenCalled()
+
+    prisma.failNextLedgerCreate = true
+    await expect(service.createRecharge(mainUser, rechargePayload({ phone: '13900000000' }), 'realtime-rollback'))
+      .rejects.toThrow('injected ledger failure')
+    expect(realtime.publish).not.toHaveBeenCalled()
+  })
+
+  it('publishes recharge reversal invalidations with metadata only', async () => {
+    const recharge = await service.createRecharge(mainUser, rechargePayload(), 'realtime-reversal-source')
+    realtime.publish.mockClear()
+
+    await service.reverseRecharge(mainUser, recharge.id, '录入错误', 'realtime-recharge-reversal')
+
+    expect(realtime.publish.mock.calls).toEqual([
+      [expect.objectContaining({ module: 'recharges', entityId: recharge.id, operation: 'update' })],
+      [expect.objectContaining({ module: 'members', entityId: recharge.memberId, operation: 'update' })]
+    ])
+    expect(JSON.stringify(realtime.publish.mock.calls)).not.toMatch(/phone|balance|remark|proof/i)
+  })
+
+  it('publishes member, consumption, and settlement invalidations after a manual consumption reversal commits', async () => {
+    await service.createRecharge(
+      mainUser,
+      rechargePayload({ paidAmount: 100, giftAmount: 0 }),
+      'realtime-consumption-lot'
+    )
+    const memberId = prisma.members[0]!.id
+    await prisma.$transaction((tx) => service.syncSampleConsumption(tx as never, consumptionInput({
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: 20
+      },
+      idempotencyKey: 'realtime-consumption-source'
+    })))
+    const consumptionId = prisma.consumptions[0]!.id
+    realtime.publish.mockClear()
+
+    const reversal = await service.reverseConsumption(
+      mainUser,
+      consumptionId,
+      '消费录入错误',
+      'realtime-consumption-reversal'
+    )
+
+    expect(realtime.publish.mock.calls).toEqual([
+      [expect.objectContaining({
+        module: 'consumptions', entityId: reversal.id, operation: 'update', changedById: mainUser.id
+      })],
+      [expect.objectContaining({
+        module: 'members', entityId: memberId, operation: 'update', changedById: mainUser.id
+      })],
+      [expect.objectContaining({
+        module: 'settlements', entityId: reversal.id, operation: 'update', changedById: mainUser.id
+      })]
+    ])
   })
 
   it.each([
@@ -1585,7 +1658,7 @@ describe('SharedPrepaidLedgerService', () => {
 describe('SharedPrepaidQueryService', () => {
   it('returns global member totals, remaining owner composition, and latest activity as JSON numbers', async () => {
     const prisma = new FakePrisma()
-    const ledger = new SharedPrepaidLedgerService(prisma as never)
+    const ledger = new SharedPrepaidLedgerService(prisma as never, { publish() {} } as never)
     await ledger.createRecharge(mainUser, rechargePayload(), 'idem-one')
     await ledger.createRecharge(otherMainUser, rechargePayload({ paidAmount: 50, giftAmount: 5 }), 'idem-two')
     const member = prisma.members[0]
@@ -1620,7 +1693,7 @@ describe('SharedPrepaidQueryService', () => {
 
   it('lists global recharge history and exposes full member detail without account scoping', async () => {
     const prisma = new FakePrisma()
-    const ledger = new SharedPrepaidLedgerService(prisma as never)
+    const ledger = new SharedPrepaidLedgerService(prisma as never, { publish() {} } as never)
     const first = await ledger.createRecharge(mainUser, rechargePayload(), 'idem-one')
     await ledger.createRecharge(otherMainUser, rechargePayload({ paidAmount: 50, giftAmount: 0 }), 'idem-two')
     const query = new SharedPrepaidQueryService(prisma as never)
@@ -1637,7 +1710,7 @@ describe('SharedPrepaidQueryService', () => {
 
   it('keeps reversed lots in member history without counting them in active totals', async () => {
     const prisma = new FakePrisma()
-    const ledger = new SharedPrepaidLedgerService(prisma as never)
+    const ledger = new SharedPrepaidLedgerService(prisma as never, { publish() {} } as never)
     const recharge = await ledger.createRecharge(mainUser, rechargePayload(), 'idem-original')
     await ledger.reverseRecharge(mainUser, recharge.id, '录入错误', 'idem-reversal')
     const query = new SharedPrepaidQueryService(prisma as never)
@@ -1652,7 +1725,7 @@ describe('SharedPrepaidQueryService', () => {
 
   it('preserves Date instances while converting nested Decimal detail values to numbers', async () => {
     const prisma = new FakePrisma()
-    const ledger = new SharedPrepaidLedgerService(prisma as never)
+    const ledger = new SharedPrepaidLedgerService(prisma as never, { publish() {} } as never)
     const recharge = await ledger.createRecharge(mainUser, rechargePayload(), 'idem-dates')
     const consumptionCreatedAt = new Date('2026-08-12T03:00:00.000Z')
     const allocationCreatedAt = new Date('2026-08-12T03:00:01.000Z')

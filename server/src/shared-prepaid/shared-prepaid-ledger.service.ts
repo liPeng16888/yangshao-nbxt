@@ -17,6 +17,7 @@ import type { CurrentUser } from '../auth/current-user'
 import { labDetectionInputFields } from '../common/lab'
 import { PrismaService } from '../prisma/prisma.service'
 import { allocatePrepaidLots, normalizePrepaidPhone } from './shared-prepaid-money'
+import { SharedPrepaidRealtimeService } from './shared-prepaid-realtime.service'
 
 export interface SyncSampleConsumptionInput {
   sheetId: string
@@ -92,6 +93,17 @@ export interface SharedPrepaidConsumptionReversalResult {
   createdAt: Date
 }
 
+export interface SharedPrepaidSampleMutation {
+  memberId: string
+  consumptionId: string
+  operation: 'create' | 'update'
+}
+
+interface TransactionMutation<T> {
+  result: T
+  changed: boolean
+}
+
 interface ValidatedRecharge {
   phone: string
   rechargeDate: string
@@ -138,7 +150,10 @@ const rechargeReadInclude = {
 
 @Injectable()
 export class SharedPrepaidLedgerService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtime: SharedPrepaidRealtimeService
+  ) {}
 
   async createRecharge(
     user: CurrentUser,
@@ -167,9 +182,11 @@ export class SharedPrepaidLedgerService {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        return await this.prisma.$transaction((tx) => (
+        const outcome = await this.prisma.$transaction((tx) => (
           this.createRechargeInTransaction(tx, user, input, key, expected)
         ))
+        if (outcome.changed) this.publishRechargeMutation(outcome.result, user.id, 'create')
+        return outcome.result
       } catch (error) {
         if (!this.isUniqueConstraintError(error)) throw error
         const duplicate = await this.resolveIdempotentResponse(this.prisma, key, expected)
@@ -211,7 +228,7 @@ export class SharedPrepaidLedgerService {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        return await this.prisma.$transaction((tx) => (
+        const outcome = await this.prisma.$transaction((tx) => (
           this.reverseRechargeInTransaction(
             tx,
             user,
@@ -221,6 +238,8 @@ export class SharedPrepaidLedgerService {
             expected
           )
         ))
+        if (outcome.changed) this.publishRechargeMutation(outcome.result, user.id, 'update')
+        return outcome.result
       } catch (error) {
         if (!this.isUniqueConstraintError(error)) throw error
         const duplicate = await this.resolveIdempotentResponse(this.prisma, key, expected)
@@ -261,7 +280,7 @@ export class SharedPrepaidLedgerService {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        return await this.prisma.$transaction((tx) => (
+        const outcome = await this.prisma.$transaction((tx) => (
           this.reverseConsumptionInTransaction(
             tx,
             user,
@@ -271,6 +290,12 @@ export class SharedPrepaidLedgerService {
             expected
           )
         ))
+        if (outcome.changed) this.publishConsumptionMutation({
+          memberId: outcome.result.memberId,
+          consumptionId: outcome.result.id,
+          operation: 'update'
+        }, user.id)
+        return outcome.result
       } catch (error) {
         if (!this.isUniqueConstraintError(error)) throw error
         const duplicate = await this.resolveConsumptionReversalResponse(
@@ -293,10 +318,10 @@ export class SharedPrepaidLedgerService {
   async syncSampleConsumption(
     tx: Prisma.TransactionClient,
     input: SyncSampleConsumptionInput
-  ): Promise<void> {
+  ): Promise<SharedPrepaidSampleMutation | null> {
     const nextTuple = this.validateConsumptionTuple(input.nextInputs)
     const initialActive = await this.findActiveConsumption(tx, input.sampleBlockId)
-    if (!initialActive && !nextTuple) return
+    if (!initialActive && !nextTuple) return null
 
     const key = this.requireIdempotencyKey(input.idempotencyKey)
     const expectedKind = nextTuple
@@ -313,7 +338,7 @@ export class SharedPrepaidLedgerService {
         ? { memberId: nextTuple.memberId, phone: nextTuple.phone, amount: nextTuple.amount.toFixed(2) }
         : null
     })
-    if (await this.resolveConsumptionIdempotency(tx, key, expectedKind, requestFingerprint)) return
+    if (await this.resolveConsumptionIdempotency(tx, key, expectedKind, requestFingerprint)) return null
     const orphanConsumption = await tx.sharedPrepaidConsumption.findUnique({
       where: { idempotencyKey: key },
       select: { id: true }
@@ -342,13 +367,14 @@ export class SharedPrepaidLedgerService {
     }
 
     const active = await this.findActiveConsumption(tx, input.sampleBlockId)
-    if (active && nextTuple && this.consumptionMatches(active, nextTuple, input.consumingFrontendUserId)) return
+    if (active && nextTuple && this.consumptionMatches(active, nextTuple, input.consumingFrontendUserId)) return null
 
+    let mutation: SharedPrepaidSampleMutation | null = null
     if (active) {
       const reversalKey = nextTuple
         ? this.derivedIdempotencyKey(key, `reverse:${active.id}`)
         : key
-      await this.reverseSampleConsumption(
+      const reversal = await this.reverseSampleConsumption(
         tx,
         active,
         input.actorUserId,
@@ -356,10 +382,16 @@ export class SharedPrepaidLedgerService {
         requestFingerprint,
         '样品预存款信息已修改'
       )
+      mutation = {
+        memberId: reversal.memberId,
+        consumptionId: reversal.id,
+        operation: 'update'
+      }
     }
     if (nextTuple) {
-      await this.createSampleConsumption(tx, input, nextTuple, key, requestFingerprint)
+      mutation = await this.createSampleConsumption(tx, input, nextTuple, key, requestFingerprint)
     }
+    return mutation
   }
 
   private async createRechargeInTransaction(
@@ -368,9 +400,9 @@ export class SharedPrepaidLedgerService {
     input: ValidatedRecharge,
     idempotencyKey: string,
     expected: ExpectedIdempotencyRequest
-  ): Promise<SharedPrepaidRechargeResult> {
+  ): Promise<TransactionMutation<SharedPrepaidRechargeResult>> {
     const duplicate = await this.resolveIdempotentResponse(tx, idempotencyKey, expected)
-    if (duplicate) return duplicate
+    if (duplicate) return { result: duplicate, changed: false }
 
     const orphanRecharge = await tx.sharedPrepaidRecharge.findUnique({
       where: { idempotencyKey }
@@ -437,7 +469,7 @@ export class SharedPrepaidLedgerService {
         reason: null
       }
     })
-    return result
+    return { result, changed: true }
   }
 
   private async reverseRechargeInTransaction(
@@ -447,9 +479,9 @@ export class SharedPrepaidLedgerService {
     reason: string,
     idempotencyKey: string,
     expected: ExpectedIdempotencyRequest
-  ): Promise<SharedPrepaidRechargeResult> {
+  ): Promise<TransactionMutation<SharedPrepaidRechargeResult>> {
     const duplicate = await this.resolveIdempotentResponse(tx, idempotencyKey, expected)
-    if (duplicate) return duplicate
+    if (duplicate) return { result: duplicate, changed: false }
 
     const initialRecharge = await tx.sharedPrepaidRecharge.findUnique({
       where: { id: rechargeId },
@@ -462,7 +494,7 @@ export class SharedPrepaidLedgerService {
 
     await tx.$queryRaw`SELECT "id" FROM "SharedPrepaidMember" WHERE "id" = ${initialRecharge.memberId} FOR UPDATE`
     const lockedDuplicate = await this.resolveIdempotentResponse(tx, idempotencyKey, expected)
-    if (lockedDuplicate) return lockedDuplicate
+    if (lockedDuplicate) return { result: lockedDuplicate, changed: false }
     const recharge = await tx.sharedPrepaidRecharge.findUnique({
       where: { id: rechargeId },
       include: rechargeReadInclude
@@ -519,7 +551,7 @@ export class SharedPrepaidLedgerService {
         message: '会员余额已变化，请重试'
       })
     }
-    return result
+    return { result, changed: true }
   }
 
   private async reverseConsumptionInTransaction(
@@ -529,14 +561,14 @@ export class SharedPrepaidLedgerService {
     reason: string,
     idempotencyKey: string,
     expected: ExpectedIdempotencyRequest
-  ): Promise<SharedPrepaidConsumptionReversalResult> {
+  ): Promise<TransactionMutation<SharedPrepaidConsumptionReversalResult>> {
     const duplicate = await this.resolveConsumptionReversalResponse(
       tx,
       idempotencyKey,
       consumptionId,
       expected
     )
-    if (duplicate) return duplicate
+    if (duplicate) return { result: duplicate, changed: false }
 
     const orphanReversal = await tx.sharedPrepaidConsumption.findUnique({
       where: { idempotencyKey },
@@ -571,8 +603,9 @@ export class SharedPrepaidLedgerService {
       consumptionId,
       expected
     )
-    if (lockedDuplicate) return lockedDuplicate
-    return this.reverseSampleConsumption(
+    if (lockedDuplicate) return { result: lockedDuplicate, changed: false }
+    return {
+      result: await this.reverseSampleConsumption(
       tx,
       initial,
       user.id,
@@ -580,7 +613,9 @@ export class SharedPrepaidLedgerService {
       expected.fingerprint,
       reason,
       user.dataOwnerId
-    )
+      ),
+      changed: true
+    }
   }
 
   private async createSampleConsumption(
@@ -589,7 +624,7 @@ export class SharedPrepaidLedgerService {
     tuple: ValidatedConsumptionTuple,
     idempotencyKey: string,
     requestFingerprint: string
-  ) {
+  ): Promise<SharedPrepaidSampleMutation> {
     await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id"
       FROM "SharedPrepaidRecharge"
@@ -715,6 +750,58 @@ export class SharedPrepaidLedgerService {
         responseSnapshot: Prisma.JsonNull,
         reason: null
       }
+    })
+    return {
+      memberId: tuple.memberId,
+      consumptionId: consumption.id,
+      operation: 'create'
+    }
+  }
+
+  private publishRechargeMutation(
+    recharge: Pick<SharedPrepaidRechargeResult, 'id' | 'memberId'>,
+    changedById: string,
+    operation: 'create' | 'update'
+  ) {
+    const updatedAt = new Date().toISOString()
+    this.realtime.publish({
+      module: 'recharges',
+      entityId: recharge.id,
+      operation,
+      changedById,
+      updatedAt
+    })
+    this.realtime.publish({
+      module: 'members',
+      entityId: recharge.memberId,
+      operation: 'update',
+      changedById,
+      updatedAt
+    })
+  }
+
+  private publishConsumptionMutation(mutation: SharedPrepaidSampleMutation, changedById: string) {
+    const updatedAt = new Date().toISOString()
+    this.realtime.publish({
+      module: 'consumptions',
+      entityId: mutation.consumptionId,
+      operation: mutation.operation,
+      changedById,
+      updatedAt
+    })
+    this.realtime.publish({
+      module: 'members',
+      entityId: mutation.memberId,
+      operation: 'update',
+      changedById,
+      updatedAt
+    })
+    this.realtime.publish({
+      module: 'settlements',
+      entityId: mutation.consumptionId,
+      operation: 'update',
+      changedById,
+      updatedAt
     })
   }
 
