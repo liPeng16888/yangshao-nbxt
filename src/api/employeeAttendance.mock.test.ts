@@ -189,6 +189,31 @@ describe('employee attendance mock repository', () => {
     expect(await mockGetMonthlySchedules('emp-1', month)).toEqual([])
   })
 
+  it('prunes matching migrated seeds for any employee while retaining current-month and edited prefixed rows', async () => {
+    const month = dayjs().format('YYYY-MM')
+    const previousMonth = dayjs(`${month}-01`).subtract(1, 'month').format('YYYY-MM')
+    const nextMonth = dayjs(`${month}-01`).add(1, 'month').format('YYYY-MM')
+    const state = JSON.parse(window.localStorage.getItem('ys_employee_attendance_v2:mock-default')!) as Record<string, any>
+    const employeeId = 'legacy-any-employee'
+    const sourceEmployee = state.employees.find((row: { id: string }) => row.id === 'emp-1')
+    state.employees.push({ ...sourceEmployee, id: employeeId, employeeNumber: 'LEGACY001' })
+    state.weeklySchedules.push(...state.weeklySchedules.filter((row: { employeeId: string }) => row.employeeId === 'emp-1').map((row: Record<string, unknown>) => ({ ...row, id: `ws-${employeeId}-${row.weekday}`, employeeId })))
+    const seed = (date: string) => {
+      const weekly = state.weeklySchedules.find((row: { employeeId: string; weekday: number }) => row.employeeId === employeeId && row.weekday === dayjs(date).day())
+      return { id: `migrated-${employeeId}-${date}`, employeeId, date, isWorkday: weekly.isWorkday, segments: weekly.isWorkday ? [{ sequence: 0, startTime: weekly.plannedStartTime, endTime: weekly.plannedEndTime }] : [], remark: '', scheduledMinutes: weekly.scheduledMinutes, breakMinutes: 0 }
+    }
+    const unchangedPrevious = seed(`${previousMonth}-01`)
+    const editedPrevious = { ...seed(`${previousMonth}-02`), segments: [{ sequence: 0, startTime: '07:00', endTime: '15:00' }] }
+    state.monthlySchedules = [unchangedPrevious, editedPrevious, seed(`${month}-01`), seed(`${nextMonth}-01`)]
+    delete state.schemaVersion
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'legacy-migrated-any' }))
+    window.localStorage.setItem('ys_employee_attendance_v2:legacy-migrated-any', JSON.stringify(state))
+
+    expect((await mockGetMonthlySchedules(employeeId, previousMonth)).map((row) => row.id)).toEqual([editedPrevious.id])
+    expect(await mockGetMonthlySchedules(employeeId, nextMonth)).toEqual([])
+    expect((await mockGetMonthlySchedules(employeeId, month)).map((row) => row.id)).toEqual([`migrated-${employeeId}-${month}-01`])
+  })
+
   it('treats an empty actual-segment list as normal attendance unless absence is explicit', async () => {
     let next = dayjs().add(1, 'day')
     while (next.day() === 0 || next.day() === 6) next = next.add(1, 'day')

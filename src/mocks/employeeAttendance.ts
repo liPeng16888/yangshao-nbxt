@@ -122,7 +122,8 @@ function legacySeedProjection(state: EmployeeAttendanceState, row: MonthlySchedu
 }
 function isProvableRoundOnePhantom(state: EmployeeAttendanceState, row: MonthlyScheduleDay) {
   const currentMonth = dayjs().format('YYYY-MM')
-  if (monthOf(row.date) === currentMonth || !['emp-1', 'emp-2'].includes(row.employeeId) || row.id !== `monthly-${row.employeeId}-${row.date}` || row.remark) return false
+  const isLegacySeedId = row.id === `migrated-${row.employeeId}-${row.date}` || row.id === `monthly-${row.employeeId}-${row.date}`
+  if (monthOf(row.date) === currentMonth || !isLegacySeedId || row.remark) return false
   const expected = legacySeedProjection(state, row)
   return row.isWorkday === expected.isWorkday && row.scheduledMinutes === expected.scheduledMinutes && row.breakMinutes === 0
     && JSON.stringify(row.segments) === JSON.stringify(expected.segments)
