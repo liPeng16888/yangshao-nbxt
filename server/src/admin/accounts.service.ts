@@ -36,6 +36,23 @@ export class AdminAccountsService {
         accessGuardGroups: {
           orderBy: { createdAt: 'asc' },
           include: { features: { orderBy: { feature: 'asc' } } }
+        },
+        frontendSubAccounts: {
+          where: { role: UserRole.FRONTEND_SUB_USER, deletedAt: null },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true,
+            account: true,
+            username: true,
+            disabled: true,
+            requiresAccessGuardPassword: true,
+            createdAt: true,
+            lastLoginAt: true,
+            frontendSubAccountPermissions: {
+              select: { permission: true },
+              orderBy: { permission: 'asc' }
+            }
+          }
         }
       }
     })
@@ -65,6 +82,16 @@ export class AdminAccountsService {
         recoveryPrompt: group.recoveryPrompt,
         recoveryAnswer: group.recoveryAnswer,
         features: group.features.map((feature) => feature.feature)
+      })),
+      frontendSubAccounts: user.frontendSubAccounts.map((subAccount) => ({
+        id: subAccount.id,
+        account: subAccount.account,
+        username: subAccount.username,
+        disabled: subAccount.disabled,
+        requiresAccessGuardPassword: subAccount.requiresAccessGuardPassword,
+        permissions: subAccount.frontendSubAccountPermissions.map((permission) => permission.permission),
+        createdAt: subAccount.createdAt,
+        lastLoginAt: subAccount.lastLoginAt
       })),
       createdAt: user.createdAt,
       lastDataUpdatedAt: user.frontendSheets[0]?.updatedAt || null

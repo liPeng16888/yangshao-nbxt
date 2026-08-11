@@ -14,6 +14,7 @@ import type {
   AdminAttendancePayrollRun,
   AdminAttendanceSchedules,
   AdminCustomerOverviewRow,
+  AdminFrontendAccount,
   AdminEmployeeAttendanceQuery,
   AdminLeaveRequest,
   AdminMedicineInventoryItem,
@@ -171,6 +172,11 @@ const mockRows = {
         { id: 'group-1', name: '经营数据', enabled: true, password: '2580', ttlMinutes: 5, recoveryPrompt: '管理员提示', recoveryAnswer: '凯里', features: ['FINANCE', 'REPORTS'] },
         { id: 'group-2', name: '样品历史', enabled: true, password: '9527', ttlMinutes: 10, recoveryPrompt: '城市', recoveryAnswer: '凯里', features: ['HISTORICAL_DATES', 'COMPLETED_SAMPLE_DATA'] }
       ],
+      frontendSubAccounts: [{
+        id: 'frontend-sub-1', account: 'operator01', username: '操作员', disabled: false,
+        requiresAccessGuardPassword: true, permissions: ['DATA_MAIN', 'REPORTS'],
+        createdAt: '2026-08-11T09:00:00.000Z', lastLoginAt: null
+      }],
       disabled: false,
       createdAt: '2026-06-25 09:00:00'
     },
@@ -182,6 +188,7 @@ const mockRows = {
       displayName: '仰韶客户二',
       password: '123456',
       accessGroups: [],
+      frontendSubAccounts: [],
       disabled: false,
       createdAt: '2026-06-25 10:00:00'
     }
@@ -727,6 +734,10 @@ export function logoutAdmin() {
 
 export function getFrontendOptions() {
   return request.get<any, FrontendOption[]>('/admin/frontend-users/options')
+}
+
+export function getAdminFrontendAccounts() {
+  return request.get<any, AdminFrontendAccount[]>('/admin/accounts/frontend-users')
 }
 
 export function buildFrontendIds(ids: string[]) {

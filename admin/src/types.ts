@@ -14,6 +14,60 @@ export interface FrontendOption {
   disabled: boolean
 }
 
+export type FrontendMenuPermission =
+  | 'DATA_MAIN'
+  | 'DATA_STANDARD_SAMPLE'
+  | 'DATA_COEFFICIENT'
+  | 'LAB_REPORT_IMAGE_TEMPLATE'
+  | 'LAB_REPORT_SMS_TEMPLATE'
+  | 'ATTENDANCE_OVERVIEW'
+  | 'ATTENDANCE_EMPLOYEES'
+  | 'ATTENDANCE_SCHEDULES'
+  | 'ATTENDANCE_RECORDS'
+  | 'ATTENDANCE_LEAVE'
+  | 'ATTENDANCE_COMPENSATION'
+  | 'ATTENDANCE_PAYROLL'
+  | 'FINANCE_EXPENSES'
+  | 'FINANCE_INCOME'
+  | 'FINANCE_UNSETTLED'
+  | 'FINANCE_MONTHLY_SETTLEMENT'
+  | 'FINANCE_PREPAID_ADD'
+  | 'FINANCE_PREPAID_CUSTOMERS'
+  | 'REPORTS'
+  | 'MEDICINE_STOCK'
+  | 'MEDICINE_INBOUND'
+  | 'MEDICINE_OUTBOUND'
+  | 'CUSTOMER_OVERVIEW'
+  | 'BLACKLIST'
+
+export interface AdminFrontendSubAccount {
+  id: string
+  account: string
+  username: string
+  disabled: boolean
+  requiresAccessGuardPassword: boolean
+  permissions: FrontendMenuPermission[]
+  createdAt: string
+  lastLoginAt?: string | null
+}
+
+export interface AdminFrontendAccount {
+  id: string
+  account: string
+  username: string
+  displayRemark: string
+  displayName: string
+  role: 'FRONTEND_USER'
+  disabled: boolean
+  disabledReason: string
+  password: string
+  accessGuard: Record<string, unknown>
+  accessGroups: Array<Record<string, any>>
+  frontendSubAccounts: AdminFrontendSubAccount[]
+  createdAt: string
+  lastDataUpdatedAt?: string | null
+}
+
 export interface ApiPageState {
   loading: boolean
 }
