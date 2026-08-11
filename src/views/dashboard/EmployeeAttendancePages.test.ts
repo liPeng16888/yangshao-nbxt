@@ -1,4 +1,5 @@
 import { defineComponent, nextTick } from 'vue'
+import dayjs from 'dayjs'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import { createPinia } from 'pinia'
@@ -475,10 +476,11 @@ describe('employee attendance navigation', () => {
       expect(wrapper.text()).toContain(message)
     }
 
+    const otherDate = dayjs(existing.date).add(1, 'day').format('YYYY-MM-DD')
     let controls = await edit()
-    ;(controls[0]! as any).vm.$emit('update:modelValue', '2026-08-12T08:00')
+    ;(controls[0]! as any).vm.$emit('update:modelValue', `${otherDate}T08:00`)
     await submitInvalid('必须在所选日期内')
-    expect((controls[0]! as any).vm.modelValue).toBe('2026-08-12T08:00')
+    expect((controls[0]! as any).vm.modelValue).toBe(`${otherDate}T08:00`)
 
     controls = await edit()
     ;(controls[0]! as any).vm.$emit('update:modelValue', `${existing.date}T18:00`)
