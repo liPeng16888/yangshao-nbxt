@@ -34,7 +34,8 @@ function createController(options: { protected?: boolean; grantValid?: boolean }
     })
   }
   const photos = { save: vi.fn().mockResolvedValue('/private/new.jpg'), read: vi.fn().mockResolvedValue({ buffer: Buffer.from('photo'), contentType: 'image/png' }), remove: vi.fn() }
-  return { controller: new EmployeeAttendanceController(service, auth as never, photos as never, service as never), service: service as any, auth, photos }
+  const calendar = { customerView: vi.fn().mockResolvedValue({}) }
+  return { controller: new EmployeeAttendanceController(service, auth as never, photos as never, service as never, calendar as never), service: service as any, auth, photos, calendar }
 }
 
 describe('EmployeeAttendanceController authorization and ownership', () => {
@@ -65,6 +66,15 @@ describe('EmployeeAttendanceController authorization and ownership', () => {
     await controller.listEmployees(frontendUser, {}, 'valid-grant')
 
     expect(service.listEmployees).toHaveBeenCalledWith('front-1', {})
+  })
+
+  it('authorizes the combined calendar read before using only the authenticated account', async () => {
+    const { controller, calendar, auth } = createController({ protected: true, grantValid: true })
+
+    await controller.scheduleAttendanceOverview(frontendUser, { employeeId: 'employee-1', month: '2026-08' } as never, 'valid-grant')
+
+    expect(auth.assertAccessGrant).toHaveBeenCalledWith('front-1', 'valid-grant', AccessGuardFeature.EMPLOYEE_ATTENDANCE, false)
+    expect(calendar.customerView).toHaveBeenCalledWith('front-1', 'employee-1', '2026-08')
   })
 
   it('always requires an attendance grant before revealing employee sensitive data', async () => {
@@ -178,7 +188,7 @@ describe('EmployeeAttendanceController authorization and ownership', () => {
       { method: 'reopenPayroll', args: ['run-1', { reason: '补录' }, grant], serviceMethod: 'reopen', prefix: ['front-1', 'front-1'] }
     ]
     const routedMethods = Object.getOwnPropertyNames(EmployeeAttendanceController.prototype)
-      .filter((name) => Reflect.getMetadata(METHOD_METADATA, EmployeeAttendanceController.prototype[name as keyof EmployeeAttendanceController]) !== undefined)
+      .filter((name) => name !== 'scheduleAttendanceOverview' && Reflect.getMetadata(METHOD_METADATA, EmployeeAttendanceController.prototype[name as keyof EmployeeAttendanceController]) !== undefined)
     expect(cases.map((item) => item.method).sort()).toEqual(routedMethods.sort())
 
     for (const item of cases) {

@@ -90,6 +90,15 @@ export class MonthlyScheduleQueryDto {
   @Matches(BUSINESS_MONTH_PATTERN) month!: string
 }
 
+export class ScheduleAttendanceOverviewQueryDto {
+  @Transform(({ value }) => trim(value)) @IsOptional() @IsString() @IsNotEmpty() employeeId?: string
+  @Matches(BUSINESS_MONTH_PATTERN) month!: string
+}
+
+export class AdminScheduleAttendanceOverviewQueryDto extends ScheduleAttendanceOverviewQueryDto {
+  @IsOptional() frontendUserIds?: string | string[]
+}
+
 export class ActualAttendanceSegmentDto {
   @Matches(ZONED_DATE_TIME_PATTERN) checkInAt!: string
   @Matches(ZONED_DATE_TIME_PATTERN) checkOutAt!: string

@@ -10,8 +10,9 @@ import { RolesGuard } from '../auth/roles.guard'
 import {
   AttendanceDto, AttendanceListQueryDto, BonusDto, CommissionRecordDto, CommissionTypeDto,
   BatchMonthlyScheduleDto, CopyMonthlyScheduleDto, CreateEmployeeDto, DateOverrideDto, EmployeeQueryDto, GenerateAttendanceDto, LeaveRequestDto,
-  LeaveTypeDto, MonthlyScheduleDayDto, MonthlyScheduleQueryDto, MonthlySettingDto, PayrollAdjustmentDto, PayrollGenerateDto, PayrollReopenDto, ReviewLeaveDto, WeeklyScheduleDto
+  LeaveTypeDto, MonthlyScheduleDayDto, MonthlyScheduleQueryDto, MonthlySettingDto, PayrollAdjustmentDto, PayrollGenerateDto, PayrollReopenDto, ReviewLeaveDto, ScheduleAttendanceOverviewQueryDto, WeeklyScheduleDto
 } from './employee-attendance.dto'
+import { AttendanceCalendarService } from './attendance-calendar.service'
 import { EmployeeAttendanceService } from './employee-attendance.service'
 import { EmployeePhotoFile, PrivateEmployeePhotoService } from './private-employee-photo.service'
 import { PayrollService } from './payroll.service'
@@ -24,7 +25,8 @@ export class EmployeeAttendanceController {
     private readonly attendance: EmployeeAttendanceService,
     private readonly auth: AuthService,
     private readonly photos: PrivateEmployeePhotoService,
-    @Optional() private readonly payrollService?: PayrollService
+    @Optional() private readonly payrollService?: PayrollService,
+    @Optional() private readonly calendar?: AttendanceCalendarService
   ) {}
 
   @Get('employees')
@@ -136,6 +138,10 @@ export class EmployeeAttendanceController {
   @Get('monthly-schedules')
   async listMonthlySchedules(@CurrentUserInfo() user: CurrentUser, @Query() query: MonthlyScheduleQueryDto, @Headers('x-ys-access-grant') grant?: string) {
     await this.authorize(user.id, grant); return this.attendance.listMonthlySchedules(user.id, query.employeeId, query.month)
+  }
+  @Get('schedule-attendance-overview')
+  async scheduleAttendanceOverview(@CurrentUserInfo() user: CurrentUser, @Query() query: ScheduleAttendanceOverviewQueryDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.calendar!.customerView(user.id, query.employeeId, query.month)
   }
   @Post('monthly-schedules/day')
   async saveMonthlyScheduleDay(@CurrentUserInfo() user: CurrentUser, @Body() body: MonthlyScheduleDayDto, @Headers('x-ys-access-grant') grant?: string) {
