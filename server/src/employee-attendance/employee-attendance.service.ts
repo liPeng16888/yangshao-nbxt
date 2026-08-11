@@ -23,11 +23,18 @@ import type {
   GenerateAttendanceDto,
   LeaveRequestDto,
   LeaveTypeDto,
+  BatchMonthlyScheduleDto,
+  CopyMonthlyScheduleDto,
+  MonthlyScheduleDayDto,
   MonthlySettingDto,
   WeeklyScheduleDto
 } from './employee-attendance.dto'
+import { breakMinutes, normalizeClockIntervals, scheduledMinutes, type ClockInterval } from './attendance-intervals'
 
 type PrismaDelegate = { findFirst(args: any): Promise<any> }
+
+type MonthlySchedulePayload = Pick<MonthlyScheduleDayDto, 'employeeId' | 'date' | 'isWorkday' | 'segments' | 'remark'>
+type BatchMonthlySchedulePayload = Omit<MonthlySchedulePayload, 'date'> & Pick<BatchMonthlyScheduleDto, 'dates'>
 
 class PayrollLockPlanChanged extends Error {
   constructor(readonly months: string[]) { super('payroll lock plan changed') }
@@ -139,6 +146,7 @@ export class EmployeeAttendanceService {
         tx.employeeWeeklySchedule.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeDateOverride.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeMonthlySetting.count({ where: { frontendUserId, employeeId: id } }),
+        tx.employeeMonthlyScheduleDay.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeAttendanceRecord.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeLeaveRequest.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeCommissionRecord.count({ where: { frontendUserId, employeeId: id } }),
@@ -276,15 +284,21 @@ export class EmployeeAttendanceService {
   }
 
   async upsertMonthlySetting(frontendUserId: string, actorUserId: string, payload: MonthlySettingDto) {
-    await this.assertEmployee(frontendUserId, payload.employeeId)
     this.assertMonth(payload.month)
-    await this.assertMonthWritable(frontendUserId, payload.month)
-    const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeMonthlySetting', (updated) => updated.id, (tx) => tx.employeeMonthlySetting.upsert({
-      where: { employeeId_month: { employeeId: payload.employeeId, month: payload.month } },
-      create: { frontendUserId, ...payload, scheduledWorkDays: this.nonnegative(payload.scheduledWorkDays, '应出勤天数'), restQuotaDays: this.nonnegative(payload.restQuotaDays, '月休额度') },
-      update: { scheduledWorkDays: this.nonnegative(payload.scheduledWorkDays, '应出勤天数'), restQuotaDays: this.nonnegative(payload.restQuotaDays, '月休额度') }
-    }), undefined, [payload.month])
-    return row
+    return this.payrollMonthLocks().run(frontendUserId, [payload.month], async (tx) => {
+      await this.assertMonthsWritable(frontendUserId, [payload.month], tx)
+      await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
+      const scheduledWorkDays = await tx.employeeMonthlyScheduleDay.count({ where: {
+        frontendUserId, employeeId: payload.employeeId, isWorkday: true, date: { startsWith: payload.month }
+      } })
+      const row = await tx.employeeMonthlySetting.upsert({
+        where: { employeeId_month: { employeeId: payload.employeeId, month: payload.month } },
+        create: { frontendUserId, employeeId: payload.employeeId, month: payload.month, scheduledWorkDays, restQuotaDays: this.nonnegative(payload.restQuotaDays, '月休额度') },
+        update: { scheduledWorkDays, restQuotaDays: this.nonnegative(payload.restQuotaDays, '月休额度') }
+      })
+      await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeMonthlySetting', row.id, `月份=${payload.month}; 排班工作日=${scheduledWorkDays}`, tx)
+      return row
+    })
   }
 
   async deleteMonthlySetting(frontendUserId: string, actorUserId: string, id: string) {
@@ -292,6 +306,98 @@ export class EmployeeAttendanceService {
     await this.assertMonthWritable(frontendUserId, row.month)
     await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeMonthlySetting', id, (tx) => tx.employeeMonthlySetting.delete({ where: { id } }), undefined, [row.month])
     return { ok: true }
+  }
+
+  async listMonthlySchedules(frontendUserId: string, employeeId: string, month: string) {
+    this.assertMonth(month)
+    await this.assertEmployee(frontendUserId, employeeId)
+    const rows = await this.prisma.employeeMonthlyScheduleDay.findMany({
+      where: { frontendUserId, employeeId, date: { startsWith: month } },
+      include: { segments: { orderBy: { sequence: 'asc' } } },
+      orderBy: { date: 'asc' }
+    })
+    return rows.map((row) => this.monthlyScheduleDto(row))
+  }
+
+  async saveMonthlyScheduleDay(frontendUserId: string, actorUserId: string, payload: MonthlySchedulePayload) {
+    this.assertDate(payload.date)
+    const normalized = this.normalizedMonthlySegments(payload)
+    return this.withMonthlyScheduleSerialization(frontendUserId, payload.employeeId, [payload.date], async (tx) => {
+      const current = await tx.employeeMonthlyScheduleDay.findFirst({ where: { frontendUserId, employeeId: payload.employeeId, date: payload.date } })
+      if (current?.payrollLockedAt) throw new ConflictException('该排班记录已被工资确认锁定')
+      const row = await this.replaceMonthlyScheduleDay(tx, frontendUserId, payload.employeeId, payload.date, payload.isWorkday, normalized, payload.remark)
+      await this.audit(frontendUserId, actorUserId, current ? EmployeeAuditAction.UPDATE : EmployeeAuditAction.CREATE, 'EmployeeMonthlyScheduleDay', row.id, `员工=${payload.employeeId}; 日期=${payload.date}`, tx)
+      return this.monthlyScheduleDto({ ...row, segments: this.scheduleSegmentsForResponse(normalized) })
+    })
+  }
+
+  async deleteMonthlyScheduleDay(frontendUserId: string, actorUserId: string, id: string) {
+    const row = await this.owned(this.prisma.employeeMonthlyScheduleDay, frontendUserId, id, '月度排班不存在')
+    return this.withCurrentPayrollSource(
+      frontendUserId,
+      [row.date],
+      (tx) => this.owned(tx.employeeMonthlyScheduleDay, frontendUserId, id, '月度排班不存在'),
+      (locked) => [locked.date],
+      async (tx, locked) => {
+        await this.owned(tx.employee, frontendUserId, locked.employeeId, '员工不存在')
+        if (locked.payrollLockedAt) throw new ConflictException('该排班记录已被工资确认锁定')
+        await tx.employeeMonthlyScheduleDay.delete({ where: { id } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeMonthlyScheduleDay', id, `员工=${locked.employeeId}; 日期=${locked.date}`, tx)
+        return { ok: true }
+      }
+    )
+  }
+
+  async batchSaveMonthlySchedules(frontendUserId: string, actorUserId: string, payload: BatchMonthlySchedulePayload) {
+    const dates = Array.from(new Set(payload.dates || [])).sort()
+    if (!dates.length) throw new BadRequestException('请选择排班日期')
+    dates.forEach((date) => this.assertDate(date))
+    const normalized = this.normalizedMonthlySegments(payload)
+    return this.withMonthlyScheduleSerialization(frontendUserId, payload.employeeId, dates, async (tx) => {
+      const currentRows = await tx.employeeMonthlyScheduleDay.findMany({ where: { frontendUserId, employeeId: payload.employeeId, date: { in: dates } } })
+      if (currentRows.some((row) => row.payrollLockedAt)) throw new ConflictException('存在已被工资确认锁定的排班记录')
+      const currentByDate = new Map(currentRows.map((row) => [row.date, row]))
+      const rows = []
+      for (const date of dates) {
+        const row = await this.replaceMonthlyScheduleDay(tx, frontendUserId, payload.employeeId, date, payload.isWorkday, normalized, payload.remark)
+        await this.audit(frontendUserId, actorUserId, currentByDate.has(date) ? EmployeeAuditAction.UPDATE : EmployeeAuditAction.CREATE, 'EmployeeMonthlyScheduleDay', row.id, `员工=${payload.employeeId}; 日期=${date}; 批量排班`, tx)
+        rows.push(this.monthlyScheduleDto({ ...row, segments: this.scheduleSegmentsForResponse(normalized) }))
+      }
+      return rows
+    })
+  }
+
+  async copyPreviousMonthSchedules(frontendUserId: string, actorUserId: string, payload: Pick<CopyMonthlyScheduleDto, 'employeeId' | 'targetMonth' | 'overwrite'>) {
+    this.assertMonth(payload.targetMonth)
+    const sourceMonth = this.previousMonth(payload.targetMonth)
+    return this.withMonthlyScheduleSerialization(frontendUserId, payload.employeeId, [sourceMonth, payload.targetMonth], async (tx) => {
+      const [source, target] = await Promise.all([
+        tx.employeeMonthlyScheduleDay.findMany({
+          where: { frontendUserId, employeeId: payload.employeeId, date: { startsWith: sourceMonth } },
+          include: { segments: { orderBy: { sequence: 'asc' } } }, orderBy: { date: 'asc' }
+        }),
+        tx.employeeMonthlyScheduleDay.findMany({
+          where: { frontendUserId, employeeId: payload.employeeId, date: { startsWith: payload.targetMonth } },
+          include: { segments: { orderBy: { sequence: 'asc' } } }, orderBy: { date: 'asc' }
+        })
+      ])
+      if (target.some((row) => row.payrollLockedAt)) throw new ConflictException('存在已被工资确认锁定的排班记录')
+      if (target.length && !payload.overwrite) throw new ConflictException('目标月份已有排班，请确认覆盖')
+      const targetDates = new Set(this.monthDates(payload.targetMonth))
+      const copies = source
+        .filter((row) => targetDates.has(`${payload.targetMonth}-${row.date.slice(-2)}`))
+        .map((row) => ({
+          source: row,
+          date: `${payload.targetMonth}-${row.date.slice(-2)}`,
+          segments: row.isWorkday ? this.normalizedMonthlySegments({ ...row, segments: row.segments }) : []
+        }))
+      if (target.length) await tx.employeeMonthlyScheduleDay.deleteMany({ where: { frontendUserId, employeeId: payload.employeeId, date: { startsWith: payload.targetMonth } } })
+      for (const copy of copies) {
+        const row = await this.replaceMonthlyScheduleDay(tx, frontendUserId, payload.employeeId, copy.date, copy.source.isWorkday, copy.segments, copy.source.remark)
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'EmployeeMonthlyScheduleDay', row.id, `员工=${payload.employeeId}; 从=${copy.source.date}; 到=${copy.date}`, tx)
+      }
+      return { copied: copies.length, targetMonth: payload.targetMonth }
+    })
   }
 
   listAttendance(frontendUserId: string, query: AttendanceListQueryDto = {}) {
@@ -1112,6 +1218,71 @@ export class EmployeeAttendanceService {
     const end = this.clockMinutes(plannedEndTime)
     if (end <= start) throw new BadRequestException('本版暂不支持跨日排班，计划下班时间必须晚于上班时间')
     return { isWorkday: true, plannedStartTime, plannedEndTime, scheduledMinutes: end - start }
+  }
+
+  private async withMonthlyScheduleSerialization<T>(frontendUserId: string, employeeId: string, datesOrMonths: string[], operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+    const months = Array.from(new Set(datesOrMonths.map((value) => value.slice(0, 7)))).sort()
+    return this.payrollMonthLocks().run(frontendUserId, months, async (tx) => {
+      await this.assertMonthsWritable(frontendUserId, months, tx)
+      await this.owned(tx.employee, frontendUserId, employeeId, '员工不存在')
+      return operation(tx)
+    })
+  }
+
+  private normalizedMonthlySegments(payload: Pick<MonthlySchedulePayload, 'isWorkday' | 'segments'>): ClockInterval[] {
+    if (!payload.isWorkday) return []
+    try {
+      return normalizeClockIntervals(payload.segments || [])
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '排班时段无效')
+    }
+  }
+
+  private async replaceMonthlyScheduleDay(
+    tx: Prisma.TransactionClient,
+    frontendUserId: string,
+    employeeId: string,
+    date: string,
+    isWorkday: boolean,
+    segments: ClockInterval[],
+    remark?: string | null
+  ) {
+    const row = await tx.employeeMonthlyScheduleDay.upsert({
+      where: { employeeId_date: { employeeId, date } },
+      create: {
+        frontendUserId, employeeId, date, isWorkday, scheduledMinutes: isWorkday ? scheduledMinutes(segments) : 0,
+        remark: this.optional(remark)
+      },
+      update: {
+        isWorkday, scheduledMinutes: isWorkday ? scheduledMinutes(segments) : 0, remark: this.optional(remark)
+      }
+    })
+    await tx.employeeScheduleSegment.deleteMany({ where: { frontendUserId, scheduleDayId: row.id } })
+    if (segments.length) await tx.employeeScheduleSegment.createMany({ data: segments.map((segment, sequence) => ({
+      frontendUserId, scheduleDayId: row.id, sequence, startTime: segment.startTime, endTime: segment.endTime
+    })) })
+    return row
+  }
+
+  private scheduleSegmentsForResponse(segments: ClockInterval[]) {
+    return segments.map((segment, sequence) => ({ sequence, startTime: segment.startTime, endTime: segment.endTime }))
+  }
+
+  private monthlyScheduleDto(row: any) {
+    const segments = (row.segments || []).slice().sort((left: any, right: any) => left.sequence - right.sequence)
+      .map((segment: any) => ({ sequence: segment.sequence, startTime: segment.startTime, endTime: segment.endTime }))
+    return {
+      ...row,
+      segments,
+      scheduledMinutes: Number(row.scheduledMinutes || 0),
+      breakMinutes: row.isWorkday ? breakMinutes(segments) : 0
+    }
+  }
+
+  private previousMonth(month: string) {
+    const [year, monthNumber] = month.split('-').map(Number)
+    const date = new Date(Date.UTC(year, monthNumber - 2, 1))
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
   }
 
   private clockMinutes(value: string) {

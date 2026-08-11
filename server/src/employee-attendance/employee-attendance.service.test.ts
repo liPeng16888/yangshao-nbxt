@@ -25,6 +25,8 @@ function createService(overrides: Record<string, unknown> = {}) {
     employeeDateOverride: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
     employeeWeeklySchedule: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
     employeeMonthlySetting: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), upsert: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+    employeeMonthlyScheduleDay: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), upsert: vi.fn(), delete: vi.fn(), deleteMany: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+    employeeScheduleSegment: { createMany: vi.fn().mockResolvedValue({ count: 0 }), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
     employeeBonus: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]) },
     employeePayrollItem: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]) },
     employeePayrollRun: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -49,6 +51,95 @@ function finishService(prisma: any) {
 }
 
 describe('EmployeeAttendanceService ownership and conflicts', () => {
+  it('recomputes scheduled minutes and replaces monthly schedule segments atomically', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeMonthlyScheduleDay.upsert.mockResolvedValue({
+      id: 'schedule-1', employeeId: 'employee-1', date: '2026-08-11', isWorkday: true,
+      scheduledMinutes: 510, remark: null, segments: []
+    })
+
+    const result = await service.saveMonthlyScheduleDay('front-1', 'front-1', {
+      employeeId: 'employee-1', date: '2026-08-11', isWorkday: true, remark: '',
+      segments: [{ startTime: '08:00', endTime: '12:00' }, { startTime: '13:00', endTime: '17:30' }]
+    })
+
+    expect(result).toMatchObject({ scheduledMinutes: 510, breakMinutes: 60, segments: [
+      { sequence: 0, startTime: '08:00', endTime: '12:00' },
+      { sequence: 1, startTime: '13:00', endTime: '17:30' }
+    ] })
+    expect(prisma.employeeScheduleSegment.createMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.arrayContaining([
+      expect.objectContaining({ sequence: 0, startTime: '08:00', endTime: '12:00' }),
+      expect.objectContaining({ sequence: 1, startTime: '13:00', endTime: '17:30' })
+    ]) }))
+  })
+
+  it('rolls back a monthly schedule batch when one selected date belongs to a confirmed month', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeePayrollRun.findFirst.mockImplementation(({ where }: any) => Promise.resolve(
+      where.month === '2026-09' ? { id: 'run-1', status: EmployeePayrollStatus.CONFIRMED } : null
+    ))
+
+    await expect(service.batchSaveMonthlySchedules('front-1', 'front-1', {
+      employeeId: 'employee-1', dates: ['2026-08-11', '2026-09-01'], isWorkday: true,
+      segments: [{ startTime: '08:00', endTime: '17:00' }], remark: ''
+    })).rejects.toThrow('工资已确认')
+
+    expect(prisma.employeeMonthlyScheduleDay.upsert).not.toHaveBeenCalled()
+  })
+
+  it('copies monthly schedules by day number and ignores dates missing from the target month', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeMonthlyScheduleDay.findMany
+      .mockResolvedValueOnce(Array.from({ length: 28 }, (_, index) => ({
+        id: `source-${index + 1}`, employeeId: 'employee-1', date: `2026-02-${String(index + 1).padStart(2, '0')}`,
+        isWorkday: true, scheduledMinutes: 480, remark: null,
+        segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }]
+      })))
+      .mockResolvedValueOnce([])
+    prisma.employeeMonthlyScheduleDay.upsert.mockImplementation(({ create }: any) => Promise.resolve({ id: `target-${create.date}`, ...create, segments: create.segments?.createMany?.data || [] }))
+
+    const result = await service.copyPreviousMonthSchedules('front-1', 'front-1', {
+      employeeId: 'employee-1', targetMonth: '2026-03', overwrite: true
+    })
+
+    expect(result).toMatchObject({ copied: 28, targetMonth: '2026-03' })
+    expect(prisma.employeeMonthlyScheduleDay.upsert).toHaveBeenCalledTimes(28)
+  })
+
+  it('validates all copied schedules before removing target month rows', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeMonthlyScheduleDay.findMany
+      .mockResolvedValueOnce([{ id: 'source-1', employeeId: 'employee-1', date: '2026-02-01', isWorkday: true, scheduledMinutes: 480, remark: null,
+        segments: [{ sequence: 0, startTime: '17:00', endTime: '08:00' }] }])
+      .mockResolvedValueOnce([{ id: 'target-1', employeeId: 'employee-1', date: '2026-03-01', payrollLockedAt: null }])
+
+    await expect(service.copyPreviousMonthSchedules('front-1', 'front-1', {
+      employeeId: 'employee-1', targetMonth: '2026-03', overwrite: true
+    })).rejects.toBeInstanceOf(BadRequestException)
+
+    expect(prisma.employeeMonthlyScheduleDay.deleteMany).not.toHaveBeenCalled()
+  })
+
+  it('derives the monthly setting compatibility workday count from schedule rows', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeMonthlyScheduleDay.count.mockResolvedValue(17)
+    prisma.employeeMonthlySetting.upsert.mockResolvedValue({ id: 'setting-1', scheduledWorkDays: new Prisma.Decimal(17) })
+
+    await service.upsertMonthlySetting('front-1', 'front-1', {
+      employeeId: 'employee-1', month: '2026-08', restQuotaDays: 4
+    })
+
+    expect(prisma.employeeMonthlySetting.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ scheduledWorkDays: 17, restQuotaDays: expect.objectContaining({ d: expect.any(Array) }) }),
+      update: expect.objectContaining({ scheduledWorkDays: 17 })
+    }))
+  })
+
   it('reports whether leave and commission types are referenced so immutable UI controls stay disabled', async () => {
     const { service, prisma } = createService()
     prisma.employeeLeaveType.findMany.mockResolvedValue([{ id: 'leave-type-1', name: '事假', _count: { leaveRequests: 1 } }])

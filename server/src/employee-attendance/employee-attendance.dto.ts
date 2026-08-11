@@ -1,6 +1,6 @@
 import { EmployeeLeaveStatus, EmployeeLeaveUnit, EmployeeStatus } from '@prisma/client'
-import { Transform } from 'class-transformer'
-import { IsArray, IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Max, Min } from 'class-validator'
+import { Transform, Type } from 'class-transformer'
+import { IsArray, IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Max, Min, ValidateNested } from 'class-validator'
 
 export const BUSINESS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 export const BUSINESS_MONTH_PATTERN = /^\d{4}-\d{2}$/
@@ -54,8 +54,39 @@ export class DateOverrideDto {
 export class MonthlySettingDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Matches(BUSINESS_MONTH_PATTERN) month!: string
-  @Transform(({ value }) => number(value)) @IsNumber() @Min(0) scheduledWorkDays!: number
   @Transform(({ value }) => number(value)) @IsNumber() @Min(0) restQuotaDays!: number
+}
+
+export class ScheduleSegmentDto {
+  @Matches(CLOCK_TIME_PATTERN) startTime!: string
+  @Matches(CLOCK_TIME_PATTERN) endTime!: string
+}
+
+export class MonthlyScheduleDayDto {
+  @IsString() @IsNotEmpty() employeeId!: string
+  @Matches(BUSINESS_DATE_PATTERN) date!: string
+  @IsBoolean() isWorkday!: boolean
+  @ValidateNested({ each: true }) @Type(() => ScheduleSegmentDto) @IsArray() segments!: ScheduleSegmentDto[]
+  @Transform(({ value }) => trim(value)) @IsOptional() @IsString() remark?: string
+}
+
+export class BatchMonthlyScheduleDto {
+  @IsString() @IsNotEmpty() employeeId!: string
+  @IsBoolean() isWorkday!: boolean
+  @ValidateNested({ each: true }) @Type(() => ScheduleSegmentDto) @IsArray() segments!: ScheduleSegmentDto[]
+  @Transform(({ value }) => trim(value)) @IsOptional() @IsString() remark?: string
+  @IsArray() @Matches(BUSINESS_DATE_PATTERN, { each: true }) dates!: string[]
+}
+
+export class CopyMonthlyScheduleDto {
+  @IsString() @IsNotEmpty() employeeId!: string
+  @Matches(BUSINESS_MONTH_PATTERN) targetMonth!: string
+  @IsBoolean() overwrite!: boolean
+}
+
+export class MonthlyScheduleQueryDto {
+  @IsString() @IsNotEmpty() employeeId!: string
+  @Matches(BUSINESS_MONTH_PATTERN) month!: string
 }
 
 export class AttendanceDto {

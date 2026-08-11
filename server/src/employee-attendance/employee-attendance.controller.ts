@@ -9,8 +9,8 @@ import { Roles } from '../auth/roles.decorator'
 import { RolesGuard } from '../auth/roles.guard'
 import {
   AttendanceDto, AttendanceListQueryDto, BonusDto, CommissionRecordDto, CommissionTypeDto,
-  CreateEmployeeDto, DateOverrideDto, EmployeeQueryDto, GenerateAttendanceDto, LeaveRequestDto,
-  LeaveTypeDto, MonthlySettingDto, PayrollAdjustmentDto, PayrollGenerateDto, PayrollReopenDto, ReviewLeaveDto, WeeklyScheduleDto
+  BatchMonthlyScheduleDto, CopyMonthlyScheduleDto, CreateEmployeeDto, DateOverrideDto, EmployeeQueryDto, GenerateAttendanceDto, LeaveRequestDto,
+  LeaveTypeDto, MonthlyScheduleDayDto, MonthlyScheduleQueryDto, MonthlySettingDto, PayrollAdjustmentDto, PayrollGenerateDto, PayrollReopenDto, ReviewLeaveDto, WeeklyScheduleDto
 } from './employee-attendance.dto'
 import { EmployeeAttendanceService } from './employee-attendance.service'
 import { EmployeePhotoFile, PrivateEmployeePhotoService } from './private-employee-photo.service'
@@ -131,6 +131,27 @@ export class EmployeeAttendanceController {
   @Delete('month-settings/:id')
   async deleteMonthlySetting(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
     await this.authorize(user.id, grant); return this.attendance.deleteMonthlySetting(user.id, user.id, id)
+  }
+
+  @Get('monthly-schedules')
+  async listMonthlySchedules(@CurrentUserInfo() user: CurrentUser, @Query() query: MonthlyScheduleQueryDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.attendance.listMonthlySchedules(user.id, query.employeeId, query.month)
+  }
+  @Post('monthly-schedules/day')
+  async saveMonthlyScheduleDay(@CurrentUserInfo() user: CurrentUser, @Body() body: MonthlyScheduleDayDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.attendance.saveMonthlyScheduleDay(user.id, user.id, this.clean(body))
+  }
+  @Delete('monthly-schedules/day/:id')
+  async deleteMonthlyScheduleDay(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.attendance.deleteMonthlyScheduleDay(user.id, user.id, id)
+  }
+  @Post('monthly-schedules/batch')
+  async batchSaveMonthlySchedules(@CurrentUserInfo() user: CurrentUser, @Body() body: BatchMonthlyScheduleDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.attendance.batchSaveMonthlySchedules(user.id, user.id, this.clean(body))
+  }
+  @Post('monthly-schedules/copy-previous')
+  async copyPreviousMonthSchedules(@CurrentUserInfo() user: CurrentUser, @Body() body: CopyMonthlyScheduleDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user.id, grant); return this.attendance.copyPreviousMonthSchedules(user.id, user.id, this.clean(body))
   }
 
   @Get('attendance')

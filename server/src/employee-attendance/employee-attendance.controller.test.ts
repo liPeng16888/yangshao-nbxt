@@ -16,6 +16,7 @@ function createController(options: { protected?: boolean; grantValid?: boolean }
     'attachPhoto', 'getPhotoPath', 'listWeeklySchedules', 'createWeeklySchedule', 'updateWeeklySchedule', 'deleteWeeklySchedule',
     'listDateOverrides', 'createDateOverride', 'updateDateOverride', 'deleteDateOverride', 'listMonthlySettings',
     'upsertMonthlySetting', 'deleteMonthlySetting', 'listAttendance', 'createAttendance', 'generateAttendance',
+    'listMonthlySchedules', 'saveMonthlyScheduleDay', 'deleteMonthlyScheduleDay', 'batchSaveMonthlySchedules', 'copyPreviousMonthSchedules',
     'updateAttendance', 'deleteAttendance', 'listLeaveTypes', 'createLeaveType', 'updateLeaveType', 'deleteLeaveType',
     'listLeaveRequests', 'createLeaveRequest', 'updateLeaveRequest', 'deleteLeaveRequest', 'approveLeave', 'rejectLeave',
     'listCommissionTypes', 'createCommissionType', 'updateCommissionType', 'deleteCommissionType',
@@ -73,6 +74,18 @@ describe('EmployeeAttendanceController authorization and ownership', () => {
     expect(service.revealEmployee).not.toHaveBeenCalled()
   })
 
+  it('rejects missing or invalid access grants before monthly schedule mutations', async () => {
+    const body = { employeeId: 'employee-1', date: '2026-08-11', isWorkday: true, segments: [{ startTime: '08:00', endTime: '17:00' }] }
+    const missing = createController({ protected: true, grantValid: false })
+    const invalid = createController({ protected: true, grantValid: false })
+
+    await expect(missing.controller.saveMonthlyScheduleDay(frontendUser, body as never, undefined)).rejects.toBeInstanceOf(ForbiddenException)
+    await expect(invalid.controller.batchSaveMonthlySchedules(frontendUser, { ...body, dates: ['2026-08-11'] } as never, 'invalid')).rejects.toBeInstanceOf(ForbiddenException)
+
+    expect(missing.service.saveMonthlyScheduleDay).not.toHaveBeenCalled()
+    expect(invalid.service.batchSaveMonthlySchedules).not.toHaveBeenCalled()
+  })
+
   it('exposes authenticated CRUD routes rather than admin routes', () => {
     const methods = Object.getOwnPropertyNames(EmployeeAttendanceController.prototype)
       .filter((name) => name.startsWith('create'))
@@ -122,6 +135,11 @@ describe('EmployeeAttendanceController authorization and ownership', () => {
       { method: 'listMonthlySettings', args: ['2026-08', grant], serviceMethod: 'listMonthlySettings', prefix: ['front-1'] },
       { method: 'createMonthlySetting', args: [body, grant], serviceMethod: 'upsertMonthlySetting', prefix: ['front-1', 'front-1'] },
       { method: 'deleteMonthlySetting', args: ['id', grant], serviceMethod: 'deleteMonthlySetting', prefix: ['front-1', 'front-1'] },
+      { method: 'listMonthlySchedules', args: [{ employeeId: 'employee-1', month: '2026-08' }, grant], serviceMethod: 'listMonthlySchedules', prefix: ['front-1', 'employee-1', '2026-08'] },
+      { method: 'saveMonthlyScheduleDay', args: [body, grant], serviceMethod: 'saveMonthlyScheduleDay', prefix: ['front-1', 'front-1'] },
+      { method: 'deleteMonthlyScheduleDay', args: ['id', grant], serviceMethod: 'deleteMonthlyScheduleDay', prefix: ['front-1', 'front-1'] },
+      { method: 'batchSaveMonthlySchedules', args: [{ ...body, dates: ['2026-08-11'] }, grant], serviceMethod: 'batchSaveMonthlySchedules', prefix: ['front-1', 'front-1'] },
+      { method: 'copyPreviousMonthSchedules', args: [{ employeeId: 'employee-1', targetMonth: '2026-08', overwrite: true }, grant], serviceMethod: 'copyPreviousMonthSchedules', prefix: ['front-1', 'front-1'] },
       { method: 'listAttendance', args: [{}, grant], serviceMethod: 'listAttendance', prefix: ['front-1'] },
       { method: 'createAttendance', args: [body, grant], serviceMethod: 'createAttendance', prefix: ['front-1', 'front-1'] },
       { method: 'createAttendanceGeneration', args: [body, grant], serviceMethod: 'generateAttendance', prefix: ['front-1', 'front-1'] },
