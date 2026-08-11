@@ -12,11 +12,12 @@ import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
 import {
   AttendanceDto, AttendanceListQueryDto, BonusDto, CommissionRecordDto, CommissionTypeDto,
   CreateEmployeeDto, DateOverrideDto, EmployeeQueryDto, GenerateAttendanceDto, LeaveRequestDto,
-  LeaveTypeDto, MonthlySettingDto, PayrollAdjustmentDto, PayrollGenerateDto, PayrollReopenDto, ReviewLeaveDto, WeeklyScheduleDto
+  LeaveTypeDto, MonthlySettingDto, PayrollAdjustmentDto, PayrollGenerateDto, PayrollReopenDto, RequiredOptimisticVersionDto, ReviewLeaveDto, WeeklyScheduleDto
 } from './employee-attendance.dto'
 import { EmployeeAttendanceService } from './employee-attendance.service'
 import { EmployeePhotoFile, PrivateEmployeePhotoService } from './private-employee-photo.service'
 import { PayrollService } from './payroll.service'
+import { TenantRealtimeService } from '../realtime/tenant-realtime.service'
 
 @Controller('employee-attendance')
 @UseGuards(AuthGuard, RolesGuard, FrontendPermissionGuard)
@@ -26,7 +27,8 @@ export class EmployeeAttendanceController {
     private readonly attendance: EmployeeAttendanceService,
     private readonly auth: AuthService,
     private readonly photos: PrivateEmployeePhotoService,
-    @Optional() private readonly payrollService?: PayrollService
+    @Optional() private readonly payrollService?: PayrollService,
+    @Optional() private readonly realtime?: TenantRealtimeService
   ) {}
 
   @Get('employees')
@@ -54,21 +56,21 @@ export class EmployeeAttendanceController {
   @FrontendPermission('ATTENDANCE_EMPLOYEES')
   async createEmployee(@CurrentUserInfo() user: CurrentUser, @Body() body: CreateEmployeeDto, @Headers('x-ys-access-grant') grant?: string) {
     await this.authorize(user, grant)
-    return this.attendance.createEmployee(user.dataOwnerId, user.id, this.clean(body))
+    return this.mutate(user, 'create', (row) => row.id, () => this.attendance.createEmployee(user.dataOwnerId, user.id, this.clean(body)))
   }
 
   @Put('employees/:id')
   @FrontendPermission('ATTENDANCE_EMPLOYEES')
   async updateEmployee(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: CreateEmployeeDto, @Headers('x-ys-access-grant') grant?: string) {
     await this.authorize(user, grant)
-    return this.attendance.updateEmployee(user.dataOwnerId, user.id, id, this.clean(body))
+    return this.mutate(user, 'update', id, () => this.attendance.updateEmployee(user.dataOwnerId, user.id, id, this.clean(body)))
   }
 
   @Delete('employees/:id')
   @FrontendPermission('ATTENDANCE_EMPLOYEES')
-  async deleteEmployee(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
+  async deleteEmployee(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
     await this.authorize(user, grant)
-    return this.attendance.deleteEmployee(user.dataOwnerId, user.id, id)
+    return this.mutate(user, 'delete', id, () => this.attendance.deleteEmployee(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
 
   @Post('employees/:id/photo')
@@ -104,17 +106,17 @@ export class EmployeeAttendanceController {
   @Post('weekly-schedules')
   @FrontendPermission('ATTENDANCE_SCHEDULES')
   async createWeeklySchedule(@CurrentUserInfo() user: CurrentUser, @Body() body: WeeklyScheduleDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.createWeeklySchedule(user.dataOwnerId, user.id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'create', (row) => row.id, () => this.attendance.createWeeklySchedule(user.dataOwnerId, user.id, this.clean(body)))
   }
   @Put('weekly-schedules/:id')
   @FrontendPermission('ATTENDANCE_SCHEDULES')
   async updateWeeklySchedule(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: WeeklyScheduleDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.updateWeeklySchedule(user.dataOwnerId, user.id, id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.updateWeeklySchedule(user.dataOwnerId, user.id, id, this.clean(body)))
   }
   @Delete('weekly-schedules/:id')
   @FrontendPermission('ATTENDANCE_SCHEDULES')
-  async deleteWeeklySchedule(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.deleteWeeklySchedule(user.dataOwnerId, user.id, id)
+  async deleteWeeklySchedule(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteWeeklySchedule(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
 
   @Get('overrides')
@@ -125,17 +127,17 @@ export class EmployeeAttendanceController {
   @Post('overrides')
   @FrontendPermission('ATTENDANCE_SCHEDULES')
   async createDateOverride(@CurrentUserInfo() user: CurrentUser, @Body() body: DateOverrideDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.createDateOverride(user.dataOwnerId, user.id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'create', (row) => row.id, () => this.attendance.createDateOverride(user.dataOwnerId, user.id, this.clean(body)))
   }
   @Put('overrides/:id')
   @FrontendPermission('ATTENDANCE_SCHEDULES')
   async updateDateOverride(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: DateOverrideDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.updateDateOverride(user.dataOwnerId, user.id, id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.updateDateOverride(user.dataOwnerId, user.id, id, this.clean(body)))
   }
   @Delete('overrides/:id')
   @FrontendPermission('ATTENDANCE_SCHEDULES')
-  async deleteDateOverride(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.deleteDateOverride(user.dataOwnerId, user.id, id)
+  async deleteDateOverride(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteDateOverride(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
 
   @Get('month-settings')
@@ -146,12 +148,12 @@ export class EmployeeAttendanceController {
   @Post('month-settings')
   @FrontendPermission('ATTENDANCE_SCHEDULES')
   async createMonthlySetting(@CurrentUserInfo() user: CurrentUser, @Body() body: MonthlySettingDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.upsertMonthlySetting(user.dataOwnerId, user.id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'update', (row) => row.id, () => this.attendance.upsertMonthlySetting(user.dataOwnerId, user.id, this.clean(body)))
   }
   @Delete('month-settings/:id')
   @FrontendPermission('ATTENDANCE_SCHEDULES')
-  async deleteMonthlySetting(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.deleteMonthlySetting(user.dataOwnerId, user.id, id)
+  async deleteMonthlySetting(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteMonthlySetting(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
 
   @Get('attendance')
@@ -162,7 +164,7 @@ export class EmployeeAttendanceController {
   @Post('attendance')
   @FrontendPermission('ATTENDANCE_RECORDS')
   async createAttendance(@CurrentUserInfo() user: CurrentUser, @Body() body: AttendanceDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.createAttendance(user.dataOwnerId, user.id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'create', (row) => row.id, () => this.attendance.createAttendance(user.dataOwnerId, user.id, this.clean(body)))
   }
   @Post('attendance/generate')
   @FrontendPermission('ATTENDANCE_RECORDS')
@@ -172,12 +174,12 @@ export class EmployeeAttendanceController {
   @Put('attendance/:id')
   @FrontendPermission('ATTENDANCE_RECORDS')
   async updateAttendance(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: AttendanceDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.updateAttendance(user.dataOwnerId, user.id, id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.updateAttendance(user.dataOwnerId, user.id, id, this.clean(body)))
   }
   @Delete('attendance/:id')
   @FrontendPermission('ATTENDANCE_RECORDS')
-  async deleteAttendance(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.deleteAttendance(user.dataOwnerId, user.id, id)
+  async deleteAttendance(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteAttendance(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
 
   @Get('leave-types')
@@ -188,17 +190,17 @@ export class EmployeeAttendanceController {
   @Post('leave-types')
   @FrontendPermission('ATTENDANCE_LEAVE')
   async createLeaveType(@CurrentUserInfo() user: CurrentUser, @Body() body: LeaveTypeDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.createLeaveType(user.dataOwnerId, user.id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'create', (row) => row.id, () => this.attendance.createLeaveType(user.dataOwnerId, user.id, this.clean(body)))
   }
   @Put('leave-types/:id')
   @FrontendPermission('ATTENDANCE_LEAVE')
   async updateLeaveType(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: LeaveTypeDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.updateLeaveType(user.dataOwnerId, user.id, id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.updateLeaveType(user.dataOwnerId, user.id, id, this.clean(body)))
   }
   @Delete('leave-types/:id')
   @FrontendPermission('ATTENDANCE_LEAVE')
-  async deleteLeaveType(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.deleteLeaveType(user.dataOwnerId, user.id, id)
+  async deleteLeaveType(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteLeaveType(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
 
   @Get('leaves')
@@ -209,27 +211,27 @@ export class EmployeeAttendanceController {
   @Post('leaves')
   @FrontendPermission('ATTENDANCE_LEAVE')
   async createLeaveRequest(@CurrentUserInfo() user: CurrentUser, @Body() body: LeaveRequestDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.createLeaveRequest(user.dataOwnerId, user.id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'create', (row) => row.id, () => this.attendance.createLeaveRequest(user.dataOwnerId, user.id, this.clean(body)))
   }
   @Put('leaves/:id')
   @FrontendPermission('ATTENDANCE_LEAVE')
   async updateLeaveRequest(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: LeaveRequestDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.updateLeaveRequest(user.dataOwnerId, user.id, id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.updateLeaveRequest(user.dataOwnerId, user.id, id, this.clean(body)))
   }
   @Delete('leaves/:id')
   @FrontendPermission('ATTENDANCE_LEAVE')
-  async deleteLeaveRequest(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.deleteLeaveRequest(user.dataOwnerId, user.id, id)
+  async deleteLeaveRequest(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteLeaveRequest(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
   @Post('leaves/:id/approve')
   @FrontendPermission('ATTENDANCE_LEAVE')
   async approveLeave(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: ReviewLeaveDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.approveLeave(user.dataOwnerId, user.id, id, body.reviewRemark)
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.approveLeave(user.dataOwnerId, user.id, id, body.reviewRemark))
   }
   @Post('leaves/:id/reject')
   @FrontendPermission('ATTENDANCE_LEAVE')
   async rejectLeave(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: ReviewLeaveDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.rejectLeave(user.dataOwnerId, user.id, id, body.reviewRemark)
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.rejectLeave(user.dataOwnerId, user.id, id, body.reviewRemark))
   }
 
   @Get('commission-types')
@@ -240,17 +242,17 @@ export class EmployeeAttendanceController {
   @Post('commission-types')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
   async createCommissionType(@CurrentUserInfo() user: CurrentUser, @Body() body: CommissionTypeDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.createCommissionType(user.dataOwnerId, user.id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'create', (row) => row.id, () => this.attendance.createCommissionType(user.dataOwnerId, user.id, this.clean(body)))
   }
   @Put('commission-types/:id')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
   async updateCommissionType(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: CommissionTypeDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.updateCommissionType(user.dataOwnerId, user.id, id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.updateCommissionType(user.dataOwnerId, user.id, id, this.clean(body)))
   }
   @Delete('commission-types/:id')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
-  async deleteCommissionType(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.deleteCommissionType(user.dataOwnerId, user.id, id)
+  async deleteCommissionType(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteCommissionType(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
 
   @Get('commissions')
@@ -261,17 +263,17 @@ export class EmployeeAttendanceController {
   @Post('commissions')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
   async createCommissionRecord(@CurrentUserInfo() user: CurrentUser, @Body() body: CommissionRecordDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.createCommissionRecord(user.dataOwnerId, user.id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'create', (row) => row.id, () => this.attendance.createCommissionRecord(user.dataOwnerId, user.id, this.clean(body)))
   }
   @Put('commissions/:id')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
   async updateCommissionRecord(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: CommissionRecordDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.updateCommissionRecord(user.dataOwnerId, user.id, id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.updateCommissionRecord(user.dataOwnerId, user.id, id, this.clean(body)))
   }
   @Delete('commissions/:id')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
-  async deleteCommissionRecord(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.deleteCommissionRecord(user.dataOwnerId, user.id, id)
+  async deleteCommissionRecord(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteCommissionRecord(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
 
   @Get('bonuses')
@@ -282,17 +284,17 @@ export class EmployeeAttendanceController {
   @Post('bonuses')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
   async createBonus(@CurrentUserInfo() user: CurrentUser, @Body() body: BonusDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.createBonus(user.dataOwnerId, user.id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'create', (row) => row.id, () => this.attendance.createBonus(user.dataOwnerId, user.id, this.clean(body)))
   }
   @Put('bonuses/:id')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
   async updateBonus(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: BonusDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.updateBonus(user.dataOwnerId, user.id, id, this.clean(body))
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.attendance.updateBonus(user.dataOwnerId, user.id, id, this.clean(body)))
   }
   @Delete('bonuses/:id')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
-  async deleteBonus(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.attendance.deleteBonus(user.dataOwnerId, user.id, id)
+  async deleteBonus(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteBonus(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
   @Get('compensation/totals')
   @FrontendPermission('ATTENDANCE_COMPENSATION')
@@ -309,7 +311,7 @@ export class EmployeeAttendanceController {
   @Post('payroll/generate')
   @FrontendPermission('ATTENDANCE_PAYROLL')
   async generatePayroll(@CurrentUserInfo() user: CurrentUser, @Body() body: PayrollGenerateDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.payrollService!.generate(user.dataOwnerId, user.id, body.month)
+    await this.authorize(user, grant); return this.mutate(user, 'update', (row) => row.id, () => this.payrollService!.generate(user.dataOwnerId, user.id, body.month))
   }
 
   @Get('payroll')
@@ -321,35 +323,56 @@ export class EmployeeAttendanceController {
   @Post('payroll/items/:itemId/adjustments')
   @FrontendPermission('ATTENDANCE_PAYROLL')
   async createPayrollAdjustment(@CurrentUserInfo() user: CurrentUser, @Param('itemId') itemId: string, @Body() body: PayrollAdjustmentDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.payrollService!.createAdjustment(user.dataOwnerId, user.id, itemId, body.amount, body.reason)
+    await this.authorize(user, grant); return this.mutate(user, 'create', (row) => row.id, () => this.payrollService!.createAdjustment(user.dataOwnerId, user.id, itemId, body.amount, body.reason))
   }
 
   @Put('payroll/adjustments/:id')
   @FrontendPermission('ATTENDANCE_PAYROLL')
   async updatePayrollAdjustment(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: PayrollAdjustmentDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.payrollService!.updateAdjustment(user.dataOwnerId, user.id, id, body.amount, body.reason)
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.payrollService!.updateAdjustment(user.dataOwnerId, user.id, id, body.amount, body.reason, body.baseUpdatedAt))
   }
 
   @Delete('payroll/adjustments/:id')
   @FrontendPermission('ATTENDANCE_PAYROLL')
-  async deletePayrollAdjustment(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.payrollService!.deleteAdjustment(user.dataOwnerId, user.id, id)
+  async deletePayrollAdjustment(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.payrollService!.deleteAdjustment(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
   }
 
   @Post('payroll/:id/confirm')
   @FrontendPermission('ATTENDANCE_PAYROLL')
   async confirmPayroll(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.payrollService!.confirm(user.dataOwnerId, user.id, id)
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.payrollService!.confirm(user.dataOwnerId, user.id, id))
   }
 
   @Post('payroll/:id/reopen')
   @FrontendPermission('ATTENDANCE_PAYROLL')
   async reopenPayroll(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: PayrollReopenDto, @Headers('x-ys-access-grant') grant?: string) {
-    await this.authorize(user, grant); return this.payrollService!.reopen(user.dataOwnerId, user.id, id, body.reason)
+    await this.authorize(user, grant); return this.mutate(user, 'update', id, () => this.payrollService!.reopen(user.dataOwnerId, user.id, id, body.reason))
   }
 
   private async authorize(user: CurrentUser, grant?: string, requireGrant = false) {
     await this.auth.assertAccessGrant(user, grant, AccessGuardFeature.EMPLOYEE_ATTENDANCE, requireGrant)
+  }
+
+  private async mutate<T>(
+    user: CurrentUser,
+    operation: 'create' | 'update' | 'delete',
+    entityId: string | ((result: T) => string),
+    action: () => Promise<T>
+  ) {
+    const result = await action()
+    const id = typeof entityId === 'function' ? entityId(result) : entityId
+    const metadata = result as { updatedAt?: Date | string } | null
+    const changedAt = metadata?.updatedAt ? new Date(metadata.updatedAt) : new Date()
+    this.realtime?.publish({
+      dataOwnerId: user.dataOwnerId,
+      module: 'employee-attendance',
+      entityId: id,
+      operation,
+      changedById: user.id,
+      updatedAt: changedAt.toISOString()
+    })
+    return result
   }
 
   private clean<T extends object>(body: T): T {

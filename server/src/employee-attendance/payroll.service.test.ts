@@ -46,6 +46,21 @@ const employee = {
 }
 
 describe('PayrollService frontend payroll', () => {
+  it('rejects a stale payroll adjustment edit inside the month lock', async () => {
+    const { service, tx, prisma } = serviceFixture()
+    const current = {
+      id: 'adjustment-1', frontendUserId: 'front-1', payrollItemId: 'item-1', amount: decimal(100), reason: '原调整',
+      updatedAt: new Date('2026-08-11T01:00:00.000Z'),
+      payrollItem: { payrollRun: { month: '2026-08' } }
+    }
+    prisma.employeePayrollAdjustment.findFirst.mockResolvedValue(current)
+    tx.employeePayrollAdjustment.findFirst.mockResolvedValue(current)
+
+    await expect(service.updateAdjustment('front-1', 'sub-1', 'adjustment-1', 200, '新调整', '2026-08-11T00:00:00.000Z'))
+      .rejects.toMatchObject({ response: expect.objectContaining({ code: 'STALE_WRITE', current }) })
+    expect(tx.employeePayrollAdjustment.update).not.toHaveBeenCalled()
+  })
+
   it('generates a decimal-safe formula snapshot from current monthly records', async () => {
     const { service, tx } = serviceFixture()
     tx.employee.findMany.mockResolvedValue([employee])

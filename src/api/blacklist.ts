@@ -17,9 +17,9 @@ export async function createBlacklist(payload: BlacklistPayload): Promise<Blackl
   return request.post('/blacklist', payload)
 }
 
-export async function deleteBlacklist(id: string): Promise<BlacklistRecord> {
+export async function deleteBlacklist(id: string, baseUpdatedAt: string): Promise<BlacklistRecord> {
   if (useMocks) return mockDeleteBlacklist(id)
-  return request.delete(`/blacklist/${id}`)
+  return request.delete(`/blacklist/${id}`, { data: { baseUpdatedAt } })
 }
 
 export async function updateBlacklist(id: string, payload: BlacklistUpdatePayload): Promise<BlacklistRecord> {

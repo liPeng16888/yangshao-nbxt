@@ -109,3 +109,8 @@ export const useTenantRealtimeStore = defineStore('tenantRealtime', () => {
     disconnect
   }
 })
+
+/** Allows isolated component tests and embedded previews without an installed Pinia. */
+export function tryUseTenantRealtimeStore() {
+  try { return useTenantRealtimeStore() } catch { return null }
+}

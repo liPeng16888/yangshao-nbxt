@@ -19,14 +19,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
-withDefaults(defineProps<{ title: string; description: string; showMonth?: boolean; showEmployee?: boolean }>(), { showMonth: true, showEmployee: true })
+import { useTenantRealtimeStore } from '@/stores/tenantRealtime'
+const props = withDefaults(defineProps<{ title: string; description: string; showMonth?: boolean; showEmployee?: boolean; dirty?: boolean }>(), { showMonth: true, showEmployee: true, dirty: false })
 const emit = defineEmits<{ refresh: [] }>()
 const store = useEmployeeAttendanceStore()
+const tenantRealtime = useTenantRealtimeStore()
+let unregisterRealtime: (() => void) | undefined
 const displayedMonth = computed(() => store.startDate || store.endDate ? '' : store.month)
 function selectMonth(value: unknown) { store.selectMonth(typeof value === 'string' ? value : ''); emit('refresh') }
-onMounted(() => { if (!store.employees.length) void store.loadEmployees().catch(() => undefined) })
+onMounted(() => {
+  if (!store.employees.length) void store.loadEmployees().catch(() => undefined)
+  unregisterRealtime = tenantRealtime.registerModule('employee-attendance', {
+    isDirty: () => props.dirty || store.saving,
+    refresh: () => emit('refresh')
+  })
+})
+onBeforeUnmount(() => unregisterRealtime?.())
 </script>
 
 <style scoped>

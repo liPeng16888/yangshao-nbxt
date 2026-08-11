@@ -51,13 +51,13 @@ export class MedicineInventoryController {
   @Post('common-names')
   @FrontendPermission('MEDICINE_INBOUND')
   createCommonName(@CurrentUserInfo() user: CurrentUser, @Body('name') name: string) {
-    return this.medicineInventory.createCommonName(user.dataOwnerId, name)
+    return this.medicineInventory.createCommonName(user.dataOwnerId, user.id, name)
   }
 
   @Delete('common-names/:id')
   @FrontendPermission('MEDICINE_INBOUND')
   async deleteCommonName(@CurrentUserInfo() user: CurrentUser, @Param('id') commonNameId: string) {
-    await this.medicineInventory.deleteCommonName(user.dataOwnerId, commonNameId)
+    await this.medicineInventory.deleteCommonName(user.dataOwnerId, user.id, commonNameId)
   }
 
   @Get('inbounds')
@@ -69,7 +69,7 @@ export class MedicineInventoryController {
   @Post('inbounds')
   @FrontendPermission('MEDICINE_INBOUND')
   createInbound(@CurrentUserInfo() user: CurrentUser, @Body() body: CreateMedicineInboundDto) {
-    return this.medicineInventory.createInbound(user.dataOwnerId, {
+    return this.medicineInventory.createInbound(user.dataOwnerId, user.id, {
       occurredOn: body.occurredOn,
       name: body.name,
       unit: body.unit,
@@ -87,7 +87,7 @@ export class MedicineInventoryController {
   @Post('outbounds')
   @FrontendPermission('MEDICINE_OUTBOUND')
   createOutbound(@CurrentUserInfo() user: CurrentUser, @Body() body: CreateMedicineOutboundDto) {
-    return this.medicineInventory.createOutbound(user.dataOwnerId, {
+    return this.medicineInventory.createOutbound(user.dataOwnerId, user.id, {
       occurredOn: body.occurredOn,
       medicineItemId: body.medicineItemId,
       quantity: body.quantity,
@@ -102,6 +102,6 @@ export class MedicineInventoryController {
     @Param('id') movementId: string,
     @Body() body: CreateMedicineCorrectionDto
   ) {
-    return this.medicineInventory.createCorrection(user.dataOwnerId, movementId, body.reason)
+    return this.medicineInventory.createCorrection(user.dataOwnerId, user.id, movementId, body.reason)
   }
 }

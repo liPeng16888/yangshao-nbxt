@@ -576,4 +576,22 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     prisma.employeeCommissionType.findFirst.mockResolvedValue({ id: 'type-new', frontendUserId: 'front-1', active: false, unitPrice: new Prisma.Decimal(10) })
     await expect(service.updateCommissionRecord('front-1', 'front-1', 'record-1', { commissionTypeId: 'type-new' })).rejects.toThrow('已停用')
   })
+
+  it('rejects a stale bonus edit and returns the current allowed record', async () => {
+    const { service, prisma } = createService()
+    const current = {
+      id: 'bonus-1', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-10',
+      amount: new Prisma.Decimal(100), reason: '原奖金', payrollLockedAt: null,
+      updatedAt: new Date('2026-08-11T01:00:00.000Z')
+    }
+    prisma.employeeBonus.findFirst.mockResolvedValue(current)
+
+    await expect(service.updateBonus('front-1', 'sub-1', 'bonus-1', {
+      amount: 200,
+      baseUpdatedAt: '2026-08-11T00:00:00.000Z'
+    })).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'STALE_WRITE', current })
+    })
+    expect(prisma.employeeBonus.update).not.toHaveBeenCalled()
+  })
 })

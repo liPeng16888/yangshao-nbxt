@@ -18,6 +18,8 @@ import type {
   IncomeBillReport,
   MonthlySettlementReport,
   MonthlySettlementSummaryRow,
+  PrepaidCustomerRow,
+  PrepaidDailyUsageRow,
   PrepaidRechargePayload,
   PrepaidRechargeRow,
   PrepaidReport,
@@ -167,19 +169,25 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     }
   }
 
-  async function savePrepaidCustomerRemark(customer: string, remark: string) {
+  async function savePrepaidCustomerRemark(row: PrepaidCustomerRow, remark: string) {
+    const customer = row.customer
     prepaidRemarkSavingId.value = `customer__${customer}`
     try {
-      await updatePrepaidCustomerRemark(customer, remark)
+      const saved = await updatePrepaidCustomerRemark(customer, remark, row.remarkUpdatedAt)
+      row.remark = saved.remark
+      row.remarkUpdatedAt = saved.updatedAt
     } finally {
       prepaidRemarkSavingId.value = ''
     }
   }
 
-  async function savePrepaidUsageRemark(id: string, remark: string) {
+  async function savePrepaidUsageRemark(row: PrepaidDailyUsageRow, remark: string) {
+    const id = row.id
     prepaidRemarkSavingId.value = id
     try {
-      await updatePrepaidUsageRemark(id, remark)
+      const saved = await updatePrepaidUsageRemark(id, remark, row.remarkUpdatedAt)
+      row.remark = saved.remark
+      row.remarkUpdatedAt = saved.updatedAt
     } finally {
       prepaidRemarkSavingId.value = ''
     }

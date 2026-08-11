@@ -25,8 +25,8 @@ export class FinanceController {
   @Roles(UserRole.FRONTEND_USER)
   @FrontendPermission('FINANCE_EXPENSES')
   createEntry(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    if (Array.isArray(body)) return this.finance.createFrontendExpenses(user.dataOwnerId, body)
-    return this.finance.createFrontendExpense(user.dataOwnerId, body)
+    if (Array.isArray(body)) return this.finance.createFrontendExpenses(user.dataOwnerId, user.id, body)
+    return this.finance.createFrontendExpense(user.dataOwnerId, user.id, body)
   }
 
   @Get('finance/months')
@@ -75,7 +75,7 @@ export class FinanceController {
   @Roles(UserRole.FRONTEND_USER)
   @FrontendPermission('FINANCE_MONTHLY_SETTLEMENT')
   updateMonthlySettlement(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.updateFrontendMonthlySettlement(user.dataOwnerId, body)
+    return this.finance.updateFrontendMonthlySettlement(user.dataOwnerId, user.id, body)
   }
 
   @Get('finance/prepaid-recharges')
@@ -89,14 +89,14 @@ export class FinanceController {
   @Roles(UserRole.FRONTEND_USER)
   @FrontendPermission('FINANCE_PREPAID_ADD')
   createPrepaidRecharge(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.createFrontendPrepaidRecharge(user.dataOwnerId, body)
+    return this.finance.createFrontendPrepaidRecharge(user.dataOwnerId, user.id, body)
   }
 
   @Post('finance/delete-requests')
   @Roles(UserRole.FRONTEND_USER)
   @FrontendPermission('FINANCE_EXPENSES', 'FINANCE_PREPAID_ADD')
   createDeletionRequest(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.createFrontendDeletionRequest(user.dataOwnerId, body)
+    return this.finance.createFrontendDeletionRequest(user.dataOwnerId, user.id, body)
   }
 
   @Get('finance/prepaid-report')
@@ -110,14 +110,14 @@ export class FinanceController {
   @Roles(UserRole.FRONTEND_USER)
   @FrontendPermission('FINANCE_PREPAID_CUSTOMERS')
   updatePrepaidCustomerRemark(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.updateFrontendPrepaidCustomerRemark(user.dataOwnerId, body)
+    return this.finance.updateFrontendPrepaidCustomerRemark(user.dataOwnerId, user.id, body)
   }
 
   @Patch('finance/prepaid-usage-remarks')
   @Roles(UserRole.FRONTEND_USER)
   @FrontendPermission('FINANCE_PREPAID_CUSTOMERS')
   updatePrepaidUsageRemark(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.updateFrontendPrepaidUsageRemark(user.dataOwnerId, body)
+    return this.finance.updateFrontendPrepaidUsageRemark(user.dataOwnerId, user.id, body)
   }
 
   @Get('admin/finance/income')

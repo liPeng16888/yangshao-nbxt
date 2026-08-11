@@ -62,6 +62,7 @@ export interface MonthlySettlementSummaryRow {
   settlementStatus: MonthlySettlementStatus
   paidAmount?: number | null
   remark?: string
+  updatedAt?: string
 }
 
 export interface MonthlySettlementReport {
@@ -95,6 +96,7 @@ export interface PrepaidCustomerRow {
   usedTimes: number
   availableTimes: number
   remark?: string
+  remarkUpdatedAt?: string
 }
 
 export interface PrepaidDailyUsageRow {
@@ -103,6 +105,7 @@ export interface PrepaidDailyUsageRow {
   customer: string
   sampleCount: number
   remark?: string
+  remarkUpdatedAt?: string
 }
 
 export interface PrepaidReport {

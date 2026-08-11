@@ -146,3 +146,42 @@ describe('FinanceService batch sample payment', () => {
     expect(transaction.cellChangeLog.create).not.toHaveBeenCalled()
   })
 })
+
+describe('FinanceService optimistic concurrency', () => {
+  it('rejects a stale monthly settlement update', async () => {
+    const current = {
+      id: 'monthly-1', month: '2026-08', frontendUserId: 'front-1', customer: '客户甲',
+      status: 'UNPAID', paidAmount: null, remark: '远端备注',
+      createdAt: new Date('2026-08-01T00:00:00.000Z'), updatedAt: new Date('2026-08-11T00:05:00.000Z')
+    }
+    const prisma = { monthlySettlementRecord: {
+      findUnique: vi.fn().mockResolvedValue(current),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 })
+    } }
+    const service = new FinanceService(prisma as never, {} as never, {} as never)
+
+    await expect(service.updateFrontendMonthlySettlement('front-1', 'sub-1', {
+      month: '2026-08', customer: '客户甲', settlementStatus: '未结款', remark: '本地备注',
+      baseUpdatedAt: '2026-08-11T00:00:00.000Z'
+    })).rejects.toMatchObject({ response: expect.objectContaining({ code: 'STALE_WRITE' }) })
+    expect(prisma.monthlySettlementRecord.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'monthly-1', frontendUserId: 'front-1', updatedAt: new Date('2026-08-11T00:00:00.000Z') }
+    }))
+  })
+
+  it('rejects a stale prepaid customer remark update', async () => {
+    const current = {
+      id: 'remark-1', frontendUserId: 'front-1', customer: '客户甲', remark: '远端备注',
+      createdAt: new Date('2026-08-01T00:00:00.000Z'), updatedAt: new Date('2026-08-11T00:05:00.000Z')
+    }
+    const prisma = { prepaidCustomerRemark: {
+      findUnique: vi.fn().mockResolvedValue(current),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 })
+    } }
+    const service = new FinanceService(prisma as never, {} as never, {} as never)
+
+    await expect(service.updateFrontendPrepaidCustomerRemark('front-1', 'sub-1', {
+      customer: '客户甲', remark: '本地备注', baseUpdatedAt: '2026-08-11T00:00:00.000Z'
+    })).rejects.toMatchObject({ response: expect.objectContaining({ code: 'STALE_WRITE' }) })
+  })
+})

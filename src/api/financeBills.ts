@@ -142,20 +142,20 @@ export async function getPrepaidReport(): Promise<PrepaidReport> {
   return summarizePrepaidReport(loadPrepaidRecharges(), dailyRows.flat(), loadRecord(PREPAID_CUSTOMER_REMARK_STORAGE_KEY), loadRecord(PREPAID_USAGE_REMARK_STORAGE_KEY))
 }
 
-export async function updatePrepaidCustomerRemark(customer: string, remark: string) {
-  if (!useMocks) return request.patch('/finance/prepaid-customers/remark', { customer, remark })
+export async function updatePrepaidCustomerRemark(customer: string, remark: string, baseUpdatedAt?: string): Promise<{ customer: string; remark: string; updatedAt: string }> {
+  if (!useMocks) return request.patch<any, { customer: string; remark: string; updatedAt: string }>('/finance/prepaid-customers/remark', { customer, remark, baseUpdatedAt })
   const remarks = loadRecord(PREPAID_CUSTOMER_REMARK_STORAGE_KEY)
   remarks[customer] = remark
   saveRecord(PREPAID_CUSTOMER_REMARK_STORAGE_KEY, remarks)
-  return { customer, remark }
+  return { customer, remark, updatedAt: new Date().toISOString() }
 }
 
-export async function updatePrepaidUsageRemark(id: string, remark: string) {
-  if (!useMocks) return request.patch('/finance/prepaid-usage-remarks', { id, remark })
+export async function updatePrepaidUsageRemark(id: string, remark: string, baseUpdatedAt?: string): Promise<{ id: string; remark: string; updatedAt: string }> {
+  if (!useMocks) return request.patch<any, { id: string; remark: string; updatedAt: string }>('/finance/prepaid-usage-remarks', { id, remark, baseUpdatedAt })
   const remarks = loadRecord(PREPAID_USAGE_REMARK_STORAGE_KEY)
   remarks[id] = remark
   saveRecord(PREPAID_USAGE_REMARK_STORAGE_KEY, remarks)
-  return { id, remark }
+  return { id, remark, updatedAt: new Date().toISOString() }
 }
 
 function getMonthDates(month: string) {

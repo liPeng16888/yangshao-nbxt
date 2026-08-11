@@ -58,11 +58,12 @@ describe('medicine inventory routes', () => {
 
     await controller.createInbound(frontendUser, body as never)
 
-    expect(service.createInbound).toHaveBeenCalledWith('front-1', {
+    expect(service.createInbound).toHaveBeenCalledWith('front-1', 'front-1', {
       occurredOn: '2026-08-02',
       name: '盐酸',
       unit: 'BOTTLE',
-      quantity: 1
+      quantity: 1,
+      remark: undefined
     })
   })
 

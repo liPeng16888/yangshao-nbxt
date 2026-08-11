@@ -477,6 +477,7 @@ model BlacklistRecord {
   images         Json
   other          String?
   note           String?
+  updatedAt      DateTime @updatedAt
 
   uploadedBy User @relation("BlacklistUploader", fields: [uploadedById], references: [id])
 }

@@ -1,5 +1,5 @@
 <template>
-  <PageShell title="请假管理" description="自定义请假类型及是否占用月休额度，录入并审批整天、半天或小时请假。" @refresh="load">
+  <PageShell title="请假管理" description="自定义请假类型及是否占用月休额度，录入并审批整天、半天或小时请假。" :dirty="visible || Boolean(typeEditingId)" @refresh="load">
     <el-tabs v-model="tab">
       <el-tab-pane label="请假记录" name="records">
         <div class="toolbar"><el-select v-model="store.leaveStatus" clearable placeholder="全部状态" style="width:130px" @change="load"><el-option label="待审批" value="PENDING"/><el-option label="已批准" value="APPROVED"/><el-option label="已驳回" value="REJECTED"/></el-select><el-date-picker :model-value="store.startDate" value-format="YYYY-MM-DD" placeholder="开始日期" clearable @update:model-value="changeStartDate"/><span>至</span><el-date-picker :model-value="store.endDate" value-format="YYYY-MM-DD" placeholder="结束日期" clearable @update:model-value="changeEndDate"/><el-button type="primary" @click="openLeave()">新增请假</el-button></div>
@@ -23,7 +23,7 @@ import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
 import * as api from '@/api/employeeAttendance'
 import type { LeaveRequest, LeaveRequestPayload, LeaveType } from '@/types/employeeAttendance'
 
-const store = useEmployeeAttendanceStore(), tab = ref('records'), visible = ref(false), formError = ref(''), leaveEditingId = ref(''), typeEditingId = ref('')
+const store = useEmployeeAttendanceStore(), tab = ref('records'), visible = ref(false), formError = ref(''), leaveEditingId = ref(''), leaveEditingUpdatedAt = ref(''), typeEditingId = ref(''), typeEditingUpdatedAt = ref('')
 const unitLabel: Record<string, string> = { FULL_DAY: '整天', HALF_DAY: '半天', HOUR: '小时' }, statusLabel: Record<string, string> = { PENDING: '待审批', APPROVED: '已批准', REJECTED: '已驳回' }
 const typeForm = reactive({ name: '', active: true, countsTowardRestQuota: true })
 const blank = (): LeaveRequestPayload => ({ employeeId: store.employeeId || store.activeEmployees[0]?.id || '', leaveTypeId: store.leaveTypes.find(row => row.active)?.id || '', startDate: dayjs().format('YYYY-MM-DD'), endDate: dayjs().format('YYYY-MM-DD'), unit: 'FULL_DAY', hours: undefined, reason: '' })
@@ -35,13 +35,13 @@ function typeName(id: string) { return store.leaveTypes.find(row => row.id === i
 async function load() { await store.loadLeaves().catch(() => undefined) }
 async function changeStartDate(value: unknown) { store.selectDateRange(typeof value === 'string' ? value : '', store.endDate); await load() }
 async function changeEndDate(value: unknown) { store.selectDateRange(store.startDate, typeof value === 'string' ? value : ''); await load() }
-function openLeave(row?: LeaveRequest) { leaveEditingId.value = row?.id || ''; Object.assign(form, row ? { employeeId: row.employeeId, leaveTypeId: row.leaveTypeId, startDate: row.startDate, endDate: row.endDate, unit: row.unit, hours: row.hours, reason: row.reason } : blank()); formError.value = ''; visible.value = true }
-async function saveLeave() { try { await store.run(() => api.saveLeave({ ...form }, leaveEditingId.value || undefined), true); visible.value = false; await load() } catch (error) { formError.value = errorText(error, '保存失败') } }
+function openLeave(row?: LeaveRequest) { leaveEditingId.value = row?.id || ''; leaveEditingUpdatedAt.value = row?.updatedAt || ''; Object.assign(form, row ? { employeeId: row.employeeId, leaveTypeId: row.leaveTypeId, startDate: row.startDate, endDate: row.endDate, unit: row.unit, hours: row.hours, reason: row.reason } : blank()); formError.value = ''; visible.value = true }
+async function saveLeave() { try { await store.run(() => api.saveLeave({ ...form }, leaveEditingId.value || undefined, leaveEditingUpdatedAt.value || undefined), true); visible.value = false; await load() } catch (error) { formError.value = errorText(error, '保存失败') } }
 async function review(id: string, action: 'approve' | 'reject') { let remark = ''; try { if (action === 'reject') remark = await ElMessageBox.prompt('请填写驳回原因', '驳回请假').then(row => row.value); await store.run(() => api.reviewLeave(id, action, remark), true); await load() } catch (error) { if (!isCancel(error)) store.setError(errorText(error, '请假审批失败')) } }
-async function removeLeave(id: string) { try { await store.run(() => api.deleteLeave(id), true); await load() } catch (error) { store.setError(errorText(error, '请假记录删除失败')) } }
-function resetType() { typeEditingId.value = ''; Object.assign(typeForm, { name: '', active: true, countsTowardRestQuota: true }) }
-function editType(row: LeaveType) { typeEditingId.value = row.id; Object.assign(typeForm, { name: row.name, active: row.active, countsTowardRestQuota: row.countsTowardRestQuota }) }
-async function saveType() { if (!typeForm.name.trim()) { store.setError('请填写类型名称'); return } try { await store.run(() => api.saveLeaveType({ ...typeForm }, typeEditingId.value || undefined), true); resetType(); await load() } catch (error) { store.setError(errorText(error, '请假类型保存失败')) } }
-async function removeType(id: string) { try { await store.run(() => api.deleteLeaveType(id), true); await load() } catch (error) { store.setError(errorText(error, '请假类型删除或停用失败')) } }
+async function removeLeave(id: string) { const row = store.leaves.find(item => item.id === id); if (!row) return; try { await store.run(() => api.deleteLeave(row), true); await load() } catch (error) { store.setError(errorText(error, '请假记录删除失败')) } }
+function resetType() { typeEditingId.value = ''; typeEditingUpdatedAt.value = ''; Object.assign(typeForm, { name: '', active: true, countsTowardRestQuota: true }) }
+function editType(row: LeaveType) { typeEditingId.value = row.id; typeEditingUpdatedAt.value = row.updatedAt || ''; Object.assign(typeForm, { name: row.name, active: row.active, countsTowardRestQuota: row.countsTowardRestQuota }) }
+async function saveType() { if (!typeForm.name.trim()) { store.setError('请填写类型名称'); return } try { await store.run(() => api.saveLeaveType({ ...typeForm }, typeEditingId.value || undefined, typeEditingUpdatedAt.value || undefined), true); resetType(); await load() } catch (error) { store.setError(errorText(error, '请假类型保存失败')) } }
+async function removeType(id: string) { const row = store.leaveTypes.find(item => item.id === id); if (!row) return; try { await store.run(() => api.deleteLeaveType(row), true); await load() } catch (error) { store.setError(errorText(error, '请假类型删除或停用失败')) } }
 onMounted(load)
 </script>

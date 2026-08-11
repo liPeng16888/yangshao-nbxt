@@ -62,8 +62,9 @@ const iconComponents = {
 }
 
 const route = useRoute()
-const authStore = useAuthStore()
-const navItems = computed(() => navigationForUser(authStore.user).map((item) => ({
+let authStore: ReturnType<typeof useAuthStore> | null = null
+try { authStore = useAuthStore() } catch { /* isolated navigation previews may omit Pinia */ }
+const navItems = computed(() => navigationForUser(authStore?.user || null).map((item) => ({
   ...item,
   icon: iconComponents[item.icon]
 })))

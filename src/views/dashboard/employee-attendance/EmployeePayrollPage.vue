@@ -3,6 +3,7 @@
     title="工资统计"
     description="生成月度工资草稿，查看计算快照，增加正负调整，确认后锁定源记录。"
     :show-employee="false"
+    :dirty="adjustmentVisible"
     @refresh="load"
   >
     <template #actions>
@@ -137,6 +138,7 @@ const store = useEmployeeAttendanceStore()
 const adjustmentVisible = ref(false)
 const adjustmentItemId = ref('')
 const adjustmentEditingId = ref('')
+const adjustmentEditingUpdatedAt = ref('')
 const formError = ref('')
 const exportVisible = ref(false)
 const exportItem = ref<PayrollItem | null>(null)
@@ -163,6 +165,7 @@ async function generate() {
 function openAdjustment(id: string, row?: PayrollAdjustment) {
   adjustmentItemId.value = id
   adjustmentEditingId.value = row?.id || ''
+  adjustmentEditingUpdatedAt.value = row?.updatedAt || ''
   Object.assign(adjustment, row ? { amount: row.amount, reason: row.reason } : { amount: 0, reason: '' })
   formError.value = ''
   adjustmentVisible.value = true
@@ -172,7 +175,7 @@ async function saveAdjustment() {
   try {
     await store.run(
       () => adjustmentEditingId.value
-        ? api.updatePayrollAdjustment(adjustmentEditingId.value, { ...adjustment })
+        ? api.updatePayrollAdjustment(adjustmentEditingId.value, { ...adjustment }, adjustmentEditingUpdatedAt.value)
         : api.createPayrollAdjustment(adjustmentItemId.value, { ...adjustment }),
       true
     )
@@ -184,8 +187,10 @@ async function saveAdjustment() {
 }
 
 async function removeAdjustment(id: string) {
+  const row = store.payroll?.items.flatMap(item => item.adjustments).find(item => item.id === id)
+  if (!row) return
   try {
-    await store.run(() => api.deletePayrollAdjustment(id), true)
+    await store.run(() => api.deletePayrollAdjustment(row), true)
     await load()
   } catch (error) {
     store.setError(errorText(error, '工资调整删除失败'))

@@ -28,16 +28,16 @@ export class BlacklistController {
 
   @Post()
   create(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.blacklist.create(user.dataOwnerId, body)
+    return this.blacklist.create(user.dataOwnerId, user.id, body)
   }
 
   @Patch(':id')
   update(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: any) {
-    return this.blacklist.update(user.dataOwnerId, id, body)
+    return this.blacklist.update(user.dataOwnerId, user.id, id, body)
   }
 
   @Delete(':id')
-  delete(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string) {
-    return this.blacklist.delete(user.dataOwnerId, id)
+  delete(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: { baseUpdatedAt?: string }) {
+    return this.blacklist.delete(user.dataOwnerId, user.id, id, body?.baseUpdatedAt)
   }
 }

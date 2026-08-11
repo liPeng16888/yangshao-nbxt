@@ -11,6 +11,7 @@ import {
 import type { CurrentUser } from '../auth/current-user'
 import { PasswordService } from '../auth/password.service'
 import { PrismaService } from '../prisma/prisma.service'
+import { requiredBaseUpdatedAt, staleWrite } from '../common/optimistic-concurrency'
 import type { AdminEmployeeAttendanceQueryDto } from './employee-attendance.dto'
 import { EmployeeDataCipherService } from './employee-data-cipher.service'
 import { calculatePayroll, type PayrollCalculationInput } from './payroll-calculator'
@@ -107,13 +108,14 @@ export class PayrollService {
     })
   }
 
-  async updateAdjustment(frontendUserId: string, actorUserId: string, id: string, amount: number, reason: string) {
+  async updateAdjustment(frontendUserId: string, actorUserId: string, id: string, amount: number, reason: string, baseUpdatedAt?: string) {
     const normalized = this.adjustment(amount, reason)
     const owned = await this.prisma.employeePayrollAdjustment.findFirst({ where: { id, frontendUserId }, include: { payrollItem: { include: { payrollRun: { select: { month: true } } } } } })
     if (!owned) throw new NotFoundException('工资调整不存在')
     return this.serializedMonth(frontendUserId, owned.payrollItem.payrollRun.month, async (tx) => {
       const current = await tx.employeePayrollAdjustment.findFirst({ where: { id, frontendUserId } })
       if (!current) throw new NotFoundException('工资调整不存在')
+      this.assertVersion(current, baseUpdatedAt)
       const item = await this.draftItem(tx, frontendUserId, current.payrollItemId)
       const row = await tx.employeePayrollAdjustment.update({ where: { id }, data: normalized })
       await this.recalculateItem(tx, item)
@@ -122,12 +124,13 @@ export class PayrollService {
     })
   }
 
-  async deleteAdjustment(frontendUserId: string, actorUserId: string, id: string) {
+  async deleteAdjustment(frontendUserId: string, actorUserId: string, id: string, baseUpdatedAt?: string) {
     const owned = await this.prisma.employeePayrollAdjustment.findFirst({ where: { id, frontendUserId }, include: { payrollItem: { include: { payrollRun: { select: { month: true } } } } } })
     if (!owned) throw new NotFoundException('工资调整不存在')
     return this.serializedMonth(frontendUserId, owned.payrollItem.payrollRun.month, async (tx) => {
       const current = await tx.employeePayrollAdjustment.findFirst({ where: { id, frontendUserId } })
       if (!current) throw new NotFoundException('工资调整不存在')
+      this.assertVersion(current, baseUpdatedAt)
       const item = await this.draftItem(tx, frontendUserId, current.payrollItemId)
       await tx.employeePayrollAdjustment.delete({ where: { id } })
       await this.recalculateItem(tx, item)
@@ -449,6 +452,12 @@ export class PayrollService {
     const normalizedReason = String(reason || '').trim()
     if (!normalizedReason) throw new BadRequestException('调整原因不能为空')
     return { amount: this.money(value), reason: normalizedReason }
+  }
+
+  private assertVersion(current: { updatedAt: Date | string }, baseUpdatedAt?: string) {
+    if (!(current as { updatedAt?: Date | string }).updatedAt && !baseUpdatedAt) return
+    const expected = requiredBaseUpdatedAt(baseUpdatedAt)
+    if (new Date(current.updatedAt).getTime() !== expected.getTime()) staleWrite(current)
   }
 
   private safeEmployee(row: any, reveal: boolean) {

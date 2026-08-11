@@ -8,6 +8,8 @@ import { RemindersService } from '../reminders/reminders.service'
 import { currentMonthInBeijing, datesBetween, todayInBeijing } from '../common/date'
 import { toMoney } from '../common/money'
 import { calculateResults, defaultLabParameters } from '../common/lab'
+import { requiredBaseUpdatedAt, staleWrite } from '../common/optimistic-concurrency'
+import { TenantRealtimeService } from '../realtime/tenant-realtime.service'
 
 const incomeStatuses = ['已结款', '未结款', '月结款', '预存款', '未选择'] as const
 const paidMonthlySettlementRemark = '此款项已结清'
@@ -63,7 +65,8 @@ export class FinanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly adminAccess: AdminAccessService,
-    private readonly reminders: RemindersService
+    private readonly reminders: RemindersService,
+    private readonly realtime?: TenantRealtimeService
   ) {}
 
   async listFrontendExpenses(frontendUserId: string, month = currentMonthInBeijing()) {
@@ -75,7 +78,9 @@ export class FinanceService {
     return rows.map((row) => this.expenseDto(row, pendingMap.get(row.id)))
   }
 
-  async createFrontendExpense(frontendUserId: string, payload: FrontendExpensePayload) {
+  async createFrontendExpense(frontendUserId: string, actorUserIdOrPayload: string | FrontendExpensePayload, maybePayload?: FrontendExpensePayload) {
+    const actorUserId = typeof actorUserIdOrPayload === 'string' ? actorUserIdOrPayload : frontendUserId
+    const payload = typeof actorUserIdOrPayload === 'string' ? maybePayload! : actorUserIdOrPayload
     this.assertValidExpensePayload(payload)
     const screenshotUrls = this.normalizeScreenshotUrls(payload.screenshotUrls, payload.screenshotUrl)
     const row = await this.prisma.financeEntry.create({
@@ -89,15 +94,18 @@ export class FinanceService {
         remark: payload.remark || null
       }
     })
+    this.publish(frontendUserId, actorUserId, 'finance-expenses', row.id, 'create', row.createdAt)
     return this.expenseDto(row)
   }
 
-  async createFrontendExpenses(frontendUserId: string, payloads: FrontendExpensePayload[]) {
+  async createFrontendExpenses(frontendUserId: string, actorUserIdOrPayloads: string | FrontendExpensePayload[], maybePayloads?: FrontendExpensePayload[]) {
+    const actorUserId = typeof actorUserIdOrPayloads === 'string' ? actorUserIdOrPayloads : frontendUserId
+    const payloads = typeof actorUserIdOrPayloads === 'string' ? maybePayloads! : actorUserIdOrPayloads
     if (!Array.isArray(payloads) || !payloads.length) throw new BadRequestException('请至少填写一条支出账单')
     payloads.forEach((payload) => this.assertValidExpensePayload(payload))
     const rows = []
     for (const payload of payloads) {
-      rows.push(await this.createFrontendExpense(frontendUserId, payload))
+      rows.push(await this.createFrontendExpense(frontendUserId, actorUserId, payload))
     }
     return rows
   }
@@ -137,7 +145,7 @@ export class FinanceService {
       .filter(Boolean)))
     if (!blockIds.length) throw new BadRequestException('请选择需要结款的样品')
 
-    return this.prisma.$transaction(async (transaction) => {
+    const rows = await this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT "id" FROM "LabSheet"
         WHERE "id" IN (
@@ -187,6 +195,8 @@ export class FinanceService {
       }
       return savedBlocks.map((block) => this.blockDto(block))
     })
+    for (const row of rows) this.publish(frontendUserId, actorUserId, 'finance-unsettled', row.id, 'update', new Date())
+    return rows
   }
 
   async getFrontendMonthlySettlementReport(frontendUserId: string, month = currentMonthInBeijing()) {
@@ -196,26 +206,39 @@ export class FinanceService {
     return this.buildMonthlyReport(month, dailyRows, savedRows)
   }
 
-  async updateFrontendMonthlySettlement(frontendUserId: string, payload: { month: string; customer: string; settlementStatus: string; paidAmount?: number | null; remark?: string }) {
+  async updateFrontendMonthlySettlement(frontendUserId: string, actorUserId: string, payload: { month: string; customer: string; settlementStatus: string; paidAmount?: number | null; remark?: string; baseUpdatedAt?: string }) {
     if (!payload.month || !payload.customer) throw new BadRequestException('月份和客户不能为空')
     const status = this.monthlyStatusFromChinese(payload.settlementStatus)
     const remark = status === MonthlySettlementStatus.PAID ? paidMonthlySettlementRemark : payload.remark || null
-    const row = await this.prisma.monthlySettlementRecord.upsert({
-      where: { month_frontendUserId_customer: { month: payload.month, frontendUserId, customer: payload.customer } },
-      create: {
+    const key = { month: payload.month, frontendUserId, customer: payload.customer }
+    const current = await this.prisma.monthlySettlementRecord.findUnique({
+      where: { month_frontendUserId_customer: key }
+    })
+    const data = {
+      status,
+      paidAmount: status === MonthlySettlementStatus.PARTIAL ? toMoney(payload.paidAmount) : status === MonthlySettlementStatus.PAID ? toMoney(payload.paidAmount) : null,
+      remark
+    }
+    let row
+    if (current) {
+      const baseUpdatedAt = requiredBaseUpdatedAt(payload.baseUpdatedAt)
+      const result = await this.prisma.monthlySettlementRecord.updateMany({
+        where: { id: current.id, frontendUserId, updatedAt: baseUpdatedAt }, data
+      })
+      row = await this.prisma.monthlySettlementRecord.findUnique({ where: { id: current.id } })
+      if (!result.count) staleWrite(row ? this.monthlyRecordDto(row, payload.customer, payload.month) : null)
+      if (!row) throw new NotFoundException('月结款记录不存在')
+    } else {
+      row = await this.prisma.monthlySettlementRecord.create({
+        data: {
         month: payload.month,
         frontendUserId,
         customer: payload.customer,
-        status,
-        paidAmount: status === MonthlySettlementStatus.PARTIAL ? toMoney(payload.paidAmount) : status === MonthlySettlementStatus.PAID ? toMoney(payload.paidAmount) : null,
-        remark
-      },
-      update: {
-        status,
-        paidAmount: status === MonthlySettlementStatus.PARTIAL ? toMoney(payload.paidAmount) : status === MonthlySettlementStatus.PAID ? toMoney(payload.paidAmount) : null,
-        remark
-      }
-    })
+          ...data
+        }
+      })
+    }
+    this.publish(frontendUserId, actorUserId, 'finance-monthly', row.id, current ? 'update' : 'create', row.updatedAt)
     return this.monthlyRecordDto(row, payload.customer, payload.month)
   }
 
@@ -228,7 +251,9 @@ export class FinanceService {
     return rows.map((row) => this.prepaidRechargeDto(row, pendingMap.get(row.id)))
   }
 
-  async createFrontendPrepaidRecharge(frontendUserId: string, payload: { rechargeDate?: string; customer?: string; amount?: number; usableTimes?: number; remark?: string }) {
+  async createFrontendPrepaidRecharge(frontendUserId: string, actorUserIdOrPayload: string | { rechargeDate?: string; customer?: string; amount?: number; usableTimes?: number; remark?: string }, maybePayload?: { rechargeDate?: string; customer?: string; amount?: number; usableTimes?: number; remark?: string }) {
+    const actorUserId = typeof actorUserIdOrPayload === 'string' ? actorUserIdOrPayload : frontendUserId
+    const payload = typeof actorUserIdOrPayload === 'string' ? maybePayload! : actorUserIdOrPayload
     const rechargeDate = String(payload.rechargeDate || '').trim()
     const customer = String(payload.customer || '').trim()
     const amount = Number(payload.amount)
@@ -246,10 +271,13 @@ export class FinanceService {
         remark: payload.remark || null
       }
     })
+    this.publish(frontendUserId, actorUserId, 'finance-prepaid', row.id, 'create', row.createdAt)
     return this.prepaidRechargeDto(row)
   }
 
-  async createFrontendDeletionRequest(frontendUserId: string, payload: FinanceDeletionSourcePayload) {
+  async createFrontendDeletionRequest(frontendUserId: string, actorUserIdOrPayload: string | FinanceDeletionSourcePayload, maybePayload?: FinanceDeletionSourcePayload) {
+    const actorUserId = typeof actorUserIdOrPayload === 'string' ? actorUserIdOrPayload : frontendUserId
+    const payload = typeof actorUserIdOrPayload === 'string' ? maybePayload! : actorUserIdOrPayload
     const sourceType = this.parseDeletionSourceType(payload.sourceType)
     const sourceId = String(payload.sourceId || '').trim()
     const reason = String(payload.reason || '').trim()
@@ -269,6 +297,7 @@ export class FinanceService {
         sourceSnapshot
       }
     })
+    this.publish(frontendUserId, actorUserId, 'finance-expenses', request.id, 'create', request.createdAt)
     return this.deletionRequestDto(request)
   }
 
@@ -281,25 +310,45 @@ export class FinanceService {
     return this.buildPrepaidReport(recharges, dailyRows, customerRemarks, usageRemarks)
   }
 
-  async updateFrontendPrepaidCustomerRemark(frontendUserId: string, payload: { customer?: string; remark?: string }) {
+  async updateFrontendPrepaidCustomerRemark(frontendUserId: string, actorUserId: string, payload: { customer?: string; remark?: string; baseUpdatedAt?: string }) {
     const customer = String(payload.customer || '').trim()
     if (!customer) throw new BadRequestException('客户名称不能为空')
-    const row = await this.prisma.prepaidCustomerRemark.upsert({
-      where: { frontendUserId_customer: { frontendUserId, customer } },
-      update: { remark: payload.remark || null },
-      create: { frontendUserId, customer, remark: payload.remark || null }
-    })
-    return { customer: row.customer, remark: row.remark || '' }
+    const key = { frontendUserId, customer }
+    const current = await this.prisma.prepaidCustomerRemark.findUnique({ where: { frontendUserId_customer: key } })
+    let row
+    if (current) {
+      const baseUpdatedAt = requiredBaseUpdatedAt(payload.baseUpdatedAt)
+      const result = await this.prisma.prepaidCustomerRemark.updateMany({
+        where: { id: current.id, frontendUserId, updatedAt: baseUpdatedAt }, data: { remark: payload.remark || null }
+      })
+      row = await this.prisma.prepaidCustomerRemark.findUnique({ where: { id: current.id } })
+      if (!result.count) staleWrite(row ? { customer: row.customer, remark: row.remark || '', updatedAt: row.updatedAt.toISOString() } : null)
+      if (!row) throw new NotFoundException('预存款客户备注不存在')
+    } else {
+      row = await this.prisma.prepaidCustomerRemark.create({ data: { frontendUserId, customer, remark: payload.remark || null } })
+    }
+    this.publish(frontendUserId, actorUserId, 'finance-prepaid', row.id, current ? 'update' : 'create', row.updatedAt)
+    return { customer: row.customer, remark: row.remark || '', updatedAt: row.updatedAt.toISOString() }
   }
 
-  async updateFrontendPrepaidUsageRemark(frontendUserId: string, payload: { id?: string; remark?: string }) {
+  async updateFrontendPrepaidUsageRemark(frontendUserId: string, actorUserId: string, payload: { id?: string; remark?: string; baseUpdatedAt?: string }) {
     const { usageDate, customer } = this.parsePrepaidUsageId(payload.id)
-    const row = await this.prisma.prepaidUsageRemark.upsert({
-      where: { frontendUserId_usageDate_customer: { frontendUserId, usageDate, customer } },
-      update: { remark: payload.remark || null },
-      create: { frontendUserId, usageDate, customer, remark: payload.remark || null }
-    })
-    return { id: `${row.usageDate}__${row.customer}`, remark: row.remark || '' }
+    const key = { frontendUserId, usageDate, customer }
+    const current = await this.prisma.prepaidUsageRemark.findUnique({ where: { frontendUserId_usageDate_customer: key } })
+    let row
+    if (current) {
+      const baseUpdatedAt = requiredBaseUpdatedAt(payload.baseUpdatedAt)
+      const result = await this.prisma.prepaidUsageRemark.updateMany({
+        where: { id: current.id, frontendUserId, updatedAt: baseUpdatedAt }, data: { remark: payload.remark || null }
+      })
+      row = await this.prisma.prepaidUsageRemark.findUnique({ where: { id: current.id } })
+      if (!result.count) staleWrite(row ? { id: `${row.usageDate}__${row.customer}`, remark: row.remark || '', updatedAt: row.updatedAt.toISOString() } : null)
+      if (!row) throw new NotFoundException('预存款每日备注不存在')
+    } else {
+      row = await this.prisma.prepaidUsageRemark.create({ data: { frontendUserId, usageDate, customer, remark: payload.remark || null } })
+    }
+    this.publish(frontendUserId, actorUserId, 'finance-prepaid', row.id, current ? 'update' : 'create', row.updatedAt)
+    return { id: `${row.usageDate}__${row.customer}`, remark: row.remark || '', updatedAt: row.updatedAt.toISOString() }
   }
 
   async getAdminIncomeReport(admin: CurrentUser, query: { frontendUserIds?: string | string[]; startDate?: string; endDate?: string; month?: string }) {
@@ -757,6 +806,7 @@ export class FinanceService {
       return {
         ...row,
         recordId: saved?.id || '',
+        updatedAt: saved?.updatedAt?.toISOString() || '',
         settlementStatus: this.monthlyStatusToChinese(status),
         paidAmount,
         remark:
@@ -1008,12 +1058,16 @@ export class FinanceService {
   private buildPrepaidReport(
     recharges: Array<{ frontendUserId?: string; name?: string; customer: string; amount: unknown; usableTimes: number; remark: string | null }>,
     dailyRows: ReturnType<FinanceService['getPrepaidDailyRows']>,
-    customerRemarks: Array<{ frontendUserId?: string; customer: string; remark: string | null }>,
-    usageRemarks: Array<{ frontendUserId?: string; usageDate: string; customer: string; remark: string | null }>
+    customerRemarks: Array<{ frontendUserId?: string; customer: string; remark: string | null; updatedAt: Date }>,
+    usageRemarks: Array<{ frontendUserId?: string; usageDate: string; customer: string; remark: string | null; updatedAt: Date }>
   ) {
-    const customerRemarkMap = new Map(customerRemarks.map((row) => [this.prepaidCustomerKey(row.frontendUserId, row.customer), row.remark || '']))
-    const usageRemarkMap = new Map(usageRemarks.map((row) => [this.prepaidUsageKey(row.frontendUserId, row.usageDate, row.customer), row.remark || '']))
-    const map = new Map<string, { id: string; frontendUserId: string; name: string; customer: string; totalAmount: number; totalUsableTimes: number; usedTimes: number; availableTimes: number; remark: string }>()
+    const customerRemarkMap = new Map(customerRemarks.map((row) => [this.prepaidCustomerKey(row.frontendUserId, row.customer), {
+      remark: row.remark || '', updatedAt: row.updatedAt.toISOString()
+    }]))
+    const usageRemarkMap = new Map(usageRemarks.map((row) => [this.prepaidUsageKey(row.frontendUserId, row.usageDate, row.customer), {
+      remark: row.remark || '', updatedAt: row.updatedAt.toISOString()
+    }]))
+    const map = new Map<string, { id: string; frontendUserId: string; name: string; customer: string; totalAmount: number; totalUsableTimes: number; usedTimes: number; availableTimes: number; remark: string; remarkUpdatedAt: string }>()
     recharges.forEach((row) => {
       const key = this.prepaidCustomerKey(row.frontendUserId, row.customer)
       const current =
@@ -1027,7 +1081,8 @@ export class FinanceService {
           totalUsableTimes: 0,
           usedTimes: 0,
           availableTimes: 0,
-          remark: ''
+          remark: '',
+          remarkUpdatedAt: ''
         }
       current.totalAmount = toMoney(current.totalAmount + toMoney(row.amount))
       current.totalUsableTimes += row.usableTimes
@@ -1047,21 +1102,29 @@ export class FinanceService {
           totalUsableTimes: 0,
           usedTimes: 0,
           availableTimes: 0,
-          remark: ''
+          remark: '',
+          remarkUpdatedAt: ''
         }
       current.usedTimes += row.sampleCount
       map.set(key, current)
     })
     const customerRows = Array.from(map.values())
-      .map((row) => ({
-        ...row,
-        availableTimes: Math.max(0, row.totalUsableTimes - row.usedTimes),
-        remark: customerRemarkMap.get(this.prepaidCustomerKey(row.frontendUserId, row.customer)) ?? row.remark
-      }))
+      .map((row) => {
+        const savedRemark = customerRemarkMap.get(this.prepaidCustomerKey(row.frontendUserId, row.customer))
+        return {
+          ...row,
+          availableTimes: Math.max(0, row.totalUsableTimes - row.usedTimes),
+          remark: savedRemark?.remark ?? row.remark,
+          remarkUpdatedAt: savedRemark?.updatedAt || ''
+        }
+      })
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN') || a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
     return {
       customerRows,
-      dailyRows: dailyRows.map((row) => ({ ...row, remark: usageRemarkMap.get(this.prepaidUsageKey(row.frontendUserId, row.date, row.customer)) || '' }))
+      dailyRows: dailyRows.map((row) => {
+        const savedRemark = usageRemarkMap.get(this.prepaidUsageKey(row.frontendUserId, row.date, row.customer))
+        return { ...row, remark: savedRemark?.remark || '', remarkUpdatedAt: savedRemark?.updatedAt || '' }
+      })
     }
   }
 
@@ -1080,7 +1143,7 @@ export class FinanceService {
     }
   }
 
-  private monthlyRecordDto(row: { id: string; month: string; customer: string; status: MonthlySettlementStatus; paidAmount: unknown; remark: string | null }, customer: string, month: string) {
+  private monthlyRecordDto(row: { id: string; month: string; customer: string; status: MonthlySettlementStatus; paidAmount: unknown; remark: string | null; updatedAt: Date }, customer: string, month: string) {
     return {
       id: `${month}__${customer}`,
       recordId: row.id,
@@ -1088,8 +1151,13 @@ export class FinanceService {
       customer: row.customer,
       settlementStatus: this.monthlyStatusToChinese(row.status),
       paidAmount: row.paidAmount === null ? null : toMoney(row.paidAmount),
-      remark: row.status === MonthlySettlementStatus.PAID ? paidMonthlySettlementRemark : row.remark || ''
+      remark: row.status === MonthlySettlementStatus.PAID ? paidMonthlySettlementRemark : row.remark || '',
+      updatedAt: row.updatedAt.toISOString()
     }
+  }
+
+  private publish(dataOwnerId: string, changedById: string, module: string, entityId: string, operation: 'create' | 'update' | 'delete', updatedAt: Date) {
+    this.realtime?.publish({ dataOwnerId, module, entityId, operation, changedById, updatedAt: updatedAt.toISOString() })
   }
 
   private resolveRange(query: { startDate?: string; endDate?: string; month?: string }) {

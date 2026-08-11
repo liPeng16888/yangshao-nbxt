@@ -235,7 +235,7 @@ async function deleteSavedCustomer(customer: Customer) {
   }
   deletingCustomerId.value = customer.id
   try {
-    await deleteCustomer(customer.id)
+    await deleteCustomer(customer.id, customer.updatedAt || '')
     customerOptions.value = customerOptions.value.filter((item) => item.id !== customer.id)
     const wasSelected = selectedNames.value.includes(customer.name)
     if (wasSelected) {

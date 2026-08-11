@@ -29,17 +29,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getMedicineItems } from '@/api/medicineInventory'
 import type { MedicineInventoryItem } from '@/types/medicineInventory'
 import { formatDateTime } from '@/utils/date'
 import { formatMedicineQuantity } from '@/utils/medicineInventory'
+import { tryUseTenantRealtimeStore } from '@/stores/tenantRealtime'
 
 const loading = ref(false)
 const loadError = ref('')
 const items = ref<MedicineInventoryItem[]>([])
 const selectedMedicineItemIds = ref<string[]>([])
+const tenantRealtime = tryUseTenantRealtimeStore()
+let unregisterRealtime: (() => void) | undefined
 
 const visibleItems = computed(() => {
   if (!selectedMedicineItemIds.value.length) return items.value
@@ -49,7 +52,10 @@ const visibleItems = computed(() => {
 
 onMounted(() => {
   void loadItems()
+  unregisterRealtime = tenantRealtime?.registerModule('medicine-inventory', { isDirty: () => false, refresh: loadItems })
 })
+
+onBeforeUnmount(() => unregisterRealtime?.())
 
 async function loadItems() {
   loading.value = true

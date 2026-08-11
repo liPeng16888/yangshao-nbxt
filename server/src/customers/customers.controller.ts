@@ -23,11 +23,11 @@ export class CustomersController {
 
   @Post()
   create(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.customers.create(user.dataOwnerId, body)
+    return this.customers.create(user.dataOwnerId, user.id, body)
   }
 
   @Delete(':id')
-  remove(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string) {
-    return this.customers.remove(user.dataOwnerId, id)
+  remove(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: { baseUpdatedAt?: string }) {
+    return this.customers.remove(user.dataOwnerId, user.id, id, body?.baseUpdatedAt)
   }
 }

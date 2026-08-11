@@ -29,7 +29,9 @@ export const useBlacklistStore = defineStore('blacklist', () => {
   async function deleteRecord(id: string) {
     deletingId.value = id
     try {
-      await deleteBlacklist(id)
+      const current = records.value.find((record) => record.id === id)
+      if (!current) return
+      await deleteBlacklist(id, current.updatedAt || '')
       records.value = records.value.filter((record) => record.id !== id)
     } finally {
       deletingId.value = ''

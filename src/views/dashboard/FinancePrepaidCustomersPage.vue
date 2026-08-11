@@ -25,7 +25,8 @@
               size="small"
               placeholder="可填写备注"
               :disabled="store.prepaidRemarkSavingId === `customer__${row.customer}`"
-              @blur="() => handleCustomerRemarkBlur(row.customer, row.remark || '')"
+              @input="() => markDirty(`customer__${row.customer}`)"
+              @blur="() => handleCustomerRemarkBlur(row, row.remark || '')"
             />
           </template>
         </el-table-column>
@@ -50,7 +51,8 @@
               size="small"
               placeholder="可填写备注"
               :disabled="store.prepaidRemarkSavingId === row.id"
-              @blur="() => handleUsageRemarkBlur(row.id, row.remark || '')"
+              @input="() => markDirty(row.id)"
+              @blur="() => handleUsageRemarkBlur(row, row.remark || '')"
             />
           </template>
         </el-table-column>
@@ -60,24 +62,40 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useFinanceBillsStore } from '@/stores/financeBills'
+import { tryUseTenantRealtimeStore } from '@/stores/tenantRealtime'
+import type { PrepaidCustomerRow, PrepaidDailyUsageRow } from '@/types/financeBills'
 
 const router = useRouter()
 const store = useFinanceBillsStore()
+const tenantRealtime = tryUseTenantRealtimeStore()
+const dirtyRows = ref(new Set<string>())
+let unregisterRealtime: (() => void) | undefined
 const report = computed(() => store.prepaidReport)
 
 onMounted(() => {
   store.loadPrepaidReport()
+  unregisterRealtime = tenantRealtime?.registerModule('finance-prepaid', {
+    isDirty: () => dirtyRows.value.size > 0,
+    refresh: () => store.loadPrepaidReport()
+  })
 })
 
-async function handleCustomerRemarkBlur(customer: string, remark: string) {
-  await store.savePrepaidCustomerRemark(customer, remark)
+onBeforeUnmount(() => unregisterRealtime?.())
+
+function markDirty(id: string) { dirtyRows.value = new Set(dirtyRows.value).add(id) }
+function clearDirty(id: string) { const next = new Set(dirtyRows.value); next.delete(id); dirtyRows.value = next }
+
+async function handleCustomerRemarkBlur(row: PrepaidCustomerRow, remark: string) {
+  await store.savePrepaidCustomerRemark(row, remark)
+  clearDirty(`customer__${row.customer}`)
 }
 
-async function handleUsageRemarkBlur(id: string, remark: string) {
-  await store.savePrepaidUsageRemark(id, remark)
+async function handleUsageRemarkBlur(row: PrepaidDailyUsageRow, remark: string) {
+  await store.savePrepaidUsageRemark(row, remark)
+  clearDirty(row.id)
 }
 
 function money(value: number) {

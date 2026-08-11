@@ -1,5 +1,5 @@
 <template>
-  <PageShell title="员工档案" description="管理员工人事信息、薪资参数和私有照片；敏感信息默认脱敏。" :show-month="false" :show-employee="false" @refresh="load">
+  <PageShell title="员工档案" description="管理员工人事信息、薪资参数和私有照片；敏感信息默认脱敏。" :show-month="false" :show-employee="false" :dirty="visible" @refresh="load">
     <div class="toolbar">
       <el-input v-model="keyword" clearable placeholder="搜索编号、姓名或手机" style="width:260px" />
       <el-select v-model="statusFilter" clearable placeholder="全部状态" style="width:130px"><el-option label="在职" value="ACTIVE"/><el-option label="停用/离职" value="INACTIVE"/></el-select>
@@ -43,7 +43,7 @@ import type { Employee, EmployeePayload, RevealedEmployee } from '@/types/employ
 
 const store = useEmployeeAttendanceStore()
 const accessGuard = useAccessGuardStore()
-const keyword = ref(''), statusFilter = ref<Employee['status'] | ''>(''), visible = ref(false), editingId = ref(''), formError = ref('')
+const keyword = ref(''), statusFilter = ref<Employee['status'] | ''>(''), visible = ref(false), editingId = ref(''), editingUpdatedAt = ref(''), formError = ref('')
 const revealVisible = ref(false), revealed = ref<RevealedEmployee | null>(null), photoVisible = ref(false), photoUrl = ref('')
 const statusLabel = { ACTIVE: '在职', INACTIVE: '停用/离职' }
 const statusName = (status: Employee['status']) => statusLabel[status]
@@ -54,9 +54,10 @@ const errorText = (error: unknown, fallback: string) => error instanceof Error ?
 const isCancel = (error: unknown) => error === 'cancel' || error === 'close' || (error instanceof Error && ['cancel', 'close'].includes(error.message))
 
 async function load() { await store.loadEmployees().catch(() => undefined) }
-function openCreate() { editingId.value = ''; Object.assign(form, blank()); formError.value = ''; visible.value = true }
+function openCreate() { editingId.value = ''; editingUpdatedAt.value = ''; Object.assign(form, blank()); formError.value = ''; visible.value = true }
 function openEdit(row: Employee) {
   editingId.value = row.id
+  editingUpdatedAt.value = row.updatedAt
   Object.assign(form, blank(), row, { idCard: '', bankCard: '', address: '', emergencyContact: '' })
   formError.value = ''; visible.value = true
 }
@@ -64,7 +65,7 @@ async function save() {
   if (!form.employeeNumber.trim() || !form.name.trim()) { formError.value = '请填写员工编号和姓名'; return }
   try {
     const payload = api.buildEmployeeMutationPayload(form, Boolean(editingId.value))
-    await store.run(() => editingId.value ? api.updateEmployee(editingId.value, payload) : api.createEmployee(payload), true)
+    await store.run(() => editingId.value ? api.updateEmployee(editingId.value, payload, editingUpdatedAt.value) : api.createEmployee(payload), true)
     visible.value = false; await load(); ElMessage.success('员工档案已保存')
   } catch (error) { formError.value = errorText(error, '保存失败') }
 }
@@ -90,7 +91,7 @@ async function upload(row: Employee, file?: File) {
 async function removeEmployee(row: Employee) {
   try {
     await ElMessageBox.confirm('有历史记录的员工将改为停用或离职，是否继续？', '确认', { type: 'warning' })
-    await store.run(() => api.deleteEmployee(row.id), true); await load()
+    await store.run(() => api.deleteEmployee(row), true); await load()
   } catch (error) { if (!isCancel(error)) store.setError(errorText(error, '员工删除或停用失败')) }
 }
 async function previewPhoto(row: Employee) {

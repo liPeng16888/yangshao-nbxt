@@ -1,5 +1,5 @@
 <template>
-  <PageShell title="排班管理" description="周排班模板＋指定日期覆盖，并可按月调整应出勤天数和月休额度。" @refresh="load">
+  <PageShell title="排班管理" description="周排班模板＋指定日期覆盖，并可按月调整应出勤天数和月休额度。" :dirty="true" @refresh="load">
     <el-tabs v-model="tab">
       <el-tab-pane label="周排班模板" name="weekly">
         <div class="toolbar"><el-button type="primary" :disabled="!store.employeeId" :loading="store.saving" @click="saveWeek">保存本周模板</el-button></div>
@@ -37,8 +37,9 @@ import type { DateOverride } from '@/types/employeeAttendance'
 const store = useEmployeeAttendanceStore()
 const tab = ref('weekly')
 const labels = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-const weekRows = reactive(labels.map((label, weekday) => ({ id: '', label, weekday, isWorkday: weekday > 0 && weekday < 6, plannedStartTime: weekday > 0 && weekday < 6 ? '08:00' : null as string | null, plannedEndTime: weekday > 0 && weekday < 6 ? '16:00' : null as string | null, scheduledMinutes: weekday > 0 && weekday < 6 ? 480 : 0 })))
+const weekRows = reactive(labels.map((label, weekday) => ({ id: '', updatedAt: '', label, weekday, isWorkday: weekday > 0 && weekday < 6, plannedStartTime: weekday > 0 && weekday < 6 ? '08:00' : null as string | null, plannedEndTime: weekday > 0 && weekday < 6 ? '16:00' : null as string | null, scheduledMinutes: weekday > 0 && weekday < 6 ? 480 : 0 })))
 const overrideEditingId = ref('')
+const overrideEditingUpdatedAt = ref('')
 const overrideForm = reactive({ date: dayjs().format('YYYY-MM-DD'), isWorkday: true, plannedStartTime: '08:00' as string | null, plannedEndTime: '16:00' as string | null, scheduledMinutes: 480, remark: '' })
 const monthForm = reactive({ scheduledWorkDays: 22, restQuotaDays: 4 })
 const selectedMonthSetting = computed(() => store.monthSettings.find(row => row.employeeId === store.employeeId && row.month === store.month))
@@ -62,7 +63,7 @@ function hydrateForms() {
   weekRows.forEach(row => {
     const saved = store.weeklySchedules.find(item => item.weekday === row.weekday)
     const isWorkday = saved?.isWorkday ?? (row.weekday > 0 && row.weekday < 6)
-    Object.assign(row, { id: saved?.id || '', isWorkday, plannedStartTime: isWorkday ? saved?.plannedStartTime || '08:00' : null, plannedEndTime: isWorkday ? saved?.plannedEndTime || '16:00' : null, scheduledMinutes: isWorkday ? saved?.scheduledMinutes ?? 480 : 0 })
+    Object.assign(row, { id: saved?.id || '', updatedAt: saved?.updatedAt || '', isWorkday, plannedStartTime: isWorkday ? saved?.plannedStartTime || '08:00' : null, plannedEndTime: isWorkday ? saved?.plannedEndTime || '16:00' : null, scheduledMinutes: isWorkday ? saved?.scheduledMinutes ?? 480 : 0 })
   })
   const setting = selectedMonthSetting.value
   const employee = store.employees.find(row => row.id === store.employeeId)
@@ -70,25 +71,25 @@ function hydrateForms() {
 }
 async function load() { try { await store.loadSchedules(); hydrateForms() } catch { /* PageShell displays persistent store error */ } }
 async function saveWeek() {
-  try { await store.run(() => Promise.all(weekRows.map(row => api.saveWeeklySchedule({ employeeId: store.employeeId, weekday: row.weekday, isWorkday: row.isWorkday, ...schedulePayload(row) }, row.id || undefined))), true); await load(); ElMessage.success('周排班已保存') }
+  try { await store.run(() => Promise.all(weekRows.map(row => api.saveWeeklySchedule({ employeeId: store.employeeId, weekday: row.weekday, isWorkday: row.isWorkday, ...schedulePayload(row) }, row.id || undefined, row.updatedAt || undefined))), true); await load(); ElMessage.success('周排班已保存') }
   catch (error) { store.setError(errorText(error, '周排班保存失败')) }
 }
-function resetOverride() { overrideEditingId.value = ''; Object.assign(overrideForm, { date: dayjs().format('YYYY-MM-DD'), isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480, remark: '' }) }
-function editOverride(row: DateOverride) { overrideEditingId.value = row.id; Object.assign(overrideForm, { date: row.date, isWorkday: row.isWorkday, plannedStartTime: row.isWorkday ? row.plannedStartTime || '08:00' : null, plannedEndTime: row.isWorkday ? row.plannedEndTime || '16:00' : null, scheduledMinutes: row.scheduledMinutes, remark: row.remark || '' }) }
+function resetOverride() { overrideEditingId.value = ''; overrideEditingUpdatedAt.value = ''; Object.assign(overrideForm, { date: dayjs().format('YYYY-MM-DD'), isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480, remark: '' }) }
+function editOverride(row: DateOverride) { overrideEditingId.value = row.id; overrideEditingUpdatedAt.value = row.updatedAt || ''; Object.assign(overrideForm, { date: row.date, isWorkday: row.isWorkday, plannedStartTime: row.isWorkday ? row.plannedStartTime || '08:00' : null, plannedEndTime: row.isWorkday ? row.plannedEndTime || '16:00' : null, scheduledMinutes: row.scheduledMinutes, remark: row.remark || '' }) }
 async function saveOverride() {
   if (!store.employeeId) { store.setError('请选择员工'); return }
-  try { await store.run(() => api.saveDateOverride({ employeeId: store.employeeId, date: overrideForm.date, isWorkday: overrideForm.isWorkday, remark: overrideForm.remark, ...schedulePayload(overrideForm) }, overrideEditingId.value || undefined), true); resetOverride(); await load() }
+  try { await store.run(() => api.saveDateOverride({ employeeId: store.employeeId, date: overrideForm.date, isWorkday: overrideForm.isWorkday, remark: overrideForm.remark, ...schedulePayload(overrideForm) }, overrideEditingId.value || undefined, overrideEditingUpdatedAt.value || undefined), true); resetOverride(); await load() }
   catch (error) { store.setError(errorText(error, '临时调班保存失败')) }
 }
-async function removeOverride(id: string) { try { await store.run(() => api.deleteDateOverride(id), true); await load() } catch (error) { store.setError(errorText(error, '临时调班删除失败')) } }
+async function removeOverride(id: string) { const row = store.overrides.find(item => item.id === id); if (!row) return; try { await store.run(() => api.deleteDateOverride(row), true); await load() } catch (error) { store.setError(errorText(error, '临时调班删除失败')) } }
 async function saveMonth() {
   if (!store.employeeId) { store.setError('请选择员工'); return }
-  try { await store.run(() => api.saveMonthlySetting({ employeeId: store.employeeId, month: store.month, ...monthForm }), true); await load() }
+  try { await store.run(() => api.saveMonthlySetting({ employeeId: store.employeeId, month: store.month, ...monthForm, baseUpdatedAt: selectedMonthSetting.value?.updatedAt }), true); await load() }
   catch (error) { store.setError(errorText(error, '月度设置保存失败')) }
 }
 async function removeMonth() {
   if (!selectedMonthSetting.value) return
-  try { await store.run(() => api.deleteMonthlySetting(selectedMonthSetting.value!.id), true); await load() }
+  try { await store.run(() => api.deleteMonthlySetting(selectedMonthSetting.value!), true); await load() }
   catch (error) { store.setError(errorText(error, '月度设置删除失败')) }
 }
 watch([() => store.employeeId, () => store.month], load)

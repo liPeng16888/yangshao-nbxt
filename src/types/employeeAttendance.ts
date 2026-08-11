@@ -2,11 +2,13 @@ export type EmployeeStatus = 'ACTIVE' | 'INACTIVE'
 export type LeaveUnit = 'FULL_DAY' | 'HALF_DAY' | 'HOUR'
 export type LeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
 export type PayrollStatus = 'DRAFT' | 'CONFIRMED'
+export interface OptimisticVersion { updatedAt?: string }
+export interface VersionedMutation { baseUpdatedAt?: string }
 
 export interface EmployeeQuery { keyword?: string; status?: EmployeeStatus | '' }
 export interface AttendanceQuery { employeeId?: string; month?: string; startDate?: string; endDate?: string; status?: LeaveStatus | '' }
 
-export interface EmployeePayload {
+export interface EmployeePayload extends VersionedMutation {
   employeeNumber: string; name: string; status?: EmployeeStatus; phone?: string; idCard?: string; bankCard?: string;
   address?: string; emergencyContact?: string; hireDate: string; terminationDate?: string;
   baseSalary?: number; attendanceBonus?: number; overtimeHourlyRate?: number; restQuotaDays?: number
@@ -18,33 +20,33 @@ export interface Employee extends Required<Pick<EmployeePayload, 'employeeNumber
 }
 export interface RevealedEmployee extends Employee { idCard: string; bankCard: string; address: string; emergencyContact: string }
 
-export interface WeeklySchedulePayload { employeeId: string; weekday: number; isWorkday: boolean; plannedStartTime?: string | null; plannedEndTime?: string | null; scheduledMinutes: number }
-export interface WeeklySchedule extends WeeklySchedulePayload { id: string }
-export interface DateOverridePayload { employeeId: string; date: string; isWorkday: boolean; plannedStartTime?: string | null; plannedEndTime?: string | null; scheduledMinutes: number; remark?: string }
-export interface DateOverride extends DateOverridePayload { id: string }
-export interface MonthlySetting { id: string; employeeId: string; month: string; scheduledWorkDays: number; restQuotaDays: number }
+export interface WeeklySchedulePayload extends VersionedMutation { employeeId: string; weekday: number; isWorkday: boolean; plannedStartTime?: string | null; plannedEndTime?: string | null; scheduledMinutes: number }
+export interface WeeklySchedule extends WeeklySchedulePayload, OptimisticVersion { id: string }
+export interface DateOverridePayload extends VersionedMutation { employeeId: string; date: string; isWorkday: boolean; plannedStartTime?: string | null; plannedEndTime?: string | null; scheduledMinutes: number; remark?: string }
+export interface DateOverride extends DateOverridePayload, OptimisticVersion { id: string }
+export interface MonthlySetting extends OptimisticVersion { id: string; employeeId: string; month: string; scheduledWorkDays: number; restQuotaDays: number }
 
-export interface AttendancePayload {
+export interface AttendancePayload extends VersionedMutation {
   employeeId: string; date: string; isScheduledWorkday: boolean; scheduledMinutes: number; checkInAt?: string | null; checkOutAt?: string | null;
   workedMinutes?: number; lateMinutes?: number; earlyLeaveMinutes?: number; absenceMinutes?: number; overtimeMinutes?: number; remark?: string
 }
-export interface AttendanceRecord extends AttendancePayload { id: string; manuallyEdited: boolean; lockedAt?: string | null }
+export interface AttendanceRecord extends AttendancePayload, OptimisticVersion { id: string; manuallyEdited: boolean; lockedAt?: string | null }
 export interface AttendanceGenerationResult { created: number; updated: number; skippedManual: number; generated: number }
 
-export interface LeaveTypePayload { name: string; active?: boolean; countsTowardRestQuota: boolean }
-export interface LeaveType extends Required<LeaveTypePayload> { id: string; referenced?: boolean }
-export interface LeaveRequestPayload { employeeId: string; leaveTypeId: string; startDate: string; endDate: string; unit: LeaveUnit; hours?: number; reason: string }
-export interface LeaveRequest extends LeaveRequestPayload { id: string; status: LeaveStatus; countedDays: number; reviewRemark: string; lockedAt?: string | null }
+export interface LeaveTypePayload extends VersionedMutation { name: string; active?: boolean; countsTowardRestQuota: boolean }
+export interface LeaveType extends Required<Omit<LeaveTypePayload, 'baseUpdatedAt'>>, OptimisticVersion { id: string; referenced?: boolean; baseUpdatedAt?: string }
+export interface LeaveRequestPayload extends VersionedMutation { employeeId: string; leaveTypeId: string; startDate: string; endDate: string; unit: LeaveUnit; hours?: number; reason: string }
+export interface LeaveRequest extends LeaveRequestPayload, OptimisticVersion { id: string; status: LeaveStatus; countedDays: number; reviewRemark: string; lockedAt?: string | null }
 
-export interface CommissionTypePayload { name: string; unitName: string; unitPrice: number; active?: boolean }
-export interface CommissionType extends Required<CommissionTypePayload> { id: string; referenced?: boolean }
-export interface CommissionPayload { employeeId: string; commissionTypeId: string; date: string; quantity: number; unitPrice?: number; remark?: string }
-export interface CommissionRecord extends CommissionPayload { id: string; unitPrice: number; amount: number; lockedAt?: string | null }
-export interface BonusPayload { employeeId: string; date: string; amount: number; reason: string }
-export interface BonusRecord extends BonusPayload { id: string; lockedAt?: string | null }
+export interface CommissionTypePayload extends VersionedMutation { name: string; unitName: string; unitPrice: number; active?: boolean }
+export interface CommissionType extends Required<Omit<CommissionTypePayload, 'baseUpdatedAt'>>, OptimisticVersion { id: string; referenced?: boolean; baseUpdatedAt?: string }
+export interface CommissionPayload extends VersionedMutation { employeeId: string; commissionTypeId: string; date: string; quantity: number; unitPrice?: number; remark?: string }
+export interface CommissionRecord extends CommissionPayload, OptimisticVersion { id: string; unitPrice: number; amount: number; lockedAt?: string | null }
+export interface BonusPayload extends VersionedMutation { employeeId: string; date: string; amount: number; reason: string }
+export interface BonusRecord extends BonusPayload, OptimisticVersion { id: string; lockedAt?: string | null }
 
 export interface CompensationTotal { employeeId: string; commissionAmount: number; bonusAmount: number }
-export interface PayrollAdjustment { id: string; payrollItemId: string; amount: number; reason: string }
+export interface PayrollAdjustment extends OptimisticVersion { id: string; payrollItemId: string; amount: number; reason: string }
 export interface PayrollCalculationInput {
   baseSalary: number; attendanceBonus: number; scheduledWorkDays: number; restQuotaDays: number; countedLeaveDays: number;
   absenceDays: number; overtimeMinutes: number; overtimeHourlyRate: number; commissionAmount: number; bonusAmount: number;

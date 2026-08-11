@@ -13,18 +13,24 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onBeforeUnmount, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FinanceEntryForm from '@/components/finance/FinanceEntryForm.vue'
 import FinanceMonthTable from '@/components/finance/FinanceMonthTable.vue'
 import { useFinanceStore } from '@/stores/finance'
 import type { FinanceEntry, FinancePayload } from '@/types/finance'
+import { tryUseTenantRealtimeStore } from '@/stores/tenantRealtime'
 
 const financeStore = useFinanceStore()
+const tenantRealtime = tryUseTenantRealtimeStore()
+let unregisterRealtime: (() => void) | undefined
 
 onMounted(() => {
   financeStore.loadEntries()
+  unregisterRealtime = tenantRealtime?.registerModule('finance-expenses', { isDirty: () => false, refresh: () => financeStore.loadEntries() })
 })
+
+onBeforeUnmount(() => unregisterRealtime?.())
 
 async function handleCreate(payloads: FinancePayload[]) {
   await financeStore.addEntries(payloads)

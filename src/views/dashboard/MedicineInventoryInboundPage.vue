@@ -118,14 +118,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { correctMedicineMovement, createMedicineCommonName, createMedicineInbound, deleteMedicineCommonName, getMedicineCommonNames, getMedicineItems, getMedicineMovements } from '@/api/medicineInventory'
 import type { MedicineCommonName, MedicineInventoryItem, MedicineInventoryMovement, MedicineUnit } from '@/types/medicineInventory'
 import { formatDateTime, todayInBeijing } from '@/utils/date'
 import { formatMedicineQuantity, medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
+import { tryUseTenantRealtimeStore } from '@/stores/tenantRealtime'
 
 const formRef = ref<FormInstance>()
+const tenantRealtime = tryUseTenantRealtimeStore()
+let unregisterRealtime: (() => void) | undefined
 const items = ref<MedicineInventoryItem[]>([])
 const commonNames = ref<MedicineCommonName[]>([])
 const movements = ref<MedicineInventoryMovement[]>([])
@@ -169,6 +172,9 @@ const medicineSuggestions = computed(() => {
   return [...existing, ...common]
 })
 const correctedMovementIds = computed(() => new Set(movements.value.flatMap((movement) => movement.correctionOfId ? [movement.correctionOfId] : [])))
+const hasUnsavedInput = computed(() => Boolean(
+  form.name.trim() || form.unit || form.quantity.trim() || form.remark.trim() || commonNameInput.value.trim() || correctionVisible.value
+))
 
 const rules: FormRules<typeof form> = {
   occurredOn: [{ required: true, message: '请选择入库日期', trigger: 'change' }],
@@ -182,7 +188,13 @@ const rules: FormRules<typeof form> = {
 
 onMounted(() => {
   void Promise.all([loadItems(), loadCommonNames(), loadHistory()])
+  unregisterRealtime = tenantRealtime?.registerModule('medicine-inventory', {
+    isDirty: () => hasUnsavedInput.value,
+    refresh: () => Promise.all([loadItems(), loadCommonNames(), loadHistory()]).then(() => undefined)
+  })
 })
+
+onBeforeUnmount(() => unregisterRealtime?.())
 
 async function loadItems() {
   loading.value = true
