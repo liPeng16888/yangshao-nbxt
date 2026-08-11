@@ -5,13 +5,14 @@ import type {
   CommissionPayload, CommissionRecord, CommissionType, CommissionTypePayload, CompensationTotal,
   DateOverridePayload, Employee, EmployeeAttendanceInput, EmployeeAttendanceState, EmployeePayload, EmployeeQuery, LeaveRequest,
   LeaveRequestPayload, LeaveStatus, LeaveType, LeaveTypePayload, MonthlySettingPayload, PayrollItem,
-  MonthlyScheduleDay, MonthlySchedulePayload, RevealedEmployee, ScheduleSegment, WeeklySchedulePayload
+  MonthlyScheduleDay, MonthlySchedulePayload, RevealedEmployee, ScheduleSegment, WeeklySchedulePayload, ScheduleAttendanceOverview, AttendanceCalendarDay
 } from '@/types/employeeAttendance'
 import { breakMinutes, deriveAttendanceMetrics, normalizeClockIntervals, scheduledMinutes } from '@/utils/attendanceIntervals'
 
 const STORAGE_KEY = 'ys_employee_attendance_v2'
 const MOCK_SCHEMA_VERSION = 4
 const now = () => dayjs().toISOString()
+const shanghaiToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 const zonedActualDateTimePattern = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i
 const id = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
@@ -32,7 +33,7 @@ function employee(seed: Partial<Employee> & Pick<Employee, 'id' | 'employeeNumbe
 
 function initialState(): EmployeeAttendanceState {
   const month = dayjs().format('YYYY-MM')
-  const today = dayjs().format('YYYY-MM-DD')
+  const today = shanghaiToday()
   const employees = [
     employee({ id: 'emp-1', employeeNumber: 'YG001', name: '张三', phone: '13800000001', baseSalary: 6000 }, { idCard: '410000199001011234', bankCard: '6222021234567890', address: '洛阳市涧西区', emergencyContact: '张父 13800001001' }),
     employee({ id: 'emp-2', employeeNumber: 'YG002', name: '李四', phone: '13800000002', baseSalary: 5500, overtimeHourlyRate: 28 }, { idCard: '410000199202022345', bankCard: '6222022345678901', address: '三门峡市湖滨区', emergencyContact: '李母 13800001002' })
@@ -633,7 +634,7 @@ export async function mockGetOverview(month: string): Promise<AttendanceOverview
     if (leaveCoverage > 0) return 'LEAVE' as const
     const stored = state.attendance.find((row) => row.employeeId === schedule.employeeId && row.date === today)
     const current = stored ? currentAttendanceRecord(stored) : null
-    return current && current.absenceMinutes > 0 ? 'ABSENT' as const : 'PRESENT' as const
+    return current && !current.actualSegments.length && current.absenceMinutes >= schedule.scheduledMinutes ? 'ABSENT' as const : 'PRESENT' as const
   })
   const monthRecords = state.attendance.filter((row) => monthOf(row.date) === month).map(currentAttendanceRecord)
   const pendingLeaves = state.leaves.filter((row) => row.status === 'PENDING' && overlapsMonth(row.startDate, row.endDate, month)).length
@@ -657,3 +658,33 @@ export async function mockGetOverview(month: string): Promise<AttendanceOverview
     issues
   })
 }
+export async function mockGetScheduleAttendanceOverview(employeeId: string | undefined, month: string): Promise<ScheduleAttendanceOverview> {
+  validateBusinessMonth(month)
+  const state = read()
+  const overview = await mockGetOverview(month)
+  const employee = employeeId ? entity(state.employees, employeeId, '员工') : null
+  if (!employee) return later({ month, employee: null, days: [], overview, readonly: false })
+  const today = shanghaiToday()
+  const days: AttendanceCalendarDay[] = Array.from({ length: dayjs(`${month}-01`).daysInMonth() }, (_, index) => {
+    const date = `${month}-${String(index + 1).padStart(2, '0')}`
+    const schedule = state.monthlySchedules.find((row) => row.employeeId === employee.id && row.date === date) || null
+    const isFuture = date > today
+    const leaveRows = state.leaves.filter((row) => row.employeeId === employee.id && row.status === 'APPROVED' && row.startDate <= date && row.endDate >= date)
+    const leaveMinutes = schedule ? Math.min(schedule.scheduledMinutes, leaveRows.reduce((sum, leave) => sum + (leave.unit === 'FULL_DAY' ? schedule.scheduledMinutes : leave.unit === 'HALF_DAY' ? Math.round(schedule.scheduledMinutes / 2) : Math.round((leave.hours || schedule.scheduledMinutes / 60 * leave.countedDays) * 60)), 0)) : 0
+    const record = state.attendance.find((row) => row.employeeId === employee.id && row.date === date)
+    const current = record ? currentAttendanceRecord(record) : null
+    const scheduledMinutes = schedule?.isWorkday ? schedule.scheduledMinutes : 0
+    const workedMinutes = current ? current.workedMinutes : Math.max(0, scheduledMinutes - leaveMinutes)
+    const absenceMinutes = current?.absenceMinutes || 0
+    const overtimeMinutes = current?.overtimeMinutes || 0
+    const credited = Math.min(scheduledMinutes, workedMinutes + leaveMinutes)
+    const shortageMinutes = Math.max(0, scheduledMinutes - credited)
+    const status = isFuture ? 'FUTURE' : !schedule?.isWorkday ? 'REST' : leaveMinutes > 0 ? 'LEAVE' : !current?.actualSegments?.length && absenceMinutes >= scheduledMinutes && scheduledMinutes > 0 ? 'ABSENT' : shortageMinutes > 0 ? 'SHORT' : overtimeMinutes > 0 ? 'OVERTIME' : 'NORMAL'
+    const parts = isFuture || status === 'REST' ? [] : [workedMinutes ? `工作${formatHours(workedMinutes)}` : '', leaveMinutes ? `请假${formatHours(leaveMinutes)}` : '', overtimeMinutes ? `加班${formatHours(overtimeMinutes)}` : ''].filter(Boolean)
+    const displayMinutes = isFuture ? scheduledMinutes : status === 'REST' ? 0 : credited + overtimeMinutes
+    const leave = leaveRows[0]
+    return { date, day: index + 1, isFuture, status, schedule, actualSegments: current?.actualSegments || [], scheduledMinutes: isFuture ? scheduledMinutes : status === 'REST' ? 0 : scheduledMinutes, workedMinutes: isFuture || status === 'REST' ? 0 : workedMinutes, approvedLeaveMinutes: isFuture || status === 'REST' ? 0 : leaveMinutes, overtimeMinutes: isFuture || status === 'REST' ? 0 : overtimeMinutes, displayMinutes, shortageMinutes: isFuture || status === 'REST' ? 0 : shortageMinutes, durationText: status === 'REST' ? '公司排休' : `${formatHours(displayMinutes)} 小时${parts.length ? `（${parts.join('＋')}）` : ''}`, leaveTypeName: leave ? state.leaveTypes.find((row) => row.id === leave.leaveTypeId)?.name || '' : '', leaveReason: leave?.reason || '', absenceReason: status === 'ABSENT' ? current?.remark || '未填写原因' : '', backgroundTone: status === 'FUTURE' ? 'future' : status === 'REST' ? 'rest' : status === 'LEAVE' ? 'leave' : status === 'ABSENT' ? 'absent' : 'normal', durationTone: shortageMinutes > 0 && status !== 'ABSENT' ? 'short' : status === 'OVERTIME' ? 'overtime' : status === 'ABSENT' ? 'absent' : status === 'LEAVE' ? 'leave' : status === 'REST' ? 'rest' : status === 'FUTURE' ? 'future' : 'normal' } as AttendanceCalendarDay
+  })
+  return later({ month, employee: { id: employee.id, employeeNumber: employee.employeeNumber, name: employee.name }, days, overview, readonly: false })
+}
+function formatHours(minutes: number) { const hours = Math.max(0, Math.round(minutes)) / 60; return Number.isInteger(hours) ? String(hours) : hours.toFixed(1) }

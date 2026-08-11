@@ -27,6 +27,7 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   const error = ref('')
   const employees = ref<Employee[]>([])
   const overview = ref<AttendanceOverview | null>(null)
+  const scheduleAttendanceOverview = ref<import('@/types/employeeAttendance').ScheduleAttendanceOverview | null>(null)
   const weeklySchedules = ref<WeeklySchedule[]>([])
   const overrides = ref<DateOverride[]>([])
   const monthlySchedules = ref<MonthlyScheduleDay[]>([])
@@ -41,6 +42,7 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   const payroll = ref<PayrollRun | null>(null)
   let attendanceLoadVersion = 0
   let leaveLoadVersion = 0
+  let scheduleAttendanceOverviewVersion = 0
   const activeEmployees = computed(() => employees.value.filter((row) => row.status === 'ACTIVE'))
 
   async function run<T>(action: () => Promise<T>, save = false) {
@@ -60,6 +62,23 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
     monthlySchedules.value = employeeId.value ? await api.getMonthlySchedules(employeeId.value, month.value) : []
     return monthlySchedules.value
   })
+  const loadScheduleAttendanceOverview = async () => {
+    const version = ++scheduleAttendanceOverviewVersion
+    const key = `${employeeId.value}:${month.value}`
+    error.value = ''
+    try {
+      const result = await runQuiet(() => api.getScheduleAttendanceOverview(employeeId.value || undefined, month.value))
+      if (version === scheduleAttendanceOverviewVersion && key === `${employeeId.value}:${month.value}`) {
+        scheduleAttendanceOverview.value = result
+        monthlySchedules.value = result.days.flatMap((day) => day.schedule ? [day.schedule] : [])
+        overview.value = result.overview
+      }
+      return result
+    } catch (reason) {
+      if (version === scheduleAttendanceOverviewVersion) { error.value = reason instanceof Error ? reason.message : '操作失败'; throw reason }
+      return scheduleAttendanceOverview.value
+    }
+  }
   function selectMonth(value: string) {
     month.value = value
     startDate.value = ''
@@ -127,5 +146,5 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   })
   function clearError() { error.value = '' }
   function setError(message: string) { error.value = message }
-  return { month, employeeId, startDate, endDate, leaveStatus, leaveEmployeeIds, loading, saving, error, employees, activeEmployees, overview, weeklySchedules, overrides, monthlySchedules, monthSettings, attendance, leaveTypes, leaves, commissionTypes, commissions, bonuses, payroll, run, runQuiet, clearError, setError, selectMonth, selectDateRange, restoreMonthMode, dateQuery, loadEmployees, loadOverview, loadSchedules, loadMonthlySchedules, loadAttendance, loadLeaves, loadCompensation, loadPayroll }
+  return { month, employeeId, startDate, endDate, leaveStatus, leaveEmployeeIds, loading, saving, error, employees, activeEmployees, overview, scheduleAttendanceOverview, weeklySchedules, overrides, monthlySchedules, monthSettings, attendance, leaveTypes, leaves, commissionTypes, commissions, bonuses, payroll, run, runQuiet, clearError, setError, selectMonth, selectDateRange, restoreMonthMode, dateQuery, loadEmployees, loadOverview, loadSchedules, loadMonthlySchedules, loadScheduleAttendanceOverview, loadAttendance, loadLeaves, loadCompensation, loadPayroll }
 })

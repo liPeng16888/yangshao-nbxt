@@ -74,6 +74,15 @@ export interface AttendanceOverview {
   month: string; activeEmployees: number; todayPresent: number; todayOnLeave: number; todayAbsent: number;
   overtimeHours: number; pendingLeaves: number; projectedPayroll: number; issueCount: number; issues: string[]
 }
+export type AttendanceCalendarStatus = 'FUTURE' | 'ABSENT' | 'LEAVE' | 'REST' | 'NORMAL' | 'OVERTIME' | 'SHORT'
+export type AttendanceCalendarTone = 'future' | 'normal' | 'leave' | 'absent' | 'rest' | 'overtime' | 'short'
+export interface AttendanceCalendarDay {
+  date: string; day: number; isFuture: boolean; status: AttendanceCalendarStatus; schedule: MonthlyScheduleDay | null;
+  actualSegments: ActualAttendanceSegment[]; scheduledMinutes: number; workedMinutes: number; approvedLeaveMinutes: number;
+  overtimeMinutes: number; displayMinutes: number; shortageMinutes: number; durationText: string; leaveTypeName: string;
+  leaveReason: string; absenceReason: string; backgroundTone: AttendanceCalendarTone; durationTone: AttendanceCalendarTone
+}
+export interface ScheduleAttendanceOverview { month: string; employee: Pick<Employee, 'id' | 'employeeNumber' | 'name'> | null; days: AttendanceCalendarDay[]; overview: AttendanceOverview; readonly: boolean }
 
 export interface EmployeeAttendanceState {
   schemaVersion: number;

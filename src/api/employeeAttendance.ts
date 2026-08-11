@@ -8,7 +8,7 @@ import type {
   CommissionPayload, CommissionRecord, CommissionType, CommissionTypePayload, CompensationTotal, DateOverride,
   DateOverridePayload, Employee, EmployeePayload, EmployeeQuery, LeaveRequest, LeaveRequestPayload, LeaveType,
   LeaveTypePayload, MonthlyScheduleDay, MonthlySchedulePayload, MonthlySetting, MonthlySettingPayload, PayrollAdjustment, PayrollRun, RevealedEmployee,
-  ScheduleSegment, WeeklySchedule, WeeklySchedulePayload
+  ScheduleSegment, WeeklySchedule, WeeklySchedulePayload, AttendanceCalendarDay, ScheduleAttendanceOverview
 } from '@/types/employeeAttendance'
 
 export function selectEmployeeAttendanceGrant(sessions: StoredAccessGuardSessions) {
@@ -278,6 +278,28 @@ export const getOverview = (month: string): Promise<AttendanceOverview> => useMo
   const issues = Array.isArray(row.issues) ? row.issues : []
   return { month: row.month, activeEmployees: row.activeEmployees ?? row.workforce ?? 0, todayPresent: row.todayPresent ?? row.todayAttendance ?? 0, todayOnLeave: row.todayOnLeave ?? row.todayLeave ?? 0, todayAbsent: row.todayAbsent ?? row.todayAbsence ?? 0, overtimeHours: row.overtimeHours ?? amount(row.overtimeMinutes) / 60, pendingLeaves: row.pendingLeaves ?? row.pendingLeave ?? 0, projectedPayroll: amount(row.projectedPayroll), issueCount, issues: issues.length ? issues : issueCount ? [`当前有 ${issueCount} 项考勤或工资问题，请进入工资统计查看详情`] : [] }
 })
+function normalizeCalendarDay(value: unknown): AttendanceCalendarDay {
+  const row = responseObject(value)
+  if (typeof row.date !== 'string' || typeof row.status !== 'string') throw new Error('排班考勤概览响应格式无效')
+  const schedule = row.schedule ? normalizeMonthlyScheduleResponse(row.schedule) : null
+  if (row.schedule && (!schedule?.id || !schedule.employeeId || !schedule.date || !Array.isArray(schedule.segments))) throw new Error('排班考勤概览响应格式无效')
+  return {
+    date: row.date, day: amount(row.day), isFuture: Boolean(row.isFuture), status: row.status as AttendanceCalendarDay['status'],
+    schedule, actualSegments: responseActualSegments(row.actualSegments),
+    scheduledMinutes: amount(row.scheduledMinutes), workedMinutes: amount(row.workedMinutes), approvedLeaveMinutes: amount(row.approvedLeaveMinutes), overtimeMinutes: amount(row.overtimeMinutes),
+    displayMinutes: amount(row.displayMinutes), shortageMinutes: amount(row.shortageMinutes), durationText: String(row.durationText || ''), leaveTypeName: String(row.leaveTypeName || ''),
+    leaveReason: String(row.leaveReason || ''), absenceReason: String(row.absenceReason || ''), backgroundTone: String(row.backgroundTone || 'normal') as AttendanceCalendarDay['backgroundTone'], durationTone: String(row.durationTone || 'normal') as AttendanceCalendarDay['durationTone']
+  }
+}
+export function normalizeScheduleAttendanceOverview(value: unknown): ScheduleAttendanceOverview {
+  const row = responseObject(value)
+  if (typeof row.month !== 'string' || !Array.isArray(row.days) || !row.overview) throw new Error('排班考勤概览响应格式无效')
+  const overview = responseObject(row.overview)
+  return { month: row.month, employee: row.employee ? { id: String(responseObject(row.employee).id || ''), employeeNumber: String(responseObject(row.employee).employeeNumber || ''), name: String(responseObject(row.employee).name || '') } : null, days: row.days.map(normalizeCalendarDay), overview: { month: String(overview.month || row.month), activeEmployees: amount(overview.activeEmployees ?? overview.workforce), todayPresent: amount(overview.todayPresent ?? overview.todayAttendance), todayOnLeave: amount(overview.todayOnLeave ?? overview.todayLeave), todayAbsent: amount(overview.todayAbsent ?? overview.todayAbsence), overtimeHours: amount(overview.overtimeHours ?? amount(overview.overtimeMinutes) / 60), pendingLeaves: amount(overview.pendingLeaves ?? overview.pendingLeave), projectedPayroll: amount(overview.projectedPayroll), issueCount: amount(overview.issueCount), issues: Array.isArray(overview.issues) ? overview.issues.map(String) : [] }, readonly: Boolean(row.readonly) }
+}
+export const getScheduleAttendanceOverview = (employeeId: string | undefined, month: string): Promise<ScheduleAttendanceOverview> => useMocks
+  ? mock.mockGetScheduleAttendanceOverview(employeeId, month)
+  : attendanceRequest.get('/employee-attendance/schedule-attendance-overview', { params: { ...(employeeId ? { employeeId } : {}), month } }).then(normalizeScheduleAttendanceOverview)
 export const getPayroll = (month: string): Promise<PayrollRun | null> => useMocks ? mock.mockGetPayroll(month) : attendanceRequest.get('/employee-attendance/payroll', { params: { month } }).then(normalizePayrollResponse)
 export const generatePayroll = (month: string): Promise<PayrollRun> => useMocks ? mock.mockGeneratePayroll(month) : attendanceRequest.post('/employee-attendance/payroll/generate', { month }).then((row) => normalizePayrollResponse(row)!)
 export const createPayrollAdjustment = (itemId: string, payload: { amount: number; reason: string }): Promise<PayrollAdjustment> => (useMocks ? mock.mockCreatePayrollAdjustment(itemId, payload) : attendanceRequest.post(`/employee-attendance/payroll/items/${itemId}/adjustments`, payload)).then(normalizePayrollAdjustmentResponse)

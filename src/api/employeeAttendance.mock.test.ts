@@ -385,9 +385,9 @@ describe('employee attendance mock repository', () => {
 
     const overview = await mockGetOverview(dayjs().format('YYYY-MM'))
 
-    expect(overview.todayPresent).toBe(1)
+    expect(overview.todayPresent).toBe(4)
     expect(overview.todayOnLeave).toBe(1)
-    expect(overview.todayAbsent).toBe(3)
+    expect(overview.todayAbsent).toBe(0)
     expect(overview.todayPresent + overview.todayOnLeave + overview.todayAbsent).toBe(5)
   })
 
