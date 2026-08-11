@@ -7,6 +7,7 @@ import {
   mockGetPrepaidMemberDetail,
   mockGetPrepaidMembers,
   mockGetPrepaidConsumptions,
+  mockGetPrepaidConsumptionFilterOptions,
   mockLookupPrepaidMember,
   mockPreviewPrepaidSettlement,
   mockRecordPrepaidConsumption,
@@ -120,6 +121,46 @@ describe('shared prepaid focused mock', () => {
     })
     expect(page.items[0]).not.toHaveProperty('idempotencyKey')
     expect(page.items[0].allocations[0].recharge).not.toHaveProperty('idempotencyKey')
+  })
+
+  it('finds reversed rows by original source owner and keeps original allocation/payable audit detail separate', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000, giftAmount: 100
+    }, 'recharge-a', ownerA)
+    const original = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 100, sheetId: 'sheet-1', sampleBlockId: 'block-1',
+      sampleIndex: 0, sampleNumberSnapshot: 'A-001', sampleCountSnapshot: 3,
+      elementsSnapshot: ['Au'], sheetDate: '2026-08-12'
+    }, 'consume-b', ownerB)
+    await mockReversePrepaidConsumption(original.id, { reason: '样品作废' }, 'reverse-b', ownerB)
+
+    const page = await mockGetPrepaidConsumptions({ status: 'REVERSED', sourceOwnerId: 'A' })
+    const reversal = page.items.find((row) => row.kind === 'REVERSAL')
+
+    expect(page.total).toBe(2)
+    expect(reversal).toMatchObject({
+      reversalOfId: original.id,
+      allocationOrigin: 'REVERSAL_TARGET',
+      allocationSourceConsumptionId: original.id,
+      allocations: [expect.objectContaining({ sourceOwnerId: 'A', allocatedAmount: 100 })],
+      payables: [],
+      originalPayables: [expect.objectContaining({ sourceOwnerId: 'A', consumerOwnerId: 'B', status: 'REVERSED' })]
+    })
+  })
+
+  it('offers only deduplicated accounts that appear in consumption/allocation/payable history', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000, giftAmount: 100
+    }, 'recharge-a', ownerA)
+    await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 100, sheetId: 'sheet-1', sampleBlockId: 'block-1',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'consume-b', ownerB)
+
+    await expect(mockGetPrepaidConsumptionFilterOptions()).resolves.toEqual({
+      sourceOwners: [{ id: 'A', account: 'account-a', label: '主账号 A（account-a）' }],
+      consumingOwners: [{ id: 'B', account: 'account-b', label: '主账号 B（account-b）' }]
+    })
   })
 
   it('spends the consuming owner own lot before older cross-owner FIFO lots', async () => {

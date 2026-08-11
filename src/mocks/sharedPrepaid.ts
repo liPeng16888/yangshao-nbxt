@@ -4,6 +4,7 @@ import type {
   PrepaidAccountRow,
   PrepaidAllocationRow,
   PrepaidConsumptionQuery,
+  PrepaidConsumptionFilterOptions,
   PrepaidConsumptionListRow,
   PrepaidConsumptionReversalResult,
   PrepaidConsumptionRow,
@@ -169,22 +170,43 @@ export async function mockGetPrepaidConsumptions(
   const rows = consumptions
     .filter((row) => (
       (!phone || row.phoneSnapshot.includes(phone)) &&
-      (!query.sourceOwnerId || row.allocations.some((allocation) => allocation.sourceOwnerId === query.sourceOwnerId)) &&
+      (!query.sourceOwnerId || effectiveAllocations(row).some((allocation) => allocation.sourceOwnerId === query.sourceOwnerId)) &&
       (!query.consumingFrontendUserId || row.consumingFrontendUserId === query.consumingFrontendUserId) &&
       (!query.startDate || row.sheetDate >= query.startDate) &&
       (!query.endDate || row.sheetDate <= query.endDate) &&
       (query.status !== 'ACTIVE' || (row.kind === 'CONSUMPTION' && row.active)) &&
       (query.status !== 'REVERSED' || row.kind === 'REVERSAL' || !row.active) &&
-      (!query.payableStatus || row.payables.some((payable) => payable.status === query.payableStatus))
+      (!query.payableStatus || [...row.payables, ...originalPayables(row)].some((payable) => payable.status === query.payableStatus))
     ))
     .sort(descendingCreatedAt)
   return paginate(rows.map(toConsumptionListRow), query.page, query.pageSize)
 }
 
+export async function mockGetPrepaidConsumptionFilterOptions(): Promise<PrepaidConsumptionFilterOptions> {
+  const sourceIds = new Set([
+    ...consumptions.flatMap((row) => effectiveAllocations(row).map((allocation) => allocation.sourceOwnerId)),
+    ...payables.map((payable) => payable.sourceOwnerId)
+  ])
+  const consumingIds = new Set([
+    ...consumptions.map((row) => row.consumingFrontendUserId),
+    ...payables.map((payable) => payable.consumerOwnerId)
+  ])
+  const options = (ids: Set<string>) => [...ids]
+    .map((id) => accounts.get(id))
+    .filter((account): account is PrepaidAccountRow => Boolean(account))
+    .map((account) => ({ id: account.id, account: account.account, label: accountOptionLabel(account) }))
+    .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN') || left.id.localeCompare(right.id))
+  return { sourceOwners: options(sourceIds), consumingOwners: options(consumingIds) }
+}
+
 function toConsumptionListRow(row: PrepaidConsumptionRow): PrepaidConsumptionListRow {
-  const { idempotencyKey: _consumptionKey, allocations, ...consumption } = row
+  const { idempotencyKey: _consumptionKey, ...consumption } = row
+  const allocations = effectiveAllocations(row)
+  const original = row.kind === 'REVERSAL' ? consumptions.find((item) => item.id === row.reversalOfId) : undefined
   return clone({
     ...consumption,
+    allocationOrigin: original ? 'REVERSAL_TARGET' : 'DIRECT',
+    allocationSourceConsumptionId: original?.id ?? row.id,
     allocations: allocations.map((allocation) => {
       const { recharge, ...publicAllocation } = allocation
       return {
@@ -202,8 +224,24 @@ function toConsumptionListRow(row: PrepaidConsumptionRow): PrepaidConsumptionLis
           createdAt: recharge.createdAt
         }
       }
-    })
+    }),
+    originalPayables: original?.payables ?? []
   })
+}
+
+function effectiveAllocations(row: PrepaidConsumptionRow) {
+  if (row.kind !== 'REVERSAL') return row.allocations
+  return consumptions.find((item) => item.id === row.reversalOfId)?.allocations ?? []
+}
+
+function originalPayables(row: PrepaidConsumptionRow) {
+  if (row.kind !== 'REVERSAL') return []
+  return consumptions.find((item) => item.id === row.reversalOfId)?.payables ?? []
+}
+
+function accountOptionLabel(account: PrepaidAccountRow) {
+  const display = account.displayRemark || account.username || account.account
+  return display && display !== account.account ? `${display}（${account.account}）` : account.account
 }
 
 export async function mockCreatePrepaidRecharge(

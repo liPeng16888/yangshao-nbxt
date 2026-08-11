@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAuthStore } from '@/stores/auth'
 import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import type {
+  PrepaidConsumptionListRow,
   PrepaidConsumptionRow,
   PrepaidMemberDetail,
   PrepaidMemberRow,
@@ -25,6 +26,7 @@ const api = vi.hoisted(() => ({
   getPrepaidMemberDetail: vi.fn(),
   getPrepaidRecharges: vi.fn(),
   getPrepaidConsumptions: vi.fn(),
+  getPrepaidConsumptionFilterOptions: vi.fn(),
   createPrepaidRecharge: vi.fn(),
   reversePrepaidRecharge: vi.fn(),
   reversePrepaidConsumption: vi.fn(),
@@ -76,6 +78,13 @@ const consumption: PrepaidConsumptionRow = {
     createdAt: '2026-08-12T03:04:05.200Z', updatedAt: '2026-08-12T03:04:05.200Z',
     sourceOwner: accountA, consumerOwner: accountB
   }]
+}
+
+const listedConsumption: PrepaidConsumptionListRow = {
+  ...consumption,
+  allocationOrigin: 'DIRECT',
+  allocationSourceConsumptionId: 'consumption-1',
+  originalPayables: []
 }
 
 const member: PrepaidMemberRow = {
@@ -151,7 +160,11 @@ beforeEach(() => {
   api.lookupPrepaidMember.mockResolvedValue(member)
   api.getPrepaidMemberDetail.mockResolvedValue(detail)
   api.getPrepaidRecharges.mockResolvedValue({ items: [recharge], total: 1, page: 1, pageSize: 20 })
-  api.getPrepaidConsumptions.mockResolvedValue({ items: [consumption], total: 1, page: 1, pageSize: 20 })
+  api.getPrepaidConsumptions.mockResolvedValue({ items: [listedConsumption], total: 1, page: 1, pageSize: 20 })
+  api.getPrepaidConsumptionFilterOptions.mockResolvedValue({
+    sourceOwners: [{ id: 'front-1', account: 'owner-a', label: '北京店（owner-a）' }],
+    consumingOwners: [{ id: 'front-2', account: 'owner-b', label: '主账号 B（owner-b）' }]
+  })
   api.createPrepaidRecharge.mockResolvedValue({
     id: 'recharge-2', memberId: 'member-1', phone: '13800000000', ownerFrontendUserId: 'front-1',
     actorUserId: 'front-1', rechargeDate: '2026-08-12', paidAmount: 1000, giftAmount: 0,
@@ -252,6 +265,62 @@ describe('PrepaidRechargePage', () => {
     expect(input(wrapper, 'recharge-paid').element).toHaveProperty('value', '')
   })
 
+  it('archives an old success result before validation, conflict, and server-error submissions', async () => {
+    const { wrapper } = mountPage(PrepaidRechargePage)
+    await flushPromises()
+    await input(wrapper, 'recharge-phone').setValue('13800000000')
+    await input(wrapper, 'recharge-paid').setValue('100')
+    await input(wrapper, 'recharge-gift').setValue('0')
+    await wrapper.get('[data-testid="recharge-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="recharge-result"]').exists()).toBe(true)
+
+    await input(wrapper, 'recharge-remark').setValue('新输入')
+    await nextTick()
+    expect(wrapper.find('[data-testid="recharge-result"]').exists()).toBe(false)
+
+    await input(wrapper, 'recharge-phone').setValue('13800000000')
+    await input(wrapper, 'recharge-paid').setValue('100')
+    await input(wrapper, 'recharge-gift').setValue('0')
+    await wrapper.get('[data-testid="recharge-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="recharge-result"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="recharge-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="recharge-result"]').exists()).toBe(false)
+
+    await input(wrapper, 'recharge-phone').setValue('13800000000')
+    await input(wrapper, 'recharge-paid').setValue('100')
+    await input(wrapper, 'recharge-gift').setValue('0')
+    await wrapper.get('[data-testid="recharge-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="recharge-result"]').exists()).toBe(true)
+
+    api.createPrepaidRecharge.mockRejectedValueOnce({
+      response: { status: 409, data: { message: '共享余额已变化' } }
+    })
+    await input(wrapper, 'recharge-phone').setValue('13900000000')
+    await input(wrapper, 'recharge-paid').setValue('200')
+    await input(wrapper, 'recharge-gift').setValue('20')
+    await wrapper.get('[data-testid="recharge-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="recharge-result"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="recharge-mutation-error"]').text()).toContain('保留了当前输入')
+
+    await wrapper.get('[data-testid="recharge-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="recharge-result"]').exists()).toBe(true)
+
+    api.createPrepaidRecharge.mockRejectedValueOnce(new Error('服务异常'))
+    await input(wrapper, 'recharge-phone').setValue('13700000000')
+    await input(wrapper, 'recharge-paid').setValue('300')
+    await input(wrapper, 'recharge-gift').setValue('0')
+    await wrapper.get('[data-testid="recharge-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="recharge-result"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="recharge-mutation-error"]').text()).toContain('服务异常')
+  })
+
   it('registers dirty-aware realtime refresh and shows a no-loss refresh prompt', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -337,13 +406,15 @@ describe('PrepaidConsumptionsPage', () => {
     const { wrapper } = mountPage(PrepaidConsumptionsPage, false)
     await flushPromises()
     await input(wrapper, 'consumption-filter-phone').setValue('138 0000-0000')
-    await input(wrapper, 'consumption-filter-source').setValue('front-1')
-    await input(wrapper, 'consumption-filter-consumer').setValue('front-2')
+    const selects = wrapper.findAllComponents(ElSelect)
+    const sourceSelect = selects.find((node) => node.attributes('data-testid') === 'consumption-filter-source')!
+    const consumerSelect = selects.find((node) => node.attributes('data-testid') === 'consumption-filter-consumer')!
+    sourceSelect.vm.$emit('update:modelValue', 'front-1')
+    consumerSelect.vm.$emit('update:modelValue', 'front-2')
     const datePicker = wrapper.getComponent(ElDatePicker)
     datePicker.vm.$emit('update:modelValue', ['2026-08-01', '2026-08-31'])
-    const selects = wrapper.findAllComponents(ElSelect)
-    selects[0].vm.$emit('update:modelValue', 'ACTIVE')
-    selects[1].vm.$emit('update:modelValue', 'PENDING')
+    selects.find((node) => node.attributes('data-testid') === 'consumption-filter-status')!.vm.$emit('update:modelValue', 'ACTIVE')
+    selects.find((node) => node.attributes('data-testid') === 'consumption-filter-payable')!.vm.$emit('update:modelValue', 'PENDING')
     await nextTick()
     await wrapper.get('[data-testid="consumption-filter-submit"]').trigger('click')
     await flushPromises()
@@ -357,7 +428,37 @@ describe('PrepaidConsumptionsPage', () => {
     })
     expect(api.getPrepaidMembers).not.toHaveBeenCalled()
     expect(api.getPrepaidMemberDetail).not.toHaveBeenCalled()
+    expect(api.getPrepaidConsumptionFilterOptions).toHaveBeenCalledOnce()
+    expect(wrapper.text()).toContain('北京店（owner-a）')
+    expect(wrapper.text()).toContain('主账号 B（owner-b）')
+    expect(wrapper.text()).toContain('充值来源账号筛选')
+    expect(wrapper.text()).toContain('消费账号筛选')
     expect(wrapper.findAll('[data-testid^="reverse-consumption-"]')).toHaveLength(0)
+  })
+
+  it('renders reversal identity with the original allocation and payable audit projection', async () => {
+    api.getPrepaidConsumptions.mockResolvedValueOnce({
+      items: [{
+        ...listedConsumption,
+        id: 'reversal-1', kind: 'REVERSAL', active: false, reversalOfId: 'consumption-1',
+        allocationOrigin: 'REVERSAL_TARGET', allocationSourceConsumptionId: 'consumption-1',
+        allocations: consumption.allocations,
+        payables: [],
+        originalPayables: consumption.payables.map((row) => ({ ...row, status: 'REVERSED' }))
+      }],
+      total: 1, page: 1, pageSize: 20
+    })
+    const { wrapper } = mountPage(PrepaidConsumptionsPage)
+    await flushPromises()
+    await wrapper.find('.el-table__expand-icon').trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('冲正流水 reversal-1')
+    expect(wrapper.text()).toContain('原消费流水 consumption-1')
+    expect(wrapper.text()).toContain('分摊来自原消费')
+    expect(wrapper.text()).toContain('充值批次 recharge-1')
+    expect(wrapper.text()).toContain('原消费应转明细')
+    expect(wrapper.text()).toContain('已冲正')
   })
 
   it('requires a reason through the immutable reversal confirmation', async () => {

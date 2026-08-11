@@ -3,6 +3,7 @@ import * as mock from '@/mocks/sharedPrepaid'
 import type {
   CreatePrepaidRechargePayload,
   PrepaidConsumptionQuery,
+  PrepaidConsumptionFilterOptions,
   PrepaidConsumptionListRow,
   PrepaidConsumptionReversalResult,
   PrepaidMemberDetail,
@@ -67,6 +68,11 @@ export function getPrepaidRecharges(query: PrepaidRechargeQuery = {}): Promise<P
 export function getPrepaidConsumptions(query: PrepaidConsumptionQuery = {}): Promise<PrepaidPage<PrepaidConsumptionListRow>> {
   if (useMocks) return mock.mockGetPrepaidConsumptions(query)
   return request.get('/shared-prepaid/consumptions', { params: query })
+}
+
+export function getPrepaidConsumptionFilterOptions(): Promise<PrepaidConsumptionFilterOptions> {
+  if (useMocks) return mock.mockGetPrepaidConsumptionFilterOptions()
+  return request.get('/shared-prepaid/consumptions/filter-options')
 }
 
 export function createPrepaidRecharge(

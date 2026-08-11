@@ -117,6 +117,94 @@ const rechargeInclude = {
   reversedByLedger: true
 } satisfies Prisma.SharedPrepaidRechargeInclude
 
+const consumptionRechargeSelect = {
+  id: true,
+  ownerFrontendUserId: true,
+  rechargeDate: true,
+  paidAmount: true,
+  giftAmount: true,
+  totalAmount: true,
+  remainingAmount: true,
+  isOpeningBalance: true,
+  reversedAt: true,
+  createdAt: true
+} satisfies Prisma.SharedPrepaidRechargeSelect
+
+const consumptionAllocationSelect = {
+  id: true,
+  consumptionId: true,
+  rechargeId: true,
+  sourceOwnerId: true,
+  allocatedAmount: true,
+  paidRatio: true,
+  exactTransferAmount: true,
+  createdAt: true,
+  recharge: { select: consumptionRechargeSelect },
+  sourceOwner: { select: accountSelect }
+} satisfies Prisma.SharedPrepaidAllocationSelect
+
+const consumptionPayableSelect = {
+  id: true,
+  consumptionId: true,
+  sourceOwnerId: true,
+  consumerOwnerId: true,
+  exactAmount: true,
+  amount: true,
+  status: true,
+  reversalOfId: true,
+  createdAt: true,
+  updatedAt: true,
+  sourceOwner: { select: accountSelect },
+  consumerOwner: { select: accountSelect }
+} satisfies Prisma.SharedPrepaidPayableSelect
+
+const consumptionListSelect = {
+  id: true,
+  memberId: true,
+  consumingFrontendUserId: true,
+  actorUserId: true,
+  kind: true,
+  amount: true,
+  sheetId: true,
+  sampleBlockId: true,
+  sampleIndex: true,
+  sampleNumberSnapshot: true,
+  sampleCountSnapshot: true,
+  elementsSnapshot: true,
+  phoneSnapshot: true,
+  sheetDate: true,
+  active: true,
+  reversalOfId: true,
+  createdAt: true,
+  consumingFrontendUser: { select: accountSelect },
+  actorUser: { select: accountSelect },
+  allocations: {
+    select: consumptionAllocationSelect,
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+  },
+  payables: {
+    select: consumptionPayableSelect,
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+  },
+  reversalOf: {
+    select: {
+      id: true,
+      allocations: {
+        select: consumptionAllocationSelect,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+      },
+      payables: {
+        select: consumptionPayableSelect,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+      }
+    }
+  }
+} satisfies Prisma.SharedPrepaidConsumptionSelect
+
+type ConsumptionListDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
+  select: typeof consumptionListSelect
+}>
+
 @Injectable()
 export class SharedPrepaidQueryService {
   constructor(private readonly prisma: PrismaService) {}
@@ -197,8 +285,16 @@ export class SharedPrepaidQueryService {
     const sourceOwnerId = String(query.sourceOwnerId ?? '').trim()
     const consumingFrontendUserId = String(query.consumingFrontendUserId ?? '').trim()
     const where: Prisma.SharedPrepaidConsumptionWhereInput = {}
+    const and: Prisma.SharedPrepaidConsumptionWhereInput[] = []
     if (phone) where.member = { phone: { contains: phone } }
-    if (sourceOwnerId) where.allocations = { some: { sourceOwnerId } }
+    if (sourceOwnerId) {
+      and.push({
+        OR: [
+          { allocations: { some: { sourceOwnerId } } },
+          { reversalOf: { allocations: { some: { sourceOwnerId } } } }
+        ]
+      })
+    }
     if (consumingFrontendUserId) where.consumingFrontendUserId = consumingFrontendUserId
     if (query.startDate || query.endDate) {
       where.sheetDate = {
@@ -210,81 +306,26 @@ export class SharedPrepaidQueryService {
       where.kind = SharedPrepaidConsumptionKind.CONSUMPTION
       where.active = true
     } else if (query.status === 'REVERSED') {
-      where.OR = [
-        { kind: SharedPrepaidConsumptionKind.REVERSAL },
-        { kind: SharedPrepaidConsumptionKind.CONSUMPTION, active: false }
-      ]
+      and.push({
+        OR: [
+          { kind: SharedPrepaidConsumptionKind.REVERSAL },
+          { kind: SharedPrepaidConsumptionKind.CONSUMPTION, active: false }
+        ]
+      })
     }
-    if (query.payableStatus) where.payables = { some: { status: query.payableStatus } }
-
-    const select = {
-      id: true,
-      memberId: true,
-      consumingFrontendUserId: true,
-      actorUserId: true,
-      kind: true,
-      amount: true,
-      sheetId: true,
-      sampleBlockId: true,
-      sampleIndex: true,
-      sampleNumberSnapshot: true,
-      sampleCountSnapshot: true,
-      elementsSnapshot: true,
-      phoneSnapshot: true,
-      sheetDate: true,
-      active: true,
-      reversalOfId: true,
-      createdAt: true,
-      consumingFrontendUser: { select: accountSelect },
-      actorUser: { select: accountSelect },
-      allocations: {
-        select: {
-          id: true,
-          consumptionId: true,
-          rechargeId: true,
-          sourceOwnerId: true,
-          allocatedAmount: true,
-          paidRatio: true,
-          exactTransferAmount: true,
-          createdAt: true,
-          recharge: { select: {
-            id: true,
-            ownerFrontendUserId: true,
-            rechargeDate: true,
-            paidAmount: true,
-            giftAmount: true,
-            totalAmount: true,
-            remainingAmount: true,
-            isOpeningBalance: true,
-            reversedAt: true,
-            createdAt: true
-          } },
-          sourceOwner: { select: accountSelect }
-        },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
-      },
-      payables: {
-        select: {
-          id: true,
-          consumptionId: true,
-          sourceOwnerId: true,
-          consumerOwnerId: true,
-          exactAmount: true,
-          amount: true,
-          status: true,
-          reversalOfId: true,
-          createdAt: true,
-          updatedAt: true,
-          sourceOwner: { select: accountSelect },
-          consumerOwner: { select: accountSelect }
-        },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
-      }
-    } satisfies Prisma.SharedPrepaidConsumptionSelect
+    if (query.payableStatus) {
+      and.push({
+        OR: [
+          { payables: { some: { status: query.payableStatus } } },
+          { reversalOf: { payables: { some: { status: query.payableStatus } } } }
+        ]
+      })
+    }
+    if (and.length) where.AND = and
     const [rows, total] = await Promise.all([
       this.prisma.sharedPrepaidConsumption.findMany({
         where,
-        select,
+        select: consumptionListSelect,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: pageSize
@@ -293,23 +334,45 @@ export class SharedPrepaidQueryService {
     ])
 
     return {
-      items: rows.map((row) => {
-        const { member: _member, idempotencyKey: _consumptionKey, ...publicRow } = row as typeof row & {
-          member?: unknown
-          idempotencyKey?: string
-        }
-        const allocations = publicRow.allocations.map((allocation) => {
-          const { idempotencyKey: _rechargeKey, remark: _remark, ...recharge } = allocation.recharge as typeof allocation.recharge & {
-            idempotencyKey?: string
-            remark?: string | null
-          }
-          return { ...allocation, recharge }
-        })
-        return this.decimalToNumberDeep({ ...publicRow, allocations })
-      }),
+      items: rows.map((row) => this.toConsumptionListRow(row)),
       total,
       page,
       pageSize
+    }
+  }
+
+  async listConsumptionFilterOptions() {
+    const [allocationSources, payableSources, consumptionOwners, payableConsumers] = await Promise.all([
+      this.prisma.sharedPrepaidAllocation.findMany({
+        distinct: ['sourceOwnerId'],
+        select: { sourceOwner: { select: accountSelect } },
+        orderBy: { sourceOwnerId: 'asc' }
+      }),
+      this.prisma.sharedPrepaidPayable.findMany({
+        distinct: ['sourceOwnerId'],
+        select: { sourceOwner: { select: accountSelect } },
+        orderBy: { sourceOwnerId: 'asc' }
+      }),
+      this.prisma.sharedPrepaidConsumption.findMany({
+        distinct: ['consumingFrontendUserId'],
+        select: { consumingFrontendUser: { select: accountSelect } },
+        orderBy: { consumingFrontendUserId: 'asc' }
+      }),
+      this.prisma.sharedPrepaidPayable.findMany({
+        distinct: ['consumerOwnerId'],
+        select: { consumerOwner: { select: accountSelect } },
+        orderBy: { consumerOwnerId: 'asc' }
+      })
+    ])
+    return {
+      sourceOwners: this.accountOptions([
+        ...allocationSources.map((row) => row.sourceOwner),
+        ...payableSources.map((row) => row.sourceOwner)
+      ]),
+      consumingOwners: this.accountOptions([
+        ...consumptionOwners.map((row) => row.consumingFrontendUser),
+        ...payableConsumers.map((row) => row.consumerOwner)
+      ])
     }
   }
 
@@ -446,6 +509,48 @@ export class SharedPrepaidQueryService {
       createdAt: recharge.createdAt,
       updatedAt: recharge.updatedAt
     }
+  }
+
+  private toConsumptionListRow(row: ConsumptionListDatabaseRow) {
+    const {
+      reversalOf,
+      member: _member,
+      idempotencyKey: _idempotencyKey,
+      ...publicRow
+    } = row as ConsumptionListDatabaseRow & { member?: unknown; idempotencyKey?: string }
+    const usesReversalTarget = row.kind === SharedPrepaidConsumptionKind.REVERSAL && Boolean(reversalOf)
+    const allocationRows = usesReversalTarget ? reversalOf?.allocations ?? [] : row.allocations
+    const allocations = allocationRows.map((allocation) => {
+      const {
+        idempotencyKey: _rechargeKey,
+        remark: _remark,
+        ...recharge
+      } = allocation.recharge as typeof allocation.recharge & {
+        idempotencyKey?: string
+        remark?: string | null
+      }
+      return { ...allocation, recharge }
+    })
+    return this.decimalToNumberDeep({
+      ...publicRow,
+      allocationOrigin: usesReversalTarget ? 'REVERSAL_TARGET' : 'DIRECT',
+      allocationSourceConsumptionId: usesReversalTarget ? reversalOf?.id ?? row.id : row.id,
+      allocations,
+      originalPayables: usesReversalTarget ? reversalOf?.payables ?? [] : []
+    })
+  }
+
+  private accountOptions(accounts: AccountRow[]) {
+    const options = new Map<string, { id: string; account: string; label: string }>()
+    for (const account of accounts) {
+      const display = account.displayRemark || account.username || account.account
+      options.set(account.id, {
+        id: account.id,
+        account: account.account,
+        label: display && display !== account.account ? `${display}（${account.account}）` : account.account
+      })
+    }
+    return [...options.values()].sort((left, right) => left.label.localeCompare(right.label, 'zh-CN') || left.id.localeCompare(right.id))
   }
 
   private pagination(query: SharedPrepaidListQuery) {

@@ -53,7 +53,7 @@
               </el-input>
             </el-form-item>
             <el-form-item label="充值日期" prop="rechargeDate" required>
-              <el-date-picker v-model="form.rechargeDate" type="date" value-format="YYYY-MM-DD" placeholder="选择充值日期" />
+              <el-date-picker v-model="form.rechargeDate" type="date" value-format="YYYY-MM-DD" aria-label="充值日期" placeholder="选择充值日期" />
             </el-form-item>
             <el-form-item class="prepaid-form-grid__wide" label="备注" prop="remark">
               <el-input v-model="form.remark" data-testid="recharge-remark" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="可选，说明本次充值来源" />
@@ -61,15 +61,15 @@
           </div>
 
           <div v-if="isMainAccount" class="opening-balance" data-testid="opening-balance-control">
-            <el-checkbox v-model="form.isOpeningBalance">录入期初余额（仅主账号）</el-checkbox>
+            <el-checkbox v-model="form.isOpeningBalance" aria-label="录入期初余额">录入期初余额（仅主账号）</el-checkbox>
             <p>期初余额用于新账本上线导入，会作为明确标记的充值批次并进入完整审计。</p>
           </div>
 
           <div class="recharge-confirmation">
             <strong>充值确认</strong>
-            <span>充值金额 ¥{{ money(paidValue) }}</span>
-            <span>赠送金额 ¥{{ money(giftValue) }}</span>
-            <span>可用合计 ¥{{ money(totalValue) }}</span>
+            <span>充值金额 ¥{{ prepaidMoney(paidValue) }}</span>
+            <span>赠送金额 ¥{{ prepaidMoney(giftValue) }}</span>
+            <span>可用合计 ¥{{ prepaidMoney(totalValue) }}</span>
             <span>归属主账号：{{ ownerLabel }}</span>
           </div>
 
@@ -82,13 +82,13 @@
         <el-result v-if="lastResult" data-testid="recharge-result" icon="success" title="充值已记入不可变账本">
           <template #sub-title>
             <div class="recharge-result-grid">
-              <span>充值金额 ¥{{ money(lastResult.paidAmount) }}</span>
-              <span>赠送金额 ¥{{ money(lastResult.giftAmount) }}</span>
-              <span>可用合计 ¥{{ money(lastResult.totalAmount) }}</span>
-              <span>新可用余额 ¥{{ money(lastResult.balance) }}</span>
+              <span>充值金额 ¥{{ prepaidMoney(lastResult.paidAmount) }}</span>
+              <span>赠送金额 ¥{{ prepaidMoney(lastResult.giftAmount) }}</span>
+              <span>可用合计 ¥{{ prepaidMoney(lastResult.totalAmount) }}</span>
+              <span>新可用余额 ¥{{ prepaidMoney(lastResult.balance) }}</span>
               <span>归属主账号 {{ lastResult.ownerFrontendUserId }}</span>
               <span>实际操作账号 {{ actorLabel }}</span>
-              <span>精确录入时间 {{ formatPreciseDateTime(lastResult.createdAt) }}</span>
+              <span>精确录入时间 {{ prepaidPreciseDateTime(lastResult.createdAt) }}</span>
             </div>
           </template>
         </el-result>
@@ -102,13 +102,25 @@
           <p class="muted">记录不可编辑或删除；主账号只能对本账号归属的未冲正充值创建反向冲正。</p>
         </div>
         <div class="prepaid-filters">
-          <el-input v-model="filters.phone" data-testid="recharge-filter-phone" clearable placeholder="会员手机号" @keyup.enter="applyFilters" />
-          <el-input v-model="filters.ownerFrontendUserId" data-testid="recharge-filter-owner" clearable placeholder="归属主账号 ID" @keyup.enter="applyFilters" />
-          <el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" />
-          <el-select v-model="filters.isOpeningBalance" clearable placeholder="全部记录">
-            <el-option label="普通充值" :value="false" />
-            <el-option label="期初余额" :value="true" />
-          </el-select>
+          <label class="filter-field">
+            <span>会员手机号筛选</span>
+            <el-input v-model="filters.phone" data-testid="recharge-filter-phone" aria-label="会员手机号筛选" clearable placeholder="会员手机号" @keyup.enter="applyFilters" />
+          </label>
+          <label class="filter-field">
+            <span>归属主账号筛选</span>
+            <el-input v-model="filters.ownerFrontendUserId" data-testid="recharge-filter-owner" aria-label="归属主账号筛选" clearable placeholder="归属主账号 ID" @keyup.enter="applyFilters" />
+          </label>
+          <label class="filter-field">
+            <span>充值日期范围</span>
+            <el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" aria-label="充值日期范围" start-placeholder="开始日期" end-placeholder="结束日期" />
+          </label>
+          <label class="filter-field">
+            <span>记录类型</span>
+            <el-select v-model="filters.isOpeningBalance" clearable aria-label="充值记录类型" placeholder="全部记录">
+              <el-option label="普通充值" :value="false" />
+              <el-option label="期初余额" :value="true" />
+            </el-select>
+          </label>
           <el-button data-testid="recharge-filter-submit" type="primary" :loading="store.loadingByPage.recharges" @click="applyFilters">查询</el-button>
         </div>
       </div>
@@ -120,14 +132,14 @@
         <el-table-column label="记录类型" width="110">
           <template #default="{ row }"><el-tag :type="row.isOpeningBalance ? 'warning' : 'success'">{{ row.isOpeningBalance ? '期初余额' : '普通充值' }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="充值本金" width="120"><template #default="{ row }">¥{{ money(row.paidAmount) }}</template></el-table-column>
-        <el-table-column label="赠送金额" width="120"><template #default="{ row }">¥{{ money(row.giftAmount) }}</template></el-table-column>
-        <el-table-column label="批次总额" width="120"><template #default="{ row }">¥{{ money(row.totalAmount) }}</template></el-table-column>
-        <el-table-column label="批次剩余" width="120"><template #default="{ row }">¥{{ money(row.remainingAmount) }}</template></el-table-column>
-        <el-table-column label="归属主账号" min-width="180"><template #default="{ row }">{{ accountLabel(row.ownerUsername, row.ownerAccount) }}</template></el-table-column>
-        <el-table-column label="实际操作账号" min-width="180"><template #default="{ row }">{{ accountLabel(row.actorUsername, row.actorAccount) }}</template></el-table-column>
+        <el-table-column label="充值本金" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.paidAmount) }}</template></el-table-column>
+        <el-table-column label="赠送金额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.giftAmount) }}</template></el-table-column>
+        <el-table-column label="批次总额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.totalAmount) }}</template></el-table-column>
+        <el-table-column label="批次剩余" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.remainingAmount) }}</template></el-table-column>
+        <el-table-column label="归属主账号" min-width="180"><template #default="{ row }">{{ prepaidAccountLabel({ username: row.ownerUsername, account: row.ownerAccount }) }}</template></el-table-column>
+        <el-table-column label="实际操作账号" min-width="180"><template #default="{ row }">{{ prepaidAccountLabel({ username: row.actorUsername, account: row.actorAccount }) }}</template></el-table-column>
         <el-table-column prop="rechargeDate" label="充值日期" width="120" />
-        <el-table-column label="精确录入时间" width="180"><template #default="{ row }">{{ formatPreciseDateTime(row.createdAt) }}</template></el-table-column>
+        <el-table-column label="精确录入时间" width="180"><template #default="{ row }">{{ prepaidPreciseDateTime(row.createdAt) }}</template></el-table-column>
         <el-table-column prop="remark" label="备注" min-width="150" />
         <el-table-column label="状态" width="100"><template #default="{ row }">{{ row.reversedAt ? '已冲正' : '有效' }}</template></el-table-column>
         <el-table-column v-if="isMainAccount" label="不可变更正" width="110" fixed="right">
@@ -157,14 +169,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 import { useSharedPrepaidRealtimeRegistration } from '@/composables/useSharedPrepaidRealtime'
 import { useAuthStore } from '@/stores/auth'
 import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import type { PrepaidRechargeMutationResult, PrepaidRechargeQuery, PrepaidRechargeRow } from '@/types/sharedPrepaid'
-import { formatPreciseDateTime, todayInBeijing } from '@/utils/date'
+import { todayInBeijing } from '@/utils/date'
+import {
+  prepaidAccountLabel,
+  prepaidErrorMessage,
+  prepaidIsConflict,
+  prepaidIsMessageBoxDismissed,
+  prepaidMoney,
+  prepaidNormalizePhone,
+  prepaidPreciseDateTime
+} from '@/utils/sharedPrepaidPresentation'
 
 defineOptions({ name: 'PrepaidRechargePage' })
 
@@ -206,18 +227,18 @@ const paidValue = computed(() => positiveNumber(form.paidAmount))
 const giftValue = computed(() => nonNegativeNumber(form.giftAmount))
 const totalValue = computed(() => paidValue.value + giftValue.value)
 const ownerLabel = computed(() => isMainAccount.value
-  ? accountLabel(auth.user?.username || '', auth.user?.account || currentOwnerId.value)
+  ? prepaidAccountLabel({ username: auth.user?.username, account: auth.user?.account || currentOwnerId.value })
   : `主账号 ID ${currentOwnerId.value}`)
-const actorLabel = computed(() => accountLabel(auth.user?.username || '', auth.user?.account || auth.user?.id || ''))
+const actorLabel = computed(() => prepaidAccountLabel({ username: auth.user?.username, account: auth.user?.account || auth.user?.id }))
 const hasUnsavedInput = computed(() => Boolean(
-  normalizePhone(form.phone) || form.paidAmount.trim() || form.giftAmount.trim() || form.remark.trim() ||
+  prepaidNormalizePhone(form.phone) || form.paidAmount.trim() || form.giftAmount.trim() || form.remark.trim() ||
   form.isOpeningBalance || form.rechargeDate !== initialDate
 ))
 
 const rules: FormRules<RechargeForm> = {
   phone: [
     { required: true, message: '请输入会员手机号', trigger: 'change' },
-    { validator: (_rule, value, callback) => /^1[3-9]\d{9}$/.test(normalizePhone(value)) ? callback() : callback(new Error('请输入 11 位中国大陆手机号')), trigger: 'change' }
+    { validator: (_rule, value, callback) => /^1[3-9]\d{9}$/.test(prepaidNormalizePhone(value)) ? callback() : callback(new Error('请输入 11 位中国大陆手机号')), trigger: 'change' }
   ],
   paidAmount: [
     { required: true, message: '请输入充值金额', trigger: 'change' },
@@ -237,6 +258,7 @@ const realtime = useSharedPrepaidRealtimeRegistration('recharges', {
 })
 
 watch(form, () => {
+  lastResult.value = null
   if (!isMainAccount.value) form.isOpeningBalance = false
   store.setRechargeDraft({ ...form })
   store.setPageDirty('recharges', hasUnsavedInput.value)
@@ -246,7 +268,8 @@ onMounted(() => void loadHistory())
 
 async function submitRecharge() {
   mutationError.value = ''
-  if (!/^1[3-9]\d{9}$/.test(normalizePhone(form.phone))) {
+  lastResult.value = null
+  if (!/^1[3-9]\d{9}$/.test(prepaidNormalizePhone(form.phone))) {
     mutationError.value = '请输入 11 位中国大陆手机号'
     await formRef.value?.validateField('phone').catch(() => undefined)
     return
@@ -255,8 +278,8 @@ async function submitRecharge() {
   if (!valid) return
   saving.value = true
   try {
-    lastResult.value = await store.createRecharge({
-      phone: normalizePhone(form.phone),
+    const result = await store.createRecharge({
+      phone: prepaidNormalizePhone(form.phone),
       paidAmount: form.paidAmount.trim(),
       giftAmount: form.giftAmount.trim(),
       rechargeDate: form.rechargeDate,
@@ -264,18 +287,21 @@ async function submitRecharge() {
       remark: form.remark.trim()
     })
     resetForm()
+    await nextTick()
+    lastResult.value = result
     await loadHistory(1)
     ElMessage.success('充值已记入共享预存款账本')
   } catch (error) {
-    mutationError.value = isConflict(error)
-      ? `${errorMessage(error, '共享余额或充值记录已变化')}；已保留了当前输入和本次操作键，请核对后直接重试。`
-      : errorMessage(error, '充值失败，已保留当前输入')
+    mutationError.value = prepaidIsConflict(error)
+      ? `${prepaidErrorMessage(error, '共享余额或充值记录已变化')}；已保留了当前输入和本次操作键，请核对后直接重试。`
+      : prepaidErrorMessage(error, '充值失败，已保留当前输入')
   } finally {
     saving.value = false
   }
 }
 
 function resetForm() {
+  lastResult.value = null
   Object.assign(form, {
     phone: '', paidAmount: '', giftAmount: '', rechargeDate: todayInBeijing(), remark: '', isOpeningBalance: false
   })
@@ -290,7 +316,7 @@ function rechargeQuery(page = 1): PrepaidRechargeQuery {
   return {
     page,
     pageSize,
-    ...(normalizePhone(filters.phone) ? { phone: normalizePhone(filters.phone) } : {}),
+    ...(prepaidNormalizePhone(filters.phone) ? { phone: prepaidNormalizePhone(filters.phone) } : {}),
     ...(filters.ownerFrontendUserId.trim() ? { ownerFrontendUserId: filters.ownerFrontendUserId.trim() } : {}),
     ...(startDate ? { startDate } : {}),
     ...(endDate ? { endDate } : {}),
@@ -329,16 +355,12 @@ async function reverseRecharge(row: PrepaidRechargeRow) {
     await loadHistory(store.rechargesPage.page)
     ElMessage.success('充值冲正流水已创建')
   } catch (error) {
-    if (!isMessageBoxCancel(error)) {
-      mutationError.value = isConflict(error)
-        ? `${errorMessage(error, '充值状态已变化')}，请刷新后核对批次剩余金额。`
-        : errorMessage(error, '充值冲正失败')
+    if (!prepaidIsMessageBoxDismissed(error)) {
+      mutationError.value = prepaidIsConflict(error)
+        ? `${prepaidErrorMessage(error, '充值状态已变化')}，请刷新后核对批次剩余金额。`
+        : prepaidErrorMessage(error, '充值冲正失败')
     }
   }
-}
-
-function normalizePhone(value: unknown) {
-  return String(value ?? '').replace(/\D/g, '')
 }
 
 function validMoney(value: unknown, positive: boolean) {
@@ -358,28 +380,6 @@ function nonNegativeNumber(value: unknown) {
   return Number.isFinite(amount) && amount >= 0 ? amount : 0
 }
 
-function money(value: unknown) {
-  const amount = Number(value)
-  return Number.isFinite(amount) ? amount.toFixed(2) : '0.00'
-}
-
-function accountLabel(username: string, account: string) {
-  return username && username !== account ? `${username}（${account}）` : account || username || '无信息'
-}
-
-function isConflict(error: unknown) {
-  return (error as { response?: { status?: unknown } } | null)?.response?.status === 409
-}
-
-function errorMessage(error: unknown, fallback: string) {
-  const response = (error as { response?: { data?: { message?: unknown } }; message?: unknown } | null)?.response
-  const message = response?.data?.message ?? (error as { message?: unknown } | null)?.message
-  return typeof message === 'string' && message.trim() ? message : fallback
-}
-
-function isMessageBoxCancel(error: unknown) {
-  return error === 'cancel' || error === 'close'
-}
 </script>
 
 <style scoped>
@@ -394,7 +394,9 @@ function isMessageBoxCancel(error: unknown) {
 .recharge-result-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; }
 .prepaid-history-header { align-items: flex-start; }
 .prepaid-filters { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.filter-field { display: grid; gap: 4px; color: #475569; font-size: 12px; }
 .prepaid-filters > * { width: 180px; }
+.filter-field :deep(.el-input), .filter-field :deep(.el-select) { width: 100%; }
 .prepaid-filters :deep(.el-date-editor) { width: 250px; }
 .prepaid-error { margin: 14px 16px 0; }
 .prepaid-pagination { display: flex; justify-content: flex-end; padding: 14px 16px; }

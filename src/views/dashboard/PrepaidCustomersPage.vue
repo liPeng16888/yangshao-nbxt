@@ -7,7 +7,7 @@
           <p class="muted">同一标准化手机号全局唯一，余额可跨前端主账号共享查看。</p>
         </div>
         <div class="customer-filters">
-          <el-input v-model="phoneFilter" data-testid="member-filter-phone" clearable placeholder="搜索会员手机号" @keyup.enter="applyFilter" />
+          <label class="filter-field"><span>会员手机号筛选</span><el-input v-model="phoneFilter" data-testid="member-filter-phone" aria-label="会员手机号筛选" clearable placeholder="搜索会员手机号" @keyup.enter="applyFilter" /></label>
           <el-button data-testid="member-filter-submit" type="primary" :loading="store.loadingByPage.members" @click="applyFilter">查询</el-button>
           <el-button :loading="store.loadingByPage.members" @click="loadMembers(store.membersPage.page)">刷新</el-button>
         </div>
@@ -22,23 +22,23 @@
 
       <el-table :data="store.membersPage.items" border v-loading="store.loadingByPage.members" empty-text="暂无预存款客户">
         <el-table-column prop="phone" label="会员手机号" width="145" />
-        <el-table-column label="充值本金" width="120"><template #default="{ row }">¥{{ money(row.paidTotal) }}</template></el-table-column>
-        <el-table-column label="赠送总额" width="120"><template #default="{ row }">¥{{ money(row.giftTotal) }}</template></el-table-column>
-        <el-table-column label="充值合计" width="120"><template #default="{ row }">¥{{ money(Number(row.paidTotal) + Number(row.giftTotal)) }}</template></el-table-column>
-        <el-table-column label="消费总额" width="120"><template #default="{ row }">¥{{ money(row.consumedTotal) }}</template></el-table-column>
-        <el-table-column label="当前余额" width="125"><template #default="{ row }"><strong>¥{{ money(row.balance) }}</strong></template></el-table-column>
+        <el-table-column label="充值本金" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.paidTotal) }}</template></el-table-column>
+        <el-table-column label="赠送总额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.giftTotal) }}</template></el-table-column>
+        <el-table-column label="充值合计" width="120"><template #default="{ row }">¥{{ prepaidMoney(Number(row.paidTotal) + Number(row.giftTotal)) }}</template></el-table-column>
+        <el-table-column label="消费总额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.consumedTotal) }}</template></el-table-column>
+        <el-table-column label="当前余额" width="125"><template #default="{ row }"><strong>¥{{ prepaidMoney(row.balance) }}</strong></template></el-table-column>
         <el-table-column label="余额归属构成" min-width="240">
           <template #default="{ row }">
             <div v-if="row.ownerComposition.length" class="composition-list">
               <el-tag v-for="owner in row.ownerComposition" :key="owner.ownerFrontendUserId" type="info">
-                {{ owner.ownerDisplayName }} / {{ owner.ownerAccount }} ¥{{ money(owner.balance) }}
+                {{ owner.ownerDisplayName }} / {{ owner.ownerAccount }} ¥{{ prepaidMoney(owner.balance) }}
               </el-tag>
             </div>
             <span v-else class="muted">暂无可用余额</span>
           </template>
         </el-table-column>
-        <el-table-column label="最近充值时间" width="170"><template #default="{ row }">{{ dateTime(row.latestRechargeTime) }}</template></el-table-column>
-        <el-table-column label="最近消费时间" width="170"><template #default="{ row }">{{ dateTime(row.latestConsumptionTime) }}</template></el-table-column>
+        <el-table-column label="最近充值时间" width="180"><template #default="{ row }">{{ prepaidPreciseDateTime(row.latestRechargeTime) }}</template></el-table-column>
+        <el-table-column label="最近消费时间" width="180"><template #default="{ row }">{{ prepaidPreciseDateTime(row.latestConsumptionTime) }}</template></el-table-column>
         <el-table-column label="不可变历史" width="100" fixed="right">
           <template #default="{ row }"><el-button :data-testid="`member-detail-${row.id}`" link type="primary" @click="openDetail(row.id)">查看详情</el-button></template>
         </el-table-column>
@@ -64,25 +64,25 @@
       </div>
       <div class="panel__body detail-stack">
         <div class="member-summary">
-          <div><span>充值本金</span><strong>¥{{ money(store.selectedMember.paidTotal) }}</strong></div>
-          <div><span>赠送总额</span><strong>¥{{ money(store.selectedMember.giftTotal) }}</strong></div>
-          <div><span>充值合计</span><strong>¥{{ money(Number(store.selectedMember.paidTotal) + Number(store.selectedMember.giftTotal)) }}</strong></div>
-          <div><span>消费总额</span><strong>¥{{ money(store.selectedMember.consumedTotal) }}</strong></div>
-          <div><span>当前余额</span><strong>¥{{ money(store.selectedMember.balance) }}</strong></div>
+          <div><span>充值本金</span><strong>¥{{ prepaidMoney(store.selectedMember.paidTotal) }}</strong></div>
+          <div><span>赠送总额</span><strong>¥{{ prepaidMoney(store.selectedMember.giftTotal) }}</strong></div>
+          <div><span>充值合计</span><strong>¥{{ prepaidMoney(Number(store.selectedMember.paidTotal) + Number(store.selectedMember.giftTotal)) }}</strong></div>
+          <div><span>消费总额</span><strong>¥{{ prepaidMoney(store.selectedMember.consumedTotal) }}</strong></div>
+          <div><span>当前余额</span><strong>¥{{ prepaidMoney(store.selectedMember.balance) }}</strong></div>
         </div>
 
         <div>
           <h3>充值批次与剩余金额</h3>
           <el-table :data="store.selectedMember.recharges" border empty-text="暂无充值批次">
             <el-table-column label="类型" width="100"><template #default="{ row }">{{ row.isOpeningBalance ? '期初余额' : '普通充值' }}</template></el-table-column>
-            <el-table-column label="充值本金" width="115"><template #default="{ row }">¥{{ money(row.paidAmount) }}</template></el-table-column>
-            <el-table-column label="赠送金额" width="115"><template #default="{ row }">¥{{ money(row.giftAmount) }}</template></el-table-column>
-            <el-table-column label="批次总额" width="115"><template #default="{ row }">¥{{ money(row.totalAmount) }}</template></el-table-column>
-            <el-table-column label="剩余金额" width="115"><template #default="{ row }">¥{{ money(row.remainingAmount) }}</template></el-table-column>
-            <el-table-column label="归属主账号" min-width="170"><template #default="{ row }">{{ accountLabel(row.ownerUsername, row.ownerAccount) }}</template></el-table-column>
-            <el-table-column label="实际操作账号" min-width="170"><template #default="{ row }">{{ accountLabel(row.actorUsername, row.actorAccount) }}</template></el-table-column>
+            <el-table-column label="充值本金" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.paidAmount) }}</template></el-table-column>
+            <el-table-column label="赠送金额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.giftAmount) }}</template></el-table-column>
+            <el-table-column label="批次总额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.totalAmount) }}</template></el-table-column>
+            <el-table-column label="剩余金额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.remainingAmount) }}</template></el-table-column>
+            <el-table-column label="归属主账号" min-width="170"><template #default="{ row }">{{ prepaidAccountLabel({ username: row.ownerUsername, account: row.ownerAccount }) }}</template></el-table-column>
+            <el-table-column label="实际操作账号" min-width="170"><template #default="{ row }">{{ prepaidAccountLabel({ username: row.actorUsername, account: row.actorAccount }) }}</template></el-table-column>
             <el-table-column prop="rechargeDate" label="充值日期" width="120" />
-            <el-table-column label="精确录入时间" width="180"><template #default="{ row }">{{ formatPreciseDateTime(row.createdAt) }}</template></el-table-column>
+            <el-table-column label="精确录入时间" width="180"><template #default="{ row }">{{ prepaidPreciseDateTime(row.createdAt) }}</template></el-table-column>
             <el-table-column label="状态" width="100"><template #default="{ row }">{{ row.reversedAt ? '已冲正' : '有效' }}</template></el-table-column>
             <el-table-column prop="remark" label="备注" min-width="160" />
           </el-table>
@@ -92,14 +92,14 @@
           <h3>消费与冲正历史</h3>
           <el-table :data="store.selectedMember.consumptions" border empty-text="暂无消费与冲正历史">
             <el-table-column label="类型" width="100"><template #default="{ row }">{{ row.kind === 'REVERSAL' ? '消费冲正' : '预存款消费' }}</template></el-table-column>
-            <el-table-column label="金额" width="110"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+            <el-table-column label="金额" width="110"><template #default="{ row }">¥{{ prepaidMoney(row.amount) }}</template></el-table-column>
             <el-table-column prop="sampleNumberSnapshot" label="样品编号" width="120" />
             <el-table-column prop="sampleCountSnapshot" label="样品数量" width="100" />
-            <el-table-column label="检测元素" min-width="170"><template #default="{ row }">{{ formatElements(row.elementsSnapshot) }}</template></el-table-column>
-            <el-table-column label="消费账号" min-width="170"><template #default="{ row }">{{ accountRowLabel(row.consumingFrontendUser) }}</template></el-table-column>
-            <el-table-column label="实际操作账号" min-width="170"><template #default="{ row }">{{ accountRowLabel(row.actorUser) }}</template></el-table-column>
+            <el-table-column label="检测元素" min-width="170"><template #default="{ row }">{{ prepaidFormatElements(row.elementsSnapshot) }}</template></el-table-column>
+            <el-table-column label="消费账号" min-width="170"><template #default="{ row }">{{ prepaidAccountLabel(row.consumingFrontendUser) }}</template></el-table-column>
+            <el-table-column label="实际操作账号" min-width="170"><template #default="{ row }">{{ prepaidAccountLabel(row.actorUser) }}</template></el-table-column>
             <el-table-column prop="sheetDate" label="样品日期" width="120" />
-            <el-table-column label="精确时间" width="180"><template #default="{ row }">{{ formatPreciseDateTime(row.createdAt) }}</template></el-table-column>
+            <el-table-column label="精确时间" width="180"><template #default="{ row }">{{ prepaidPreciseDateTime(row.createdAt) }}</template></el-table-column>
             <el-table-column label="状态" width="110"><template #default="{ row }">{{ consumptionStatus(row) }}</template></el-table-column>
           </el-table>
         </div>
@@ -112,7 +112,7 @@
             <el-table-column prop="ownerFrontendUserId" label="资金归属主账号" min-width="160" />
             <el-table-column prop="actorUserId" label="实际操作账号" min-width="160" />
             <el-table-column prop="reason" label="原因" min-width="180" />
-            <el-table-column label="精确审计时间" width="180"><template #default="{ row }">{{ formatPreciseDateTime(row.createdAt) }}</template></el-table-column>
+            <el-table-column label="精确审计时间" width="180"><template #default="{ row }">{{ prepaidPreciseDateTime(row.createdAt) }}</template></el-table-column>
           </el-table>
         </div>
       </div>
@@ -125,8 +125,14 @@ import { onMounted, ref } from 'vue'
 
 import { useSharedPrepaidRealtimeRegistration } from '@/composables/useSharedPrepaidRealtime'
 import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
-import type { PrepaidAccountRow, PrepaidConsumptionRow, PrepaidLedgerKind } from '@/types/sharedPrepaid'
-import { formatDateTime, formatPreciseDateTime } from '@/utils/date'
+import type { PrepaidConsumptionRow, PrepaidLedgerKind } from '@/types/sharedPrepaid'
+import {
+  prepaidAccountLabel,
+  prepaidFormatElements,
+  prepaidMoney,
+  prepaidNormalizePhone,
+  prepaidPreciseDateTime
+} from '@/utils/sharedPrepaidPresentation'
 
 defineOptions({ name: 'PrepaidCustomersPage' })
 
@@ -149,7 +155,7 @@ async function loadMembers(page = 1) {
     await store.loadMembers({
       page,
       pageSize,
-      ...(normalizePhone(phoneFilter.value) ? { phone: normalizePhone(phoneFilter.value) } : {})
+      ...(prepaidNormalizePhone(phoneFilter.value) ? { phone: prepaidNormalizePhone(phoneFilter.value) } : {})
     })
   } catch {
     // Store exposes the persistent error and loading state to the page.
@@ -168,50 +174,10 @@ async function openDetail(id: string) {
   }
 }
 
-function normalizePhone(value: unknown) {
-  return String(value ?? '').replace(/\D/g, '')
-}
-
-function money(value: unknown) {
-  const amount = Number(value)
-  return Number.isFinite(amount) ? amount.toFixed(2) : '0.00'
-}
-
 function signedMoney(value: unknown) {
   const amount = Number(value)
   if (!Number.isFinite(amount)) return '¥0.00'
   return `${amount > 0 ? '+' : ''}¥${amount.toFixed(2)}`
-}
-
-function dateTime(value: string | null) {
-  return value ? formatDateTime(value) : '无信息'
-}
-
-function accountLabel(username: string, account: string) {
-  return username && username !== account ? `${username}（${account}）` : account || username || '无信息'
-}
-
-function accountRowLabel(account: PrepaidAccountRow) {
-  return accountLabel(account.username, account.account)
-}
-
-function formatElements(value: unknown) {
-  if (Array.isArray(value)) {
-    return value.map((item) => {
-      if (typeof item === 'string') return item
-      if (item && typeof item === 'object') {
-        const record = item as Record<string, unknown>
-        const name = record.name ?? record.element ?? record.label
-        const amount = record.value ?? record.result
-        return [name, amount].filter((part) => part !== undefined && part !== null && part !== '').join(': ')
-      }
-      return String(item)
-    }).filter(Boolean).join('、') || '无信息'
-  }
-  if (value && typeof value === 'object') {
-    return Object.entries(value).map(([key, item]) => `${key}: ${String(item)}`).join('、')
-  }
-  return typeof value === 'string' && value.trim() ? value : '无信息'
 }
 
 function consumptionStatus(row: PrepaidConsumptionRow) {
@@ -232,6 +198,7 @@ function ledgerKindLabel(kind: PrepaidLedgerKind) {
 <style scoped>
 .customers-header { align-items: flex-start; }
 .customer-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.filter-field { display: grid; gap: 4px; color: #475569; font-size: 12px; }
 .customer-filters :deep(.el-input) { width: 230px; }
 .customer-alert { margin: 14px 16px 0; }
 .composition-list { display: flex; flex-wrap: wrap; gap: 6px; }

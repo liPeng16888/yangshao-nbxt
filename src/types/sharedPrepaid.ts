@@ -19,6 +19,17 @@ export interface PrepaidAccountRow {
   displayRemark: string | null
 }
 
+export interface PrepaidAccountFilterOption {
+  id: string
+  account: string
+  label: string
+}
+
+export interface PrepaidConsumptionFilterOptions {
+  sourceOwners: PrepaidAccountFilterOption[]
+  consumingOwners: PrepaidAccountFilterOption[]
+}
+
 export interface PrepaidOwnerCompositionRow {
   ownerFrontendUserId: string
   ownerAccount: string
@@ -152,7 +163,10 @@ export interface PrepaidConsumptionListAllocationRow extends Omit<PrepaidAllocat
 }
 
 export interface PrepaidConsumptionListRow extends Omit<PrepaidConsumptionRow, 'idempotencyKey' | 'allocations'> {
+  allocationOrigin: 'DIRECT' | 'REVERSAL_TARGET'
+  allocationSourceConsumptionId: string
   allocations: PrepaidConsumptionListAllocationRow[]
+  originalPayables: PrepaidPayableRow[]
 }
 
 export interface PrepaidLedgerEntryRow {

@@ -35,12 +35,6 @@ export function formatDateTime(value: string | Date) {
   return new Date(timestamp + BEIJING_UTC_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ')
 }
 
-export function formatPreciseDateTime(value: string | Date) {
-  const timestamp = new Date(value).getTime()
-  if (!Number.isFinite(timestamp)) return '无信息'
-  return new Date(timestamp + BEIJING_UTC_OFFSET_MS).toISOString().slice(0, 19).replace('T', ' ')
-}
-
 export function getReportRange(mode: 'daily' | 'weekly' | 'monthly' | 'custom', date: string, startDate?: string, endDate?: string) {
   const base = dayjs(date)
   if (mode === 'weekly') {

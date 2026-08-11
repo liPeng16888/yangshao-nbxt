@@ -14,6 +14,7 @@ import { useAuthStore } from '@/stores/auth'
 import type {
   CreatePrepaidRechargePayload,
   PrepaidConsumptionQuery,
+  PrepaidConsumptionFilterOptions,
   PrepaidConsumptionListRow,
   PrepaidConsumptionRow,
   PrepaidMemberDetail,
@@ -99,6 +100,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const rechargesPage = ref<PrepaidPage<PrepaidRechargeRow>>(emptyPage())
   const selectedMember = ref<PrepaidMemberDetail | null>(null)
   const consumptionsPage = ref<PrepaidPage<PrepaidConsumptionListRow>>(emptyPage())
+  const consumptionFilterOptions = ref<PrepaidConsumptionFilterOptions>({ sourceOwners: [], consumingOwners: [] })
   const consumptions = ref<PrepaidConsumptionRow[]>([])
   const payables = ref<PrepaidPayableRow[]>([])
   const settlementPreview = ref<PrepaidSettlementPreview | null>(null)
@@ -217,6 +219,15 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     return runLatest('consumptions:list', 'consumptions', () => prepaidApi.getPrepaidConsumptions(query), (result) => {
       consumptionsPage.value = result
     })
+  }
+
+  async function loadConsumptionFilterOptions() {
+    return runLatest(
+      'consumptions:filter-options',
+      'consumptions',
+      () => prepaidApi.getPrepaidConsumptionFilterOptions(),
+      (result) => { consumptionFilterOptions.value = result }
+    )
   }
 
   async function mutate<T>(
@@ -535,6 +546,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     rechargesPage,
     selectedMember,
     consumptionsPage,
+    consumptionFilterOptions,
     consumptions,
     payables,
     settlementPreview,
@@ -555,6 +567,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     loadMemberDetail,
     loadRecharges,
     loadConsumptions,
+    loadConsumptionFilterOptions,
     createRecharge,
     reverseRecharge,
     reverseConsumption,

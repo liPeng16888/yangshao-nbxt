@@ -17,6 +17,7 @@ import {
   getPrepaidMemberDetail,
   getPrepaidMembers,
   getPrepaidConsumptions,
+  getPrepaidConsumptionFilterOptions,
   getPrepaidRecharges,
   isSharedPrepaidTerminalAuthError,
   lookupPrepaidMember,
@@ -65,6 +66,7 @@ describe('shared prepaid realtime transport', () => {
       status: 'ACTIVE',
       payableStatus: 'PENDING'
     })
+    await getPrepaidConsumptionFilterOptions()
 
     expect(requestMocks.get.mock.calls).toEqual([
       ['/shared-prepaid/members', { params: { page: 2, pageSize: 10, phone: '138' } }],
@@ -80,7 +82,8 @@ describe('shared prepaid realtime transport', () => {
         endDate: '2026-08-31',
         status: 'ACTIVE',
         payableStatus: 'PENDING'
-      } }]
+      } }],
+      ['/shared-prepaid/consumptions/filter-options']
     ])
   })
 

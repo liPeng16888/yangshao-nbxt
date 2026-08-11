@@ -15,6 +15,7 @@ const apiMocks = vi.hoisted(() => ({
   getPrepaidMemberDetail: vi.fn(),
   getPrepaidRecharges: vi.fn(),
   getPrepaidConsumptions: vi.fn(),
+  getPrepaidConsumptionFilterOptions: vi.fn(),
   createPrepaidRecharge: vi.fn(),
   reversePrepaidRecharge: vi.fn(),
   reversePrepaidConsumption: vi.fn(),
@@ -151,6 +152,7 @@ describe('shared prepaid realtime refresh', () => {
     for (const name of [
       'getPrepaidMembers', 'lookupPrepaidMember', 'getPrepaidMemberDetail', 'getPrepaidRecharges',
       'getPrepaidConsumptions',
+      'getPrepaidConsumptionFilterOptions',
       'createPrepaidRecharge', 'reversePrepaidRecharge', 'reversePrepaidConsumption',
       'previewPrepaidSettlement', 'createPrepaidSettlement', 'submitPrepaidSettlementPayment',
       'confirmPrepaidSettlement', 'rejectPrepaidSettlement', 'cancelPrepaidSettlement'
@@ -351,6 +353,19 @@ describe('shared prepaid realtime refresh', () => {
     expect(apiMocks.getPrepaidConsumptions).toHaveBeenCalledWith(query)
     expect(store.consumptionsPage).toEqual({ items: [], total: 0, page: 2, pageSize: 10 })
     expect(store.loadingByPage.consumptions).toBe(false)
+  })
+
+  it('loads safe discoverable consumption account filter options', async () => {
+    const options = {
+      sourceOwners: [{ id: 'front-1', account: 'owner-a', label: '北京店（owner-a）' }],
+      consumingOwners: [{ id: 'front-2', account: 'owner-b', label: '主账号 B（owner-b）' }]
+    }
+    apiMocks.getPrepaidConsumptionFilterOptions.mockResolvedValue(options)
+    const store = useSharedPrepaidStore()
+
+    await store.loadConsumptionFilterOptions()
+
+    expect(store.consumptionFilterOptions).toEqual(options)
   })
 
   it('preserves settlement selection, dirty state, and the same key after a 409 retry', async () => {

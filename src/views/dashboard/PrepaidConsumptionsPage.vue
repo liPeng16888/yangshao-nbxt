@@ -10,22 +10,32 @@
 
       <div class="panel__body filter-body">
         <div class="consumption-filters">
-          <el-input v-model="filters.phone" data-testid="consumption-filter-phone" clearable placeholder="会员手机号" @keyup.enter="applyFilters" />
-          <el-input v-model="filters.sourceOwnerId" data-testid="consumption-filter-source" clearable placeholder="充值来源主账号 ID" @keyup.enter="applyFilters" />
-          <el-input v-model="filters.consumingFrontendUserId" data-testid="consumption-filter-consumer" clearable placeholder="消费主账号 ID" @keyup.enter="applyFilters" />
-          <el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" start-placeholder="样品开始日期" end-placeholder="样品结束日期" />
-          <el-select v-model="filters.status" clearable placeholder="消费/冲正状态">
-            <el-option label="有效消费" value="ACTIVE" />
-            <el-option label="已冲正及冲正流水" value="REVERSED" />
-          </el-select>
-          <el-select v-model="filters.payableStatus" clearable placeholder="结算状态">
-            <el-option label="待结算" value="PENDING" />
-            <el-option label="已进入结算单 / 待确认" value="HELD" />
-            <el-option label="已完成" value="COMPLETED" />
-            <el-option label="已冲正" value="REVERSED" />
-          </el-select>
+          <label class="filter-field"><span>会员手机号筛选</span><el-input v-model="filters.phone" data-testid="consumption-filter-phone" aria-label="会员手机号筛选" clearable placeholder="会员手机号" @keyup.enter="applyFilters" /></label>
+          <label class="filter-field">
+            <span>充值来源账号筛选</span>
+            <el-select v-model="filters.sourceOwnerId" data-testid="consumption-filter-source" filterable clearable aria-label="充值来源账号筛选" placeholder="搜索账号或显示名称">
+              <el-option v-for="option in store.consumptionFilterOptions.sourceOwners" :key="option.id" :label="option.label" :value="option.id" />
+            </el-select>
+          </label>
+          <label class="filter-field">
+            <span>消费账号筛选</span>
+            <el-select v-model="filters.consumingFrontendUserId" data-testid="consumption-filter-consumer" filterable clearable aria-label="消费账号筛选" placeholder="搜索账号或显示名称">
+              <el-option v-for="option in store.consumptionFilterOptions.consumingOwners" :key="option.id" :label="option.label" :value="option.id" />
+            </el-select>
+          </label>
+          <label class="filter-field"><span>样品日期范围</span><el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" aria-label="样品日期范围" start-placeholder="样品开始日期" end-placeholder="样品结束日期" /></label>
+          <label class="filter-field"><span>消费/冲正状态</span><el-select v-model="filters.status" data-testid="consumption-filter-status" clearable aria-label="消费或冲正状态" placeholder="全部状态">
+              <el-option label="有效消费" value="ACTIVE" />
+              <el-option label="已冲正及冲正流水" value="REVERSED" />
+            </el-select></label>
+          <label class="filter-field"><span>结算状态</span><el-select v-model="filters.payableStatus" data-testid="consumption-filter-payable" clearable aria-label="结算状态" placeholder="全部结算状态">
+              <el-option label="待结算" value="PENDING" />
+              <el-option label="已进入结算单 / 待确认" value="HELD" />
+              <el-option label="已完成" value="COMPLETED" />
+              <el-option label="已冲正" value="REVERSED" />
+            </el-select></label>
           <el-button data-testid="consumption-filter-submit" type="primary" :loading="store.loadingByPage.consumptions" @click="applyFilters">查询</el-button>
-          <el-button :loading="store.loadingByPage.consumptions" @click="loadConsumptions(store.consumptionsPage.page)">刷新</el-button>
+          <el-button :loading="store.loadingByPage.consumptions" @click="loadPageData(store.consumptionsPage.page)">刷新</el-button>
         </div>
       </div>
 
@@ -34,13 +44,18 @@
       </el-alert>
       <el-alert v-if="mutationError" data-testid="consumption-mutation-error" class="consumption-alert" type="error" :closable="false" show-icon :title="mutationError" />
       <el-alert v-if="store.errorsByPage.consumptions" class="consumption-alert" type="error" :closable="false" show-icon :title="store.errorsByPage.consumptions">
-        <template #default><el-button link type="primary" @click="loadConsumptions(store.consumptionsPage.page)">重试</el-button></template>
+        <template #default><el-button link type="primary" @click="loadPageData(store.consumptionsPage.page)">重试</el-button></template>
       </el-alert>
 
       <el-table :data="store.consumptionsPage.items" border v-loading="store.loadingByPage.consumptions" empty-text="暂无符合条件的消费明细">
         <el-table-column type="expand" width="46">
           <template #default="{ row }">
             <div class="consumption-detail">
+              <div class="audit-identity">
+                <strong>{{ row.kind === 'REVERSAL' ? '冲正流水' : '消费流水' }} {{ row.id }}</strong>
+                <span v-if="row.reversalOfId">原消费流水 {{ row.reversalOfId }}</span>
+                <span>{{ row.allocationOrigin === 'REVERSAL_TARGET' ? '分摊来自原消费' : '本流水直接分摊' }} {{ row.allocationSourceConsumptionId }}</span>
+              </div>
               <div class="sample-detail-grid">
                 <span>化验单 {{ row.sheetId }}</span>
                 <span>样品块 {{ row.sampleBlockId }}</span>
@@ -52,15 +67,15 @@
               <div v-if="row.allocations.length" class="allocation-list">
                 <article v-for="allocation in row.allocations" :key="allocation.id" class="allocation-card">
                   <div><strong>充值批次 {{ allocation.rechargeId }}</strong><el-tag v-if="allocation.recharge.isOpeningBalance" type="warning">期初余额</el-tag></div>
-                  <div>充值来源账号 {{ accountLabel(allocation.sourceOwner) }}</div>
-                  <div>充值日期 {{ allocation.recharge.rechargeDate }}，批次创建 {{ formatPreciseDateTime(allocation.recharge.createdAt) }}</div>
-                  <div>批次原始：本金 ¥{{ money(allocation.recharge.paidAmount) }} + 赠送 ¥{{ money(allocation.recharge.giftAmount) }}</div>
-                  <div>分摊价值 ¥{{ money(allocation.allocatedAmount) }}</div>
-                  <div>分摊本金 ¥{{ money(allocatedPaid(allocation)) }}</div>
-                  <div>分摊赠送 ¥{{ money(allocatedGift(allocation)) }}</div>
+                  <div>充值来源账号 {{ prepaidAccountLabel(allocation.sourceOwner) }}</div>
+                  <div>充值日期 {{ allocation.recharge.rechargeDate }}，批次创建 {{ prepaidPreciseDateTime(allocation.recharge.createdAt) }}</div>
+                  <div>批次原始：本金 ¥{{ prepaidMoney(allocation.recharge.paidAmount) }} + 赠送 ¥{{ prepaidMoney(allocation.recharge.giftAmount) }}</div>
+                  <div>分摊价值 ¥{{ prepaidMoney(allocation.allocatedAmount) }}</div>
+                  <div>分摊本金 ¥{{ prepaidMoney(allocatedPaid(allocation)) }}</div>
+                  <div>分摊赠送 ¥{{ prepaidMoney(allocatedGift(allocation)) }}</div>
                   <div>本金比例 {{ percent(allocation.paidRatio) }}</div>
                   <div>未舍入应转值 {{ preciseMoney(allocation.exactTransferAmount) }}</div>
-                  <div>分摊创建时间 {{ formatPreciseDateTime(allocation.createdAt) }}</div>
+                  <div>分摊创建时间 {{ prepaidPreciseDateTime(allocation.createdAt) }}</div>
                 </article>
               </div>
               <el-empty v-else :image-size="48" description="该记录无充值分摊" />
@@ -68,30 +83,44 @@
               <h3>账号间应转明细</h3>
               <div v-if="row.payables.length" class="payable-list">
                 <article v-for="payable in row.payables" :key="payable.id" class="payable-card">
-                  <span>充值来源账号 {{ accountLabel(payable.sourceOwner) }}</span>
-                  <span>消费账号 {{ accountLabel(payable.consumerOwner) }}</span>
+                  <span>充值来源账号 {{ prepaidAccountLabel(payable.sourceOwner) }}</span>
+                  <span>消费账号 {{ prepaidAccountLabel(payable.consumerOwner) }}</span>
                   <span>精确本金值 {{ preciseMoney(payable.exactAmount) }}</span>
-                  <strong>应转金额 ¥{{ money(payable.amount) }}</strong>
+                  <strong>应转金额 ¥{{ prepaidMoney(payable.amount) }}</strong>
                   <el-tag :type="payableTagType(payable.status)">{{ payableStatusLabel(payable.status) }}</el-tag>
-                  <span>应转创建时间 {{ formatPreciseDateTime(payable.createdAt) }}</span>
+                  <span>应转创建时间 {{ prepaidPreciseDateTime(payable.createdAt) }}</span>
                 </article>
               </div>
               <p v-else class="muted">使用消费账号自有额度，无跨账号应转金额。</p>
+
+              <template v-if="row.originalPayables.length">
+                <h3>原消费应转明细（仅审计展示，不计入本冲正流水合计）</h3>
+                <div class="payable-list">
+                  <article v-for="payable in row.originalPayables" :key="payable.id" class="payable-card">
+                    <span>充值来源账号 {{ prepaidAccountLabel(payable.sourceOwner) }}</span>
+                    <span>消费账号 {{ prepaidAccountLabel(payable.consumerOwner) }}</span>
+                    <span>精确本金值 {{ preciseMoney(payable.exactAmount) }}</span>
+                    <strong>原应转金额 ¥{{ prepaidMoney(payable.amount) }}</strong>
+                    <el-tag :type="payableTagType(payable.status)">{{ payableStatusLabel(payable.status) }}</el-tag>
+                    <span>原应转创建时间 {{ prepaidPreciseDateTime(payable.createdAt) }}</span>
+                  </article>
+                </div>
+              </template>
             </div>
           </template>
         </el-table-column>
         <el-table-column prop="phoneSnapshot" label="会员手机号" width="145" />
         <el-table-column label="类型" width="95"><template #default="{ row }">{{ row.kind === 'REVERSAL' ? '冲正流水' : '消费' }}</template></el-table-column>
-        <el-table-column label="消费金额" width="115"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
-        <el-table-column label="跨账号应转" width="125"><template #default="{ row }">¥{{ money(payableTotal(row)) }}</template></el-table-column>
+        <el-table-column label="消费金额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.amount) }}</template></el-table-column>
+        <el-table-column label="本流水跨账号应转" width="150"><template #default="{ row }">¥{{ prepaidMoney(payableTotal(row)) }}</template></el-table-column>
         <el-table-column label="充值来源账号" min-width="190"><template #default="{ row }">{{ sourceOwnerLabels(row) }}</template></el-table-column>
-        <el-table-column label="消费账号" min-width="180"><template #default="{ row }">{{ accountLabel(row.consumingFrontendUser) }}</template></el-table-column>
-        <el-table-column label="实际操作账号" min-width="180"><template #default="{ row }">{{ accountLabel(row.actorUser) }}</template></el-table-column>
+        <el-table-column label="消费账号" min-width="180"><template #default="{ row }">{{ prepaidAccountLabel(row.consumingFrontendUser) }}</template></el-table-column>
+        <el-table-column label="实际操作账号" min-width="180"><template #default="{ row }">{{ prepaidAccountLabel(row.actorUser) }}</template></el-table-column>
         <el-table-column prop="sampleNumberSnapshot" label="样品编号" width="115" />
         <el-table-column prop="sampleCountSnapshot" label="样品数量" width="100" />
-        <el-table-column label="检测元素" min-width="180"><template #default="{ row }">{{ formatElements(row.elementsSnapshot) }}</template></el-table-column>
+        <el-table-column label="检测元素" min-width="180"><template #default="{ row }">{{ prepaidFormatElements(row.elementsSnapshot) }}</template></el-table-column>
         <el-table-column prop="sheetDate" label="样品日期" width="120" />
-        <el-table-column label="实际消费时间" width="185"><template #default="{ row }">{{ formatPreciseDateTime(row.createdAt) }}</template></el-table-column>
+        <el-table-column label="实际消费时间" width="185"><template #default="{ row }">{{ prepaidPreciseDateTime(row.createdAt) }}</template></el-table-column>
         <el-table-column label="结算/冲正状态" width="165"><template #default="{ row }">{{ rowStatus(row) }}</template></el-table-column>
         <el-table-column v-if="isMainAccount" label="不可变更正" width="110" fixed="right">
           <template #default="{ row }">
@@ -127,13 +156,21 @@ import { useSharedPrepaidRealtimeRegistration } from '@/composables/useSharedPre
 import { useAuthStore } from '@/stores/auth'
 import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import type {
-  PrepaidAccountRow,
   PrepaidConsumptionListAllocationRow,
   PrepaidConsumptionListRow,
   PrepaidConsumptionQuery,
   PrepaidPayableStatus
 } from '@/types/sharedPrepaid'
-import { formatPreciseDateTime } from '@/utils/date'
+import {
+  prepaidAccountLabel,
+  prepaidErrorMessage,
+  prepaidFormatElements,
+  prepaidIsConflict,
+  prepaidIsMessageBoxDismissed,
+  prepaidMoney,
+  prepaidNormalizePhone,
+  prepaidPreciseDateTime
+} from '@/utils/sharedPrepaidPresentation'
 
 defineOptions({ name: 'PrepaidConsumptionsPage' })
 
@@ -154,17 +191,17 @@ const isMainAccount = computed(() => auth.user?.role === 'FRONTEND_USER' || auth
 const currentOwnerId = computed(() => auth.user?.dataOwnerId || auth.user?.id || '')
 const realtime = useSharedPrepaidRealtimeRegistration('consumptions', {
   isDirty: () => false,
-  refresh: () => loadConsumptions(store.consumptionsPage.page)
+  refresh: () => loadPageData(store.consumptionsPage.page)
 })
 
-onMounted(() => void loadConsumptions())
+onMounted(() => void loadPageData())
 
 function consumptionQuery(page = 1): PrepaidConsumptionQuery {
   const [startDate, endDate] = filters.dateRange
   return {
     page,
     pageSize,
-    ...(normalizePhone(filters.phone) ? { phone: normalizePhone(filters.phone) } : {}),
+    ...(prepaidNormalizePhone(filters.phone) ? { phone: prepaidNormalizePhone(filters.phone) } : {}),
     ...(filters.sourceOwnerId.trim() ? { sourceOwnerId: filters.sourceOwnerId.trim() } : {}),
     ...(filters.consumingFrontendUserId.trim() ? { consumingFrontendUserId: filters.consumingFrontendUserId.trim() } : {}),
     ...(startDate ? { startDate } : {}),
@@ -180,6 +217,13 @@ async function loadConsumptions(page = 1) {
   } catch {
     // Store exposes the persistent error and retains the exact active filters.
   }
+}
+
+async function loadPageData(page = 1) {
+  await Promise.allSettled([
+    store.loadConsumptionFilterOptions(),
+    loadConsumptions(page)
+  ])
 }
 
 function applyFilters() {
@@ -199,19 +243,19 @@ async function reverseConsumption(row: PrepaidConsumptionListRow) {
       { type: 'warning', inputPattern: /\S+/, inputErrorMessage: '请填写冲正原因', confirmButtonText: '创建冲正', cancelButtonText: '取消' }
     )
     await store.reverseConsumption(row.id, value.trim())
-    await loadConsumptions(store.consumptionsPage.page)
+    await loadPageData(store.consumptionsPage.page)
     ElMessage.success('消费冲正流水已创建')
   } catch (error) {
-    if (!isMessageBoxCancel(error)) {
-      mutationError.value = isConflict(error)
-        ? `${errorMessage(error, '消费或结算状态已变化')}，本次冲正未生效，请刷新后核对再重试。`
-        : errorMessage(error, '消费冲正失败')
+    if (!prepaidIsMessageBoxDismissed(error)) {
+      mutationError.value = prepaidIsConflict(error)
+        ? `${prepaidErrorMessage(error, '消费或结算状态已变化')}，本次冲正未生效，请刷新后核对再重试。`
+        : prepaidErrorMessage(error, '消费冲正失败')
     }
   }
 }
 
 function sourceOwnerLabels(row: PrepaidConsumptionListRow) {
-  const labels = new Map(row.allocations.map((allocation) => [allocation.sourceOwnerId, accountLabel(allocation.sourceOwner)]))
+  const labels = new Map(row.allocations.map((allocation) => [allocation.sourceOwnerId, prepaidAccountLabel(allocation.sourceOwner)]))
   return [...labels.values()].join('、') || '无信息'
 }
 
@@ -247,37 +291,6 @@ function payableTagType(status: PrepaidPayableStatus) {
   return ({ PENDING: 'warning', HELD: 'primary', COMPLETED: 'success', REVERSED: 'info' } as const)[status]
 }
 
-function accountLabel(account: PrepaidAccountRow) {
-  const display = account.displayRemark || account.username
-  return display && display !== account.account ? `${display}（${account.account}）` : account.account || display || '无信息'
-}
-
-function formatElements(value: unknown) {
-  if (Array.isArray(value)) {
-    return value.map((item) => {
-      if (typeof item === 'string') return item
-      if (item && typeof item === 'object') {
-        const record = item as Record<string, unknown>
-        const name = record.name ?? record.element ?? record.label
-        const amount = record.value ?? record.result
-        return [name, amount].filter((part) => part !== undefined && part !== null && part !== '').join(': ')
-      }
-      return String(item)
-    }).filter(Boolean).join('、') || '无信息'
-  }
-  if (value && typeof value === 'object') return Object.entries(value).map(([key, item]) => `${key}: ${String(item)}`).join('、')
-  return typeof value === 'string' && value.trim() ? value : '无信息'
-}
-
-function normalizePhone(value: unknown) {
-  return String(value ?? '').replace(/\D/g, '')
-}
-
-function money(value: unknown) {
-  const amount = Number(value)
-  return Number.isFinite(amount) ? amount.toFixed(2) : '0.00'
-}
-
 function preciseMoney(value: unknown) {
   const amount = Number(value)
   return Number.isFinite(amount) ? amount.toFixed(8).replace(/0+$/, '').replace(/\.$/, '') : '0'
@@ -288,28 +301,18 @@ function percent(value: unknown) {
   return Number.isFinite(ratio) ? `${(ratio * 100).toFixed(4)}%` : '0%'
 }
 
-function isConflict(error: unknown) {
-  return (error as { response?: { status?: unknown } } | null)?.response?.status === 409
-}
-
-function errorMessage(error: unknown, fallback: string) {
-  const response = (error as { response?: { data?: { message?: unknown } }; message?: unknown } | null)?.response
-  const message = response?.data?.message ?? (error as { message?: unknown } | null)?.message
-  return typeof message === 'string' && message.trim() ? message : fallback
-}
-
-function isMessageBoxCancel(error: unknown) {
-  return error === 'cancel' || error === 'close'
-}
 </script>
 
 <style scoped>
 .consumption-header { align-items: flex-start; }
 .filter-body { padding-bottom: 0; }
 .consumption-filters { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 10px; }
+.filter-field { display: grid; gap: 4px; color: #475569; font-size: 12px; }
+.filter-field :deep(.el-input), .filter-field :deep(.el-select) { width: 100%; }
 .consumption-filters :deep(.el-date-editor) { width: 100%; }
 .consumption-alert { margin: 14px 16px 0; }
 .consumption-detail { display: grid; gap: 12px; padding: 12px 16px 18px 58px; }
+.audit-identity { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 10px 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; color: #9a3412; }
 .consumption-detail h3 { margin: 4px 0 0; font-size: 14px; }
 .sample-detail-grid { display: flex; flex-wrap: wrap; gap: 8px 18px; color: #475569; font-size: 13px; }
 .allocation-list, .payable-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

@@ -141,6 +141,12 @@ export class SharedPrepaidController {
     return this.queryService.listConsumptions(query)
   }
 
+  @Get('consumptions/filter-options')
+  @FrontendPermission('PREPAID_CONSUMPTIONS')
+  listConsumptionFilterOptions() {
+    return this.queryService.listConsumptionFilterOptions()
+  }
+
   @Post('recharges')
   @FrontendPermission('PREPAID_RECHARGE')
   createRecharge(
