@@ -5,6 +5,8 @@ import type { CurrentUser } from '../auth/current-user'
 import { CurrentUserInfo } from '../auth/current-user.decorator'
 import { Roles } from '../auth/roles.decorator'
 import { RolesGuard } from '../auth/roles.guard'
+import { FrontendPermission } from '../auth/frontend-permission.decorator'
+import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
 import {
   CreateMedicineCorrectionDto,
   CreateMedicineInboundDto,
@@ -29,39 +31,45 @@ function movementQuery(query: MedicineInventoryQuery) {
 }
 
 @Controller('medicine-inventory')
-@UseGuards(AuthGuard, RolesGuard)
+@UseGuards(AuthGuard, RolesGuard, FrontendPermissionGuard)
 @Roles(UserRole.FRONTEND_USER)
 export class MedicineInventoryController {
   constructor(private readonly medicineInventory: MedicineInventoryService) {}
 
   @Get('items')
+  @FrontendPermission('MEDICINE_STOCK')
   items(@CurrentUserInfo() user: CurrentUser, @Query() query: MedicineInventoryQuery) {
-    return this.medicineInventory.listItems([user.id], parseMedicineMultiValue(query.medicineItemIds))
+    return this.medicineInventory.listItems([user.dataOwnerId], parseMedicineMultiValue(query.medicineItemIds))
   }
 
   @Get('common-names')
+  @FrontendPermission('MEDICINE_INBOUND')
   commonNames(@CurrentUserInfo() user: CurrentUser) {
-    return this.medicineInventory.listCommonNames([user.id])
+    return this.medicineInventory.listCommonNames([user.dataOwnerId])
   }
 
   @Post('common-names')
+  @FrontendPermission('MEDICINE_INBOUND')
   createCommonName(@CurrentUserInfo() user: CurrentUser, @Body('name') name: string) {
-    return this.medicineInventory.createCommonName(user.id, name)
+    return this.medicineInventory.createCommonName(user.dataOwnerId, name)
   }
 
   @Delete('common-names/:id')
+  @FrontendPermission('MEDICINE_INBOUND')
   async deleteCommonName(@CurrentUserInfo() user: CurrentUser, @Param('id') commonNameId: string) {
-    await this.medicineInventory.deleteCommonName(user.id, commonNameId)
+    await this.medicineInventory.deleteCommonName(user.dataOwnerId, commonNameId)
   }
 
   @Get('inbounds')
+  @FrontendPermission('MEDICINE_INBOUND')
   inbounds(@CurrentUserInfo() user: CurrentUser, @Query() query: MedicineInventoryQuery) {
-    return this.medicineInventory.listMovements([user.id], 'inbound', movementQuery(query))
+    return this.medicineInventory.listMovements([user.dataOwnerId], 'inbound', movementQuery(query))
   }
 
   @Post('inbounds')
+  @FrontendPermission('MEDICINE_INBOUND')
   createInbound(@CurrentUserInfo() user: CurrentUser, @Body() body: CreateMedicineInboundDto) {
-    return this.medicineInventory.createInbound(user.id, {
+    return this.medicineInventory.createInbound(user.dataOwnerId, {
       occurredOn: body.occurredOn,
       name: body.name,
       unit: body.unit,
@@ -71,13 +79,15 @@ export class MedicineInventoryController {
   }
 
   @Get('outbounds')
+  @FrontendPermission('MEDICINE_OUTBOUND')
   outbounds(@CurrentUserInfo() user: CurrentUser, @Query() query: MedicineInventoryQuery) {
-    return this.medicineInventory.listMovements([user.id], 'outbound', movementQuery(query))
+    return this.medicineInventory.listMovements([user.dataOwnerId], 'outbound', movementQuery(query))
   }
 
   @Post('outbounds')
+  @FrontendPermission('MEDICINE_OUTBOUND')
   createOutbound(@CurrentUserInfo() user: CurrentUser, @Body() body: CreateMedicineOutboundDto) {
-    return this.medicineInventory.createOutbound(user.id, {
+    return this.medicineInventory.createOutbound(user.dataOwnerId, {
       occurredOn: body.occurredOn,
       medicineItemId: body.medicineItemId,
       quantity: body.quantity,
@@ -86,11 +96,12 @@ export class MedicineInventoryController {
   }
 
   @Post('movements/:id/corrections')
+  @FrontendPermission('MEDICINE_INBOUND', 'MEDICINE_OUTBOUND')
   createCorrection(
     @CurrentUserInfo() user: CurrentUser,
     @Param('id') movementId: string,
     @Body() body: CreateMedicineCorrectionDto
   ) {
-    return this.medicineInventory.createCorrection(user.id, movementId, body.reason)
+    return this.medicineInventory.createCorrection(user.dataOwnerId, movementId, body.reason)
   }
 }

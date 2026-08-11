@@ -12,6 +12,12 @@ const frontendUser: CurrentUser = {
   isFrontendMainAccount: true, isFrontendSubAccount: false
 }
 
+const frontendSubUser: CurrentUser = {
+  id: 'sub-1', account: 'sub-1', username: '子账号', role: UserRole.FRONTEND_SUB_USER,
+  dataOwnerId: 'front-1', permissionVersion: 2, permissions: ['DATA_MAIN'], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: false, isFrontendSubAccount: true
+}
+
 describe('LabSheetsController segmented parameter access', () => {
   const sheets = {
     applyCurrentParametersFromIndex: vi.fn().mockResolvedValue({}),
@@ -87,6 +93,15 @@ describe('LabSheetsController segmented parameter access', () => {
     const controller = new LabSheetsController(sheets as never, auth as never)
 
     await controller.addBlocks(frontendUser, 'sheet-1', 1, 'client-1', 'valid-grant')
+
+    expect(sheets.addSampleBlocks).toHaveBeenCalledWith('front-1', 'sheet-1', 1, 'client-1', true)
+  })
+
+  it('uses the parent data owner for subaccount reads and writes', async () => {
+    auth.isFeatureProtected.mockResolvedValue(false)
+    const controller = new LabSheetsController(sheets as never, auth as never)
+
+    await controller.addBlocks(frontendSubUser, 'sheet-1', 1, 'client-1')
 
     expect(sheets.addSampleBlocks).toHaveBeenCalledWith('front-1', 'sheet-1', 1, 'client-1', true)
   })

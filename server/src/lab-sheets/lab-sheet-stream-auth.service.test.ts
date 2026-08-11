@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common'
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common'
 import { UserRole } from '@prisma/client'
 import jwt from 'jsonwebtoken'
 import { describe, expect, it, vi } from 'vitest'
@@ -43,5 +43,23 @@ describe('LabSheetStreamAuthService', () => {
     const oldToken = jwt.sign({ sub: 'sub-1', permissionVersion: 3 }, secret)
 
     await expect(service.verifyFrontendToken(oldToken)).rejects.toBeInstanceOf(UnauthorizedException)
+  })
+
+  it('rejects a subaccount stream without data calculation permission', async () => {
+    const prisma = {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'sub-1', account: 'sub-1', username: '子账号', role: UserRole.FRONTEND_SUB_USER,
+          permissionVersion: 3, requiresAccessGuardPassword: true, disabled: false, deletedAt: null,
+          parentFrontendUserId: 'front-1',
+          parentFrontendUser: { id: 'front-1', role: UserRole.FRONTEND_USER, disabled: false, deletedAt: null },
+          frontendSubAccountPermissions: [{ permission: 'REPORTS' }]
+        })
+      }
+    }
+    const service = new LabSheetStreamAuthService(prisma as never, { get: vi.fn(() => secret) } as never)
+    const token = jwt.sign({ sub: 'sub-1', permissionVersion: 3 }, secret)
+
+    await expect(service.verifyFrontendToken(token)).rejects.toBeInstanceOf(ForbiddenException)
   })
 })

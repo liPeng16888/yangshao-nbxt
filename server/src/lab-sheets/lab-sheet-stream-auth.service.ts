@@ -24,6 +24,9 @@ export class LabSheetStreamAuthService {
       if (user.role !== UserRole.FRONTEND_USER && user.role !== UserRole.FRONTEND_SUB_USER) {
         throw new ForbiddenException('无权访问')
       }
+      if (user.role === UserRole.FRONTEND_SUB_USER && !user.permissions.includes('DATA_MAIN')) {
+        throw new ForbiddenException('子账号没有数据计算权限')
+      }
       return user
     } catch (error) {
       if (error instanceof UnauthorizedException || error instanceof ForbiddenException) throw error

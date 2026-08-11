@@ -162,9 +162,10 @@ export class LabSheetsService {
 
   async saveSampleBlock(user: CurrentUser, sheetId: string, blockPayload: Record<string, unknown>, sourceClientId?: string, canViewCompletedSensitiveData = true) {
     const blockId = String(blockPayload.id || '')
+    const dataOwnerId = user.dataOwnerId || user.id
     const outcome = await this.withSheetWriteLock(sheetId, async (tx) => {
       const sheet = await tx.labSheet.findUnique({ where: { id: sheetId } })
-      if (!sheet || sheet.frontendUserId !== user.id) throw new NotFoundException('未找到表格')
+      if (!sheet || sheet.frontendUserId !== dataOwnerId) throw new NotFoundException('未找到表格')
       this.assertSheetEditable(sheet)
       const block = await tx.sampleBlock.findUnique({ where: { id: blockId } })
       if (!block || block.sheetId !== sheet.id) throw new NotFoundException('未找到样品')

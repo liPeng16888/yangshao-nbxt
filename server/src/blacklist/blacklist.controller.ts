@@ -5,11 +5,14 @@ import { CurrentUserInfo } from '../auth/current-user.decorator'
 import type { CurrentUser } from '../auth/current-user'
 import { Roles } from '../auth/roles.decorator'
 import { RolesGuard } from '../auth/roles.guard'
+import { FrontendPermission } from '../auth/frontend-permission.decorator'
+import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
 import { BlacklistService } from './blacklist.service'
 
 @Controller('blacklist')
-@UseGuards(AuthGuard, RolesGuard)
+@UseGuards(AuthGuard, RolesGuard, FrontendPermissionGuard)
 @Roles(UserRole.FRONTEND_USER)
+@FrontendPermission('BLACKLIST')
 export class BlacklistController {
   constructor(private readonly blacklist: BlacklistService) {}
 
@@ -25,16 +28,16 @@ export class BlacklistController {
 
   @Post()
   create(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.blacklist.create(user.id, body)
+    return this.blacklist.create(user.dataOwnerId, body)
   }
 
   @Patch(':id')
   update(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: any) {
-    return this.blacklist.update(user.id, id, body)
+    return this.blacklist.update(user.dataOwnerId, id, body)
   }
 
   @Delete(':id')
   delete(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string) {
-    return this.blacklist.delete(user.id, id)
+    return this.blacklist.delete(user.dataOwnerId, id)
   }
 }

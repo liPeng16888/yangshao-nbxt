@@ -76,7 +76,7 @@ describe('FinanceService batch sample payment', () => {
   it('marks unique unsettled samples as paid in one transaction and logs every block', async () => {
     transaction.sampleBlock.findMany.mockResolvedValue([makeBlock('block-2'), makeBlock('block-1')])
 
-    const result = await service.markFrontendSamplesPaid('front-1', ['block-1', 'block-1', 'block-2'])
+    const result = await service.markFrontendSamplesPaid('front-1', ['block-1', 'block-1', 'block-2'], 'sub-1')
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1)
     expect(transaction.sampleBlock.findMany).toHaveBeenCalledWith({
@@ -85,6 +85,9 @@ describe('FinanceService batch sample payment', () => {
     })
     expect(transaction.sampleBlock.update).toHaveBeenCalledTimes(2)
     expect(transaction.cellChangeLog.create).toHaveBeenCalledTimes(2)
+    expect(transaction.cellChangeLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ frontendUserId: 'front-1', changedById: 'sub-1' })
+    })
     expect(result.map((block) => block.id)).toEqual(['block-1', 'block-2'])
     expect(result.every((block) => (block.inputs as Record<string, unknown>).paymentStatus === '已结款')).toBe(true)
   })

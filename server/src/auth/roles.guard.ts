@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
-import type { UserRole } from '@prisma/client'
+import { UserRole } from '@prisma/client'
 import { ROLES_KEY } from './roles.decorator'
 import type { CurrentUser } from './current-user'
 
@@ -13,6 +13,7 @@ export class RolesGuard implements CanActivate {
     if (!roles?.length) return true
     const request = context.switchToHttp().getRequest<{ user?: CurrentUser }>()
     if (request.user && roles.includes(request.user.role)) return true
+    if (request.user?.role === UserRole.FRONTEND_SUB_USER && roles.includes(UserRole.FRONTEND_USER)) return true
     throw new ForbiddenException('没有访问权限')
   }
 }

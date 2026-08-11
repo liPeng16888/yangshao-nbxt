@@ -126,12 +126,12 @@ export class FinanceService {
     return this.getUnsettledRows(sheets).sort((a, b) => `${b.date}-${b.sequence}`.localeCompare(`${a.date}-${a.sequence}`))
   }
 
-  async markFrontendSamplePaid(frontendUserId: string, blockId: string) {
-    const [saved] = await this.markFrontendSamplesPaid(frontendUserId, [blockId])
+  async markFrontendSamplePaid(frontendUserId: string, blockId: string, actorUserId = frontendUserId) {
+    const [saved] = await this.markFrontendSamplesPaid(frontendUserId, [blockId], actorUserId)
     return saved
   }
 
-  async markFrontendSamplesPaid(frontendUserId: string, rawBlockIds: string[]) {
+  async markFrontendSamplesPaid(frontendUserId: string, rawBlockIds: string[], actorUserId = frontendUserId) {
     const blockIds = Array.from(new Set((Array.isArray(rawBlockIds) ? rawBlockIds : [])
       .map((id) => String(id || '').trim())
       .filter(Boolean)))
@@ -177,7 +177,7 @@ export class FinanceService {
             sheetId: block.sheetId,
             blockId: block.id,
             frontendUserId,
-            changedById: frontendUserId,
+            changedById: actorUserId,
             field: 'paymentStatus',
             oldValue: this.jsonValue(oldInputs.paymentStatus ?? null),
             newValue: '已结款'
