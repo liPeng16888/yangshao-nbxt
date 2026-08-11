@@ -11,7 +11,7 @@ import {
   buildEmployeeMutationPayload,
   normalizeAttendanceGenerationResponse,
   normalizeAttendanceResponse,
-  normalizeAttendanceMutationPayload,
+  normalizeLegacyAttendanceMutationPayload,
   normalizeAttendanceQuery,
   normalizeBonusResponse,
   normalizeCommissionResponse,
@@ -22,6 +22,7 @@ import {
   normalizeMonthlySettingResponse,
   getLeaves,
   getMonthlySchedules,
+  saveAttendance,
   normalizePayrollAdjustmentResponse,
   normalizePayrollResponse,
   selectEmployeeAttendanceGrant,
@@ -54,6 +55,14 @@ describe('employee attendance real API adapters', () => {
   it('normalizes ordered actual attendance segments and numeric totals', () => {
     expect(normalizeAttendanceResponse({ id: 'att-1', employeeId: 'emp-1', date: '2026-08-03', isScheduledWorkday: true, scheduledMinutes: '480', workedMinutes: '450', lateMinutes: '10', earlyLeaveMinutes: '20', absenceMinutes: '30', overtimeMinutes: '45', actualSegments: [{ sequence: 1, checkInAt: '2026-08-03T13:00:00+08:00', checkOutAt: '2026-08-03T17:00:00+08:00' }, { sequence: 0, checkInAt: '2026-08-03T08:00:00+08:00', checkOutAt: '2026-08-03T12:00:00+08:00' }] }))
       .toMatchObject({ scheduledMinutes: 480, workedMinutes: 450, lateMinutes: 10, earlyLeaveMinutes: 20, absenceMinutes: 30, overtimeMinutes: 45, actualSegments: [{ sequence: 0 }, { sequence: 1 }] })
+  })
+
+  it('sends the DTO-shaped actual-segment attendance payload through the public save adapter', async () => {
+    vi.mocked(request.post).mockResolvedValueOnce({ id: 'att-1', employeeId: 'emp-1', date: '2026-08-03', isScheduledWorkday: true, scheduledMinutes: 480, actualSegments: [], explicitAbsenceMinutes: 30, absenceMinutes: 30 })
+    await expect(saveAttendance({ employeeId: 'emp-1', date: '2026-08-03', actualSegments: [], explicitAbsenceMinutes: 30, overtimeMinutes: 0 })).resolves.toMatchObject({ actualSegments: [], absenceMinutes: 30 })
+    expect(request.post).toHaveBeenCalledWith('/employee-attendance/attendance', {
+      employeeId: 'emp-1', date: '2026-08-03', actualSegments: [], explicitAbsenceMinutes: 30, overtimeMinutes: 0
+    }, {})
   })
 
   it('omits blank sensitive fields from edits while retaining explicit changes', () => {
@@ -89,7 +98,7 @@ describe('employee attendance real API adapters', () => {
   })
 
   it('serializes datetime-local punches with a fixed Beijing offset and restores Beijing wall time for editing', () => {
-    const payload = normalizeAttendanceMutationPayload({
+    const payload = normalizeLegacyAttendanceMutationPayload({
       employeeId: 'e1', date: '2026-08-08', isScheduledWorkday: true, scheduledMinutes: 480,
       checkInAt: '2026-08-08T08:05', checkOutAt: '2026-08-08T17:30'
     })
@@ -98,7 +107,7 @@ describe('employee attendance real API adapters', () => {
       checkOutAt: '2026-08-08T17:30:00+08:00'
     })
     expect(toBeijingDateTimeLocal('2026-08-08T00:05:00Z')).toBe('2026-08-08T08:05')
-    expect(normalizeAttendanceMutationPayload({
+    expect(normalizeLegacyAttendanceMutationPayload({
       employeeId: 'e1', date: '2026-08-08', isScheduledWorkday: true, scheduledMinutes: 480,
       checkInAt: '', checkOutAt: ''
     })).toMatchObject({ checkInAt: null, checkOutAt: null })

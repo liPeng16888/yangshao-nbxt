@@ -3,8 +3,8 @@ import baseRequest, { useMocks } from '@/utils/request'
 import { readAccessGuardSessions, selectAccessGuardGrant, type StoredAccessGuardSessions } from '@/api/accessGuard'
 import * as mock from '@/mocks/employeeAttendance'
 import type {
-  ActualAttendanceSegment, AttendanceGenerationResult, AttendanceOverview, AttendancePayload, AttendanceQuery, AttendanceRecord, BonusPayload, BonusRecord,
-  BatchMonthlySchedulePayload,
+  ActualAttendanceSegment, AttendanceGenerationResult, AttendanceOverview, AttendancePayload, AttendanceQuery, AttendanceRecord, BonusPayload, BonusRecord, EmployeeAttendanceInput,
+  BatchMonthlySchedulePayload, BatchMonthlyScheduleResult,
   CommissionPayload, CommissionRecord, CommissionType, CommissionTypePayload, CompensationTotal, DateOverride,
   DateOverridePayload, Employee, EmployeePayload, EmployeeQuery, LeaveRequest, LeaveRequestPayload, LeaveType,
   LeaveTypePayload, MonthlyScheduleDay, MonthlySchedulePayload, MonthlySetting, PayrollAdjustment, PayrollRun, RevealedEmployee,
@@ -128,17 +128,18 @@ function toBeijingOffsetIso(value?: string | null): string | null {
   return `${match[1]}T${match[2]}:${match[3] || '00'}+08:00`
 }
 
-export function normalizeAttendanceMutationPayload(payload: AttendancePayload): AttendancePayload {
-  const actualSegments = payload.actualSegments?.map((segment) => ({
-    ...segment,
-    checkInAt: toBeijingOffsetIso(segment.checkInAt) || '', checkOutAt: toBeijingOffsetIso(segment.checkOutAt) || ''
-  }))
+export function normalizeAttendanceMutationPayload(payload: EmployeeAttendanceInput): EmployeeAttendanceInput {
   return {
     ...payload,
-    ...(actualSegments ? { actualSegments } : {}),
-    checkInAt: toBeijingOffsetIso(payload.checkInAt),
-    checkOutAt: toBeijingOffsetIso(payload.checkOutAt)
+    actualSegments: payload.actualSegments.map((segment) => ({
+      ...segment,
+      checkInAt: toBeijingOffsetIso(segment.checkInAt) || '', checkOutAt: toBeijingOffsetIso(segment.checkOutAt) || ''
+    }))
   }
+}
+/** @deprecated Only the existing weekly attendance screen uses this migration adapter. */
+export function normalizeLegacyAttendanceMutationPayload(payload: AttendancePayload): AttendancePayload {
+  return { ...payload, checkInAt: toBeijingOffsetIso(payload.checkInAt), checkOutAt: toBeijingOffsetIso(payload.checkOutAt) }
 }
 
 export function toBeijingDateTimeLocal(value?: string | null): string {
@@ -216,12 +217,13 @@ export const deleteMonthlyScheduleDay = async (id: string): Promise<void> => {
   if (useMocks) return mock.mockDeleteMonthlyScheduleDay(id)
   await attendanceRequest.delete(`/employee-attendance/monthly-schedules/day/${id}`)
 }
-export const batchSaveMonthlySchedules = (payload: BatchMonthlySchedulePayload): Promise<{ updated: number; overwritten: number }> => (useMocks
+export const batchSaveMonthlySchedules = (payload: BatchMonthlySchedulePayload): Promise<BatchMonthlyScheduleResult> => (useMocks
   ? mock.mockBatchSaveMonthlySchedules(payload)
   : attendanceRequest.post('/employee-attendance/monthly-schedules/batch', payload)).then((result: unknown) => {
-  if (Array.isArray(result)) return { updated: result.length, overwritten: result.length }
+  if (Array.isArray(result)) return { rows: result.map(normalizeMonthlyScheduleResponse), updated: result.length, overwritten: 0 }
   const row = responseObject(result)
-  return { updated: amount(row.updated), overwritten: amount(row.overwritten) }
+  const rows = Array.isArray(row.rows) ? row.rows.map(normalizeMonthlyScheduleResponse) : []
+  return { rows, updated: amount(row.updated), overwritten: amount(row.overwritten) }
 })
 export const copyPreviousMonthSchedules = (employeeId: string, targetMonth: string, overwrite: boolean): Promise<{ copied: number; targetMonth: string }> => (useMocks
   ? mock.mockCopyPreviousMonthSchedules(employeeId, targetMonth, overwrite)
@@ -231,7 +233,14 @@ export const copyPreviousMonthSchedules = (employeeId: string, targetMonth: stri
 })
 
 export const getAttendance = (query: AttendanceQuery = {}): Promise<AttendanceRecord[]> => { const normalized = normalizeAttendanceQuery(query); return useMocks ? mock.mockGetAttendance(normalized) : attendanceRequest.get('/employee-attendance/attendance', { params: normalized }).then((rows: unknown[]) => rows.map(normalizeAttendanceResponse)) }
-export const saveAttendance = (payload: AttendancePayload, id?: string): Promise<AttendanceRecord> => { const normalized = normalizeAttendanceMutationPayload(payload); return (useMocks ? mock.mockSaveAttendance(normalized, id) : id ? attendanceRequest.put(`/employee-attendance/attendance/${id}`, normalized) : attendanceRequest.post('/employee-attendance/attendance', normalized)).then(normalizeAttendanceResponse) }
+export function saveAttendance(payload: EmployeeAttendanceInput, id?: string): Promise<AttendanceRecord>
+/** @deprecated Compatibility overload for the legacy weekly attendance page. */
+export function saveAttendance(payload: AttendancePayload, id?: string): Promise<AttendanceRecord>
+export function saveAttendance(payload: EmployeeAttendanceInput | AttendancePayload, id?: string): Promise<AttendanceRecord> {
+  const isModern = 'actualSegments' in payload && !('isScheduledWorkday' in payload) && !('scheduledMinutes' in payload) && !('checkInAt' in payload) && !('checkOutAt' in payload)
+  const normalized = isModern ? normalizeAttendanceMutationPayload(payload) : normalizeLegacyAttendanceMutationPayload(payload)
+  return (useMocks ? mock.mockSaveAttendance(normalized, id) : id ? attendanceRequest.put(`/employee-attendance/attendance/${id}`, normalized) : attendanceRequest.post('/employee-attendance/attendance', normalized)).then(normalizeAttendanceResponse)
+}
 export const deleteAttendance = async (id: string) => useMocks ? mock.mockDeleteAttendance(id) : attendanceRequest.delete(`/employee-attendance/attendance/${id}`)
 export const generateAttendance = (month: string, employeeIds: string[]): Promise<AttendanceGenerationResult> => useMocks
   ? mock.mockGenerateAttendance(month, employeeIds)

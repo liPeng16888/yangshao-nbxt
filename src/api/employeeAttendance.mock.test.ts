@@ -192,7 +192,7 @@ describe('employee attendance mock repository', () => {
     await mockCreatePayrollAdjustment(item.id, { amount: -10.01, reason: '补扣' })
     const refreshed = await mockGetPayroll(month)
     const result = refreshed!.items.find((row) => row.employeeId === 'emp-1')!.calculationSnapshot.result
-    expect(result).toMatchObject({ attendanceBonus: 0, overtimePay: 15.5, commissionAmount: 96, bonusAmount: 200, adjustmentAmount: -10.01, leaveDeduction: 3000, absenceDeduction: 1500, payableAmount: 1801.49 })
+    expect(result).toMatchObject({ attendanceBonus: 0, overtimePay: 15.5, commissionAmount: 96, bonusAmount: 200, adjustmentAmount: -10.01, leaveDeduction: 285.71, absenceDeduction: 142.86, payableAmount: 5872.92 })
   })
 
   it('matches conflict, inactive-type, overlapping-month, history-delete and employment-window rules', async () => {
@@ -231,7 +231,7 @@ describe('employee attendance mock repository', () => {
     await mockSaveAttendance({ ...record, checkInAt: '', checkOutAt: '', absenceMinutes: 480 }, record.id)
     const refreshed = await mockGeneratePayroll(month)
     const snapshot = refreshed.items.find(row => row.employeeId === 'emp-2')!.calculationSnapshot.result
-    expect(snapshot).toMatchObject({ attendanceBonus: 0, absenceDeduction: 2750 })
+    expect(snapshot).toMatchObject({ attendanceBonus: 0, absenceDeduction: 130.95 })
   })
 
   it('includes rest-day overtime and stores a complete immutable server-shaped calculation snapshot', async () => {
@@ -248,7 +248,7 @@ describe('employee attendance mock repository', () => {
     expect(Object.keys(snapshot.input).sort()).toEqual(['adjustments', 'absenceDays', 'attendanceBonus', 'baseSalary', 'bonusAmount', 'commissionAmount', 'countedLeaveDays', 'overtimeHourlyRate', 'overtimeMinutes', 'restQuotaDays', 'scheduledWorkDays'].sort())
     expect(Object.keys(snapshot.result).sort()).toEqual(['absenceDeduction', 'adjustmentAmount', 'attendanceBonus', 'bonusAmount', 'commissionAmount', 'dailyRate', 'excessLeaveDays', 'issues', 'leaveDeduction', 'overtimeHours', 'overtimePay', 'payableAmount'].sort())
     expect(snapshot).toEqual({
-      input: expect.objectContaining({ baseSalary: 6000, scheduledWorkDays: 1, overtimeMinutes: 90, overtimeHourlyRate: 30, adjustments: [] }),
+      input: expect.objectContaining({ baseSalary: 6000, scheduledWorkDays: 21, overtimeMinutes: 90, overtimeHourlyRate: 30, adjustments: [] }),
       result: expect.objectContaining({ overtimeHours: 1.5, overtimePay: 45, payableAmount: expect.any(Number), issues: [] }),
       generatedAt: expect.any(String)
     })
@@ -287,7 +287,7 @@ describe('employee attendance mock repository', () => {
     const draft = await mockGeneratePayroll(month)
     const item = draft.items.find((row) => row.employeeId === 'emp-1')!
     expect(item.issues).toEqual([])
-    expect(item.calculationSnapshot.result).toMatchObject({ attendanceBonus: 0, absenceDeduction: 6000 })
+    expect(item.calculationSnapshot.result).toMatchObject({ attendanceBonus: 0, absenceDeduction: 285.71 })
     await expect(mockConfirmPayroll(draft.id)).resolves.toMatchObject({ status: 'CONFIRMED' })
   })
 

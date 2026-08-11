@@ -28,6 +28,7 @@ export interface ScheduleSegment { id?: string; sequence?: number; startTime: st
 export interface MonthlySchedulePayload { employeeId: string; date: string; isWorkday: boolean; segments: ScheduleSegment[]; remark?: string }
 export interface MonthlyScheduleDay extends MonthlySchedulePayload { id: string; scheduledMinutes: number; breakMinutes: number }
 export interface BatchMonthlySchedulePayload extends Omit<MonthlySchedulePayload, 'date'> { dates: string[] }
+export interface BatchMonthlyScheduleResult { rows: MonthlyScheduleDay[]; updated: number; overwritten: number }
 export interface ActualAttendanceSegment { id?: string; sequence?: number; checkInAt: string; checkOutAt: string }
 
 /**
@@ -35,12 +36,10 @@ export interface ActualAttendanceSegment { id?: string; sequence?: number; check
  * incrementally. New monthly scheduling code uses actualSegments and
  * explicitAbsenceMinutes exclusively.
  */
-export interface AttendancePayload {
-  employeeId: string; date: string; actualSegments?: ActualAttendanceSegment[]; explicitAbsenceMinutes?: number; overtimeMinutes?: number; remark?: string
-  isScheduledWorkday?: boolean; scheduledMinutes?: number; checkInAt?: string | null; checkOutAt?: string | null;
-  workedMinutes?: number; lateMinutes?: number; earlyLeaveMinutes?: number; absenceMinutes?: number
-}
-export interface AttendanceRecord extends AttendancePayload { id: string; manuallyEdited: boolean; lockedAt?: string | null; isScheduledWorkday: boolean; scheduledMinutes: number; actualSegments: ActualAttendanceSegment[]; workedMinutes: number; lateMinutes: number; earlyLeaveMinutes: number; absenceMinutes: number }
+export interface EmployeeAttendanceInput { employeeId: string; date: string; actualSegments: ActualAttendanceSegment[]; explicitAbsenceMinutes?: number; overtimeMinutes?: number; remark?: string }
+/** @deprecated Compatibility input for the legacy weekly attendance page. */
+export interface AttendancePayload { employeeId: string; date: string; isScheduledWorkday: boolean; scheduledMinutes: number; checkInAt?: string | null; checkOutAt?: string | null; workedMinutes?: number; lateMinutes?: number; earlyLeaveMinutes?: number; absenceMinutes?: number; overtimeMinutes?: number; remark?: string }
+export interface AttendanceRecord extends EmployeeAttendanceInput { id: string; manuallyEdited: boolean; lockedAt?: string | null; isScheduledWorkday: boolean; scheduledMinutes: number; checkInAt?: string | null; checkOutAt?: string | null; workedMinutes: number; lateMinutes: number; earlyLeaveMinutes: number; absenceMinutes: number }
 export interface AttendanceGenerationResult { created: number; updated: number; skippedManual: number; generated: number }
 
 export interface LeaveTypePayload { name: string; active?: boolean; countsTowardRestQuota: boolean }

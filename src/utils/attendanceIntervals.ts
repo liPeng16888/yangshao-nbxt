@@ -4,12 +4,12 @@ export interface ClockInterval { startTime: string; endTime: string }
 export interface ActualInterval { checkInAt: string | Date; checkOutAt: string | Date }
 export interface AttendanceMetrics { workedMinutes: number; lateMinutes: number; earlyLeaveMinutes: number; absenceMinutes: number }
 
-const clockPattern = /^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/
+const clockPattern = /^([01]\d|2[0-3]):([0-5]\d)$/
 
 export function clockMinutes(value: string): number {
   const match = clockPattern.exec(value)
   if (!match) throw new Error('计划时间必须为 HH:mm 格式')
-  return value === '24:00' ? 1440 : Number(match[1]) * 60 + Number(match[2])
+  return Number(match[1]) * 60 + Number(match[2])
 }
 
 export function normalizeClockIntervals(input: ReadonlyArray<Pick<ScheduleSegment, 'startTime' | 'endTime'>>): ClockInterval[] {

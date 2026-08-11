@@ -15,6 +15,7 @@ describe('attendance interval contracts', () => {
   it('rejects overlapping or reverse work intervals before Mock persistence', () => {
     expect(() => normalizeClockIntervals([{ startTime: '08:00', endTime: '12:00' }, { startTime: '11:30', endTime: '17:00' }])).toThrow('重叠')
     expect(() => normalizeClockIntervals([{ startTime: '17:00', endTime: '08:00' }])).toThrow('同一自然日')
+    expect(() => normalizeClockIntervals([{ startTime: '08:00', endTime: '24:00' }])).toThrow('HH:mm')
   })
 
   it('defaults missing actual intervals to normal attendance and derives absence from partial intervals', () => {

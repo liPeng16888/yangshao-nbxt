@@ -363,7 +363,7 @@ export class EmployeeAttendanceService {
         await this.audit(frontendUserId, actorUserId, currentByDate.has(date) ? EmployeeAuditAction.UPDATE : EmployeeAuditAction.CREATE, 'EmployeeMonthlyScheduleDay', row.id, `员工=${payload.employeeId}; 日期=${date}; 批量排班`, tx)
         rows.push(this.monthlyScheduleDto({ ...row, segments: this.scheduleSegmentsForResponse(normalized) }))
       }
-      return rows
+      return { rows, updated: rows.length, overwritten: currentByDate.size }
     })
   }
 
