@@ -1,5 +1,5 @@
 <template>
-  <PageShell title="排班考勤概览" description="按自然月编辑排班，并查看服务端统一计算的每日考勤状态和当月概览。" :employee-change-refresh="false" :month-change-refresh="false" @refresh="load">
+  <PageShell title="排班考勤概览" description="按自然月编辑排班，并查看服务端统一计算的每日考勤状态和当月概览。" :employee-change-refresh="false" :month-change-refresh="false" @refresh="load()">
     <template #actions>
       <el-button data-testid="copy-previous-month" :disabled="!store.employeeId" @click="openCopy">复制上月排班</el-button>
       <el-button data-testid="batch-mode" :disabled="!store.employeeId" :type="batchMode ? 'primary' : 'default'" @click="toggleBatchMode">
@@ -97,7 +97,7 @@ function hydrateMonthSetting() {
   const employee = store.employees.find((row) => row.id === store.employeeId)
   restQuotaDays.value = currentMonthSetting.value?.restQuotaDays ?? employee?.restQuotaDays ?? 0
 }
-async function load() {
+async function load(options: { force?: boolean } = {}) {
   store.restoreMonthMode()
   if (!/^\d{4}-\d{2}$/.test(store.month)) {
     store.selectMonth(dayjs().format('YYYY-MM'))
@@ -106,7 +106,7 @@ async function load() {
   const employeeId = store.employeeId
   const month = store.month
   const requestKey = `${employeeId}:${month}`
-  if (activeLoad && activeLoadKey === requestKey) return activeLoad
+  if (!options.force && activeLoad && activeLoadKey === requestKey) return activeLoad
   const requestId = ++scheduleLoadSequence
   store.clearError()
   const request = (async () => {
@@ -145,7 +145,7 @@ async function saveDay(payload: MonthlySchedulePayload) {
   try {
     await store.run(() => api.saveMonthlyScheduleDay(payload), true)
     drawerVisible.value = false
-    await load()
+    await load({ force: true })
   } catch (error) { drawerError.value = errorText(error, '当天排班保存失败') }
 }
 async function deleteDay(id: string) {
@@ -153,7 +153,7 @@ async function deleteDay(id: string) {
   try {
     await store.run(() => api.deleteMonthlyScheduleDay(id), true)
     drawerVisible.value = false
-    await load()
+    await load({ force: true })
   } catch (error) { drawerError.value = errorText(error, '当天排班删除失败') }
 }
 async function saveBatch(payload: BatchMonthlySchedulePayload) {
@@ -163,7 +163,7 @@ async function saveBatch(payload: BatchMonthlySchedulePayload) {
     batchVisible.value = false
     batchMode.value = false
     selectedDates.value = []
-    await load()
+    await load({ force: true })
     ElMessage.success(`已覆盖 ${result.updated} 个日期，其中 ${result.overwritten} 天原有排班已替换`)
   } catch (error) { batchError.value = errorText(error, '批量排班保存失败') }
 }
@@ -171,7 +171,7 @@ async function saveMonthSetting() {
   if (!store.employeeId) return
   try {
     await store.run(() => api.saveMonthlySetting({ employeeId: store.employeeId, month: store.month, restQuotaDays: restQuotaDays.value }), true)
-    await load()
+    await load({ force: true })
   } catch (error) { store.setError(errorText(error, '月休额度保存失败')) }
 }
 function openCopy() { copyError.value = ''; copyVisible.value = true }
@@ -180,7 +180,7 @@ async function copyPrevious() {
   try {
     const result = await store.run(() => api.copyPreviousMonthSchedules(store.employeeId, store.month, store.monthlySchedules.length > 0), true)
     copyVisible.value = false
-    await load()
+    await load({ force: true })
     ElMessage.success(`已复制 ${result.copied} 天上月排班`)
   } catch (error) { copyError.value = errorText(error, '复制上月排班失败') }
 }

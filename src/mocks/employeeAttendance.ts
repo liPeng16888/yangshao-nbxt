@@ -623,9 +623,9 @@ export async function mockConfirmPayroll(runId: string) {
   return later(current)
 }
 export async function mockReopenPayroll(runId: string, reason: string) { required(reason, '撤销确认原因'); const run = entity(read().payrolls, runId, '工资单'); if (run.status !== 'CONFIRMED') throw new Error('只有已确认工资可以撤销确认'); run.status = 'DRAFT'; run.confirmedAt = null; run.reopenReason = reason; setPayrollLocks(run.month, null); save(); return later(run) }
-export async function mockGetOverview(month: string): Promise<AttendanceOverview> {
+export async function mockGetOverview(month: string, referenceToday = shanghaiToday()): Promise<AttendanceOverview> {
   const state = read()
-  const today = dayjs().format('YYYY-MM-DD')
+  const today = referenceToday
   const employees = state.employees.filter((row) => row.status === 'ACTIVE')
   const employeeIds = new Set(employees.filter((row) => row.hireDate <= today && (!row.terminationDate || row.terminationDate >= today)).map((row) => row.id))
   const todaySchedules = state.monthlySchedules.filter((row) => row.date === today && row.isWorkday && row.scheduledMinutes > 0 && employeeIds.has(row.employeeId))
@@ -661,10 +661,10 @@ export async function mockGetOverview(month: string): Promise<AttendanceOverview
 export async function mockGetScheduleAttendanceOverview(employeeId: string | undefined, month: string): Promise<ScheduleAttendanceOverview> {
   validateBusinessMonth(month)
   const state = read()
-  const overview = await mockGetOverview(month)
+  const today = shanghaiToday()
+  const overview = await mockGetOverview(month, today)
   const employee = employeeId ? entity(state.employees, employeeId, '员工') : null
   if (!employee) return later({ month, employee: null, days: [], overview, readonly: false })
-  const today = shanghaiToday()
   const days: AttendanceCalendarDay[] = Array.from({ length: dayjs(`${month}-01`).daysInMonth() }, (_, index) => {
     const date = `${month}-${String(index + 1).padStart(2, '0')}`
     const schedule = state.monthlySchedules.find((row) => row.employeeId === employee.id && row.date === date) || null

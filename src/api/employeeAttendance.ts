@@ -280,9 +280,20 @@ export const getOverview = (month: string): Promise<AttendanceOverview> => useMo
 })
 function normalizeCalendarDay(value: unknown): AttendanceCalendarDay {
   const row = responseObject(value)
-  if (typeof row.date !== 'string' || typeof row.status !== 'string') throw new Error('排班考勤概览响应格式无效')
+  const statuses: AttendanceCalendarDay['status'][] = ['FUTURE', 'ABSENT', 'LEAVE', 'REST', 'NORMAL', 'OVERTIME', 'SHORT']
+  const tones: AttendanceCalendarDay['backgroundTone'][] = ['future', 'normal', 'leave', 'absent', 'rest', 'overtime', 'short']
+  if (typeof row.date !== 'string' || !statuses.includes(row.status as AttendanceCalendarDay['status'])
+    || !tones.includes(row.backgroundTone as AttendanceCalendarDay['backgroundTone'])
+    || !tones.includes(row.durationTone as AttendanceCalendarDay['durationTone'])
+    || !Array.isArray(row.actualSegments)) throw new Error('排班考勤概览响应格式无效')
+  if (row.schedule) {
+    const rawSchedule = responseObject(row.schedule)
+    if (typeof rawSchedule.id !== 'string' || typeof rawSchedule.employeeId !== 'string' || typeof rawSchedule.date !== 'string' || !Array.isArray(rawSchedule.segments)) {
+      throw new Error('排班考勤概览响应格式无效')
+    }
+  }
   const schedule = row.schedule ? normalizeMonthlyScheduleResponse(row.schedule) : null
-  if (row.schedule && (!schedule?.id || !schedule.employeeId || !schedule.date || !Array.isArray(schedule.segments))) throw new Error('排班考勤概览响应格式无效')
+  if (row.schedule && (!schedule?.id || !schedule.employeeId || !schedule.date)) throw new Error('排班考勤概览响应格式无效')
   return {
     date: row.date, day: amount(row.day), isFuture: Boolean(row.isFuture), status: row.status as AttendanceCalendarDay['status'],
     schedule, actualSegments: responseActualSegments(row.actualSegments),

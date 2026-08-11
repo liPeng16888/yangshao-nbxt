@@ -302,6 +302,36 @@ describe('employee attendance navigation', () => {
     save.mockRestore(); remove.mockRestore()
   })
 
+  it('forces a fresh combined snapshot after a save even while the same-month refresh is pending', async () => {
+    const realCombined = attendanceApi.getScheduleAttendanceOverview
+    const first = await realCombined('emp-1', '2026-08')
+    let resolvePending!: (value: typeof first) => void
+    const pending = new Promise<typeof first>((resolve) => { resolvePending = resolve })
+    const combined = vi.spyOn(attendanceApi, 'getScheduleAttendanceOverview')
+      .mockResolvedValueOnce(first)
+      .mockReturnValueOnce(pending)
+      .mockResolvedValue(first)
+    const save = vi.spyOn(attendanceApi, 'saveMonthlyScheduleDay').mockResolvedValue(first.days.find((day) => day.schedule)?.schedule!)
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    await wrapper.findAll('button').find((node) => node.text() === '刷新')!.trigger('click')
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    await wrapper.get('[data-testid="schedule-day-drawer"]').findAll('button').find((node) => node.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(save).toHaveBeenCalled()
+    expect(combined.mock.calls.filter(([employeeId]) => employeeId === 'emp-1')).toHaveLength(2)
+    resolvePending(first)
+    await flushPromises()
+    combined.mockRestore()
+    save.mockRestore()
+    wrapper.unmount()
+  })
+
   it('rejects a locally invalid interval without discarding the edited values', async () => {
     const save = vi.spyOn(attendanceApi, 'saveMonthlyScheduleDay')
     const pinia = createPinia()

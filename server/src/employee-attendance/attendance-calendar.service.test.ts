@@ -55,7 +55,7 @@ describe('AttendanceCalendarService', () => {
     expect(result).toMatchObject({ month: '2026-08', employee: { employeeNumber: '001', name: '张三' }, readonly: false })
     expect(result.days).toHaveLength(31)
     expect(result.days.map((day: any) => day.date)).toEqual(Array.from({ length: 31 }, (_, index) => `2026-08-${String(index + 1).padStart(2, '0')}`))
-    expect(result.days.find((day: any) => day.date === '2026-08-10')).toMatchObject({ status: 'NORMAL', scheduledMinutes: 600, durationText: '10 小时（工作10）', schedule: { segments: expect.any(Array) } })
+    expect(result.days.find((day: any) => day.date === '2026-08-10')).toMatchObject({ status: 'NORMAL', scheduledMinutes: 600, durationText: '10 小时（工作10）', schedule: { employeeId: employee.id, segments: expect.any(Array) } })
     expect(result.days.find((day: any) => day.date === '2026-08-11')).toMatchObject({ status: 'OVERTIME', displayMinutes: 630, durationText: '10.5 小时（工作10＋加班0.5）' })
     expect(result.days.find((day: any) => day.date === '2026-08-12')).toMatchObject({ status: 'SHORT', shortageMinutes: 60, durationTone: 'short' })
     expect(result.days.find((day: any) => day.date === '2026-08-13')).toMatchObject({ status: 'LEAVE', approvedLeaveMinutes: 240, leaveTypeName: '事假', leaveReason: '照顾家人', durationText: '10 小时（工作6＋请假4）' })

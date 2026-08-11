@@ -94,7 +94,8 @@ export class AttendanceCalendarService {
         day: index + 1,
         isFuture: source.isFuture,
         schedule: schedule ? {
-          id: schedule.id, date: schedule.date, isWorkday: schedule.isWorkday, scheduledMinutes: schedule.scheduledMinutes,
+          id: schedule.id, employeeId: schedule.employeeId, date: schedule.date, isWorkday: schedule.isWorkday,
+          scheduledMinutes: schedule.scheduledMinutes, breakMinutes: schedule.breakMinutes,
           remark: schedule.remark || '', segments: plan
         } : null,
         actualSegments

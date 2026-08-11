@@ -26,6 +26,7 @@ import {
   saveAttendance,
   normalizePayrollAdjustmentResponse,
   normalizePayrollResponse,
+  normalizeScheduleAttendanceOverview,
   selectEmployeeAttendanceGrant,
   toBeijingDateTimeLocal
 } from './employeeAttendance'
@@ -168,6 +169,17 @@ describe('employee attendance real API adapters', () => {
     expect(() => normalizeAttendanceQuery({ month: '2026-08', startDate: '2026-08-01', endDate: '2026-08-31' }))
       .toThrow('月份和日期范围不能同时筛选')
     expect(normalizeAttendanceQuery({ month: '2026-08' })).toEqual({ month: '2026-08' })
+  })
+
+  it('rejects unknown calendar semantics and malformed nested schedules', () => {
+    const valid = {
+      month: '2026-08', readonly: false, employee: null,
+      overview: { month: '2026-08', workforce: 0, todayAttendance: 0, todayLeave: 0, todayAbsence: 0, overtimeMinutes: 0, pendingLeave: 0, projectedPayroll: 0, issueCount: 0, issues: [] },
+      days: [{ date: '2026-08-01', day: 1, isFuture: false, status: 'NORMAL', schedule: null, actualSegments: [], scheduledMinutes: 0, workedMinutes: 0, approvedLeaveMinutes: 0, overtimeMinutes: 0, displayMinutes: 0, shortageMinutes: 0, durationText: '0 小时', leaveTypeName: '', leaveReason: '', absenceReason: '', backgroundTone: 'normal', durationTone: 'normal' }]
+    }
+    expect(() => normalizeScheduleAttendanceOverview({ ...valid, days: [{ ...valid.days[0], status: 'BOGUS' }] })).toThrow('响应格式无效')
+    expect(() => normalizeScheduleAttendanceOverview({ ...valid, days: [{ ...valid.days[0], backgroundTone: 'danger' }] })).toThrow('响应格式无效')
+    expect(() => normalizeScheduleAttendanceOverview({ ...valid, days: [{ ...valid.days[0], schedule: { id: 's1', employeeId: 'e1', date: '2026-08-01', isWorkday: true, segments: 'not-an-array' } }] })).toThrow('响应格式无效')
   })
 
   it('provides a mock grant token that can be tagged with attendance features', async () => {
