@@ -12,6 +12,7 @@ export interface LabSheetRealtimeEvent {
   date: string
   sheetId?: string
   sourceClientId?: string
+  changedById?: string
   updatedAt: string
   parameters?: typeof defaultLabParameters & { savedAt?: string }
 }

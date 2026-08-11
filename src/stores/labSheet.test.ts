@@ -123,7 +123,7 @@ describe('labSheet store auto save', () => {
       value: createMemoryStorage()
     })
     window.localStorage.clear()
-    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', account: 'front-1' }))
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', dataOwnerId: 'front-1', account: 'front-1' }))
     apiMocks.createLabSheetEventSource.mockReturnValue(null)
     apiMocks.getLabSheetClientId.mockReturnValue('client-1')
     apiMocks.getCurrentLabSheet.mockImplementation(async () => makeSheet())
@@ -242,7 +242,21 @@ describe('labSheet store auto save', () => {
     expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('LOCAL-DRAFT')
     expect(store.autoSaveStatus).toBe('error')
     expect(Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index))).toEqual(
-      expect.arrayContaining([expect.stringContaining('ys_lab_draft:v1:front-1:2026-06-25:sheet-1')])
+      expect.arrayContaining([expect.stringContaining('ys_lab_draft:v1:front-1:front-1:2026-06-25:sheet-1')])
+    )
+  })
+
+  it('isolates a subaccount draft by both shared owner and actual actor', async () => {
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'sub-1', dataOwnerId: 'front-1', account: 'sub-1' }))
+    apiMocks.saveSampleBlock.mockRejectedValue({ response: { status: 400 }, message: 'bad request' })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    store.patchBlock('block-1', { sampleNumber: 'SUB-DRAFT' })
+    await vi.advanceTimersByTimeAsync(900)
+
+    expect(Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index))).toEqual(
+      expect.arrayContaining([expect.stringContaining('ys_lab_draft:v1:front-1:sub-1:2026-06-25:sheet-1')])
     )
   })
 

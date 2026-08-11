@@ -23,7 +23,7 @@ export class LabSheetsService {
     return this.toSheetDto(await this.ensureSheet(frontendUserId, businessDateInBeijing()), canViewCompletedSensitiveData)
   }
 
-  async updateCurrentParameters(frontendUserId: string, parameters: Record<string, number>, sourceClientId?: string) {
+  async updateCurrentParameters(frontendUserId: string, parameters: Record<string, number>, sourceClientId?: string, actorUserId = frontendUserId) {
     const sheet = await this.ensureSheet(frontendUserId, businessDateInBeijing())
     const nextParameters = { ...defaultLabParameters, ...parameters, savedAt: new Date().toISOString() }
     await this.prisma.labSheet.update({ where: { id: sheet.id }, data: { parameters: nextParameters as Prisma.InputJsonValue } })
@@ -34,6 +34,7 @@ export class LabSheetsService {
       sheetId: sheet.id,
       parameters: nextParameters,
       sourceClientId,
+      changedById: actorUserId,
       updatedAt: new Date().toISOString()
     })
     return nextParameters
@@ -43,7 +44,8 @@ export class LabSheetsService {
     frontendUserId: string,
     payload: unknown,
     sourceClientId?: string,
-    canViewCompletedSensitiveData = false
+    canViewCompletedSensitiveData = false,
+    actorUserId = frontendUserId
   ) {
     if (!this.isPlainObject(payload)) throw new BadRequestException('请求格式不正确')
     const startIndex = payload.startIndex
@@ -105,6 +107,7 @@ export class LabSheetsService {
       date: dto.date,
       sheetId: dto.id,
       sourceClientId,
+      changedById: actorUserId,
       updatedAt: new Date().toISOString()
     })
     return dto
@@ -115,7 +118,8 @@ export class LabSheetsService {
     sheetId: string,
     count: number,
     sourceClientId?: string,
-    canViewCompletedSensitiveData = false
+    canViewCompletedSensitiveData = false,
+    actorUserId = frontendUserId
   ) {
     if (!Number.isInteger(count) || count <= 0) throw new ForbiddenException('新增数量必须是正整数')
     const updatedSheet = await this.withSheetWriteLock(sheetId, async (tx) => {
@@ -155,6 +159,7 @@ export class LabSheetsService {
       date: nextSheet.date,
       sheetId: nextSheet.id,
       sourceClientId,
+      changedById: actorUserId,
       updatedAt: new Date().toISOString()
     })
     return nextSheet
@@ -205,6 +210,7 @@ export class LabSheetsService {
         date: outcome.sheet.date,
         sheetId: outcome.sheet.id,
         sourceClientId,
+        changedById: user.id,
         updatedAt: new Date().toISOString()
       })
     }

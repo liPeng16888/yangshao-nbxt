@@ -10,9 +10,11 @@ import { resolveCurrentUserIdentity } from './current-user'
 
 interface AccessGrantClaims {
   sub?: string
+  ownerId?: string
   type?: string
   groupId?: string
   grantVersion?: number
+  permissionVersion?: number
   features?: AccessGuardFeature[]
 }
 
@@ -116,9 +118,14 @@ export class AuthService {
     }
     const user = await this.prisma.user.findUnique({ where: { id: currentUser.id } })
     if (!user || user.deletedAt) throw new UnauthorizedException('账号不存在或已失效')
+    const passwordUpdate = await this.buildPasswordUpdate(user.passwordHash, dto)
     await this.prisma.user.update({
       where: { id: user.id },
-      data: await this.buildPasswordUpdate(user.passwordHash, dto)
+      data: {
+        ...passwordUpdate,
+        ...(currentUser.role === UserRole.FRONTEND_SUB_USER ? { passwordCipher: null } : {}),
+        permissionVersion: { increment: 1 }
+      }
     })
     return { ok: true }
   }
@@ -228,21 +235,25 @@ export class AuthService {
   }
 
   async verifyAccessGuardGroup(currentUser: CurrentUser, id: string, password: string) {
-    this.assertFrontendUser(currentUser)
-    const group = await this.prisma.accessGuardGroup.findFirst({ where: { id, frontendUserId: currentUser.id }, include: { features: true } })
+    if (currentUser.role !== UserRole.FRONTEND_USER && currentUser.role !== UserRole.FRONTEND_SUB_USER) {
+      throw new ForbiddenException('无权验证访问组合')
+    }
+    const group = await this.prisma.accessGuardGroup.findFirst({ where: { id, frontendUserId: currentUser.dataOwnerId }, include: { features: true } })
     if (!group || !group.enabled) throw new ForbiddenException('访问组合不存在或未启用')
     if (password.trim() !== group.password) throw new ForbiddenException('访问密码不正确')
     const features = group.features.map((item) => item.feature)
     const expiresAt = Date.now() + group.ttlMinutes * 60_000
     const token = jwt.sign({
-      sub: currentUser.id, type: 'access-guard', groupId: group.id, grantVersion: group.grantVersion,
+      sub: currentUser.id, ownerId: currentUser.dataOwnerId, permissionVersion: currentUser.permissionVersion,
+      type: 'access-guard', groupId: group.id, grantVersion: group.grantVersion,
       features, exp: Math.floor(expiresAt / 1000)
     }, this.config.get<string>('JWT_SECRET') || 'dev-secret')
     return { expiresAt, token, groupId: group.id, grantVersion: group.grantVersion, features }
   }
 
-  async hasAccessGrant(currentUserId: string, token: string | undefined, feature: AccessGuardFeature) {
+  async hasAccessGrant(currentUser: CurrentUser | string, token: string | undefined, feature: AccessGuardFeature) {
     if (!token) return false
+    const identity = this.accessIdentity(currentUser)
     let payload: AccessGrantClaims
     try {
       const verified = jwt.verify(token, this.config.get<string>('JWT_SECRET') || 'dev-secret')
@@ -250,34 +261,42 @@ export class AuthService {
       payload = verified as AccessGrantClaims
     } catch { return false }
     if (
-      payload.sub !== currentUserId || payload.type !== 'access-guard' || !payload.groupId ||
+      payload.sub !== identity.actorId || payload.type !== 'access-guard' || !payload.groupId ||
       !Number.isInteger(payload.grantVersion) || Number(payload.grantVersion) < 1 ||
       !Array.isArray(payload.features) || !payload.features.includes(feature)
     ) return false
+    if (
+      identity.strict &&
+      (payload.ownerId !== identity.ownerId || payload.permissionVersion !== identity.permissionVersion)
+    ) return false
+    if (!identity.strict && payload.ownerId && payload.ownerId !== identity.ownerId) return false
     const currentGroup = await this.prisma.accessGuardGroup.findFirst({
       where: {
         id: payload.groupId,
-        frontendUserId: currentUserId,
+        frontendUserId: identity.ownerId,
         enabled: true,
         grantVersion: payload.grantVersion,
-        features: { some: { frontendUserId: currentUserId, feature } }
+        features: { some: { frontendUserId: identity.ownerId, feature } }
       },
       select: { id: true }
     })
     return Boolean(currentGroup)
   }
 
-  async isFeatureProtected(currentUserId: string, feature: AccessGuardFeature) {
+  async isFeatureProtected(currentUser: CurrentUser | string, feature: AccessGuardFeature) {
+    const identity = this.accessIdentity(currentUser)
+    if (!identity.requiresAccessGuardPassword) return false
     const membership = await this.prisma.accessGuardGroupFeature.findFirst({
-      where: { frontendUserId: currentUserId, feature, group: { enabled: true } },
+      where: { frontendUserId: identity.ownerId, feature, group: { enabled: true } },
       select: { id: true }
     })
     return Boolean(membership)
   }
 
-  async assertAccessGrant(currentUserId: string, token: string | undefined, feature: AccessGuardFeature, alwaysRequire = false) {
-    const protectedFeature = alwaysRequire || await this.isFeatureProtected(currentUserId, feature)
-    if (protectedFeature && !(await this.hasAccessGrant(currentUserId, token, feature))) {
+  async assertAccessGrant(currentUser: CurrentUser | string, token: string | undefined, feature: AccessGuardFeature, alwaysRequire = false) {
+    const identity = this.accessIdentity(currentUser)
+    const protectedFeature = identity.requiresAccessGuardPassword && (alwaysRequire || await this.isFeatureProtected(currentUser, feature))
+    if (protectedFeature && !(await this.hasAccessGrant(currentUser, token, feature))) {
       throw new ForbiddenException({ code: 'ACCESS_GRANT_INVALID', message: '访问授权无效或已过期' })
     }
   }
@@ -336,6 +355,25 @@ export class AuthService {
 
   private assertFrontendUser(currentUser: CurrentUser) {
     if (currentUser.role !== UserRole.FRONTEND_USER) throw new ForbiddenException('无权管理访问组合')
+  }
+
+  private accessIdentity(currentUser: CurrentUser | string) {
+    if (typeof currentUser === 'string') {
+      return {
+        actorId: currentUser,
+        ownerId: currentUser,
+        permissionVersion: undefined,
+        requiresAccessGuardPassword: true,
+        strict: false
+      }
+    }
+    return {
+      actorId: currentUser.id,
+      ownerId: currentUser.dataOwnerId,
+      permissionVersion: currentUser.permissionVersion,
+      requiresAccessGuardPassword: currentUser.requiresAccessGuardPassword,
+      strict: true
+    }
   }
 
   private normalizeAccessGuardGroup(dto: AccessGuardGroupDto) {

@@ -27,6 +27,7 @@ export type LabSheetRealtimeEvent =
       date: string
       sheetId: string
       sourceClientId?: string
+      changedById?: string
       updatedAt: string
     }
   | {
@@ -35,6 +36,7 @@ export type LabSheetRealtimeEvent =
       date: string
       sheetId: string
       sourceClientId?: string
+      changedById?: string
       updatedAt: string
       parameters: LabParameter
     }
@@ -44,6 +46,7 @@ export type LabSheetRealtimeEvent =
       date: string
       sheetId: string
       sourceClientId?: string
+      changedById?: string
       updatedAt: string
     }
   | {

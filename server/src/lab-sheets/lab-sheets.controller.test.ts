@@ -42,8 +42,8 @@ describe('LabSheetsController segmented parameter access', () => {
 
     await controller.applyCurrentParameters(frontendUser, payload, 'client-1', 'wrong-grant')
 
-    expect(auth.hasAccessGrant).toHaveBeenCalledWith('front-1', 'wrong-grant', 'COMPLETED_SAMPLE_DATA')
-    expect(sheets.applyCurrentParametersFromIndex).toHaveBeenCalledWith('front-1', payload, 'client-1', false)
+    expect(auth.hasAccessGrant).toHaveBeenCalledWith(frontendUser, 'wrong-grant', 'COMPLETED_SAMPLE_DATA')
+    expect(sheets.applyCurrentParametersFromIndex).toHaveBeenCalledWith('front-1', payload, 'client-1', false, 'front-1')
   })
 
   it('passes an accepted completed-sample grant to the apply service', async () => {
@@ -57,7 +57,8 @@ describe('LabSheetsController segmented parameter access', () => {
       'front-1',
       { parameters: {}, startIndex: 3 },
       'client-1',
-      true
+      true,
+      'front-1'
     )
   })
 
@@ -72,7 +73,8 @@ describe('LabSheetsController segmented parameter access', () => {
       'front-1',
       { parameters: {}, startIndex: 1 },
       'client-1',
-      true
+      true,
+      'front-1'
     )
   })
 
@@ -83,8 +85,8 @@ describe('LabSheetsController segmented parameter access', () => {
 
     await controller.addBlocks(frontendUser, 'sheet-1', 2, 'client-1', 'wrong-grant')
 
-    expect(auth.hasAccessGrant).toHaveBeenCalledWith('front-1', 'wrong-grant', 'COMPLETED_SAMPLE_DATA')
-    expect(sheets.addSampleBlocks).toHaveBeenCalledWith('front-1', 'sheet-1', 2, 'client-1', false)
+    expect(auth.hasAccessGrant).toHaveBeenCalledWith(frontendUser, 'wrong-grant', 'COMPLETED_SAMPLE_DATA')
+    expect(sheets.addSampleBlocks).toHaveBeenCalledWith('front-1', 'sheet-1', 2, 'client-1', false, 'front-1')
   })
 
   it('passes an accepted completed-sample grant to the add-blocks service', async () => {
@@ -94,7 +96,7 @@ describe('LabSheetsController segmented parameter access', () => {
 
     await controller.addBlocks(frontendUser, 'sheet-1', 1, 'client-1', 'valid-grant')
 
-    expect(sheets.addSampleBlocks).toHaveBeenCalledWith('front-1', 'sheet-1', 1, 'client-1', true)
+    expect(sheets.addSampleBlocks).toHaveBeenCalledWith('front-1', 'sheet-1', 1, 'client-1', true, 'front-1')
   })
 
   it('uses the parent data owner for subaccount reads and writes', async () => {
@@ -103,6 +105,6 @@ describe('LabSheetsController segmented parameter access', () => {
 
     await controller.addBlocks(frontendSubUser, 'sheet-1', 1, 'client-1')
 
-    expect(sheets.addSampleBlocks).toHaveBeenCalledWith('front-1', 'sheet-1', 1, 'client-1', true)
+    expect(sheets.addSampleBlocks).toHaveBeenCalledWith('front-1', 'sheet-1', 1, 'client-1', true, 'sub-1')
   })
 })

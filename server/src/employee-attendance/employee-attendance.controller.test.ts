@@ -29,9 +29,9 @@ function createController(options: { protected?: boolean; grantValid?: boolean }
   const auth = {
     isFeatureProtected: vi.fn().mockResolvedValue(Boolean(options.protected)),
     hasAccessGrant: vi.fn().mockResolvedValue(Boolean(options.grantValid)),
-    assertAccessGrant: vi.fn(async (frontendUserId: string, grant: string | undefined, feature: AccessGuardFeature, alwaysRequire = false) => {
-      const protectedFeature = alwaysRequire || await auth.isFeatureProtected(frontendUserId, feature)
-      if (protectedFeature && !(await auth.hasAccessGrant(frontendUserId, grant, feature))) throw new ForbiddenException('访问授权无效或已过期')
+    assertAccessGrant: vi.fn(async (user: CurrentUser, grant: string | undefined, feature: AccessGuardFeature, alwaysRequire = false) => {
+      const protectedFeature = alwaysRequire || await auth.isFeatureProtected(user, feature)
+      if (protectedFeature && !(await auth.hasAccessGrant(user, grant, feature))) throw new ForbiddenException('访问授权无效或已过期')
     })
   }
   const photos = { save: vi.fn().mockResolvedValue('/private/new.jpg'), read: vi.fn().mockResolvedValue({ buffer: Buffer.from('photo'), contentType: 'image/png' }), remove: vi.fn() }
@@ -55,8 +55,8 @@ describe('EmployeeAttendanceController authorization and ownership', () => {
 
     await expect(controller.listEmployees(frontendUser, {}, 'bad-grant')).rejects.toBeInstanceOf(ForbiddenException)
 
-    expect(auth.isFeatureProtected).toHaveBeenCalledWith('front-1', AccessGuardFeature.EMPLOYEE_ATTENDANCE)
-    expect(auth.hasAccessGrant).toHaveBeenCalledWith('front-1', 'bad-grant', AccessGuardFeature.EMPLOYEE_ATTENDANCE)
+    expect(auth.isFeatureProtected).toHaveBeenCalledWith(frontendUser, AccessGuardFeature.EMPLOYEE_ATTENDANCE)
+    expect(auth.hasAccessGrant).toHaveBeenCalledWith(frontendUser, 'bad-grant', AccessGuardFeature.EMPLOYEE_ATTENDANCE)
     expect(service.listEmployees).not.toHaveBeenCalled()
   })
 
@@ -168,7 +168,7 @@ describe('EmployeeAttendanceController authorization and ownership', () => {
     for (const item of cases) {
       vi.clearAllMocks()
       await (controller as any)[item.method](frontendUser, ...item.args)
-      expect(auth.assertAccessGrant).toHaveBeenCalledWith('front-1', grant, AccessGuardFeature.EMPLOYEE_ATTENDANCE, Boolean(item.force))
+      expect(auth.assertAccessGrant).toHaveBeenCalledWith(frontendUser, grant, AccessGuardFeature.EMPLOYEE_ATTENDANCE, Boolean(item.force))
       expect(service[item.serviceMethod]).toHaveBeenCalled()
       expect(service[item.serviceMethod].mock.calls.at(-1).slice(0, item.prefix.length)).toEqual(item.prefix)
     }

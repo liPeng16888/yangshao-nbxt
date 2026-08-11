@@ -580,10 +580,12 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (typeof window === 'undefined') return 'server'
     try {
       const raw = window.localStorage.getItem('ys_user')
-      const user = raw ? (JSON.parse(raw) as { id?: string; account?: string }) : null
-      return user?.id || user?.account || 'guest'
+      const user = raw ? (JSON.parse(raw) as { id?: string; account?: string; dataOwnerId?: string }) : null
+      const actorId = user?.id || user?.account || 'guest'
+      const ownerId = user?.dataOwnerId || actorId
+      return `${ownerId}:${actorId}`
     } catch {
-      return 'guest'
+      return 'guest:guest'
     }
   }
 

@@ -414,7 +414,7 @@ describe('LabSheetsService default sheet selection', () => {
     }))
 
     const result = await service.saveSampleBlock(
-      { id: 'front-1' } as never,
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
       `sheet-${today}`,
       {
         id: 'block-1',
@@ -457,7 +457,7 @@ describe('LabSheetsService default sheet selection', () => {
     }))
 
     const result = await service.saveSampleBlock(
-      { id: 'front-1' } as never,
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
       `sheet-${today}`,
       {
         id: block.id,
@@ -476,7 +476,9 @@ describe('LabSheetsService default sheet selection', () => {
     })
     expect(realtime.publish).toHaveBeenCalledWith(expect.objectContaining({
       type: 'block-saved',
-      sheetId: `sheet-${today}`
+      sheetId: `sheet-${today}`,
+      frontendUserId: 'front-1',
+      changedById: 'sub-1'
     }))
     expect(realtime.publish).toHaveBeenCalledWith(expect.not.objectContaining({ block: expect.anything() }))
   })
