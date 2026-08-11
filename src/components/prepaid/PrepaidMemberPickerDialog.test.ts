@@ -34,6 +34,14 @@ function mountDialog(props: Record<string, unknown> = {}) {
   })
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 describe('PrepaidMemberPickerDialog', () => {
   beforeEach(() => {
     storeMocks.lookupLabMember.mockReset()
@@ -105,5 +113,38 @@ describe('PrepaidMemberPickerDialog', () => {
     expect((wrapper.get('[data-testid="prepaid-member-phone"]').element as HTMLInputElement).value).toBe('')
     expect(wrapper.find('[data-testid="prepaid-deduction-amount"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('¥40.00')
+  })
+
+  it('ignores a pending lookup when the phone is edited before its response arrives', async () => {
+    const pendingLookup = createDeferred<{ id: string; phone: string; currentBalance: number } | null>()
+    storeMocks.lookupLabMember.mockReturnValue(pendingLookup.promise)
+    const wrapper = mountDialog({ initialPhone: '13800000000', initialAmount: 10 })
+    await nextTick()
+
+    await wrapper.get('[data-testid="prepaid-member-phone"]').setValue('13900000000')
+    pendingLookup.resolve({ id: 'member-a', phone: '13800000000', currentBalance: 100 })
+    await pendingLookup.promise
+    await nextTick()
+
+    expect((wrapper.get('[data-testid="prepaid-member-phone"]').element as HTMLInputElement).value)
+      .toBe('13900000000')
+    expect(wrapper.find('[data-testid="prepaid-deduction-amount"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="prepaid-member-confirm"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('ignores a pending lookup when the phone is cleared before its response arrives', async () => {
+    const pendingLookup = createDeferred<{ id: string; phone: string; currentBalance: number } | null>()
+    storeMocks.lookupLabMember.mockReturnValue(pendingLookup.promise)
+    const wrapper = mountDialog({ initialPhone: '13800000000', initialAmount: 10 })
+    await nextTick()
+
+    await wrapper.get('[data-testid="prepaid-member-phone"]').setValue('')
+    pendingLookup.resolve({ id: 'member-a', phone: '13800000000', currentBalance: 100 })
+    await pendingLookup.promise
+    await nextTick()
+
+    expect((wrapper.get('[data-testid="prepaid-member-phone"]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.find('[data-testid="prepaid-deduction-amount"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="prepaid-member-confirm"]').attributes('disabled')).toBeDefined()
   })
 })

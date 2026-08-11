@@ -142,11 +142,13 @@ watch(
 )
 
 watch(phone, () => {
+  lookupGeneration += 1
+  searching.value = false
   if (selectedMember.value && normalizePhone(phone.value) !== selectedMember.value.phone) {
     selectedMember.value = null
     errorMessage.value = ''
   }
-})
+}, { flush: 'sync' })
 
 async function lookupExactPhone() {
   const normalized = normalizePhone(phone.value)
@@ -161,9 +163,8 @@ async function lookupExactPhone() {
   errorMessage.value = ''
   try {
     const member = await store.lookupLabMember(normalized)
-    if (generation !== lookupGeneration || !props.visible) return
+    if (generation !== lookupGeneration || !props.visible || normalizePhone(phone.value) !== normalized) return
     selectedMember.value = member
-    phone.value = member?.phone ?? normalized
     if (!member) errorMessage.value = '未找到该预存款会员'
   } catch (error) {
     if (generation !== lookupGeneration || !props.visible) return

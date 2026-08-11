@@ -245,7 +245,7 @@
     <PrepaidMemberPickerDialog
       v-if="prepaidPickerVisible"
       :visible="prepaidPickerVisible"
-      :initial-phone="activePrepaidBlock?.inputs.prepaidMemberPhone || ''"
+      :initial-phone="activePrepaidInitialPhone"
       :initial-amount="activePrepaidBlock?.inputs.price ?? null"
       @close="closePrepaidPicker"
       @confirm="confirmPrepaidSelection"
@@ -303,6 +303,11 @@ const prepaidPickerVisible = ref(false)
 const activePrepaidBlockId = ref('')
 const activePrepaidBlock = computed(() => (
   props.blocks.find((block) => block.id === activePrepaidBlockId.value)
+))
+const activePrepaidInitialPhone = computed(() => (
+  activePrepaidBlock.value?.inputs.paymentStatus === '预存款'
+    ? activePrepaidBlock.value.inputs.prepaidMemberPhone || ''
+    : ''
 ))
 let resizeObserver: ResizeObserver | null = null
 const focusedFieldValues = new Map<string, unknown>()

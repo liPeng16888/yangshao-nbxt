@@ -413,6 +413,36 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
   })
 
+  it('clears prepaid member fields when bulk fill changes an existing prepaid sample to another status', async () => {
+    mocks.labStore.sampleBlocks[0].inputs = {
+      sequence: '001',
+      price: 30.25,
+      paymentStatus: '预存款',
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    }
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '填写已选1个样品').trigger('click')
+    await wrapper.find('.bulk-fill-apply').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.patchBlock.mock.calls[0]).toStrictEqual([
+      'block-1',
+      {
+        price: 20,
+        paymentStatus: '月结款',
+        prepaidMemberId: undefined,
+        prepaidMemberPhone: undefined
+      }
+    ])
+    expect(mocks.labStore.patchBlock).not.toHaveBeenCalledWith('block-2', expect.anything())
+    expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
+  })
+
   it('records and saves recipient customers during bulk fill', async () => {
     const wrapper = mountPage()
     await settleMountedPage()

@@ -652,6 +652,33 @@ describe('LabSheetGrid', () => {
     expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-amount')).toBe('30.25')
   })
 
+  it('does not seed stale member fields when switching a non-prepaid block back to prepaid', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({
+          price: 30.25,
+          paymentStatus: '月结款',
+          prepaidMemberId: 'stale-member',
+          prepaidMemberPhone: '13800000000'
+        })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
+        }
+      }
+    })
+
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '预存款')
+    await nextTick()
+
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-phone')).toBe('')
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-amount')).toBe('30.25')
+    expect(wrapper.emitted('update')).toBeUndefined()
+  })
+
   it('treats a non-positive prepaid deduction amount as incomplete', () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
