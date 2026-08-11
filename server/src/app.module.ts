@@ -14,6 +14,7 @@ import { CustomerOverviewModule } from './customer-overview/customer-overview.mo
 import { MedicineInventoryModule } from './medicine-inventory/medicine-inventory.module'
 import { EmployeeAttendanceModule } from './employee-attendance/employee-attendance.module'
 import { TenantRealtimeModule } from './realtime/tenant-realtime.module'
+import { SharedPrepaidModule } from './shared-prepaid/shared-prepaid.module'
 
 @Module({
   imports: [
@@ -31,7 +32,8 @@ import { TenantRealtimeModule } from './realtime/tenant-realtime.module'
     AdminModule,
     MedicineInventoryModule,
     EmployeeAttendanceModule,
-    TenantRealtimeModule
+    TenantRealtimeModule,
+    SharedPrepaidModule
   ]
 })
 export class AppModule {}
