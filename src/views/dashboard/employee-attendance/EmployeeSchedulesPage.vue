@@ -1,5 +1,5 @@
 <template>
-  <PageShell title="排班管理" description="按自然月为每位员工设置每日多个上班、下班时段；时段之间自动作为休息时间。" :employee-change-refresh="false" :month-change-refresh="false" @refresh="load">
+  <PageShell title="排班考勤概览" description="按自然月编辑排班，并查看服务端统一计算的每日考勤状态和当月概览。" :employee-change-refresh="false" :month-change-refresh="false" @refresh="load">
     <template #actions>
       <el-button data-testid="copy-previous-month" :disabled="!store.employeeId" @click="openCopy">复制上月排班</el-button>
       <el-button data-testid="batch-mode" :disabled="!store.employeeId" :type="batchMode ? 'primary' : 'default'" @click="toggleBatchMode">
@@ -20,7 +20,7 @@
       </section>
       <MonthlyScheduleCalendar
         :month="store.month"
-        :rows="store.monthlySchedules"
+        :days="store.scheduleAttendanceOverview?.days || []"
         :selected-dates="selectedDates"
         :batch-mode="batchMode"
         @select-date="openDay"
@@ -29,6 +29,7 @@
       <p v-if="batchMode" class="batch-tip">已选择 {{ selectedDates.length }} 个日期；应用后会完整覆盖这些日期原有排班。</p>
     </template>
     <el-empty v-else description="请先选择需要排班的员工" />
+    <AttendanceOverviewPanel :overview="store.overview" />
   </PageShell>
 
   <ScheduleDayDrawer
@@ -68,6 +69,7 @@ import PageShell from './EmployeeAttendancePageShell.vue'
 import MonthlyScheduleCalendar from './MonthlyScheduleCalendar.vue'
 import ScheduleDayDrawer from './ScheduleDayDrawer.vue'
 import ScheduleBatchDialog from './ScheduleBatchDialog.vue'
+import AttendanceOverviewPanel from './AttendanceOverviewPanel.vue'
 import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
 import * as api from '@/api/employeeAttendance'
 import type { BatchMonthlySchedulePayload, MonthlyScheduleDay, MonthlySchedulePayload } from '@/types/employeeAttendance'
@@ -109,17 +111,12 @@ async function load() {
   store.clearError()
   const request = (async () => {
     try {
-      if (!employeeId) {
-        const settings = await store.runQuiet(() => api.getMonthlySettings(month))
-        if (requestId !== scheduleLoadSequence || store.employeeId || store.month !== month) return
-        store.monthlySchedules = []
-        store.monthSettings = settings
-        hydrateMonthSetting()
-        return
-      }
-      const [rows, settings] = await store.runQuiet(() => Promise.all([api.getMonthlySchedules(employeeId, month), api.getMonthlySettings(month)]))
+      const [result, settings] = await Promise.all([
+        store.loadScheduleAttendanceOverview(),
+        store.runQuiet(() => api.getMonthlySettings(month))
+      ])
       if (requestId !== scheduleLoadSequence || store.employeeId !== employeeId || store.month !== month) return
-      store.monthlySchedules = rows
+      if (!result) return
       store.monthSettings = settings
       hydrateMonthSetting()
     } catch (error) {

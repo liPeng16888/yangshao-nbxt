@@ -12,7 +12,6 @@ import * as attendanceApi from '@/api/employeeAttendance'
 import { mockCreateEmployee, mockGetAttendance, mockSaveAttendance, resetEmployeeAttendanceMock } from '@/mocks/employeeAttendance'
 import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
 import { useAccessGuardStore } from '@/stores/accessGuard'
-import EmployeeAttendanceOverviewPage from './employee-attendance/EmployeeAttendanceOverviewPage.vue'
 import EmployeeDirectoryPage from './employee-attendance/EmployeeDirectoryPage.vue'
 import EmployeeSchedulesPage from './employee-attendance/EmployeeSchedulesPage.vue'
 import EmployeeAttendanceRecordsPage from './employee-attendance/EmployeeAttendanceRecordsPage.vue'
@@ -31,12 +30,18 @@ beforeEach(() => {
 })
 
 describe('employee attendance navigation', () => {
-  it('adds seven exact routes and positions the menu between lab report and finance', async () => {
+  it('adds six exact routes, redirects old overview links, and positions the merged menu between lab report and finance', async () => {
     expect(appRouter.getRoutes().map((route) => route.path)).toEqual(expect.arrayContaining([
       '/employee-attendance/overview', '/employee-attendance/employees', '/employee-attendance/schedules',
       '/employee-attendance/records', '/employee-attendance/leave', '/employee-attendance/compensation',
       '/employee-attendance/payroll'
     ]))
+    expect(appRouter.resolve('/employee-attendance').redirectedFrom).toBeUndefined()
+    const attendanceRoot = appRouter.getRoutes().find((route) => route.path === '/employee-attendance')
+    const oldOverview = appRouter.getRoutes().find((route) => route.path === '/employee-attendance/overview')
+    expect(attendanceRoot?.redirect).toBe('/employee-attendance/schedules')
+    expect(oldOverview?.redirect).toBe('/employee-attendance/schedules')
+    expect(appRouter.resolve('/employee-attendance/schedules').meta.title).toBe('排班考勤概览')
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: defineComponent({ template: '<div />' }) }] })
     await router.push('/employee-attendance/overview')
     const wrapper = mount(AppSidebar, { props: { collapsed: false }, global: { plugins: [router, ElementPlus] } })
@@ -44,8 +49,10 @@ describe('employee attendance navigation', () => {
     expect(text.indexOf('化验报告')).toBeLessThan(text.indexOf('员工考勤'))
     expect(text.indexOf('员工考勤')).toBeLessThan(text.indexOf('财务'))
     expect(wrapper.findAll('.side-nav__child').map((node) => node.text())).toEqual([
-      '考勤概览', '员工档案', '排班管理', '考勤记录', '请假管理', '提成与奖金', '工资统计'
+      '排班考勤概览', '员工档案', '考勤记录', '请假管理', '提成与奖金', '工资统计'
     ])
+    expect(wrapper.findAll('.side-nav__child').some((node) => node.text() === '考勤概览')).toBe(false)
+    expect(wrapper.findAll('.side-nav__child').some((node) => node.text() === '排班管理')).toBe(false)
   })
 
   it('protects every attendance route with its own access feature', () => {
@@ -53,12 +60,11 @@ describe('employee attendance navigation', () => {
     expect(featureForPath('/employee-attendance/payroll')).toBe('EMPLOYEE_ATTENDANCE')
   })
 
-  it('labels the overview overtime card as the selected-month total and removes unsupported terminated status', async () => {
-    const overview = mount(EmployeeAttendanceOverviewPage, { global: { plugins: [createPinia(), ElementPlus] } })
+  it('labels the merged overview overtime card as the selected-month total and removes unsupported terminated status', async () => {
+    const overview = mount(EmployeeSchedulesPage, { global: { plugins: [createPinia(), ElementPlus] } })
     await flushPromises()
     expect(overview.text()).toContain('本月加班总时长')
     overview.unmount()
-
     const directory = mount(EmployeeDirectoryPage, { global: { plugins: [createPinia(), ElementPlus], stubs: { teleport: true, 'el-select': true, 'el-option': true, 'el-date-picker': true, 'el-input-number': true } } })
     await flushPromises()
     expect(directory.text()).not.toContain('TERMINATED')
@@ -66,10 +72,10 @@ describe('employee attendance navigation', () => {
     directory.unmount()
   })
 
-  it('renders all seven management pages with loading completion and meaningful empty/sample states', async () => {
+  it('renders all six management pages with loading completion and meaningful empty/sample states', async () => {
     const pages = [
-      [EmployeeAttendanceOverviewPage, '考勤概览'], [EmployeeDirectoryPage, '员工档案'],
-      [EmployeeSchedulesPage, '排班管理'], [EmployeeAttendanceRecordsPage, '考勤记录'],
+      [EmployeeSchedulesPage, '排班考勤概览'], [EmployeeDirectoryPage, '员工档案'],
+      [EmployeeAttendanceRecordsPage, '考勤记录'],
       [EmployeeLeavePage, '请假管理'], [EmployeeCompensationPage, '提成与奖金'], [EmployeePayrollPage, '工资统计']
     ] as const
     for (const [component, title] of pages) {
@@ -178,13 +184,26 @@ describe('employee attendance navigation', () => {
   })
 
   it('keeps the latest employee/month response when an older schedule request resolves last', async () => {
-    let resolveFirst!: (rows: any[]) => void
-    let resolveSecond!: (rows: any[]) => void
-    const first = new Promise<any[]>((resolve) => { resolveFirst = resolve })
-    const second = new Promise<any[]>((resolve) => { resolveSecond = resolve })
-    const schedules = vi.spyOn(attendanceApi, 'getMonthlySchedules')
-      .mockImplementationOnce(() => first)
-      .mockImplementationOnce(() => second)
+    const response = (employeeId: string, id: string) => ({
+      month: '2026-08', employee: { id: employeeId, employeeNumber: employeeId, name: employeeId }, readonly: false,
+      overview: { month: '2026-08', activeEmployees: 2, todayPresent: 1, todayOnLeave: 0, todayAbsent: 0, overtimeHours: 0, pendingLeaves: 0, projectedPayroll: 0, issueCount: 0, issues: [] },
+      days: [{
+        date: '2026-08-03', day: 3, isFuture: false, status: 'REST' as const,
+        schedule: { id, employeeId, date: '2026-08-03', isWorkday: false, segments: [], scheduledMinutes: 0, breakMinutes: 0 },
+        actualSegments: [], scheduledMinutes: 0, workedMinutes: 0, approvedLeaveMinutes: 0, overtimeMinutes: 0,
+        displayMinutes: 0, shortageMinutes: 0, durationText: '公司排休', leaveTypeName: '', leaveReason: '', absenceReason: '', backgroundTone: 'rest' as const, durationTone: 'rest' as const
+      }]
+    })
+    let resolveFirst!: (value: ReturnType<typeof response>) => void
+    let resolveSecond!: (value: ReturnType<typeof response>) => void
+    const first = new Promise<ReturnType<typeof response>>((resolve) => { resolveFirst = resolve })
+    const second = new Promise<ReturnType<typeof response>>((resolve) => { resolveSecond = resolve })
+    let employeeRequest = 0
+    const schedules = vi.spyOn(attendanceApi, 'getScheduleAttendanceOverview').mockImplementation((employeeId) => {
+      if (!employeeId) return Promise.resolve({ ...response('', 'none'), employee: null, days: [] })
+      employeeRequest += 1
+      return employeeRequest === 1 ? first : second
+    })
     vi.spyOn(attendanceApi, 'getMonthlySettings').mockResolvedValue([])
     const pinia = createPinia()
     const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
@@ -194,25 +213,38 @@ describe('employee attendance navigation', () => {
     await flushPromises()
     store.employeeId = 'emp-2'
     await flushPromises()
-    resolveSecond([{ id: 'new', employeeId: 'emp-2', date: '2026-08-03', isWorkday: false, segments: [], scheduledMinutes: 0, breakMinutes: 0 }])
+    resolveSecond(response('emp-2', 'new'))
     await flushPromises()
-    resolveFirst([{ id: 'old', employeeId: 'emp-1', date: '2026-08-03', isWorkday: true, segments: [{ startTime: '08:00', endTime: '16:00' }], scheduledMinutes: 480, breakMinutes: 0 }])
+    resolveFirst(response('emp-1', 'old'))
     await flushPromises()
 
-    expect(schedules).toHaveBeenCalledTimes(2)
+    expect(employeeRequest).toBe(2)
     expect(store.monthlySchedules).toEqual([expect.objectContaining({ id: 'new', employeeId: 'emp-2' })])
     wrapper.unmount()
     schedules.mockRestore()
   })
 
   it('does not surface a late failure from an obsolete employee/month request', async () => {
+    const response = (employeeId: string, id: string) => ({
+      month: '2026-08', employee: { id: employeeId, employeeNumber: employeeId, name: employeeId }, readonly: false,
+      overview: { month: '2026-08', activeEmployees: 2, todayPresent: 1, todayOnLeave: 0, todayAbsent: 0, overtimeHours: 0, pendingLeaves: 0, projectedPayroll: 0, issueCount: 0, issues: [] },
+      days: [{
+        date: '2026-08-03', day: 3, isFuture: false, status: 'REST' as const,
+        schedule: { id, employeeId, date: '2026-08-03', isWorkday: false, segments: [], scheduledMinutes: 0, breakMinutes: 0 },
+        actualSegments: [], scheduledMinutes: 0, workedMinutes: 0, approvedLeaveMinutes: 0, overtimeMinutes: 0,
+        displayMinutes: 0, shortageMinutes: 0, durationText: '公司排休', leaveTypeName: '', leaveReason: '', absenceReason: '', backgroundTone: 'rest' as const, durationTone: 'rest' as const
+      }]
+    })
     let rejectFirst!: (error: Error) => void
-    let resolveSecond!: (rows: any[]) => void
-    const first = new Promise<any[]>((_resolve, reject) => { rejectFirst = reject })
-    const second = new Promise<any[]>((resolve) => { resolveSecond = resolve })
-    const schedules = vi.spyOn(attendanceApi, 'getMonthlySchedules')
-      .mockImplementationOnce(() => first)
-      .mockImplementationOnce(() => second)
+    let resolveSecond!: (value: ReturnType<typeof response>) => void
+    const first = new Promise<ReturnType<typeof response>>((_resolve, reject) => { rejectFirst = reject })
+    const second = new Promise<ReturnType<typeof response>>((resolve) => { resolveSecond = resolve })
+    let employeeRequest = 0
+    const schedules = vi.spyOn(attendanceApi, 'getScheduleAttendanceOverview').mockImplementation((employeeId) => {
+      if (!employeeId) return Promise.resolve({ ...response('', 'none'), employee: null, days: [] })
+      employeeRequest += 1
+      return employeeRequest === 1 ? first : second
+    })
     vi.spyOn(attendanceApi, 'getMonthlySettings').mockResolvedValue([])
     const pinia = createPinia()
     const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
@@ -222,7 +254,7 @@ describe('employee attendance navigation', () => {
     await flushPromises()
     store.employeeId = 'emp-2'
     await flushPromises()
-    resolveSecond([{ id: 'new-success', employeeId: 'emp-2', date: '2026-08-03', isWorkday: false, segments: [], scheduledMinutes: 0, breakMinutes: 0 }])
+    resolveSecond(response('emp-2', 'new-success'))
     await flushPromises()
     rejectFirst(new Error('旧请求失败'))
     await flushPromises()
@@ -542,7 +574,7 @@ describe('employee attendance navigation', () => {
     const store = useEmployeeAttendanceStore(pinia)
     store.selectMonth('2026-08')
 
-    for (const component of [EmployeeAttendanceOverviewPage, EmployeeSchedulesPage, EmployeePayrollPage]) {
+    for (const component of [EmployeeSchedulesPage, EmployeePayrollPage]) {
       store.selectDateRange('2026-07-01', '2026-07-31')
       const page = mount(component, { global: { plugins: [pinia, ElementPlus] } })
       await flushPromises()

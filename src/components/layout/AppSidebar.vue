@@ -85,9 +85,8 @@ const navItems: NavItem[] = [
     label: '员工考勤',
     icon: Calendar,
     children: [
-      { path: '/employee-attendance/overview', label: '考勤概览' },
+      { path: '/employee-attendance/schedules', label: '排班考勤概览' },
       { path: '/employee-attendance/employees', label: '员工档案' },
-      { path: '/employee-attendance/schedules', label: '排班管理' },
       { path: '/employee-attendance/records', label: '考勤记录' },
       { path: '/employee-attendance/leave', label: '请假管理' },
       { path: '/employee-attendance/compensation', label: '提成与奖金' },
