@@ -21,6 +21,7 @@ import { ROLES_KEY } from '../auth/roles.decorator'
 import {
   CreateSharedPrepaidRechargeDto,
   ReverseSharedPrepaidRechargeDto,
+  SharedPrepaidConsumptionQueryDto,
   SharedPrepaidMemberQueryDto,
   SharedPrepaidRechargeQueryDto
 } from './shared-prepaid.dto'
@@ -643,10 +644,40 @@ describe('shared prepaid runtime DTOs', () => {
     expect(recharges).not.toHaveProperty('ignored')
   })
 
+  it('transforms and whitelists the global consumption filters', async () => {
+    const consumptions = await transform({
+      page: '2',
+      pageSize: '50',
+      phone: '138 0000-0000',
+      sourceOwnerId: 'front-1',
+      consumingFrontendUserId: 'front-2',
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+      status: 'REVERSED',
+      payableStatus: 'COMPLETED',
+      ignored: 'x'
+    }, SharedPrepaidConsumptionQueryDto, 'query')
+
+    expect(consumptions).toMatchObject({
+      page: 2,
+      pageSize: 50,
+      phone: '138 0000-0000',
+      sourceOwnerId: 'front-1',
+      consumingFrontendUserId: 'front-2',
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+      status: 'REVERSED',
+      payableStatus: 'COMPLETED'
+    })
+    expect(consumptions).not.toHaveProperty('ignored')
+  })
+
   it.each([
     [SharedPrepaidMemberQueryDto, { page: {} }],
     [SharedPrepaidRechargeQueryDto, { isOpeningBalance: 'yes' }],
-    [SharedPrepaidRechargeQueryDto, { startDate: '2026/08/01' }]
+    [SharedPrepaidRechargeQueryDto, { startDate: '2026/08/01' }],
+    [SharedPrepaidConsumptionQueryDto, { status: 'DELETED' }],
+    [SharedPrepaidConsumptionQueryDto, { payableStatus: 'SETTLED' }]
   ])('rejects invalid query types and values', async (metatype, value) => {
     await expect(transform(value, metatype, 'query')).rejects.toBeInstanceOf(BadRequestException)
   })

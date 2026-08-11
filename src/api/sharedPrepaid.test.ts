@@ -16,6 +16,7 @@ import {
   createSharedPrepaidStreamTicket,
   getPrepaidMemberDetail,
   getPrepaidMembers,
+  getPrepaidConsumptions,
   getPrepaidRecharges,
   isSharedPrepaidTerminalAuthError,
   lookupPrepaidMember,
@@ -47,19 +48,39 @@ describe('shared prepaid realtime transport', () => {
     window.localStorage.setItem('ys_token', 'long-lived.raw.jwt')
   })
 
-  it('uses only the authoritative member and recharge read routes', async () => {
+  it('uses only the authoritative member, recharge, and consumption read routes', async () => {
     requestMocks.get.mockResolvedValue({ items: [], total: 0, page: 2, pageSize: 10 })
 
     await getPrepaidMembers({ page: 2, pageSize: 10, phone: '138' })
     await lookupPrepaidMember('138 0000-0000')
     await getPrepaidMemberDetail('member-1')
     await getPrepaidRecharges({ ownerFrontendUserId: 'front-1', isOpeningBalance: false })
+    await getPrepaidConsumptions({
+      page: 3,
+      phone: '138 0000-0000',
+      sourceOwnerId: 'front-1',
+      consumingFrontendUserId: 'front-2',
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+      status: 'ACTIVE',
+      payableStatus: 'PENDING'
+    })
 
     expect(requestMocks.get.mock.calls).toEqual([
       ['/shared-prepaid/members', { params: { page: 2, pageSize: 10, phone: '138' } }],
       ['/shared-prepaid/members/lookup', { params: { phone: '138 0000-0000' } }],
       ['/shared-prepaid/members/member-1'],
-      ['/shared-prepaid/recharges', { params: { ownerFrontendUserId: 'front-1', isOpeningBalance: false } }]
+      ['/shared-prepaid/recharges', { params: { ownerFrontendUserId: 'front-1', isOpeningBalance: false } }],
+      ['/shared-prepaid/consumptions', { params: {
+        page: 3,
+        phone: '138 0000-0000',
+        sourceOwnerId: 'front-1',
+        consumingFrontendUserId: 'front-2',
+        startDate: '2026-08-01',
+        endDate: '2026-08-31',
+        status: 'ACTIVE',
+        payableStatus: 'PENDING'
+      } }]
     ])
   })
 

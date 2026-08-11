@@ -3,6 +3,8 @@ import type {
   CreatePrepaidRechargePayload,
   PrepaidAccountRow,
   PrepaidAllocationRow,
+  PrepaidConsumptionQuery,
+  PrepaidConsumptionListRow,
   PrepaidConsumptionReversalResult,
   PrepaidConsumptionRow,
   PrepaidLedgerEntryRow,
@@ -158,6 +160,50 @@ export async function mockGetPrepaidRecharges(
     .sort(descendingCreatedAt)
     .map(toRechargeRow)
   return paginate(rows, query.page, query.pageSize)
+}
+
+export async function mockGetPrepaidConsumptions(
+  query: PrepaidConsumptionQuery = {}
+): Promise<PrepaidPage<PrepaidConsumptionListRow>> {
+  const phone = String(query.phone ?? '').replace(/\D/g, '')
+  const rows = consumptions
+    .filter((row) => (
+      (!phone || row.phoneSnapshot.includes(phone)) &&
+      (!query.sourceOwnerId || row.allocations.some((allocation) => allocation.sourceOwnerId === query.sourceOwnerId)) &&
+      (!query.consumingFrontendUserId || row.consumingFrontendUserId === query.consumingFrontendUserId) &&
+      (!query.startDate || row.sheetDate >= query.startDate) &&
+      (!query.endDate || row.sheetDate <= query.endDate) &&
+      (query.status !== 'ACTIVE' || (row.kind === 'CONSUMPTION' && row.active)) &&
+      (query.status !== 'REVERSED' || row.kind === 'REVERSAL' || !row.active) &&
+      (!query.payableStatus || row.payables.some((payable) => payable.status === query.payableStatus))
+    ))
+    .sort(descendingCreatedAt)
+  return paginate(rows.map(toConsumptionListRow), query.page, query.pageSize)
+}
+
+function toConsumptionListRow(row: PrepaidConsumptionRow): PrepaidConsumptionListRow {
+  const { idempotencyKey: _consumptionKey, allocations, ...consumption } = row
+  return clone({
+    ...consumption,
+    allocations: allocations.map((allocation) => {
+      const { recharge, ...publicAllocation } = allocation
+      return {
+        ...publicAllocation,
+        recharge: {
+          id: recharge.id,
+          ownerFrontendUserId: recharge.ownerFrontendUserId,
+          rechargeDate: recharge.rechargeDate,
+          paidAmount: recharge.paidAmount,
+          giftAmount: recharge.giftAmount,
+          totalAmount: recharge.totalAmount,
+          remainingAmount: recharge.remainingAmount,
+          isOpeningBalance: recharge.isOpeningBalance,
+          reversedAt: recharge.reversedAt,
+          createdAt: recharge.createdAt
+        }
+      }
+    })
+  })
 }
 
 export async function mockCreatePrepaidRecharge(

@@ -2,6 +2,8 @@ import request, { useMocks } from '@/utils/request'
 import * as mock from '@/mocks/sharedPrepaid'
 import type {
   CreatePrepaidRechargePayload,
+  PrepaidConsumptionQuery,
+  PrepaidConsumptionListRow,
   PrepaidConsumptionReversalResult,
   PrepaidMemberDetail,
   PrepaidMemberQuery,
@@ -60,6 +62,11 @@ export function getPrepaidMemberDetail(id: string): Promise<PrepaidMemberDetail>
 export function getPrepaidRecharges(query: PrepaidRechargeQuery = {}): Promise<PrepaidPage<PrepaidRechargeRow>> {
   if (useMocks) return mock.mockGetPrepaidRecharges(query)
   return request.get('/shared-prepaid/recharges', { params: query })
+}
+
+export function getPrepaidConsumptions(query: PrepaidConsumptionQuery = {}): Promise<PrepaidPage<PrepaidConsumptionListRow>> {
+  if (useMocks) return mock.mockGetPrepaidConsumptions(query)
+  return request.get('/shared-prepaid/consumptions', { params: query })
 }
 
 export function createPrepaidRecharge(

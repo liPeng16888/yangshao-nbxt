@@ -6,6 +6,7 @@ import {
   mockConfirmPrepaidSettlement,
   mockGetPrepaidMemberDetail,
   mockGetPrepaidMembers,
+  mockGetPrepaidConsumptions,
   mockLookupPrepaidMember,
   mockPreviewPrepaidSettlement,
   mockRecordPrepaidConsumption,
@@ -84,6 +85,41 @@ describe('shared prepaid focused mock', () => {
     expect(detail.consumptions.flatMap((row) => row.allocations).every((allocation) => (
       allocation.recharge.remainingAmount === 950
     ))).toBe(true)
+  })
+
+  it('filters and paginates global consumption rows independently from customer detail permission', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000, giftAmount: 100
+    }, 'recharge-a', ownerA)
+    await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 100, sheetId: 'sheet-1', sampleBlockId: 'block-1',
+      sampleIndex: 0, sampleNumberSnapshot: 'A-001', sampleCountSnapshot: 3,
+      elementsSnapshot: ['Au', 'Ag'], sheetDate: '2026-08-12'
+    }, 'consume-b', ownerB)
+
+    const page = await mockGetPrepaidConsumptions({
+      page: 1,
+      pageSize: 10,
+      phone: '138 0000-0000',
+      sourceOwnerId: 'A',
+      consumingFrontendUserId: 'B',
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+      status: 'ACTIVE',
+      payableStatus: 'PENDING'
+    })
+
+    expect(page).toMatchObject({ total: 1, page: 1, pageSize: 10 })
+    expect(page.items[0]).toMatchObject({
+      phoneSnapshot: '13800000000',
+      sampleNumberSnapshot: 'A-001',
+      sampleCountSnapshot: 3,
+      elementsSnapshot: ['Au', 'Ag'],
+      allocations: [expect.objectContaining({ sourceOwnerId: 'A', allocatedAmount: 100 })],
+      payables: [expect.objectContaining({ consumerOwnerId: 'B', amount: 90.9, status: 'PENDING' })]
+    })
+    expect(page.items[0]).not.toHaveProperty('idempotencyKey')
+    expect(page.items[0].allocations[0].recharge).not.toHaveProperty('idempotencyKey')
   })
 
   it('spends the consuming owner own lot before older cross-owner FIFO lots', async () => {

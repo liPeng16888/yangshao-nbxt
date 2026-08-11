@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { Prisma, SharedPrepaidConsumptionKind } from '@prisma/client'
+import { Prisma, SharedPrepaidConsumptionKind, SharedPrepaidPayableStatus } from '@prisma/client'
 
 import { PrismaService } from '../prisma/prisma.service'
 import { normalizePrepaidPhone } from './shared-prepaid-money'
@@ -15,6 +15,15 @@ export interface SharedPrepaidRechargeQuery extends SharedPrepaidListQuery {
   startDate?: string
   endDate?: string
   isOpeningBalance?: boolean | string
+}
+
+export interface SharedPrepaidConsumptionQuery extends SharedPrepaidListQuery {
+  sourceOwnerId?: string
+  consumingFrontendUserId?: string
+  startDate?: string
+  endDate?: string
+  status?: 'ACTIVE' | 'REVERSED'
+  payableStatus?: SharedPrepaidPayableStatus
 }
 
 interface AccountRow {
@@ -176,6 +185,128 @@ export class SharedPrepaidQueryService {
     ])
     return {
       items: recharges.map((recharge) => this.toRechargeRow(recharge as RechargeRow)),
+      total,
+      page,
+      pageSize
+    }
+  }
+
+  async listConsumptions(query: SharedPrepaidConsumptionQuery = {}) {
+    const { page, pageSize, skip } = this.pagination(query)
+    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    const sourceOwnerId = String(query.sourceOwnerId ?? '').trim()
+    const consumingFrontendUserId = String(query.consumingFrontendUserId ?? '').trim()
+    const where: Prisma.SharedPrepaidConsumptionWhereInput = {}
+    if (phone) where.member = { phone: { contains: phone } }
+    if (sourceOwnerId) where.allocations = { some: { sourceOwnerId } }
+    if (consumingFrontendUserId) where.consumingFrontendUserId = consumingFrontendUserId
+    if (query.startDate || query.endDate) {
+      where.sheetDate = {
+        ...(query.startDate ? { gte: String(query.startDate).trim() } : {}),
+        ...(query.endDate ? { lte: String(query.endDate).trim() } : {})
+      }
+    }
+    if (query.status === 'ACTIVE') {
+      where.kind = SharedPrepaidConsumptionKind.CONSUMPTION
+      where.active = true
+    } else if (query.status === 'REVERSED') {
+      where.OR = [
+        { kind: SharedPrepaidConsumptionKind.REVERSAL },
+        { kind: SharedPrepaidConsumptionKind.CONSUMPTION, active: false }
+      ]
+    }
+    if (query.payableStatus) where.payables = { some: { status: query.payableStatus } }
+
+    const select = {
+      id: true,
+      memberId: true,
+      consumingFrontendUserId: true,
+      actorUserId: true,
+      kind: true,
+      amount: true,
+      sheetId: true,
+      sampleBlockId: true,
+      sampleIndex: true,
+      sampleNumberSnapshot: true,
+      sampleCountSnapshot: true,
+      elementsSnapshot: true,
+      phoneSnapshot: true,
+      sheetDate: true,
+      active: true,
+      reversalOfId: true,
+      createdAt: true,
+      consumingFrontendUser: { select: accountSelect },
+      actorUser: { select: accountSelect },
+      allocations: {
+        select: {
+          id: true,
+          consumptionId: true,
+          rechargeId: true,
+          sourceOwnerId: true,
+          allocatedAmount: true,
+          paidRatio: true,
+          exactTransferAmount: true,
+          createdAt: true,
+          recharge: { select: {
+            id: true,
+            ownerFrontendUserId: true,
+            rechargeDate: true,
+            paidAmount: true,
+            giftAmount: true,
+            totalAmount: true,
+            remainingAmount: true,
+            isOpeningBalance: true,
+            reversedAt: true,
+            createdAt: true
+          } },
+          sourceOwner: { select: accountSelect }
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+      },
+      payables: {
+        select: {
+          id: true,
+          consumptionId: true,
+          sourceOwnerId: true,
+          consumerOwnerId: true,
+          exactAmount: true,
+          amount: true,
+          status: true,
+          reversalOfId: true,
+          createdAt: true,
+          updatedAt: true,
+          sourceOwner: { select: accountSelect },
+          consumerOwner: { select: accountSelect }
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+      }
+    } satisfies Prisma.SharedPrepaidConsumptionSelect
+    const [rows, total] = await Promise.all([
+      this.prisma.sharedPrepaidConsumption.findMany({
+        where,
+        select,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: pageSize
+      }),
+      this.prisma.sharedPrepaidConsumption.count({ where })
+    ])
+
+    return {
+      items: rows.map((row) => {
+        const { member: _member, idempotencyKey: _consumptionKey, ...publicRow } = row as typeof row & {
+          member?: unknown
+          idempotencyKey?: string
+        }
+        const allocations = publicRow.allocations.map((allocation) => {
+          const { idempotencyKey: _rechargeKey, remark: _remark, ...recharge } = allocation.recharge as typeof allocation.recharge & {
+            idempotencyKey?: string
+            remark?: string | null
+          }
+          return { ...allocation, recharge }
+        })
+        return this.decimalToNumberDeep({ ...publicRow, allocations })
+      }),
       total,
       page,
       pageSize

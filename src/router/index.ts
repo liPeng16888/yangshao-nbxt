@@ -9,6 +9,9 @@ import FinancePage from '@/views/dashboard/FinancePage.vue'
 import FinanceIncomePage from '@/views/dashboard/FinanceIncomePage.vue'
 import FinanceMonthlySettlementPage from '@/views/dashboard/FinanceMonthlySettlementPage.vue'
 import FinanceUnsettledPage from '@/views/dashboard/FinanceUnsettledPage.vue'
+import PrepaidRechargePage from '@/views/dashboard/PrepaidRechargePage.vue'
+import PrepaidCustomersPage from '@/views/dashboard/PrepaidCustomersPage.vue'
+import PrepaidConsumptionsPage from '@/views/dashboard/PrepaidConsumptionsPage.vue'
 import SharedPrepaidPlaceholderPage from '@/views/dashboard/SharedPrepaidPlaceholderPage.vue'
 import ReportPage from '@/views/dashboard/ReportPage.vue'
 import BlacklistPage from '@/views/dashboard/BlacklistPage.vue'
@@ -91,19 +94,19 @@ const router = createRouter({
         {
           path: 'prepaid/recharges',
           name: 'prepaidRecharges',
-          component: SharedPrepaidPlaceholderPage,
+          component: PrepaidRechargePage,
           meta: { title: '预存款充值', requiresAuth: true, frontendPermission: 'PREPAID_RECHARGE' }
         },
         {
           path: 'prepaid/customers',
           name: 'prepaidCustomers',
-          component: SharedPrepaidPlaceholderPage,
+          component: PrepaidCustomersPage,
           meta: { title: '预存款客户', requiresAuth: true, frontendPermission: 'PREPAID_CUSTOMERS' }
         },
         {
           path: 'prepaid/consumptions',
           name: 'prepaidConsumptions',
-          component: SharedPrepaidPlaceholderPage,
+          component: PrepaidConsumptionsPage,
           meta: { title: '消费明细', requiresAuth: true, frontendPermission: 'PREPAID_CONSUMPTIONS' }
         },
         {

@@ -13,6 +13,8 @@ import * as prepaidApi from '@/api/sharedPrepaid'
 import { useAuthStore } from '@/stores/auth'
 import type {
   CreatePrepaidRechargePayload,
+  PrepaidConsumptionQuery,
+  PrepaidConsumptionListRow,
   PrepaidConsumptionRow,
   PrepaidMemberDetail,
   PrepaidMemberQuery,
@@ -96,6 +98,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const membersPage = ref<PrepaidPage<PrepaidMemberRow>>(emptyPage())
   const rechargesPage = ref<PrepaidPage<PrepaidRechargeRow>>(emptyPage())
   const selectedMember = ref<PrepaidMemberDetail | null>(null)
+  const consumptionsPage = ref<PrepaidPage<PrepaidConsumptionListRow>>(emptyPage())
   const consumptions = ref<PrepaidConsumptionRow[]>([])
   const payables = ref<PrepaidPayableRow[]>([])
   const settlementPreview = ref<PrepaidSettlementPreview | null>(null)
@@ -207,6 +210,12 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   async function loadRecharges(query: PrepaidRechargeQuery = {}) {
     return runLatest('recharges:list', 'recharges', () => prepaidApi.getPrepaidRecharges(query), (result) => {
       rechargesPage.value = result
+    })
+  }
+
+  async function loadConsumptions(query: PrepaidConsumptionQuery = {}) {
+    return runLatest('consumptions:list', 'consumptions', () => prepaidApi.getPrepaidConsumptions(query), (result) => {
+      consumptionsPage.value = result
     })
   }
 
@@ -525,6 +534,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     membersPage,
     rechargesPage,
     selectedMember,
+    consumptionsPage,
     consumptions,
     payables,
     settlementPreview,
@@ -544,6 +554,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     lookupMember,
     loadMemberDetail,
     loadRecharges,
+    loadConsumptions,
     createRecharge,
     reverseRecharge,
     reverseConsumption,

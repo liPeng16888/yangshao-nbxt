@@ -30,6 +30,7 @@ import {
 import {
   CreateSharedPrepaidRechargeDto,
   ReverseSharedPrepaidRechargeDto,
+  SharedPrepaidConsumptionQueryDto,
   SharedPrepaidIdempotencyHeadersDto,
   SharedPrepaidMemberQueryDto,
   SharedPrepaidRechargeQueryDto,
@@ -132,6 +133,12 @@ export class SharedPrepaidController {
   @FrontendPermission('PREPAID_RECHARGE')
   listRecharges(@Query() query: SharedPrepaidRechargeQueryDto) {
     return this.queryService.listRecharges(query)
+  }
+
+  @Get('consumptions')
+  @FrontendPermission('PREPAID_CONSUMPTIONS')
+  listConsumptions(@Query() query: SharedPrepaidConsumptionQueryDto) {
+    return this.queryService.listConsumptions(query)
   }
 
   @Post('recharges')

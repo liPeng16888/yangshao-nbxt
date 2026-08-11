@@ -143,6 +143,18 @@ export interface PrepaidConsumptionRow {
   payables: PrepaidPayableRow[]
 }
 
+export type PrepaidConsumptionListRechargeRow = Pick<PrepaidRechargeLotRow,
+  'id' | 'ownerFrontendUserId' | 'rechargeDate' | 'paidAmount' | 'giftAmount' | 'totalAmount' |
+  'remainingAmount' | 'isOpeningBalance' | 'reversedAt' | 'createdAt'>
+
+export interface PrepaidConsumptionListAllocationRow extends Omit<PrepaidAllocationRow, 'recharge'> {
+  recharge: PrepaidConsumptionListRechargeRow
+}
+
+export interface PrepaidConsumptionListRow extends Omit<PrepaidConsumptionRow, 'idempotencyKey' | 'allocations'> {
+  allocations: PrepaidConsumptionListAllocationRow[]
+}
+
 export interface PrepaidLedgerEntryRow {
   id: string
   memberId: string
@@ -248,6 +260,17 @@ export interface PrepaidRechargeQuery extends PrepaidMemberQuery {
   startDate?: string
   endDate?: string
   isOpeningBalance?: boolean
+}
+
+export type PrepaidConsumptionStatusFilter = 'ACTIVE' | 'REVERSED'
+
+export interface PrepaidConsumptionQuery extends PrepaidMemberQuery {
+  sourceOwnerId?: string
+  consumingFrontendUserId?: string
+  startDate?: string
+  endDate?: string
+  status?: PrepaidConsumptionStatusFilter
+  payableStatus?: PrepaidPayableStatus
 }
 
 export interface CreatePrepaidRechargePayload {

@@ -6,6 +6,7 @@ import {
   IsArray,
   IsBoolean,
   IsDefined,
+  IsIn,
   IsISO8601,
   IsInt,
   IsNotEmpty,
@@ -210,4 +211,38 @@ export class SharedPrepaidRechargeQueryDto extends SharedPrepaidMemberQueryDto {
   @IsOptional()
   @IsBoolean({ message: '期初余额筛选必须为布尔值' })
   isOpeningBalance?: boolean
+}
+
+export class SharedPrepaidConsumptionQueryDto extends SharedPrepaidMemberQueryDto {
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsString({ message: '充值来源账号必须为文本' })
+  @IsNotEmpty({ message: '充值来源账号不能为空' })
+  sourceOwnerId?: string
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsString({ message: '消费账号必须为文本' })
+  @IsNotEmpty({ message: '消费账号不能为空' })
+  consumingFrontendUserId?: string
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @Matches(BUSINESS_DATE_PATTERN, { message: '开始日期必须为 YYYY-MM-DD 格式' })
+  startDate?: string
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @Matches(BUSINESS_DATE_PATTERN, { message: '结束日期必须为 YYYY-MM-DD 格式' })
+  endDate?: string
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsIn(['ACTIVE', 'REVERSED'], { message: '消费状态参数错误' })
+  status?: 'ACTIVE' | 'REVERSED'
+
+  @Transform(({ value }) => trim(value))
+  @IsOptional()
+  @IsIn(['PENDING', 'HELD', 'COMPLETED', 'REVERSED'], { message: '结算状态参数错误' })
+  payableStatus?: 'PENDING' | 'HELD' | 'COMPLETED' | 'REVERSED'
 }

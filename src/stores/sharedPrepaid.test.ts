@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
   lookupPrepaidMember: vi.fn(),
   getPrepaidMemberDetail: vi.fn(),
   getPrepaidRecharges: vi.fn(),
+  getPrepaidConsumptions: vi.fn(),
   createPrepaidRecharge: vi.fn(),
   reversePrepaidRecharge: vi.fn(),
   reversePrepaidConsumption: vi.fn(),
@@ -149,6 +150,7 @@ describe('shared prepaid realtime refresh', () => {
     apiMocks.isSharedPrepaidTerminalAuthError.mockReturnValue(false)
     for (const name of [
       'getPrepaidMembers', 'lookupPrepaidMember', 'getPrepaidMemberDetail', 'getPrepaidRecharges',
+      'getPrepaidConsumptions',
       'createPrepaidRecharge', 'reversePrepaidRecharge', 'reversePrepaidConsumption',
       'previewPrepaidSettlement', 'createPrepaidSettlement', 'submitPrepaidSettlementPayment',
       'confirmPrepaidSettlement', 'rejectPrepaidSettlement', 'cancelPrepaidSettlement'
@@ -333,6 +335,22 @@ describe('shared prepaid realtime refresh', () => {
     await recharges
 
     expect(store.loadingByPage).toEqual({ recharges: false, members: false, consumptions: false, settlements: false })
+  })
+
+  it('loads the independently paginated global consumption list with exact filters', async () => {
+    apiMocks.getPrepaidConsumptions.mockResolvedValue({ items: [], total: 0, page: 2, pageSize: 10 })
+    const store = useSharedPrepaidStore()
+    const query = {
+      page: 2, pageSize: 10, phone: '13800000000', sourceOwnerId: 'front-1',
+      consumingFrontendUserId: 'front-2', startDate: '2026-08-01', endDate: '2026-08-31',
+      status: 'REVERSED' as const, payableStatus: 'COMPLETED' as const
+    }
+
+    await store.loadConsumptions(query)
+
+    expect(apiMocks.getPrepaidConsumptions).toHaveBeenCalledWith(query)
+    expect(store.consumptionsPage).toEqual({ items: [], total: 0, page: 2, pageSize: 10 })
+    expect(store.loadingByPage.consumptions).toBe(false)
   })
 
   it('preserves settlement selection, dirty state, and the same key after a 409 retry', async () => {
