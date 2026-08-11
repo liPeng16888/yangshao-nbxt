@@ -103,36 +103,69 @@ describe('employee attendance navigation', () => {
     wrapper.unmount()
   })
 
-  it('loads an existing month setting and clears stale values for an employee without a setting', async () => {
+  it('loads an existing monthly rest quota and clears stale values for an employee without a setting', async () => {
     const pinia = createPinia()
     const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
     const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
     await flushPromises()
     store.employeeId = 'emp-1'
     await flushPromises()
-    expect((wrapper.get('[data-testid="month-scheduled-days"] input').element as HTMLInputElement).value).toBe('22')
     expect((wrapper.get('[data-testid="month-rest-quota"] input').element as HTMLInputElement).value).toBe('4')
+    expect(wrapper.text()).toContain('排班工作日')
 
     const employee = await mockCreateEmployee({ employeeNumber: 'YG777', name: '无月设置员工', status: 'ACTIVE', hireDate: '2026-08-01', restQuotaDays: 3 })
     await store.loadEmployees()
     store.employeeId = employee.id
     await flushPromises()
-    expect((wrapper.get('[data-testid="month-scheduled-days"] input').element as HTMLInputElement).value).toBe('0')
     expect((wrapper.get('[data-testid="month-rest-quota"] input').element as HTMLInputElement).value).toBe('3')
     wrapper.unmount()
   })
 
-  it('shows planned start/end controls and the derived duration for workday schedules', async () => {
+  it('renders a month calendar and edits multiple intervals in the day drawer', async () => {
     const pinia = createPinia()
     const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
     const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
     await flushPromises()
     store.employeeId = 'emp-1'
     await flushPromises()
+    expect(wrapper.find('[data-testid="monthly-schedule-calendar"]').exists()).toBe(true)
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    expect(wrapper.get('[data-testid="schedule-day-drawer"]').text()).toContain('添加工作时段')
+    await wrapper.get('[data-testid="add-planned-interval"]').trigger('click')
+    expect(wrapper.findAll('[data-testid="planned-interval"]')).toHaveLength(2)
+    expect(wrapper.text()).toContain('休息 60 分钟')
+    expect(wrapper.text()).toContain('工作 8.5 小时')
+    wrapper.unmount()
+  })
 
-    expect(wrapper.text()).toContain('开始时间')
-    expect(wrapper.text()).toContain('结束时间')
-    expect(wrapper.text()).toContain('自动计算分钟')
+  it('confirms the count before fully overwriting selected dates', async () => {
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    await flushPromises()
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-mode"]').trigger('click')
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    await wrapper.get('[data-date="2026-08-04"]').trigger('click')
+    await wrapper.get('[data-testid="apply-batch"]').trigger('click')
+    expect(wrapper.text()).toContain('将完整覆盖 2 个日期')
+    wrapper.unmount()
+  })
+
+  it('copies the previous month only after overwrite confirmation', async () => {
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    await flushPromises()
+    store.employeeId = 'emp-1'
+    await flushPromises()
+    await wrapper.get('[data-testid="copy-previous-month"]').trigger('click')
+    expect(wrapper.text()).toContain('覆盖当前月已有排班')
     wrapper.unmount()
   })
 
