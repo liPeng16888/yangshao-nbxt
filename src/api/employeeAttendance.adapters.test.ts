@@ -29,13 +29,27 @@ import {
   selectEmployeeAttendanceGrant,
   toBeijingDateTimeLocal
 } from './employeeAttendance'
-import { verifyAccessGuardGroup } from './accessGuard'
+import { ACCESS_GUARD_SESSION_KEY, verifyAccessGuardGroup } from './accessGuard'
+
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>()
+  return {
+    get length() { return values.size },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, value)
+  }
+}
 
 describe('employee attendance real API adapters', () => {
   beforeEach(() => {
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: createMemoryStorage() })
     vi.mocked(request.get).mockReset()
     vi.mocked(request.post).mockReset()
     vi.mocked(request.post).mockResolvedValue({ expiresAt: Date.now() + 60_000, token: 'mock-access-grant:attendance-group:1', groupId: 'attendance-group', grantVersion: 1, features: [] })
+    window.localStorage.clear()
   })
 
   it('normalizes monthly schedules and sends selected leave employee ids', async () => {
@@ -51,6 +65,29 @@ describe('employee attendance real API adapters', () => {
     expect(request.get).toHaveBeenCalledWith('/employee-attendance/leaves', {
       params: expect.objectContaining({ employeeIds: 'emp-1,emp-2', month: '2026-08' })
     })
+  })
+
+  it('forwards the current attendance grant on monthly schedule, attendance and leave routes', async () => {
+    window.localStorage.setItem(ACCESS_GUARD_SESSION_KEY, JSON.stringify({
+      attendance: {
+        groupId: 'attendance', grantVersion: 1, expiresAt: Date.now() + 60_000,
+        token: 'attendance-grant', features: ['EMPLOYEE_ATTENDANCE']
+      }
+    }))
+    vi.mocked(request.get).mockResolvedValueOnce([]).mockResolvedValueOnce([])
+    vi.mocked(request.post).mockResolvedValueOnce({
+      id: 'attendance-1', employeeId: 'emp-1', date: '2026-08-03',
+      actualSegments: [], explicitAbsenceMinutes: 0, absenceMinutes: 0
+    })
+
+    await getMonthlySchedules('emp-1', '2026-08')
+    await saveAttendance({ employeeId: 'emp-1', date: '2026-08-03', actualSegments: [], explicitAbsenceMinutes: 0, overtimeMinutes: 0 })
+    await getLeaves({ employeeIds: ['emp-1'] })
+
+    const headers = { 'X-YS-Access-Grant': 'attendance-grant' }
+    expect(request.get).toHaveBeenNthCalledWith(1, '/employee-attendance/monthly-schedules', { params: { employeeId: 'emp-1', month: '2026-08' }, headers })
+    expect(request.post).toHaveBeenCalledWith('/employee-attendance/attendance', expect.any(Object), { headers })
+    expect(request.get).toHaveBeenNthCalledWith(2, '/employee-attendance/leaves', { params: { employeeIds: 'emp-1' }, headers })
   })
 
   it('sends only the editable monthly rest quota and receives a server-derived workday count', async () => {

@@ -39,25 +39,25 @@ CREATE TABLE "EmployeeAttendanceSegment" (
 );
 
 -- CreateIndex
+CREATE INDEX "EmployeeMonthlyScheduleDay_frontendUserId_date_idx" ON "EmployeeMonthlyScheduleDay"("frontendUserId", "date");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "EmployeeMonthlyScheduleDay_employeeId_date_key" ON "EmployeeMonthlyScheduleDay"("employeeId", "date");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "EmployeeMonthlyScheduleDay_id_frontendUserId_key" ON "EmployeeMonthlyScheduleDay"("id", "frontendUserId");
 
 -- CreateIndex
-CREATE INDEX "EmployeeMonthlyScheduleDay_frontendUserId_date_idx" ON "EmployeeMonthlyScheduleDay"("frontendUserId", "date");
+CREATE INDEX "EmployeeScheduleSegment_frontendUserId_scheduleDayId_idx" ON "EmployeeScheduleSegment"("frontendUserId", "scheduleDayId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "EmployeeScheduleSegment_scheduleDayId_sequence_key" ON "EmployeeScheduleSegment"("scheduleDayId", "sequence");
 
 -- CreateIndex
-CREATE INDEX "EmployeeScheduleSegment_frontendUserId_scheduleDayId_idx" ON "EmployeeScheduleSegment"("frontendUserId", "scheduleDayId");
+CREATE INDEX "EmployeeAttendanceSegment_frontendUserId_attendanceRecordId_idx" ON "EmployeeAttendanceSegment"("frontendUserId", "attendanceRecordId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "EmployeeAttendanceSegment_attendanceRecordId_sequence_key" ON "EmployeeAttendanceSegment"("attendanceRecordId", "sequence");
-
--- CreateIndex
-CREATE INDEX "EmployeeAttendanceSegment_frontendUserId_attendanceRecordId_idx" ON "EmployeeAttendanceSegment"("frontendUserId", "attendanceRecordId");
 
 -- AddForeignKey
 ALTER TABLE "EmployeeMonthlyScheduleDay" ADD CONSTRAINT "EmployeeMonthlyScheduleDay_frontendUserId_fkey" FOREIGN KEY ("frontendUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -75,7 +75,7 @@ ALTER TABLE "EmployeeScheduleSegment" ADD CONSTRAINT "EmployeeScheduleSegment_sc
 ALTER TABLE "EmployeeAttendanceSegment" ADD CONSTRAINT "EmployeeAttendanceSegment_frontendUserId_fkey" FOREIGN KEY ("frontendUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "EmployeeAttendanceSegment" ADD CONSTRAINT "EmployeeAttendanceSegment_attendanceRecordId_frontendUserId_fkey" FOREIGN KEY ("attendanceRecordId", "frontendUserId") REFERENCES "EmployeeAttendanceRecord"("id", "frontendUserId") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "EmployeeAttendanceSegment" ADD CONSTRAINT "EmployeeAttendanceSegment_attendanceRecordId_frontendUserI_fkey" FOREIGN KEY ("attendanceRecordId", "frontendUserId") REFERENCES "EmployeeAttendanceRecord"("id", "frontendUserId") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- Backfill the deployment month from the legacy weekly schedule, preferring an exact date override.
 WITH deployment_days AS (

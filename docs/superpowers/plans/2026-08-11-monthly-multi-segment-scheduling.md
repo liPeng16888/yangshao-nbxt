@@ -872,7 +872,7 @@ git commit -m "feat: show monthly schedules in readonly admin"
 - Consumes all prior tasks.
 - Produces a locally verified, documented feature with no production deployment.
 
-- [ ] **Step 1: Add route-level integration assertions**
+- [x] **Step 1: Add route-level integration assertions**
 
 Extend existing page/controller suites to assert:
 
@@ -882,7 +882,7 @@ Extend existing page/controller suites to assert:
 - Admin schedules route is read-only.
 - Every customer route sends `x-ys-access-grant` and every server write checks it.
 
-- [ ] **Step 2: Run focused cross-layer regression suites**
+- [x] **Step 2: Run focused cross-layer regression suites**
 
 ```bash
 ./node_modules/.bin/vitest run src/api/employeeAttendance.mock.test.ts src/stores/employeeAttendance.test.ts src/views/dashboard/EmployeeAttendancePages.test.ts admin/src/api.employeeAttendance.test.ts admin/src/views/EmployeeAttendancePage.test.ts --exclude '.worktrees/**' --exclude '.pnpm-store/**' --exclude '.superpowers/**'
@@ -891,11 +891,11 @@ cd server && ../node_modules/.bin/vitest run src/employee-attendance
 
 Expected: all focused customer, admin and server tests PASS.
 
-- [ ] **Step 3: Verify the migration against a fresh schema diff**
+- [x] **Step 3: Verify the migration against a fresh schema diff**
 
 Run Prisma format, validate and generate with a non-production `DATABASE_URL`. Create a fresh base-to-feature diff and compare it byte-for-byte with `server/prisma/migrations/20260811000000_add_monthly_schedule_segments/migration.sql`, excluding the intentional data backfill block from the structural comparison. Confirm all new tenant ownership indexes and composite foreign keys are present and no employee/history table is dropped.
 
-- [ ] **Step 4: Run full repository verification**
+- [x] **Step 4: Run full repository verification**
 
 ```bash
 ./node_modules/.bin/vitest run --exclude '.worktrees/**' --exclude '.pnpm-store/**' --exclude '.superpowers/**'
@@ -912,7 +912,7 @@ cd .. && git diff --check
 
 Expected: zero test failures, zero type errors, all builds exit 0, Prisma valid and diff check clean. Existing Vite chunk-size and dependency deprecation warnings are non-failing.
 
-- [ ] **Step 5: Update local documentation**
+- [x] **Step 5: Update local documentation**
 
 Document:
 
@@ -937,7 +937,7 @@ Start customer port 5173 and admin port 5174 using installed Vite binaries and `
 
 Leave customer and admin attendance pages open as deliverables.
 
-- [ ] **Step 7: Commit Task 8**
+- [x] **Step 7: Commit Task 8**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-08-11-monthly-multi-segment-scheduling.md
