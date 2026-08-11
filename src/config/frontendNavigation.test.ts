@@ -31,6 +31,7 @@ describe('frontend navigation permissions', () => {
       'PREPAID_CONSUMPTIONS',
       'PREPAID_SETTLEMENTS'
     ])
+    expect(frontendNavigation.find((item) => item.key === 'PREPAID')?.icon).toBe('prepaid')
     expect(frontendNavigation.find((item) => item.key === 'FINANCE')?.children?.map((child) => child.permission)).toEqual([
       'FINANCE_EXPENSES',
       'FINANCE_INCOME',

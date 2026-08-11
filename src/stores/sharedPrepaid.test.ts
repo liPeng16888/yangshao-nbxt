@@ -8,7 +8,20 @@ import { useSharedPrepaidStore } from './sharedPrepaid'
 const apiMocks = vi.hoisted(() => ({
   createSharedPrepaidStreamTicket: vi.fn(),
   createSharedPrepaidEventSource: vi.fn(),
-  isSharedPrepaidTerminalAuthError: vi.fn()
+  isSharedPrepaidTerminalAuthError: vi.fn(),
+  getPrepaidMembers: vi.fn(),
+  lookupPrepaidMember: vi.fn(),
+  getPrepaidMemberDetail: vi.fn(),
+  getPrepaidRecharges: vi.fn(),
+  createPrepaidRecharge: vi.fn(),
+  reversePrepaidRecharge: vi.fn(),
+  reversePrepaidConsumption: vi.fn(),
+  previewPrepaidSettlement: vi.fn(),
+  createPrepaidSettlement: vi.fn(),
+  submitPrepaidSettlementPayment: vi.fn(),
+  confirmPrepaidSettlement: vi.fn(),
+  rejectPrepaidSettlement: vi.fn(),
+  cancelPrepaidSettlement: vi.fn()
 }))
 
 vi.mock('@/api/sharedPrepaid', () => apiMocks)
@@ -62,6 +75,12 @@ describe('shared prepaid realtime refresh', () => {
     apiMocks.createSharedPrepaidEventSource.mockReset()
     apiMocks.isSharedPrepaidTerminalAuthError.mockReset()
     apiMocks.isSharedPrepaidTerminalAuthError.mockReturnValue(false)
+    for (const name of [
+      'getPrepaidMembers', 'lookupPrepaidMember', 'getPrepaidMemberDetail', 'getPrepaidRecharges',
+      'createPrepaidRecharge', 'reversePrepaidRecharge', 'reversePrepaidConsumption',
+      'previewPrepaidSettlement', 'createPrepaidSettlement', 'submitPrepaidSettlementPayment',
+      'confirmPrepaidSettlement', 'rejectPrepaidSettlement', 'cancelPrepaidSettlement'
+    ] as const) apiMocks[name].mockReset()
     const auth = useAuthStore()
     auth.token = 'signed-token'
     auth.user = {
@@ -225,5 +244,65 @@ describe('shared prepaid realtime refresh', () => {
 
     expect(apiMocks.createSharedPrepaidEventSource).not.toHaveBeenCalled()
     expect(store.realtimeAuthTerminal).toBe(false)
+  })
+
+  it('tracks loading independently for each prepaid page', async () => {
+    let finishRecharges!: (value: { items: never[]; total: number; page: number; pageSize: number }) => void
+    apiMocks.getPrepaidRecharges.mockReturnValue(new Promise((resolve) => { finishRecharges = resolve }))
+    apiMocks.getPrepaidMembers.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 })
+    const store = useSharedPrepaidStore()
+
+    const recharges = store.loadRecharges()
+    expect(store.loadingByPage).toEqual({ recharges: true, members: false, consumptions: false, settlements: false })
+    await store.loadMembers()
+    expect(store.loadingByPage.recharges).toBe(true)
+    expect(store.loadingByPage.members).toBe(false)
+    finishRecharges({ items: [], total: 0, page: 1, pageSize: 20 })
+    await recharges
+
+    expect(store.loadingByPage).toEqual({ recharges: false, members: false, consumptions: false, settlements: false })
+  })
+
+  it('preserves settlement selection, dirty state, and the same key after a 409 retry', async () => {
+    const conflict = { response: { status: 409, data: { code: 'PREPAID_WRITE_CONFLICT' } } }
+    apiMocks.createPrepaidSettlement
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce({ id: 'settlement-1', status: 'AWAITING_PAYMENT', lines: [] })
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue('00000000-0000-4000-8000-000000000009')
+    const store = useSharedPrepaidStore()
+    store.setSettlementSelection(['payable-1', 'payable-2'])
+
+    await expect(store.createSettlement()).rejects.toBe(conflict)
+    expect(store.settlementSelection).toEqual(['payable-1', 'payable-2'])
+    expect(store.dirtyByPage.settlements).toBe(true)
+    expect(store.pendingIdempotencyKeys.createSettlement).toBe('00000000-0000-4000-8000-000000000009')
+
+    await store.createSettlement()
+    expect(apiMocks.createPrepaidSettlement).toHaveBeenNthCalledWith(1, {
+      payableIds: ['payable-1', 'payable-2']
+    }, '00000000-0000-4000-8000-000000000009')
+    expect(apiMocks.createPrepaidSettlement).toHaveBeenNthCalledWith(2, {
+      payableIds: ['payable-1', 'payable-2']
+    }, '00000000-0000-4000-8000-000000000009')
+    expect(store.settlementSelection).toEqual([])
+    expect(store.dirtyByPage.settlements).toBe(false)
+    expect(store.pendingIdempotencyKeys.createSettlement).toBeUndefined()
+  })
+
+  it('allows an explicit action key and preserves a recharge form on conflict', async () => {
+    const conflict = { response: { status: 409 } }
+    apiMocks.createPrepaidRecharge.mockRejectedValue(conflict)
+    const store = useSharedPrepaidStore()
+    store.setRechargeDraft({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000,
+      giftAmount: 100, isOpeningBalance: false, remark: '待重试'
+    })
+
+    await expect(store.createRecharge(undefined, 'explicit-retry-key')).rejects.toBe(conflict)
+
+    expect(apiMocks.createPrepaidRecharge).toHaveBeenCalledWith(store.rechargeDraft, 'explicit-retry-key')
+    expect(store.rechargeDraft.remark).toBe('待重试')
+    expect(store.dirtyByPage.recharges).toBe(true)
+    expect(store.pendingIdempotencyKeys.createRecharge).toBe('explicit-retry-key')
   })
 })

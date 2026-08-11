@@ -54,6 +54,7 @@ const iconComponents = {
   data: DataAnalysis,
   report: Memo,
   attendance: Calendar,
+  prepaid: Money,
   finance: Money,
   reports: DocumentChecked,
   medicine: Box,

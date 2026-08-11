@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const requestMocks = vi.hoisted(() => ({ post: vi.fn() }))
+const requestMocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
 
 vi.mock('@/utils/request', () => ({
   default: requestMocks,
@@ -8,13 +8,28 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import {
+  cancelPrepaidSettlement,
+  confirmPrepaidSettlement,
+  createPrepaidRecharge,
+  createPrepaidSettlement,
   createSharedPrepaidEventSource,
   createSharedPrepaidStreamTicket,
-  isSharedPrepaidTerminalAuthError
+  getPrepaidMemberDetail,
+  getPrepaidMembers,
+  getPrepaidRecharges,
+  isSharedPrepaidTerminalAuthError,
+  lookupPrepaidMember,
+  previewPrepaidSettlement,
+  rejectPrepaidSettlement,
+  reversePrepaidConsumption,
+  reversePrepaidRecharge,
+  submitPrepaidSettlementPayment
 } from './sharedPrepaid'
+import type { CreatePrepaidRechargePayload } from '@/types/sharedPrepaid'
 
 describe('shared prepaid realtime transport', () => {
   beforeEach(() => {
+    requestMocks.get.mockReset()
     requestMocks.post.mockReset()
     const values = new Map<string, string>()
     vi.stubGlobal('localStorage', {
@@ -26,6 +41,86 @@ describe('shared prepaid realtime transport', () => {
       get length() { return values.size }
     })
     window.localStorage.setItem('ys_token', 'long-lived.raw.jwt')
+  })
+
+  it('uses only the authoritative member and recharge read routes', async () => {
+    requestMocks.get.mockResolvedValue({ items: [], total: 0, page: 2, pageSize: 10 })
+
+    await getPrepaidMembers({ page: 2, pageSize: 10, phone: '138' })
+    await lookupPrepaidMember('138 0000-0000')
+    await getPrepaidMemberDetail('member-1')
+    await getPrepaidRecharges({ ownerFrontendUserId: 'front-1', isOpeningBalance: false })
+
+    expect(requestMocks.get.mock.calls).toEqual([
+      ['/shared-prepaid/members', { params: { page: 2, pageSize: 10, phone: '138' } }],
+      ['/shared-prepaid/members/lookup', { params: { phone: '138 0000-0000' } }],
+      ['/shared-prepaid/members/member-1'],
+      ['/shared-prepaid/recharges', { params: { ownerFrontendUserId: 'front-1', isOpeningBalance: false } }]
+    ])
+  })
+
+  it('creates one idempotency key per mutation and keeps an explicit retry key stable', async () => {
+    const randomUUID = vi.fn()
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000001')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000002')
+    vi.spyOn(crypto, 'randomUUID').mockImplementation(randomUUID)
+    requestMocks.post.mockResolvedValue({ id: 'saved' })
+    const payload: CreatePrepaidRechargePayload = {
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000,
+      giftAmount: 100, isOpeningBalance: false, remark: '首次充值'
+    }
+
+    await createPrepaidRecharge(payload)
+    await reversePrepaidRecharge('recharge-1', { reason: '金额录错' }, 'retry-key')
+    await reversePrepaidConsumption('consumption-1', { reason: '样品作废' })
+
+    expect(requestMocks.post.mock.calls).toEqual([
+      ['/shared-prepaid/recharges', payload, {
+        headers: { 'X-Idempotency-Key': '00000000-0000-4000-8000-000000000001' }
+      }],
+      ['/shared-prepaid/recharges/recharge-1/reversal', { reason: '金额录错' }, {
+        headers: { 'X-Idempotency-Key': 'retry-key' }
+      }],
+      ['/shared-prepaid/consumptions/consumption-1/reversal', { reason: '样品作废' }, {
+        headers: { 'X-Idempotency-Key': '00000000-0000-4000-8000-000000000002' }
+      }]
+    ])
+    expect(randomUUID).toHaveBeenCalledTimes(2)
+  })
+
+  it('maps every settlement mutation to the server route and keeps bodies exact', async () => {
+    requestMocks.post.mockResolvedValue({ id: 'settlement-1' })
+    const key = 'stable-action-key'
+
+    await previewPrepaidSettlement({ payableIds: ['payable-1', 'payable-2'] })
+    await createPrepaidSettlement({ payableIds: ['payable-1', 'payable-2'] }, key)
+    await submitPrepaidSettlementPayment('settlement-1', {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00',
+      proofUrls: ['/uploads/prepaid/proof.png'], remark: '已转账'
+    }, key)
+    await confirmPrepaidSettlement('settlement-1', key)
+    await rejectPrepaidSettlement('settlement-1', { reason: '金额不符' }, key)
+    await cancelPrepaidSettlement('settlement-1', key)
+
+    expect(requestMocks.post.mock.calls).toEqual([
+      ['/shared-prepaid/settlements/preview', { payableIds: ['payable-1', 'payable-2'] }],
+      ['/shared-prepaid/settlements', { payableIds: ['payable-1', 'payable-2'] }, {
+        headers: { 'X-Idempotency-Key': key }
+      }],
+      ['/shared-prepaid/settlements/settlement-1/payment', {
+        actualTransferredAt: '2026-08-12T16:00:00+08:00',
+        proofUrls: ['/uploads/prepaid/proof.png'], remark: '已转账'
+      }, { headers: { 'X-Idempotency-Key': key } }],
+      ['/shared-prepaid/settlements/settlement-1/confirm', undefined, {
+        headers: { 'X-Idempotency-Key': key }
+      }],
+      ['/shared-prepaid/settlements/settlement-1/reject', { reason: '金额不符' }, {
+        headers: { 'X-Idempotency-Key': key }
+      }],
+      ['/shared-prepaid/settlements/settlement-1/cancel', undefined, {
+        headers: { 'X-Idempotency-Key': key }
+      }]
+    ])
   })
 
   it('obtains a short-lived ticket through the authenticated request client', async () => {

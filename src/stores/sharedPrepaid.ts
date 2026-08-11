@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, onScopeDispose, ref, watch } from 'vue'
+import { computed, onScopeDispose, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import {
@@ -9,7 +9,23 @@ import {
   type SharedPrepaidRealtimeEvent,
   type SharedPrepaidRealtimeModule
 } from '@/api/sharedPrepaid'
+import * as prepaidApi from '@/api/sharedPrepaid'
 import { useAuthStore } from '@/stores/auth'
+import type {
+  CreatePrepaidRechargePayload,
+  PrepaidConsumptionRow,
+  PrepaidMemberDetail,
+  PrepaidMemberQuery,
+  PrepaidMemberRow,
+  PrepaidPage,
+  PrepaidPayableRow,
+  PrepaidReasonPayload,
+  PrepaidRechargeQuery,
+  PrepaidRechargeRow,
+  PrepaidSettlementPaymentPayload,
+  PrepaidSettlementPreview,
+  PrepaidSettlementRow
+} from '@/types/sharedPrepaid'
 
 export interface SharedPrepaidRealtimeRegistration {
   isDirty: () => boolean
@@ -24,8 +40,64 @@ const PREPAID_PERMISSIONS = new Set([
   'PREPAID_SETTLEMENTS'
 ])
 
+type SharedPrepaidPage = SharedPrepaidRealtimeModule
+type SharedPrepaidMutation =
+  | 'createRecharge'
+  | `reverseRecharge:${string}`
+  | `reverseConsumption:${string}`
+  | 'createSettlement'
+  | `submitPayment:${string}`
+  | `confirmSettlement:${string}`
+  | `rejectSettlement:${string}`
+  | `cancelSettlement:${string}`
+
+const emptyPage = <T>(): PrepaidPage<T> => ({ items: [], total: 0, page: 1, pageSize: 20 })
+const emptyRechargeDraft = (): CreatePrepaidRechargePayload => ({
+  phone: '',
+  rechargeDate: '',
+  paidAmount: '',
+  giftAmount: '',
+  isOpeningBalance: false,
+  remark: ''
+})
+
 export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const authStore = useAuthStore()
+  const loadingCounts = reactive<Record<SharedPrepaidPage, number>>({
+    recharges: 0,
+    members: 0,
+    consumptions: 0,
+    settlements: 0
+  })
+  const loadingByPage = computed<Record<SharedPrepaidPage, boolean>>(() => ({
+    recharges: loadingCounts.recharges > 0,
+    members: loadingCounts.members > 0,
+    consumptions: loadingCounts.consumptions > 0,
+    settlements: loadingCounts.settlements > 0
+  }))
+  const dirtyByPage = reactive<Record<SharedPrepaidPage, boolean>>({
+    recharges: false,
+    members: false,
+    consumptions: false,
+    settlements: false
+  })
+  const errorsByPage = reactive<Record<SharedPrepaidPage, string>>({
+    recharges: '',
+    members: '',
+    consumptions: '',
+    settlements: ''
+  })
+  const pendingIdempotencyKeys = reactive<Partial<Record<SharedPrepaidMutation, string>>>({})
+  const membersPage = ref<PrepaidPage<PrepaidMemberRow>>(emptyPage())
+  const rechargesPage = ref<PrepaidPage<PrepaidRechargeRow>>(emptyPage())
+  const selectedMember = ref<PrepaidMemberDetail | null>(null)
+  const consumptions = ref<PrepaidConsumptionRow[]>([])
+  const payables = ref<PrepaidPayableRow[]>([])
+  const settlementPreview = ref<PrepaidSettlementPreview | null>(null)
+  const settlements = ref<PrepaidSettlementRow[]>([])
+  const rechargeDraft = ref<CreatePrepaidRechargePayload>(emptyRechargeDraft())
+  const settlementSelection = ref<string[]>([])
+  const settlementPaymentDraft = ref<PrepaidSettlementPaymentPayload>({ actualTransferredAt: '' })
   const realtimeConnected = ref(false)
   const realtimeAuthTerminal = ref(false)
   const refreshPromptModules = ref<SharedPrepaidRealtimeModule[]>([])
@@ -38,6 +110,167 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   let connectingEpoch: number | null = null
 
   const hasRefreshPrompt = computed(() => refreshPromptModules.value.length > 0)
+
+  async function runPage<T>(page: SharedPrepaidPage, action: () => Promise<T>): Promise<T> {
+    loadingCounts[page] += 1
+    errorsByPage[page] = ''
+    try {
+      return await action()
+    } catch (error) {
+      errorsByPage[page] = error instanceof Error ? error.message : '操作失败'
+      throw error
+    } finally {
+      loadingCounts[page] -= 1
+    }
+  }
+
+  function setPageDirty(page: SharedPrepaidPage, dirty = true) {
+    dirtyByPage[page] = dirty
+  }
+
+  function setRechargeDraft(draft: CreatePrepaidRechargePayload) {
+    rechargeDraft.value = { ...draft }
+    setPageDirty('recharges')
+  }
+
+  function setSettlementSelection(ids: string[]) {
+    settlementSelection.value = [...ids]
+    setPageDirty('settlements', ids.length > 0)
+  }
+
+  function setSettlementPaymentDraft(draft: PrepaidSettlementPaymentPayload) {
+    settlementPaymentDraft.value = { ...draft, proofUrls: draft.proofUrls ? [...draft.proofUrls] : undefined }
+    setPageDirty('settlements')
+  }
+
+  async function loadMembers(query: PrepaidMemberQuery = {}) {
+    return runPage('members', async () => {
+      membersPage.value = await prepaidApi.getPrepaidMembers(query)
+      return membersPage.value
+    })
+  }
+
+  async function lookupMember(phone: string) {
+    return runPage('members', () => prepaidApi.lookupPrepaidMember(phone))
+  }
+
+  async function loadMemberDetail(id: string, page: 'members' | 'consumptions' = 'members') {
+    return runPage(page, async () => {
+      selectedMember.value = await prepaidApi.getPrepaidMemberDetail(id)
+      consumptions.value = selectedMember.value.consumptions
+      payables.value = selectedMember.value.consumptions.flatMap((row) => row.payables)
+      return selectedMember.value
+    })
+  }
+
+  async function loadRecharges(query: PrepaidRechargeQuery = {}) {
+    return runPage('recharges', async () => {
+      rechargesPage.value = await prepaidApi.getPrepaidRecharges(query)
+      return rechargesPage.value
+    })
+  }
+
+  async function mutate<T>(
+    page: SharedPrepaidPage,
+    mutation: SharedPrepaidMutation,
+    explicitKey: string | undefined,
+    action: (key: string) => Promise<T>,
+    afterSuccess?: (result: T) => void
+  ) {
+    const key = explicitKey ?? pendingIdempotencyKeys[mutation] ?? crypto.randomUUID()
+    pendingIdempotencyKeys[mutation] = key
+    try {
+      const result = await runPage(page, () => action(key))
+      delete pendingIdempotencyKeys[mutation]
+      afterSuccess?.(result)
+      return result
+    } catch (error) {
+      if (!isConflict(error)) delete pendingIdempotencyKeys[mutation]
+      throw error
+    }
+  }
+
+  async function createRecharge(
+    payload: CreatePrepaidRechargePayload = rechargeDraft.value,
+    idempotencyKey?: string
+  ) {
+    return mutate('recharges', 'createRecharge', idempotencyKey, (key) => (
+      prepaidApi.createPrepaidRecharge(payload, key)
+    ), () => {
+      rechargeDraft.value = emptyRechargeDraft()
+      setPageDirty('recharges', false)
+    })
+  }
+
+  async function reverseRecharge(id: string, reason: string, idempotencyKey?: string) {
+    const payload: PrepaidReasonPayload = { reason }
+    return mutate('recharges', `reverseRecharge:${id}`, idempotencyKey, (key) => (
+      prepaidApi.reversePrepaidRecharge(id, payload, key)
+    ))
+  }
+
+  async function reverseConsumption(id: string, reason: string, idempotencyKey?: string) {
+    const payload: PrepaidReasonPayload = { reason }
+    return mutate('consumptions', `reverseConsumption:${id}`, idempotencyKey, (key) => (
+      prepaidApi.reversePrepaidConsumption(id, payload, key)
+    ))
+  }
+
+  async function previewSettlement(ids: string[] = settlementSelection.value) {
+    return runPage('settlements', async () => {
+      settlementPreview.value = await prepaidApi.previewPrepaidSettlement({ payableIds: [...ids] })
+      return settlementPreview.value
+    })
+  }
+
+  async function createSettlement(ids: string[] = settlementSelection.value, idempotencyKey?: string) {
+    return mutate('settlements', 'createSettlement', idempotencyKey, (key) => (
+      prepaidApi.createPrepaidSettlement({ payableIds: [...ids] }, key)
+    ), (row) => {
+      upsertSettlement(row)
+      settlementSelection.value = []
+      settlementPreview.value = null
+      setPageDirty('settlements', false)
+    })
+  }
+
+  async function submitSettlementPayment(
+    id: string,
+    payload: PrepaidSettlementPaymentPayload = settlementPaymentDraft.value,
+    idempotencyKey?: string
+  ) {
+    return mutate('settlements', `submitPayment:${id}`, idempotencyKey, (key) => (
+      prepaidApi.submitPrepaidSettlementPayment(id, payload, key)
+    ), (row) => {
+      upsertSettlement(row)
+      settlementPaymentDraft.value = { actualTransferredAt: '' }
+      setPageDirty('settlements', false)
+    })
+  }
+
+  function confirmSettlement(id: string, idempotencyKey?: string) {
+    return mutate('settlements', `confirmSettlement:${id}`, idempotencyKey, (key) => (
+      prepaidApi.confirmPrepaidSettlement(id, key)
+    ), upsertSettlement)
+  }
+
+  function rejectSettlement(id: string, reason: string, idempotencyKey?: string) {
+    return mutate('settlements', `rejectSettlement:${id}`, idempotencyKey, (key) => (
+      prepaidApi.rejectPrepaidSettlement(id, { reason }, key)
+    ), upsertSettlement)
+  }
+
+  function cancelSettlement(id: string, idempotencyKey?: string) {
+    return mutate('settlements', `cancelSettlement:${id}`, idempotencyKey, (key) => (
+      prepaidApi.cancelPrepaidSettlement(id, key)
+    ), upsertSettlement)
+  }
+
+  function upsertSettlement(row: PrepaidSettlementRow) {
+    const index = settlements.value.findIndex((item) => item.id === row.id)
+    if (index >= 0) settlements.value[index] = row
+    else settlements.value.unshift(row)
+  }
 
   function canUseRealtime() {
     const user = authStore.user
@@ -211,10 +444,41 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   onScopeDispose(() => disconnectRealtime())
 
   return {
+    loadingByPage,
+    dirtyByPage,
+    errorsByPage,
+    pendingIdempotencyKeys,
+    membersPage,
+    rechargesPage,
+    selectedMember,
+    consumptions,
+    payables,
+    settlementPreview,
+    settlements,
+    rechargeDraft,
+    settlementSelection,
+    settlementPaymentDraft,
     realtimeConnected,
     realtimeAuthTerminal,
     refreshPromptModules,
     hasRefreshPrompt,
+    setPageDirty,
+    setRechargeDraft,
+    setSettlementSelection,
+    setSettlementPaymentDraft,
+    loadMembers,
+    lookupMember,
+    loadMemberDetail,
+    loadRecharges,
+    createRecharge,
+    reverseRecharge,
+    reverseConsumption,
+    previewSettlement,
+    createSettlement,
+    submitSettlementPayment,
+    confirmSettlement,
+    rejectSettlement,
+    cancelSettlement,
     registerModule,
     handleRealtimeEvent,
     acknowledgeAndRefresh,
@@ -223,3 +487,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     disconnectRealtime
   }
 })
+
+function isConflict(error: unknown) {
+  return (error as { response?: { status?: unknown } } | null)?.response?.status === 409
+}

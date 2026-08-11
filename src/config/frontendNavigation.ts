@@ -28,7 +28,7 @@ export const frontendMenuPermissions = [
 ] as const
 
 export type FrontendMenuPermission = typeof frontendMenuPermissions[number]
-export type FrontendNavigationIcon = 'data' | 'report' | 'attendance' | 'finance' | 'reports' | 'medicine' | 'customers' | 'blacklist'
+export type FrontendNavigationIcon = 'data' | 'report' | 'attendance' | 'prepaid' | 'finance' | 'reports' | 'medicine' | 'customers' | 'blacklist'
 
 export interface FrontendNavigationLeaf {
   path: string
@@ -80,7 +80,7 @@ export const frontendNavigation: FrontendNavigationItem[] = [
     ]
   },
   {
-    key: 'PREPAID', path: '/prepaid', label: '预充值客户', icon: 'finance',
+    key: 'PREPAID', path: '/prepaid', label: '预充值客户', icon: 'prepaid',
     children: [
       { path: '/prepaid/recharges', label: '预存款充值', permission: 'PREPAID_RECHARGE' },
       { path: '/prepaid/customers', label: '预存款客户', permission: 'PREPAID_CUSTOMERS' },
