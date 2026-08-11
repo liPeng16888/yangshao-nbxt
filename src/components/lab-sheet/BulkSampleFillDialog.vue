@@ -97,7 +97,7 @@ const emit = defineEmits<{
   blacklistHit: [records: BlacklistRecord[]]
 }>()
 
-const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款']
+const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款']
 const payerCustomerPatch = ref<Partial<LabSampleInput>>({})
 const recipientCustomerPatch = ref<Partial<LabSampleInput>>({})
 const price = ref<number | null>(null)
@@ -120,8 +120,8 @@ async function confirmApply() {
     ElMessage.warning('请先选择至少一个样品')
     return
   }
-  if (paymentStatus.value === '预存款' && typeof price.value === 'number' && price.value <= 0) {
-    ElMessage.warning('预存款扣除金额必须大于 0')
+  if (paymentStatus.value === '预存款') {
+    ElMessage.warning('预存款不能批量填写，请逐个样品选择会员并填写扣除金额')
     return
   }
 

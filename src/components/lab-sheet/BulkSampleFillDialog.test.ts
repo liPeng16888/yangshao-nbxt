@@ -78,9 +78,11 @@ describe('BulkSampleFillDialog', () => {
     })
   })
 
-  it('labels prepaid input as a deduction amount and keeps two decimals', async () => {
+  it('safely disallows ambiguous prepaid bulk deductions without member semantics', async () => {
     const wrapper = mountDialog()
     const select = wrapper.findComponent({ name: 'ElSelect' })
+    expect(wrapper.findAllComponents({ name: 'ElOption' }).map((option) => option.props('value'))).not.toContain('预存款')
+
     select.vm.$emit('update:modelValue', '预存款')
     const numberInput = wrapper.findComponent({ name: 'ElInputNumber' })
     numberInput.vm.$emit('update:modelValue', 12.345)
@@ -89,21 +91,6 @@ describe('BulkSampleFillDialog', () => {
     const confirmButton = wrapper.findAll('button').find((button) => button.text().includes('确认填充'))
     await confirmButton!.trigger('click')
     await nextTick()
-
-    expect(wrapper.text()).toContain('扣除金额')
-    expect(wrapper.emitted('apply')?.[0]?.[0]).toEqual({
-      patch: { price: 12.35, paymentStatus: '预存款' }
-    })
-  })
-
-  it('rejects a non-positive prepaid deduction amount', async () => {
-    const wrapper = mountDialog()
-    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '预存款')
-    wrapper.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:modelValue', 0)
-    await nextTick()
-
-    const confirmButton = wrapper.findAll('button').find((button) => button.text().includes('确认填充'))
-    await confirmButton!.trigger('click')
 
     expect(wrapper.emitted('apply')).toBeUndefined()
   })

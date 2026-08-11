@@ -21,6 +21,7 @@ import {
   getPrepaidRecharges,
   isSharedPrepaidTerminalAuthError,
   lookupPrepaidMember,
+  lookupLabPrepaidMember,
   previewPrepaidSettlement,
   rejectPrepaidSettlement,
   reversePrepaidConsumption,
@@ -54,6 +55,7 @@ describe('shared prepaid realtime transport', () => {
 
     await getPrepaidMembers({ page: 2, pageSize: 10, phone: '138' })
     await lookupPrepaidMember('138 0000-0000')
+    await lookupLabPrepaidMember('138 0000-0000')
     await getPrepaidMemberDetail('member-1')
     await getPrepaidRecharges({ ownerFrontendUserId: 'front-1', isOpeningBalance: false })
     await getPrepaidConsumptions({
@@ -71,6 +73,7 @@ describe('shared prepaid realtime transport', () => {
     expect(requestMocks.get.mock.calls).toEqual([
       ['/shared-prepaid/members', { params: { page: 2, pageSize: 10, phone: '138' } }],
       ['/shared-prepaid/members/lookup', { params: { phone: '138 0000-0000' } }],
+      ['/shared-prepaid/lab-members/lookup', { params: { phone: '138 0000-0000' } }],
       ['/shared-prepaid/members/member-1'],
       ['/shared-prepaid/recharges', { params: { ownerFrontendUserId: 'front-1', isOpeningBalance: false } }],
       ['/shared-prepaid/consumptions', { params: {

@@ -10,6 +10,7 @@ import type {
   PrepaidConsumptionRow,
   PrepaidLedgerEntryRow,
   PrepaidMemberDetail,
+  PrepaidLabMemberLookupRow,
   PrepaidMemberQuery,
   PrepaidMemberRechargeRow,
   PrepaidMemberRow,
@@ -119,6 +120,12 @@ export async function mockLookupPrepaidMember(phone: string): Promise<PrepaidMem
   const normalized = normalizeSharedPrepaidPhone(phone)
   const member = members.find((row) => row.phone === normalized)
   return member ? clone(toMemberRow(member)) : null
+}
+
+export async function mockLookupLabPrepaidMember(phone: string): Promise<PrepaidLabMemberLookupRow | null> {
+  const normalized = normalizeSharedPrepaidPhone(phone)
+  const member = members.find((row) => row.phone === normalized)
+  return member ? { id: member.id, phone: member.phone, currentBalance: memberBalance(member.id) } : null
 }
 
 export async function mockGetPrepaidMemberDetail(id: string): Promise<PrepaidMemberDetail> {

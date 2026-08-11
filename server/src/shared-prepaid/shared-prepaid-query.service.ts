@@ -209,6 +209,25 @@ type ConsumptionListDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
 export class SharedPrepaidQueryService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async getLabMemberByPhone(phone: unknown) {
+    let normalizedPhone: string
+    try {
+      normalizedPhone = normalizePrepaidPhone(phone)
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '会员手机号格式错误')
+    }
+    const member = await this.prisma.sharedPrepaidMember.findUnique({
+      where: { phone: normalizedPhone },
+      select: { id: true, phone: true, cachedBalance: true }
+    })
+    if (!member) return null
+    return {
+      id: member.id,
+      phone: member.phone,
+      currentBalance: member.cachedBalance.toNumber()
+    }
+  }
+
   async getMemberByPhone(phone: unknown) {
     let normalizedPhone: string
     try {

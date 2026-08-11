@@ -1,9 +1,11 @@
-import { RequestMethod } from '@nestjs/common'
+import { ForbiddenException, RequestMethod } from '@nestjs/common'
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
-import { Prisma, SharedPrepaidConsumptionKind, SharedPrepaidPayableStatus } from '@prisma/client'
+import { Reflector } from '@nestjs/core'
+import { Prisma, SharedPrepaidConsumptionKind, SharedPrepaidPayableStatus, UserRole } from '@prisma/client'
 import { describe, expect, it, vi } from 'vitest'
 
 import { FRONTEND_PERMISSIONS_KEY } from '../auth/frontend-permission.decorator'
+import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
 import { SharedPrepaidController } from './shared-prepaid.controller'
 import { SharedPrepaidQueryService } from './shared-prepaid-query.service'
 
@@ -132,6 +134,70 @@ describe('SharedPrepaidQueryService consumption list', () => {
     expect(Reflect.getMetadata(METHOD_METADATA, filterHandler)).toBe(RequestMethod.GET)
     expect(Reflect.getMetadata(FRONTEND_PERMISSIONS_KEY, filterHandler)).toEqual(['PREPAID_CONSUMPTIONS'])
     expect(queryService.listConsumptionFilterOptions).toHaveBeenCalledOnce()
+  })
+
+  it('exposes a dedicated minimal lab lookup to DATA_MAIN only', async () => {
+    const queryService = {
+      getLabMemberByPhone: vi.fn().mockResolvedValue({
+        id: 'member-1',
+        phone: '13800000000',
+        currentBalance: 100
+      })
+    }
+    const controller = new SharedPrepaidController({} as never, queryService as never, {} as never)
+    const handler = (SharedPrepaidController.prototype as unknown as {
+      lookupLabMember: (phone: string) => unknown
+    }).lookupLabMember
+    const lookupLabMember = (controller as unknown as {
+      lookupLabMember: (phone: string) => Promise<unknown>
+    }).lookupLabMember.bind(controller)
+
+    const result = await lookupLabMember('138 0000-0000')
+
+    expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe('lab-members/lookup')
+    expect(Reflect.getMetadata(FRONTEND_PERMISSIONS_KEY, handler)).toEqual(['DATA_MAIN'])
+    expect(queryService.getLabMemberByPhone).toHaveBeenCalledWith('138 0000-0000')
+    expect(result).toEqual({ id: 'member-1', phone: '13800000000', currentBalance: 100 })
+    expect(Object.keys(result as object).sort()).toEqual(['currentBalance', 'id', 'phone'])
+
+    const guard = new FrontendPermissionGuard(new Reflector())
+    const contextFor = (permissions: string[]) => ({
+      getHandler: () => handler,
+      getClass: () => SharedPrepaidController,
+      switchToHttp: () => ({
+        getRequest: () => ({
+          user: {
+            id: 'sub-1',
+            role: UserRole.FRONTEND_SUB_USER,
+            permissions
+          }
+        })
+      })
+    })
+    expect(guard.canActivate(contextFor(['DATA_MAIN']) as never)).toBe(true)
+    expect(() => guard.canActivate(contextFor(['PREPAID_CUSTOMERS']) as never)).toThrow(ForbiddenException)
+
+    expect(Reflect.getMetadata(FRONTEND_PERMISSIONS_KEY, SharedPrepaidController.prototype.lookupMember))
+      .toEqual(['PREPAID_CUSTOMERS'])
+  })
+
+  it('normalizes the lab phone and selects no member fields beyond the picker contract', async () => {
+    const findUnique = vi.fn().mockResolvedValue({
+      id: 'member-1',
+      phone: '13800000000',
+      cachedBalance: new Prisma.Decimal('12.34')
+    })
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidMember: { findUnique }
+    } as never)
+
+    const result = await service.getLabMemberByPhone('138 0000-0000')
+
+    expect(findUnique).toHaveBeenCalledWith({
+      where: { phone: '13800000000' },
+      select: { id: true, phone: true, cachedBalance: true }
+    })
+    expect(result).toEqual({ id: 'member-1', phone: '13800000000', currentBalance: 12.34 })
   })
 
   it('matches reversed rows through their original allocation and projects original detail without double counting', async () => {

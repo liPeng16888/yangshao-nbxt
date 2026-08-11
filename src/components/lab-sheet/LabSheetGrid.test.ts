@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { defineComponent, nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import ElementPlus, { ElMessage } from 'element-plus'
@@ -13,6 +14,29 @@ const customerEditorStub = {
   emits: ['update', 'blacklistHit'],
   template: '<div class="customer-editor-stub" />'
 }
+
+const prepaidPickerStub = defineComponent({
+  name: 'PrepaidMemberPickerDialog',
+  props: {
+    visible: Boolean,
+    initialPhone: String,
+    initialAmount: Number
+  },
+  emits: ['close', 'confirm'],
+  template: `
+    <section
+      v-if="visible"
+      class="prepaid-picker-stub"
+      :data-initial-phone="initialPhone || ''"
+      :data-initial-amount="initialAmount ?? ''"
+    >
+      <button
+        class="prepaid-picker-confirm"
+        @click="$emit('confirm', { memberId: 'member-1', phone: '13800000000', amount: 30.25, currentBalance: 100 })"
+      >确认</button>
+    </section>
+  `
+})
 
 function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock {
   const inputs: SampleBlock['inputs'] = {
@@ -488,33 +512,157 @@ describe('LabSheetGrid', () => {
     expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: 12.34 }])
   })
 
-  it('uses an exact two-decimal deduction amount for prepaid samples', async () => {
+  it('opens the member picker and emits one complete prepaid tuple only after confirmation', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
-        blocks: [makeBlock({ sampleNumber: 'A-001', price: null, paymentStatus: '预存款' })]
+        blocks: [makeBlock({ sampleNumber: 'A-001', price: null, paymentStatus: '' })]
       },
       global: {
         plugins: [ElementPlus],
         stubs: {
-          CustomerCellEditor: {
-            template: '<div class="customer-editor-stub" />'
-          }
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
         }
       }
     })
 
-    const amountInput = wrapper.find('.cell--required input')
-    await amountInput.setValue('3.9')
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '预存款')
+    await nextTick()
+
+    expect(wrapper.emitted('update')).toBeUndefined()
+    expect(wrapper.find('.prepaid-picker-stub').exists()).toBe(true)
+
+    await wrapper.get('.prepaid-picker-confirm').trigger('click')
+
+    expect(wrapper.emitted('update')).toEqual([[
+      'block-1',
+      {
+        paymentStatus: '预存款',
+        price: 30.25,
+        prepaidMemberId: 'member-1',
+        prepaidMemberPhone: '13800000000'
+      }
+    ]])
+  })
+
+  it('renders an existing prepaid amount to two decimals and reopens the picker with its member tuple', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({
+          sampleNumber: 'A-001',
+          price: 3.9,
+          paymentStatus: '预存款',
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
+        }
+      }
+    })
 
     expect(wrapper.text()).toContain('扣除金额')
-    expect(wrapper.text()).not.toContain('样品金额')
-    expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: 3.9 }])
+    expect(wrapper.text()).toContain('3.90')
+    expect(wrapper.text()).not.toContain('扣除次数')
+
+    await wrapper.get('[data-testid="prepaid-picker-trigger-block-1"]').trigger('click')
+
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-phone')).toBe('13800000000')
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-amount')).toBe('3.9')
+  })
+
+  it('keeps historical prepaid samples readable without treating them as linked ledger members', async () => {
+    const block = makeBlock({
+      sampleNumber: 'A-001',
+      price: 8,
+      paymentStatus: '预存款'
+    })
+    block.readonly = true
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [block] },
+      global: {
+        plugins: [ElementPlus],
+        stubs: { CustomerCellEditor: customerEditorStub }
+      }
+    })
+
+    expect(wrapper.text()).toContain('8.00')
+    expect(wrapper.text()).toContain('历史预存款记录（未关联新台账）')
+    expect(wrapper.get('[data-testid="prepaid-picker-trigger-block-1"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="prepaid-picker-trigger-block-1"]').trigger('click')
+    expect(wrapper.emitted('update')).toBeUndefined()
+  })
+
+  it('clears prepaid-only fields in the same patch when switching away from prepaid', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({
+          price: 30.25,
+          paymentStatus: '预存款',
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
+        }
+      }
+    })
+
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '已结款')
+    await nextTick()
+
+    expect(wrapper.emitted('update')).toEqual([[
+      'block-1',
+      { paymentStatus: '已结款', prepaidMemberId: undefined, prepaidMemberPhone: undefined }
+    ]])
+  })
+
+  it('does not resurrect a cleared prepaid member when prepaid is selected again', async () => {
+    const block = makeBlock({
+      price: 30.25,
+      paymentStatus: '预存款',
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    })
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [block] },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
+        }
+      }
+    })
+
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '已结款')
+    await wrapper.setProps({ blocks: [makeBlock({ price: 30.25, paymentStatus: '已结款' })] })
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '预存款')
+    await nextTick()
+
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-phone')).toBe('')
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-amount')).toBe('30.25')
   })
 
   it('treats a non-positive prepaid deduction amount as incomplete', () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
-        blocks: [makeBlock({ sampleNumber: 'A-001', price: 0, paymentStatus: '预存款', elementNote: '铁' })]
+        blocks: [makeBlock({
+          sampleNumber: 'A-001',
+          price: 0,
+          paymentStatus: '预存款',
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000',
+          elementNote: '铁'
+        })]
       },
       global: {
         plugins: [ElementPlus],

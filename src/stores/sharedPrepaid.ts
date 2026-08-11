@@ -201,6 +201,10 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     return runLatest('members:lookup', 'members', () => prepaidApi.lookupPrepaidMember(phone), () => undefined)
   }
 
+  async function lookupLabMember(phone: string) {
+    return runLatest('members:lab-lookup', 'members', () => prepaidApi.lookupLabPrepaidMember(phone), () => undefined)
+  }
+
   async function loadMemberDetail(id: string, page: 'members' | 'consumptions' = 'members') {
     return runLatest('member:detail', page, () => prepaidApi.getPrepaidMemberDetail(id), (result) => {
       selectedMember.value = result
@@ -564,6 +568,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     setSettlementPaymentDraft,
     loadMembers,
     lookupMember,
+    lookupLabMember,
     loadMemberDetail,
     loadRecharges,
     loadConsumptions,

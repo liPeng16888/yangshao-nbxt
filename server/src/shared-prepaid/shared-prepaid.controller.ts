@@ -117,6 +117,12 @@ export class SharedPrepaidController {
     return this.queryService.listMembers(query)
   }
 
+  @Get('lab-members/lookup')
+  @FrontendPermission('DATA_MAIN')
+  lookupLabMember(@Query('phone') phone: string) {
+    return this.queryService.getLabMemberByPhone(phone)
+  }
+
   @Get('members/lookup')
   @FrontendPermission('PREPAID_CUSTOMERS')
   lookupMember(@Query('phone') phone: string) {

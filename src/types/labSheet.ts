@@ -13,6 +13,13 @@ export type LabParameterKey =
 
 export type SamplePaymentStatus = '已结款' | '未结款' | '月结款' | '预存款'
 
+export interface PrepaidMemberPickerResult {
+  memberId: string
+  phone: string
+  amount: number
+  currentBalance: number
+}
+
 export interface LabParameter {
   ironBlank: number
   ironFactor: number

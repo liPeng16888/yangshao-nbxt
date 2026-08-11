@@ -53,6 +53,12 @@ export interface PrepaidMemberRow {
   updatedAt: string
 }
 
+export interface PrepaidLabMemberLookupRow {
+  id: string
+  phone: string
+  currentBalance: number
+}
+
 export interface PrepaidRechargeBaseRow {
   id: string
   memberId: string

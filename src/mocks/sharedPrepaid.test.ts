@@ -9,6 +9,7 @@ import {
   mockGetPrepaidConsumptions,
   mockGetPrepaidConsumptionFilterOptions,
   mockLookupPrepaidMember,
+  mockLookupLabPrepaidMember,
   mockPreviewPrepaidSettlement,
   mockRecordPrepaidConsumption,
   mockRejectPrepaidSettlement,
@@ -46,10 +47,12 @@ describe('shared prepaid focused mock', () => {
     }, 'recharge-b', ownerB)
 
     const lookup = await mockLookupPrepaidMember('13800000000')
+    const labLookup = await mockLookupLabPrepaidMember('13800000000')
     const page = await mockGetPrepaidMembers({ phone: '8000' })
     const detail = await mockGetPrepaidMemberDetail(first.memberId)
 
     expect(lookup).toMatchObject({ id: first.memberId, phone: '13800000000', paidTotal: 1200, giftTotal: 100, balance: 1300 })
+    expect(labLookup).toEqual({ id: first.memberId, phone: '13800000000', currentBalance: 1300 })
     expect(page).toMatchObject({ total: 1, page: 1, pageSize: 20 })
     expect(detail.recharges).toHaveLength(2)
     expect(detail.recharges[0]).not.toHaveProperty('phone')
