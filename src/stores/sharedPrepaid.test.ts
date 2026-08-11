@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useAuthStore } from './auth'
 import { useSharedPrepaidStore } from './sharedPrepaid'
+import type { PrepaidPage, PrepaidRechargeRow, PrepaidSettlementRow } from '@/types/sharedPrepaid'
 
 const apiMocks = vi.hoisted(() => ({
   createSharedPrepaidStreamTicket: vi.fn(),
@@ -49,6 +50,67 @@ function deferred<T>() {
     reject = rejectPromise
   })
   return { promise, resolve, reject }
+}
+
+function settlementRowFixture(id: string): PrepaidSettlementRow {
+  return {
+    id,
+    accountAId: 'front-1',
+    accountBId: 'front-2',
+    aToBAmount: 90.9,
+    bToAAmount: 0,
+    netAmount: 90.9,
+    payerFrontendUserId: 'front-1',
+    receiverFrontendUserId: 'front-2',
+    status: 'AWAITING_PAYMENT',
+    actualTransferredAt: null,
+    proofUrls: [],
+    remark: null,
+    createdById: 'front-1',
+    paymentSubmittedById: null,
+    paymentSubmittedAt: null,
+    receiptConfirmedById: null,
+    receiptConfirmedAt: null,
+    rejectedById: null,
+    rejectedAt: null,
+    rejectionReason: null,
+    cancelledById: null,
+    cancelledAt: null,
+    version: 1,
+    idempotencyKey: `key-${id}`,
+    createdAt: '2026-08-12T08:00:00.000Z',
+    updatedAt: '2026-08-12T08:00:00.000Z',
+    lines: []
+  }
+}
+
+function rechargeRowFixture(id: string): PrepaidRechargeRow {
+  return {
+    id,
+    memberId: 'member-1',
+    phone: '13800000000',
+    ownerFrontendUserId: 'front-1',
+    ownerAccount: 'front-1',
+    ownerUsername: '主账号',
+    actorUserId: 'front-1',
+    actorAccount: 'front-1',
+    actorUsername: '主账号',
+    rechargeDate: '2026-08-12',
+    paidAmount: 1000,
+    giftAmount: 100,
+    totalAmount: 1100,
+    remainingAmount: 1100,
+    isOpeningBalance: false,
+    remark: null,
+    reversedAt: null,
+    reversedByLedgerId: null,
+    createdAt: '2026-08-12T08:00:00.000Z',
+    updatedAt: '2026-08-12T08:00:00.000Z'
+  }
+}
+
+function rechargePageFixture(id: string, page: number): PrepaidPage<PrepaidRechargeRow> {
+  return { items: [rechargeRowFixture(id)], total: 1, page, pageSize: 10 }
 }
 
 function sendChange(source: FakeEventSource, module: 'recharges' | 'members' | 'consumptions' | 'settlements') {
@@ -317,8 +379,8 @@ describe('shared prepaid realtime refresh', () => {
   })
 
   it('serializes same-slot mutations and preserves the latest selection after success then conflict', async () => {
-    const first = deferred<any>()
-    const second = deferred<any>()
+    const first = deferred<PrepaidSettlementRow>()
+    const second = deferred<PrepaidSettlementRow>()
     const conflict = { response: { status: 409, data: { code: 'PREPAID_WRITE_CONFLICT' } } }
     apiMocks.createPrepaidSettlement
       .mockReturnValueOnce(first.promise)
@@ -334,7 +396,7 @@ describe('shared prepaid realtime refresh', () => {
     await Promise.resolve()
     expect(apiMocks.createPrepaidSettlement).toHaveBeenCalledTimes(1)
 
-    first.resolve({ id: 'settlement-1', status: 'AWAITING_PAYMENT', lines: [] })
+    first.resolve(settlementRowFixture('settlement-1'))
     await firstCall
     await vi.waitFor(() => expect(apiMocks.createPrepaidSettlement).toHaveBeenCalledTimes(2))
     const secondResult = expect(secondCall).rejects.toBe(conflict)
@@ -351,8 +413,8 @@ describe('shared prepaid realtime refresh', () => {
   })
 
   it('does not let an earlier conflict overwrite a later successful same-slot mutation', async () => {
-    const first = deferred<any>()
-    const second = deferred<any>()
+    const first = deferred<PrepaidSettlementRow>()
+    const second = deferred<PrepaidSettlementRow>()
     const conflict = { response: { status: 409 } }
     apiMocks.createPrepaidSettlement
       .mockReturnValueOnce(first.promise)
@@ -370,7 +432,7 @@ describe('shared prepaid realtime refresh', () => {
     first.reject(conflict)
     await firstResult
     await vi.waitFor(() => expect(apiMocks.createPrepaidSettlement).toHaveBeenCalledTimes(2))
-    second.resolve({ id: 'settlement-2', status: 'AWAITING_PAYMENT', lines: [] })
+    second.resolve(settlementRowFixture('settlement-2'))
     await secondCall
 
     expect(store.settlementSelection).toEqual([])
@@ -407,8 +469,8 @@ describe('shared prepaid realtime refresh', () => {
   })
 
   it('keeps the newest recharge page when older requests resolve out of order', async () => {
-    const first = deferred<any>()
-    const second = deferred<any>()
+    const first = deferred<PrepaidPage<PrepaidRechargeRow>>()
+    const second = deferred<PrepaidPage<PrepaidRechargeRow>>()
     apiMocks.getPrepaidRecharges
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
@@ -416,17 +478,17 @@ describe('shared prepaid realtime refresh', () => {
 
     const oldRequest = store.loadRecharges({ phone: 'old' })
     const newRequest = store.loadRecharges({ phone: 'new' })
-    second.resolve({ items: [{ id: 'new' }], total: 1, page: 2, pageSize: 10 })
+    second.resolve(rechargePageFixture('new', 2))
     await newRequest
-    first.resolve({ items: [{ id: 'old' }], total: 1, page: 1, pageSize: 10 })
+    first.resolve(rechargePageFixture('old', 1))
     await oldRequest
 
     expect(store.rechargesPage).toMatchObject({ items: [{ id: 'new' }], page: 2 })
   })
 
   it('ignores an older recharge error after a newer request succeeds', async () => {
-    const first = deferred<any>()
-    const second = deferred<any>()
+    const first = deferred<PrepaidPage<PrepaidRechargeRow>>()
+    const second = deferred<PrepaidPage<PrepaidRechargeRow>>()
     apiMocks.getPrepaidRecharges
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
@@ -434,7 +496,7 @@ describe('shared prepaid realtime refresh', () => {
 
     const oldRequest = store.loadRecharges({ phone: 'old' })
     const newRequest = store.loadRecharges({ phone: 'new' })
-    second.resolve({ items: [{ id: 'new' }], total: 1, page: 2, pageSize: 10 })
+    second.resolve(rechargePageFixture('new', 2))
     await newRequest
     const oldResult = expect(oldRequest).rejects.toThrow('stale failure')
     first.reject(new Error('stale failure'))
