@@ -405,8 +405,8 @@ describe('PayrollService frontend payroll', () => {
 
   it('rejects mixed month and date-range filters in admin queries', async () => {
     const { service, prisma } = serviceFixture()
-    expect(() => service.adminAttendance(['front-1'], { month: '2026-08', startDate: '2026-08-01' }))
-      .toThrow('月份和日期范围不能同时使用')
+    await expect(service.adminAttendance(['front-1'], { month: '2026-08', startDate: '2026-08-01' }))
+      .rejects.toThrow('月份和日期范围不能同时使用')
     expect(prisma.employeeAttendanceRecord.findMany).not.toHaveBeenCalled()
   })
 
@@ -448,12 +448,24 @@ describe('PayrollService frontend payroll', () => {
     }))
   })
 
-  it('includes ordered actual attendance intervals in readonly admin records', async () => {
+  it('maps ordered actual attendance intervals to the public contract without exposing Prisma segments', async () => {
     const { service, prisma } = serviceFixture()
-    prisma.employeeAttendanceRecord.findMany.mockResolvedValue([])
+    prisma.employeeAttendanceRecord.findMany.mockResolvedValue([{
+      id: 'attendance-1', frontendUserId: 'front-1', employeeId: employee.id, date: '2026-08-11',
+      segments: [
+        { id: 'segment-later', sequence: 1, checkInAt: new Date('2026-08-11T05:00:00.000Z'), checkOutAt: new Date('2026-08-11T09:00:00.000Z') },
+        { id: 'segment-first', sequence: 0, checkInAt: new Date('2026-08-11T00:00:00.000Z'), checkOutAt: new Date('2026-08-11T04:00:00.000Z') }
+      ],
+      employee: { employeeNumber: '001', name: '张三' }
+    }])
 
-    await service.adminAttendance(['front-1'], { month: '2026-08' })
+    const rows: any[] = await service.adminAttendance(['front-1'], { month: '2026-08' })
 
+    expect(rows[0]).not.toHaveProperty('segments')
+    expect(rows[0].actualSegments).toEqual([
+      { sequence: 0, checkInAt: new Date('2026-08-11T00:00:00.000Z'), checkOutAt: new Date('2026-08-11T04:00:00.000Z') },
+      { sequence: 1, checkInAt: new Date('2026-08-11T05:00:00.000Z'), checkOutAt: new Date('2026-08-11T09:00:00.000Z') }
+    ])
     expect(prisma.employeeAttendanceRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
       include: expect.objectContaining({ segments: { orderBy: { sequence: 'asc' } } })
     }))

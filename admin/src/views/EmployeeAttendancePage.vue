@@ -219,7 +219,7 @@ function normalizeCommon<T extends AdminAttendanceRecord | AdminLeaveRequest | A
 }
 
 function normalizeAttendance(row: AdminAttendanceRecord): AdminAttendanceTableRow {
-  const actualIntervals = row.segments || []
+  const actualIntervals = row.actualSegments || []
   return {
     ...normalizeCommon(row),
     checkInText: formatPunchTime(actualIntervals[0]?.checkInAt || row.checkInAt),

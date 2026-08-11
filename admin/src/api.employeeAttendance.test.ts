@@ -57,6 +57,7 @@ describe('admin employee attendance mock contract', () => {
     for (const path of ['/admin/employee-attendance', '/admin/employee-attendance/leaves/leave-1/approve']) {
       await expect(request.post(path)).rejects.toThrow('只读')
       await expect(request.patch(path, {})).rejects.toThrow('只读')
+      await expect(request.put(path, {})).rejects.toThrow('只读')
       await expect(request.delete(path)).rejects.toThrow('只读')
     }
   })
@@ -83,10 +84,21 @@ describe('admin employee attendance mock contract', () => {
 
     const statusIgnored = await getAdminAttendanceSchedules({ frontendUserIds: ['front-1'], status: 'NOPE' })
     expect(statusIgnored).toHaveLength(2)
-    expect(statusIgnored[0]).toMatchObject({ date: '2026-08-08', scheduledMinutes: 510, breakMinutes: 60 })
-    expect(statusIgnored[0].segments).toEqual([
+    expect(statusIgnored.every((row, index, rows) => !index || rows[index - 1].date >= row.date)).toBe(true)
+    const workday = statusIgnored.find((row) => row.isWorkday)
+    expect(workday).toMatchObject({ date: '2026-08-08', scheduledMinutes: 510, breakMinutes: 60 })
+    expect(workday?.segments).toEqual([
       { sequence: 0, startTime: '08:00', endTime: '12:00' },
       { sequence: 1, startTime: '13:00', endTime: '17:30' }
+    ])
+  })
+
+  it('exposes actualSegments rather than persistence segments from readonly attendance records', async () => {
+    const records = await request.get('/admin/employee-attendance/attendance', { params: { frontendUserIds: 'front-1', month: '2026-08' } }) as Array<Record<string, unknown>>
+    expect(records[0]).not.toHaveProperty('segments')
+    expect(records[0].actualSegments).toEqual([
+      { sequence: 0, checkInAt: '2026-08-08T08:00:00+08:00', checkOutAt: '2026-08-08T12:00:00+08:00' },
+      { sequence: 1, checkInAt: '2026-08-08T13:00:00+08:00', checkOutAt: '2026-08-08T17:30:00+08:00' }
     ])
   })
 })

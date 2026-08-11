@@ -182,7 +182,7 @@ export interface AdminAttendanceRecord {
   overtimeMinutes: number
   remark?: string | null
   employee: AdminAttendanceEmbeddedEmployee
-  segments?: Array<{ sequence: number; checkInAt: string; checkOutAt: string }>
+  actualSegments?: Array<{ sequence: number; checkInAt: string; checkOutAt: string }>
 }
 
 export interface AdminLeaveTypeSummary {

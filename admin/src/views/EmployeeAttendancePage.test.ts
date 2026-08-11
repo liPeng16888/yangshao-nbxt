@@ -190,13 +190,14 @@ describe('EmployeeAttendancePage', () => {
       id: 'attendance-1', frontendUserId: 'front-2', employeeId: 'emp-1', date: '2026-08-08',
       checkInAt: '2026-08-08T00:05:00Z', checkOutAt: null, scheduledMinutes: 480,
       workedMinutes: 0, lateMinutes: 5, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0,
+      actualSegments: [{ sequence: 0, checkInAt: '2026-08-08T00:05:00Z', checkOutAt: '2026-08-08T04:00:00Z' }],
       employee: { employeeNumber: 'YG001', name: '张三' }
     }])
     const wrapper = mountPage()
     await flushPromises()
 
     expect((wrapper.getComponent(TableStub).props('data')!).at(0)!).toMatchObject({
-      accountName: '仰韶客户二（yangshao002）', checkInText: '08:05', checkOutText: '未录入'
+      accountName: '仰韶客户二（yangshao002）', checkInText: '08:05', checkOutText: '12:00', actualIntervalsText: '08:05—12:00'
     })
   })
 

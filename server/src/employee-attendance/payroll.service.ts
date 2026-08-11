@@ -234,14 +234,20 @@ export class PayrollService {
     return rows.map((row) => ({ ...row, breakMinutes: breakMinutes(row.segments) }))
   }
 
-  adminAttendance(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+  async adminAttendance(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
     this.assertExclusiveDateFilter(query)
-    return this.prisma.employeeAttendanceRecord.findMany({ where: {
+    const rows = await this.prisma.employeeAttendanceRecord.findMany({ where: {
       ...this.adminEmployeeWhere(frontendUserIds, query), ...this.adminDateWhere(query)
     }, include: {
       employee: { select: { employeeNumber: true, name: true } },
       segments: { orderBy: { sequence: 'asc' } }
     }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] })
+    return rows.map(({ segments, ...row }) => ({
+      ...row,
+      actualSegments: segments.slice().sort((left, right) => left.sequence - right.sequence).map((segment) => ({
+        sequence: segment.sequence, checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt
+      }))
+    }))
   }
 
   adminLeaves(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {

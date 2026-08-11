@@ -39,6 +39,7 @@ export type AdminProfilePayload = {
 type AdminRequest = {
   get<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
   post<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
+  put<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
   patch<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
   delete<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
 }
@@ -282,7 +283,7 @@ const mockEmployeeAttendance = {
   attendance: [
     {
       id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 510, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' },
-      segments: [{ sequence: 0, checkInAt: '2026-08-08T08:00:00+08:00', checkOutAt: '2026-08-08T12:00:00+08:00' }, { sequence: 1, checkInAt: '2026-08-08T13:00:00+08:00', checkOutAt: '2026-08-08T17:30:00+08:00' }]
+      actualSegments: [{ sequence: 0, checkInAt: '2026-08-08T08:00:00+08:00', checkOutAt: '2026-08-08T12:00:00+08:00' }, { sequence: 1, checkInAt: '2026-08-08T13:00:00+08:00', checkOutAt: '2026-08-08T17:30:00+08:00' }]
     },
     { id: 'attendance-2', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 470, lateMinutes: 10, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '王五' } }
   ],
@@ -335,6 +336,8 @@ function mockMonthlyScheduleFilter(config?: AdminRequestConfig) {
   return mockEmployeeAttendance.schedules.days.filter((row) => ids.includes(row.frontendUserId)
     && (!employeeId || row.employeeId === employeeId)
     && (month ? row.date.startsWith(month) : (!startDate || row.date >= startDate) && (!endDate || row.date <= endDate)))
+    .slice()
+    .sort((left, right) => right.date.localeCompare(left.date) || left.employeeId.localeCompare(right.employeeId) || left.id.localeCompare(right.id))
 }
 
 function isEmployeeAttendanceAdminPath(url: string) {
@@ -674,6 +677,10 @@ const mockRequest = {
       const row = mockRows.monthlyCustomers.find((item) => item.frontendUserId === payload?.frontendUserId && item.customer === payload?.customer)
       if (row) row.remark = payload?.remark || ''
     }
+    return { ok: true }
+  },
+  async put(url: string) {
+    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     return { ok: true }
   },
   async delete(url: string) {
