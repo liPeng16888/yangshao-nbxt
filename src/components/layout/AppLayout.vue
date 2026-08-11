@@ -21,6 +21,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
+import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import { useTenantRealtimeStore } from '@/stores/tenantRealtime'
 import AppSidebar from './AppSidebar.vue'
 import AppTopbar from './AppTopbar.vue'
@@ -29,14 +30,19 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'ys_sidebar_collapsed'
 const sidebarCollapsed = ref(false)
 const accessGuard = useAccessGuardStore()
 const tenantRealtime = useTenantRealtimeStore()
+const sharedPrepaid = useSharedPrepaidStore()
 
 onMounted(() => {
   sidebarCollapsed.value = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'
   void accessGuard.loadGroups()
   tenantRealtime.connect()
+  void sharedPrepaid.connectRealtime()
 })
 
-onBeforeUnmount(() => tenantRealtime.disconnect())
+onBeforeUnmount(() => {
+  tenantRealtime.disconnect()
+  sharedPrepaid.disconnectRealtime()
+})
 
 watch(sidebarCollapsed, (collapsed) => {
   window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(collapsed))

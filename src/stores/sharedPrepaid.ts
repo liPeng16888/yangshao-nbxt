@@ -4,6 +4,8 @@ import { ElMessage } from 'element-plus'
 
 import {
   createSharedPrepaidEventSource,
+  createSharedPrepaidStreamTicket,
+  isSharedPrepaidTerminalAuthError,
   type SharedPrepaidRealtimeEvent,
   type SharedPrepaidRealtimeModule
 } from '@/api/sharedPrepaid'
@@ -15,18 +17,35 @@ export interface SharedPrepaidRealtimeRegistration {
 }
 
 const RECONNECT_DELAY_MS = 2000
+const PREPAID_PERMISSIONS = new Set([
+  'PREPAID_RECHARGE',
+  'PREPAID_CUSTOMERS',
+  'PREPAID_CONSUMPTIONS',
+  'PREPAID_SETTLEMENTS'
+])
 
 export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const authStore = useAuthStore()
   const realtimeConnected = ref(false)
+  const realtimeAuthTerminal = ref(false)
   const refreshPromptModules = ref<SharedPrepaidRealtimeModule[]>([])
   const registrations = new Map<SharedPrepaidRealtimeModule, SharedPrepaidRealtimeRegistration>()
   const refreshing = new Set<SharedPrepaidRealtimeModule>()
   const trailingRefresh = new Set<SharedPrepaidRealtimeModule>()
   let source: EventSource | null = null
   let reconnectTimer: number | undefined
+  let connectionEpoch = 0
+  let connectingEpoch: number | null = null
 
   const hasRefreshPrompt = computed(() => refreshPromptModules.value.length > 0)
+
+  function canUseRealtime() {
+    const user = authStore.user
+    if (!authStore.isLoggedIn || !user) return false
+    if (user.role === 'FRONTEND_USER') return true
+    return user.role === 'FRONTEND_SUB_USER' &&
+      Boolean(user.permissions?.some((permission) => PREPAID_PERMISSIONS.has(permission)))
+  }
 
   function registerModule(
     module: SharedPrepaidRealtimeModule,
@@ -59,23 +78,30 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
         markRefreshPrompt(module)
         return
       }
-      await registration.refresh()
-      clearRefreshPrompt(module)
+      try {
+        await registration.refresh()
+        clearRefreshPrompt(module)
+      } catch {
+        // The invalidation remains pending and the page can call acknowledgeAndRefresh to retry.
+        markRefreshPrompt(module, true)
+      }
     } finally {
       refreshing.delete(module)
       if (trailingRefresh.delete(module)) void refreshModule(module)
     }
   }
 
-  function handleRealtimeEvent(event: SharedPrepaidRealtimeEvent) {
-    if (event.type !== 'change') return
-    void refreshModule(event.module)
+  function handleRealtimeEvent(event: SharedPrepaidRealtimeEvent): Promise<void> {
+    if (event.type !== 'change') return Promise.resolve()
+    return refreshModule(event.module)
   }
 
-  function markRefreshPrompt(module: SharedPrepaidRealtimeModule) {
+  function markRefreshPrompt(module: SharedPrepaidRealtimeModule, refreshFailed = false) {
     if (refreshPromptModules.value.includes(module)) return
     refreshPromptModules.value = [...refreshPromptModules.value, module]
-    ElMessage.warning('共享预存款已有新数据，已保留你尚未提交的内容，请保存或放弃后刷新')
+    ElMessage.warning(refreshFailed
+      ? '共享预存款刷新失败，新数据提示已保留，请点击刷新重试'
+      : '共享预存款已有新数据，已保留你尚未提交的内容，请保存或放弃后刷新')
   }
 
   function clearRefreshPrompt(module?: SharedPrepaidRealtimeModule) {
@@ -93,40 +119,66 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     await refreshModule(module)
   }
 
-  function connectRealtime() {
-    if (source || !authStore.isLoggedIn) return
-    const nextSource = createSharedPrepaidEventSource()
-    if (!nextSource) return
-    source = nextSource
-    nextSource.onopen = () => { realtimeConnected.value = true }
-    nextSource.onmessage = (message) => {
-      try {
-        handleRealtimeEvent(JSON.parse(message.data) as SharedPrepaidRealtimeEvent)
-      } catch {
-        // SSE carries invalidation metadata only; malformed or future-version signals are ignored.
+  async function connectRealtime() {
+    if (source || connectingEpoch !== null || realtimeAuthTerminal.value || !canUseRealtime()) return
+    const attempt = ++connectionEpoch
+    connectingEpoch = attempt
+    try {
+      const { ticket } = await createSharedPrepaidStreamTicket()
+      if (attempt !== connectionEpoch || !canUseRealtime() || realtimeAuthTerminal.value) return
+      const nextSource = createSharedPrepaidEventSource(ticket)
+      if (!nextSource) return
+      source = nextSource
+      nextSource.onopen = () => {
+        if (source === nextSource) realtimeConnected.value = true
       }
-    }
-    nextSource.onerror = () => {
-      realtimeConnected.value = false
-      nextSource.close()
-      if (source === nextSource) source = null
-      scheduleReconnect()
+      nextSource.onmessage = (message) => {
+        try {
+          void handleRealtimeEvent(JSON.parse(message.data) as SharedPrepaidRealtimeEvent)
+        } catch {
+          // SSE carries invalidation metadata only; malformed or future-version signals are ignored.
+        }
+      }
+      nextSource.onerror = () => {
+        if (source !== nextSource) return
+        realtimeConnected.value = false
+        nextSource.close()
+        source = null
+        scheduleReconnect()
+      }
+    } catch (error) {
+      if (attempt !== connectionEpoch) return
+      if (isSharedPrepaidTerminalAuthError(error)) {
+        realtimeAuthTerminal.value = true
+        cancelReconnect()
+      } else {
+        scheduleReconnect()
+      }
+    } finally {
+      if (connectingEpoch === attempt) connectingEpoch = null
     }
   }
 
   function scheduleReconnect() {
-    if (reconnectTimer) window.clearTimeout(reconnectTimer)
+    if (realtimeAuthTerminal.value || !canUseRealtime()) return
+    cancelReconnect()
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = undefined
-      if (authStore.isLoggedIn) connectRealtime()
+      if (!realtimeAuthTerminal.value && canUseRealtime()) void connectRealtime()
     }, RECONNECT_DELAY_MS)
   }
 
-  function disconnectRealtime(clearPrompts = true) {
-    if (reconnectTimer) {
+  function cancelReconnect() {
+    if (reconnectTimer !== undefined) {
       window.clearTimeout(reconnectTimer)
       reconnectTimer = undefined
     }
+  }
+
+  function disconnectRealtime(clearPrompts = true) {
+    connectionEpoch += 1
+    connectingEpoch = null
+    cancelReconnect()
     source?.close()
     source = null
     realtimeConnected.value = false
@@ -135,11 +187,24 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     if (clearPrompts) clearRefreshPrompt()
   }
 
+  const authSessionSignature = computed(() => {
+    const user = authStore.user
+    return [
+      authStore.token,
+      user?.id ?? '',
+      user?.permissionVersion ?? '',
+      user?.role ?? '',
+      [...(user?.permissions ?? [])].sort().join(',')
+    ].join('|')
+  })
+
   watch(
-    () => authStore.isLoggedIn,
-    (loggedIn) => {
-      if (loggedIn) connectRealtime()
-      else disconnectRealtime()
+    authSessionSignature,
+    () => {
+      disconnectRealtime()
+      realtimeAuthTerminal.value = false
+      if (canUseRealtime()) void connectRealtime()
+      else if (authStore.isLoggedIn) realtimeAuthTerminal.value = true
     },
     { flush: 'sync', immediate: true }
   )
@@ -147,6 +212,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
 
   return {
     realtimeConnected,
+    realtimeAuthTerminal,
     refreshPromptModules,
     hasRefreshPrompt,
     registerModule,

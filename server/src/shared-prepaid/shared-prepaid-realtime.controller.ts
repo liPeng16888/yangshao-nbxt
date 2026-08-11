@@ -1,51 +1,37 @@
-import { Controller, ForbiddenException, Query, Sse, UnauthorizedException } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
+import { Controller, Post, Query, Sse, UseGuards } from '@nestjs/common'
 import { UserRole } from '@prisma/client'
-import jwt from 'jsonwebtoken'
 import { from, mergeMap } from 'rxjs'
 
-import { resolveCurrentUserIdentity } from '../auth/current-user'
-import { PrismaService } from '../prisma/prisma.service'
+import { AuthGuard } from '../auth/auth.guard'
+import type { CurrentUser } from '../auth/current-user'
+import { CurrentUserInfo } from '../auth/current-user.decorator'
+import { FrontendPermission } from '../auth/frontend-permission.decorator'
+import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
+import { Roles } from '../auth/roles.decorator'
+import { RolesGuard } from '../auth/roles.guard'
 import { SharedPrepaidRealtimeService } from './shared-prepaid-realtime.service'
 
 @Controller('shared-prepaid')
 export class SharedPrepaidRealtimeController {
-  constructor(
-    private readonly realtime: SharedPrepaidRealtimeService,
-    private readonly prisma: PrismaService,
-    private readonly config: ConfigService
-  ) {}
+  constructor(private readonly realtime: SharedPrepaidRealtimeService) {}
 
-  @Sse('stream')
-  stream(@Query('token') token?: string) {
-    return from(this.verifyFrontendToken(token)).pipe(
-      mergeMap((identity) => this.realtime.stream(
-        identity,
-        () => this.verifyFrontendToken(token)
-      ))
-    )
+  @Post('stream-ticket')
+  @UseGuards(AuthGuard, RolesGuard, FrontendPermissionGuard)
+  @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission(
+    'PREPAID_RECHARGE',
+    'PREPAID_CUSTOMERS',
+    'PREPAID_CONSUMPTIONS',
+    'PREPAID_SETTLEMENTS'
+  )
+  issueStreamTicket(@CurrentUserInfo() user: CurrentUser) {
+    return this.realtime.issueTicket(user)
   }
 
-  private async verifyFrontendToken(token?: string) {
-    if (!token) throw new UnauthorizedException('请先登录')
-    try {
-      const payload = jwt.verify(token, this.config.get<string>('JWT_SECRET') || 'dev-secret') as {
-        sub: string
-        permissionVersion: number
-      }
-      const identity = await resolveCurrentUserIdentity(
-        this.prisma,
-        payload.sub,
-        payload.permissionVersion
-      )
-      if (identity.role !== UserRole.FRONTEND_USER && identity.role !== UserRole.FRONTEND_SUB_USER) {
-        throw new ForbiddenException('无权访问')
-      }
-      this.realtime.assertCanConnect(identity)
-      return identity
-    } catch (error) {
-      if (error instanceof UnauthorizedException || error instanceof ForbiddenException) throw error
-      throw new UnauthorizedException('登录已失效')
-    }
+  @Sse('stream')
+  stream(@Query('ticket') ticket?: string) {
+    return from(this.realtime.consumeTicket(ticket)).pipe(
+      mergeMap((identity) => this.realtime.stream(identity))
+    )
   }
 }

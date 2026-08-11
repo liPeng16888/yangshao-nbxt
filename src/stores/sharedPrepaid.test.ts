@@ -6,7 +6,9 @@ import { useAuthStore } from './auth'
 import { useSharedPrepaidStore } from './sharedPrepaid'
 
 const apiMocks = vi.hoisted(() => ({
-  createSharedPrepaidEventSource: vi.fn()
+  createSharedPrepaidStreamTicket: vi.fn(),
+  createSharedPrepaidEventSource: vi.fn(),
+  isSharedPrepaidTerminalAuthError: vi.fn()
 }))
 
 vi.mock('@/api/sharedPrepaid', () => apiMocks)
@@ -35,6 +37,12 @@ function sendChange(source: FakeEventSource, module: 'recharges' | 'members' | '
   } as MessageEvent)
 }
 
+async function waitForSource(source: FakeEventSource) {
+  await vi.waitFor(() => expect(apiMocks.createSharedPrepaidEventSource).toHaveBeenCalled())
+  expect(apiMocks.createSharedPrepaidEventSource).toHaveBeenLastCalledWith('opaque-ticket')
+  return source
+}
+
 describe('shared prepaid realtime refresh', () => {
   beforeEach(() => {
     const values = new Map<string, string>()
@@ -47,7 +55,13 @@ describe('shared prepaid realtime refresh', () => {
       get length() { return values.size }
     })
     setActivePinia(createPinia())
+    apiMocks.createSharedPrepaidStreamTicket.mockReset()
+    apiMocks.createSharedPrepaidStreamTicket.mockResolvedValue({
+      ticket: 'opaque-ticket', expiresAt: Date.now() + 30_000
+    })
     apiMocks.createSharedPrepaidEventSource.mockReset()
+    apiMocks.isSharedPrepaidTerminalAuthError.mockReset()
+    apiMocks.isSharedPrepaidTerminalAuthError.mockReturnValue(false)
     const auth = useAuthStore()
     auth.token = 'signed-token'
     auth.user = {
@@ -57,61 +71,136 @@ describe('shared prepaid realtime refresh', () => {
     }
   })
 
-  it('uses one EventSource and refreshes a clean registered page', async () => {
+  it('preflights one ticket, uses one EventSource, and refreshes a clean registered page', async () => {
     const source = makeEventSource()
     apiMocks.createSharedPrepaidEventSource.mockReturnValue(source)
     const store = useSharedPrepaidStore()
     const refresh = vi.fn().mockResolvedValue(undefined)
     store.registerModule('members', { isDirty: () => false, refresh })
 
-    store.connectRealtime()
-    store.connectRealtime()
+    await waitForSource(source)
+    await store.connectRealtime()
     sendChange(source, 'members')
     await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
 
+    expect(apiMocks.createSharedPrepaidStreamTicket).toHaveBeenCalledTimes(1)
     expect(apiMocks.createSharedPrepaidEventSource).toHaveBeenCalledTimes(1)
     expect(store.hasRefreshPrompt).toBe(false)
   })
 
-  it('connects when created for a logged-in frontend session', () => {
-    const source = makeEventSource()
-    apiMocks.createSharedPrepaidEventSource.mockReturnValue(source)
+  it.each([401, 403])('stops reconnect attempts after terminal preflight status %s', async (status) => {
+    vi.useFakeTimers()
+    const error = { response: { status } }
+    apiMocks.createSharedPrepaidStreamTicket.mockRejectedValue(error)
+    apiMocks.isSharedPrepaidTerminalAuthError.mockImplementation((candidate) => candidate === error)
 
-    useSharedPrepaidStore()
+    const store = useSharedPrepaidStore()
+    await store.connectRealtime()
+    await vi.runAllTimersAsync()
 
-    expect(apiMocks.createSharedPrepaidEventSource).toHaveBeenCalledTimes(1)
+    expect(apiMocks.createSharedPrepaidStreamTicket).toHaveBeenCalledTimes(1)
+    expect(apiMocks.createSharedPrepaidEventSource).not.toHaveBeenCalled()
+    expect(store.realtimeAuthTerminal).toBe(true)
+    vi.useRealTimers()
   })
 
-  it('refreshes another tab even when the change actor is the same account', async () => {
+  it('reacquires a fresh ticket after a transient stream failure', async () => {
+    vi.useFakeTimers()
+    const first = makeEventSource()
+    const second = makeEventSource()
+    apiMocks.createSharedPrepaidStreamTicket
+      .mockResolvedValueOnce({ ticket: 'opaque-ticket', expiresAt: Date.now() + 30_000 })
+      .mockResolvedValueOnce({ ticket: 'fresh-ticket', expiresAt: Date.now() + 30_000 })
+    apiMocks.createSharedPrepaidEventSource
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+    useSharedPrepaidStore()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    first.onerror?.()
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    expect(first.close).toHaveBeenCalledTimes(1)
+    expect(apiMocks.createSharedPrepaidStreamTicket).toHaveBeenCalledTimes(2)
+    expect(apiMocks.createSharedPrepaidEventSource).toHaveBeenLastCalledWith('fresh-ticket')
+    vi.useRealTimers()
+  })
+
+  it('stops delivery promptly when a subaccount loses its last prepaid leaf', async () => {
     const source = makeEventSource()
     apiMocks.createSharedPrepaidEventSource.mockReturnValue(source)
+    const auth = useAuthStore()
+    auth.user = {
+      id: 'sub-1', account: 'sub-1', username: '子账号', role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'front-1', permissions: ['PREPAID_RECHARGE'], permissionVersion: 1,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: false, isFrontendSubAccount: true
+    }
     const store = useSharedPrepaidStore()
-    const refresh = vi.fn().mockResolvedValue(undefined)
+    await waitForSource(source)
+
+    auth.user.permissions = []
+    await nextTick()
+
+    expect(source.close).toHaveBeenCalledTimes(1)
+    expect(store.realtimeAuthTerminal).toBe(true)
+  })
+
+  it('keeps a failed invalidation pending and offers a successful retry without rejection', async () => {
+    const store = useSharedPrepaidStore()
+    const refresh = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce(undefined)
     store.registerModule('members', { isDirty: () => false, refresh })
 
-    source.onmessage?.({
-      data: JSON.stringify({
-        type: 'change', module: 'members', entityId: 'member-1', operation: 'update',
-        changedById: 'front-1', updatedAt: '2026-08-12T08:00:00.000Z'
-      })
-    } as MessageEvent)
+    await expect(store.handleRealtimeEvent({
+      type: 'change', module: 'members', entityId: 'member-1', operation: 'update',
+      changedById: 'front-2', updatedAt: '2026-08-12T08:00:00.000Z'
+    })).resolves.toBeUndefined()
+    expect(store.refreshPromptModules).toContain('members')
 
-    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+    await expect(store.acknowledgeAndRefresh('members')).resolves.toBeUndefined()
+    expect(refresh).toHaveBeenCalledTimes(2)
+    expect(store.refreshPromptModules).not.toContain('members')
+  })
+
+  it('retains correct trailing refresh behavior when the active refresh fails', async () => {
+    let rejectFirst!: (error: Error) => void
+    const firstRefresh = new Promise<void>((_resolve, reject) => { rejectFirst = reject })
+    const refresh = vi.fn()
+      .mockReturnValueOnce(firstRefresh)
+      .mockResolvedValueOnce(undefined)
+    const store = useSharedPrepaidStore()
+    store.registerModule('consumptions', { isDirty: () => false, refresh })
+
+    const first = store.handleRealtimeEvent({
+      type: 'change', module: 'consumptions', entityId: 'one', operation: 'update',
+      changedById: 'front-2', updatedAt: '2026-08-12T08:00:00.000Z'
+    })
+    const trailing = store.handleRealtimeEvent({
+      type: 'change', module: 'consumptions', entityId: 'two', operation: 'update',
+      changedById: 'front-2', updatedAt: '2026-08-12T08:00:01.000Z'
+    })
+    await nextTick()
+    rejectFirst(new Error('temporary failure'))
+
+    await expect(Promise.all([first, trailing])).resolves.toBeDefined()
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2))
+    expect(store.refreshPromptModules).not.toContain('consumptions')
   })
 
   it.each(['recharges', 'settlements'] as const)(
     'keeps a dirty %s draft and exposes a visible refresh prompt',
     async (module) => {
-      const source = makeEventSource()
-      apiMocks.createSharedPrepaidEventSource.mockReturnValue(source)
       const store = useSharedPrepaidStore()
       const draft = { remark: '尚未提交的输入' }
       const refresh = vi.fn(() => { draft.remark = '被覆盖' })
       store.registerModule(module, { isDirty: () => true, refresh })
-      store.connectRealtime()
 
-      sendChange(source, module)
-      await nextTick()
+      await store.handleRealtimeEvent({
+        type: 'change', module, entityId: `${module}-1`, operation: 'update',
+        changedById: 'front-2', updatedAt: '2026-08-12T08:00:00.000Z'
+      })
 
       expect(refresh).not.toHaveBeenCalled()
       expect(draft.remark).toBe('尚未提交的输入')
@@ -120,51 +209,21 @@ describe('shared prepaid realtime refresh', () => {
     }
   )
 
-  it('coalesces a burst into one active refresh and at most one trailing refresh', async () => {
-    const source = makeEventSource()
-    apiMocks.createSharedPrepaidEventSource.mockReturnValue(source)
-    let release!: () => void
-    const firstRefresh = new Promise<void>((resolve) => { release = resolve })
-    const refresh = vi.fn()
-      .mockReturnValueOnce(firstRefresh)
-      .mockResolvedValue(undefined)
-    const store = useSharedPrepaidStore()
-    store.registerModule('consumptions', { isDirty: () => false, refresh })
-    store.connectRealtime()
-
-    sendChange(source, 'consumptions')
-    sendChange(source, 'consumptions')
-    sendChange(source, 'consumptions')
-    await nextTick()
-    expect(refresh).toHaveBeenCalledTimes(1)
-
-    release()
-    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2))
-  })
-
-  it('closes realtime on logout and store disposal', async () => {
-    const firstSource = makeEventSource()
-    const secondSource = makeEventSource()
-    apiMocks.createSharedPrepaidEventSource
-      .mockReturnValueOnce(firstSource)
-      .mockReturnValueOnce(secondSource)
+  it('closes realtime on logout and ignores a ticket that resolves after logout', async () => {
+    let resolveTicket!: (value: { ticket: string; expiresAt: number }) => void
+    apiMocks.createSharedPrepaidStreamTicket.mockReturnValue(new Promise((resolve) => {
+      resolveTicket = resolve
+    }))
     const store = useSharedPrepaidStore()
     const auth = useAuthStore()
-    store.connectRealtime()
 
     auth.token = ''
     auth.user = null
     await nextTick()
-    expect(firstSource.close).toHaveBeenCalledTimes(1)
+    resolveTicket({ ticket: 'stale-ticket', expiresAt: Date.now() + 30_000 })
+    await Promise.resolve()
 
-    auth.token = 'new-token'
-    auth.user = {
-      id: 'front-1', account: 'front-1', username: '主账号', role: 'FRONTEND_USER',
-      dataOwnerId: 'front-1', permissions: [], permissionVersion: 1,
-      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
-    }
-    store.connectRealtime()
-    store.$dispose()
-    expect(secondSource.close).toHaveBeenCalledTimes(1)
+    expect(apiMocks.createSharedPrepaidEventSource).not.toHaveBeenCalled()
+    expect(store.realtimeAuthTerminal).toBe(false)
   })
 })
