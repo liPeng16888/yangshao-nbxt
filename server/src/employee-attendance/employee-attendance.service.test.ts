@@ -109,6 +109,64 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     expect(prisma.employeeMonthlyScheduleDay.upsert).toHaveBeenCalledTimes(28)
   })
 
+  it('copies from a confirmed source month while keeping both months locked', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeePayrollRun.findFirst.mockImplementation(({ where }: any) => Promise.resolve(
+      where.month === '2026-02' ? { id: 'confirmed-source', status: EmployeePayrollStatus.CONFIRMED } : null
+    ))
+    prisma.employeeMonthlyScheduleDay.findMany
+      .mockResolvedValueOnce([{ id: 'source-1', employeeId: 'employee-1', date: '2026-02-01', isWorkday: false, scheduledMinutes: 0, remark: null, segments: [] }])
+      .mockResolvedValueOnce([])
+    prisma.employeeMonthlyScheduleDay.upsert.mockResolvedValue({ id: 'target-1', employeeId: 'employee-1', date: '2026-03-01', isWorkday: false, scheduledMinutes: 0, remark: null })
+
+    await expect(service.copyPreviousMonthSchedules('front-1', 'front-1', {
+      employeeId: 'employee-1', targetMonth: '2026-03', overwrite: true
+    })).resolves.toMatchObject({ copied: 1, targetMonth: '2026-03' })
+
+    const lockKeys = prisma.$executeRawUnsafe.mock.calls.map((call: unknown[]) => call[1])
+    expect(lockKeys).toEqual(expect.arrayContaining(['employee-payroll:front-1:2026-02', 'employee-payroll:front-1:2026-03']))
+  })
+
+  it('rejects an empty source month without deleting existing target schedules', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeMonthlyScheduleDay.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'target-1', employeeId: 'employee-1', date: '2026-03-01', payrollLockedAt: null, segments: [] }])
+
+    await expect(service.copyPreviousMonthSchedules('front-1', 'front-1', {
+      employeeId: 'employee-1', targetMonth: '2026-03', overwrite: true
+    })).rejects.toThrow('上月暂无可复制排班')
+
+    expect(prisma.employeeMonthlyScheduleDay.deleteMany).not.toHaveBeenCalled()
+    expect(prisma.employeeMonthlyScheduleDay.upsert).not.toHaveBeenCalled()
+  })
+
+  it('audits every overwritten target schedule before replacing a shorter source month', async () => {
+    const { service, prisma } = createService()
+    prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })
+    prisma.employeeMonthlyScheduleDay.findMany
+      .mockResolvedValueOnce([{ id: 'source-1', employeeId: 'employee-1', date: '2026-02-01', isWorkday: false, scheduledMinutes: 0, remark: null, segments: [] }])
+      .mockResolvedValueOnce([
+        { id: 'target-1', employeeId: 'employee-1', date: '2026-03-01', payrollLockedAt: null, segments: [] },
+        { id: 'target-31', employeeId: 'employee-1', date: '2026-03-31', payrollLockedAt: null, segments: [] }
+      ])
+    prisma.employeeMonthlyScheduleDay.upsert.mockResolvedValue({ id: 'replacement-1', employeeId: 'employee-1', date: '2026-03-01', isWorkday: false, scheduledMinutes: 0, remark: null })
+
+    await service.copyPreviousMonthSchedules('front-1', 'front-1', {
+      employeeId: 'employee-1', targetMonth: '2026-03', overwrite: true
+    })
+
+    const deleted = prisma.employeeAuditLog.create.mock.calls
+      .map((call: unknown[]) => (call[0] as { data: unknown }).data)
+      .filter((data: any) => data.action === 'DELETE')
+    expect(deleted).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityType: 'EmployeeMonthlyScheduleDay', entityId: 'target-1', reason: expect.stringContaining('2026-03-01') }),
+      expect.objectContaining({ entityType: 'EmployeeMonthlyScheduleDay', entityId: 'target-31', reason: expect.stringContaining('2026-03-31') })
+    ]))
+  })
+
   it('validates all copied schedules before removing target month rows', async () => {
     const { service, prisma } = createService()
     prisma.employee.findFirst.mockResolvedValue({ id: 'employee-1', frontendUserId: 'front-1' })

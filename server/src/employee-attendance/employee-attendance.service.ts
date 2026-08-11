@@ -381,6 +381,7 @@ export class EmployeeAttendanceService {
           include: { segments: { orderBy: { sequence: 'asc' } } }, orderBy: { date: 'asc' }
         })
       ])
+      if (!source.length) throw new BadRequestException('上月暂无可复制排班')
       if (target.some((row) => row.payrollLockedAt)) throw new ConflictException('存在已被工资确认锁定的排班记录')
       if (target.length && !payload.overwrite) throw new ConflictException('目标月份已有排班，请确认覆盖')
       const targetDates = new Set(this.monthDates(payload.targetMonth))
@@ -391,13 +392,16 @@ export class EmployeeAttendanceService {
           date: `${payload.targetMonth}-${row.date.slice(-2)}`,
           segments: row.isWorkday ? this.normalizedMonthlySegments({ ...row, segments: row.segments }) : []
         }))
+      for (const targetRow of target) {
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeMonthlyScheduleDay', targetRow.id, `员工=${payload.employeeId}; 日期=${targetRow.date}; 覆盖复制删除`, tx)
+      }
       if (target.length) await tx.employeeMonthlyScheduleDay.deleteMany({ where: { frontendUserId, employeeId: payload.employeeId, date: { startsWith: payload.targetMonth } } })
       for (const copy of copies) {
         const row = await this.replaceMonthlyScheduleDay(tx, frontendUserId, payload.employeeId, copy.date, copy.source.isWorkday, copy.segments, copy.source.remark)
         await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'EmployeeMonthlyScheduleDay', row.id, `员工=${payload.employeeId}; 从=${copy.source.date}; 到=${copy.date}`, tx)
       }
       return { copied: copies.length, targetMonth: payload.targetMonth }
-    })
+    }, [payload.targetMonth])
   }
 
   listAttendance(frontendUserId: string, query: AttendanceListQueryDto = {}) {
@@ -1220,10 +1224,17 @@ export class EmployeeAttendanceService {
     return { isWorkday: true, plannedStartTime, plannedEndTime, scheduledMinutes: end - start }
   }
 
-  private async withMonthlyScheduleSerialization<T>(frontendUserId: string, employeeId: string, datesOrMonths: string[], operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+  private async withMonthlyScheduleSerialization<T>(
+    frontendUserId: string,
+    employeeId: string,
+    datesOrMonths: string[],
+    operation: (tx: Prisma.TransactionClient) => Promise<T>,
+    writableDatesOrMonths: string[] = datesOrMonths
+  ) {
     const months = Array.from(new Set(datesOrMonths.map((value) => value.slice(0, 7)))).sort()
+    const writableMonths = Array.from(new Set(writableDatesOrMonths.map((value) => value.slice(0, 7)))).sort()
     return this.payrollMonthLocks().run(frontendUserId, months, async (tx) => {
-      await this.assertMonthsWritable(frontendUserId, months, tx)
+      await this.assertMonthsWritable(frontendUserId, writableMonths, tx)
       await this.owned(tx.employee, frontendUserId, employeeId, '员工不存在')
       return operation(tx)
     })
