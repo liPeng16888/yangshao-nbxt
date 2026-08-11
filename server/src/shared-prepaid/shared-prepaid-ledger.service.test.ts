@@ -660,7 +660,7 @@ describe('SharedPrepaidController reversal routes', () => {
         calls.push(args)
         return Promise.resolve({ id: 'reversal-1' })
       }
-    } as never, {} as never)
+    } as never, {} as never, {} as never)
 
     await controller.reverseConsumption(
       mainUser,

@@ -24,6 +24,10 @@ import {
   SharedPrepaidQueryService
 } from './shared-prepaid-query.service'
 import {
+  SharedPrepaidSettlementService,
+  type SubmitSettlementPaymentPayload
+} from './shared-prepaid-settlement.service'
+import {
   CreateSharedPrepaidRechargeDto,
   ReverseSharedPrepaidRechargeDto,
   SharedPrepaidMemberQueryDto,
@@ -36,8 +40,70 @@ import {
 export class SharedPrepaidController {
   constructor(
     private readonly ledger: SharedPrepaidLedgerService,
-    private readonly queryService: SharedPrepaidQueryService
+    private readonly queryService: SharedPrepaidQueryService,
+    private readonly settlementService: SharedPrepaidSettlementService
   ) {}
+
+  @Post('settlements/preview')
+  @FrontendPermission('PREPAID_SETTLEMENTS')
+  previewSettlement(
+    @CurrentUserInfo() user: CurrentUser,
+    @Body() body: { payableIds?: unknown }
+  ) {
+    return this.settlementService.previewSettlement(user, body?.payableIds)
+  }
+
+  @Post('settlements')
+  @FrontendPermission('PREPAID_SETTLEMENTS')
+  createSettlement(
+    @CurrentUserInfo() user: CurrentUser,
+    @Headers('x-idempotency-key') key: string,
+    @Body() body: { payableIds?: unknown }
+  ) {
+    return this.settlementService.createSettlement(user, body?.payableIds, key)
+  }
+
+  @Post('settlements/:id/payment')
+  @FrontendPermission('PREPAID_SETTLEMENTS')
+  submitSettlementPayment(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param('id') id: string,
+    @Headers('x-idempotency-key') key: string,
+    @Body() body: SubmitSettlementPaymentPayload
+  ) {
+    return this.settlementService.submitPayment(user, id, body, key)
+  }
+
+  @Post('settlements/:id/confirm')
+  @FrontendPermission('PREPAID_SETTLEMENTS')
+  confirmSettlementReceipt(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param('id') id: string,
+    @Headers('x-idempotency-key') key: string
+  ) {
+    return this.settlementService.confirmReceipt(user, id, key)
+  }
+
+  @Post('settlements/:id/reject')
+  @FrontendPermission('PREPAID_SETTLEMENTS')
+  rejectSettlement(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param('id') id: string,
+    @Headers('x-idempotency-key') key: string,
+    @Body() body: { reason?: unknown }
+  ) {
+    return this.settlementService.rejectSettlement(user, id, body?.reason, key)
+  }
+
+  @Post('settlements/:id/cancel')
+  @FrontendPermission('PREPAID_SETTLEMENTS')
+  cancelSettlement(
+    @CurrentUserInfo() user: CurrentUser,
+    @Param('id') id: string,
+    @Headers('x-idempotency-key') key: string
+  ) {
+    return this.settlementService.cancelSettlement(user, id, key)
+  }
 
   @Get('members')
   @FrontendPermission('PREPAID_CUSTOMERS')
