@@ -751,7 +751,7 @@ export class FinanceService {
   }
 
   private getPrepaidDailyRows(sheets: Awaited<ReturnType<FinanceService['loadSheets']>>) {
-    const map = new Map<string, { id: string; date: string; frontendUserId: string; name: string; customer: string; sampleCount: number; remark: string }>()
+    const map = new Map<string, { id: string; date: string; frontendUserId: string; name: string; customer: string; deductionAmount: number; remark: string }>()
     sheets.forEach((sheet) => {
       sheet.sampleBlocks.forEach((block) => {
         const inputs = block.inputs as Record<string, unknown>
@@ -767,10 +767,10 @@ export class FinanceService {
             frontendUserId: sheet.frontendUserId,
             name: this.displayName(sheet.frontendUser),
             customer,
-            sampleCount: 0,
+            deductionAmount: 0,
             remark: ''
           }
-        current.sampleCount += this.getPrepaidDeductionTimes(inputs)
+        current.deductionAmount = toMoney(current.deductionAmount + amount)
         map.set(key, current)
       })
     })
@@ -1067,7 +1067,7 @@ export class FinanceService {
     const usageRemarkMap = new Map(usageRemarks.map((row) => [this.prepaidUsageKey(row.frontendUserId, row.usageDate, row.customer), {
       remark: row.remark || '', updatedAt: row.updatedAt.toISOString()
     }]))
-    const map = new Map<string, { id: string; frontendUserId: string; name: string; customer: string; totalAmount: number; totalUsableTimes: number; usedTimes: number; availableTimes: number; remark: string; remarkUpdatedAt: string }>()
+    const map = new Map<string, { id: string; frontendUserId: string; name: string; customer: string; totalAmount: number; totalUsableTimes: number; usedTimes: number; availableTimes: number; usedAmount: number; availableAmount: number; remark: string; remarkUpdatedAt: string }>()
     recharges.forEach((row) => {
       const key = this.prepaidCustomerKey(row.frontendUserId, row.customer)
       const current =
@@ -1081,6 +1081,8 @@ export class FinanceService {
           totalUsableTimes: 0,
           usedTimes: 0,
           availableTimes: 0,
+          usedAmount: 0,
+          availableAmount: 0,
           remark: '',
           remarkUpdatedAt: ''
         }
@@ -1102,10 +1104,12 @@ export class FinanceService {
           totalUsableTimes: 0,
           usedTimes: 0,
           availableTimes: 0,
+          usedAmount: 0,
+          availableAmount: 0,
           remark: '',
           remarkUpdatedAt: ''
         }
-      current.usedTimes += row.sampleCount
+      current.usedAmount = toMoney(current.usedAmount + row.deductionAmount)
       map.set(key, current)
     })
     const customerRows = Array.from(map.values())
@@ -1114,6 +1118,8 @@ export class FinanceService {
         return {
           ...row,
           availableTimes: Math.max(0, row.totalUsableTimes - row.usedTimes),
+          usedAmount: toMoney(row.usedAmount),
+          availableAmount: toMoney(Math.max(0, row.totalAmount - row.usedAmount)),
           remark: savedRemark?.remark ?? row.remark,
           remarkUpdatedAt: savedRemark?.updatedAt || ''
         }
@@ -1206,11 +1212,6 @@ export class FinanceService {
 
   private getSampleAmount(inputs: Record<string, unknown>) {
     return typeof inputs.price === 'number' && Number.isFinite(inputs.price) ? toMoney(inputs.price) : Number.NaN
-  }
-
-  private getPrepaidDeductionTimes(inputs: Record<string, unknown>) {
-    const amount = this.getSampleAmount(inputs)
-    return Number.isFinite(amount) ? Math.max(0, Math.trunc(amount)) : 0
   }
 
   private getIncomeStatus(inputs: Record<string, unknown>): IncomeStatus {

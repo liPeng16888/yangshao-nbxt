@@ -488,7 +488,7 @@ describe('LabSheetGrid', () => {
     expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: 12.34 }])
   })
 
-  it('uses deduction times without decimals for prepaid samples', async () => {
+  it('uses an exact two-decimal deduction amount for prepaid samples', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
         blocks: [makeBlock({ sampleNumber: 'A-001', price: null, paymentStatus: '预存款' })]
@@ -506,9 +506,23 @@ describe('LabSheetGrid', () => {
     const amountInput = wrapper.find('.cell--required input')
     await amountInput.setValue('3.9')
 
-    expect(wrapper.text()).toContain('扣除次数')
+    expect(wrapper.text()).toContain('扣除金额')
     expect(wrapper.text()).not.toContain('样品金额')
-    expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: 3 }])
+    expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: 3.9 }])
+  })
+
+  it('treats a non-positive prepaid deduction amount as incomplete', () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({ sampleNumber: 'A-001', price: 0, paymentStatus: '预存款', elementNote: '铁' })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: { CustomerCellEditor: { template: '<div class="customer-editor-stub" />' } }
+      }
+    })
+
+    expect(wrapper.find('.blocked-click-layer').attributes('aria-label')).toBe('请先输入大于 0 的扣除金额')
   })
 
   it('supports negative sample amount input and keeps two decimal places', async () => {

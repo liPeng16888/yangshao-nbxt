@@ -165,7 +165,7 @@ describe('finance bill aggregation', () => {
       customer: '王总',
       customerDisplay: '王总 13055558888 wangzong 王总微信 付款客户'
     })
-    expect(prepaidRows[0]).toMatchObject({ customer: '王总', sampleCount: 3 })
+    expect(prepaidRows[0]).toMatchObject({ customer: '王总', deductionAmount: 3 })
   })
 
   it('groups monthly settlement samples by date and customer, then summarizes by customer for the month', () => {
@@ -301,12 +301,12 @@ describe('finance bill aggregation', () => {
     expect(filterMonthlySettlementDailyRows(rows, ['客户甲', '客户丙']).map((row) => row.customer)).toEqual(['客户甲', '客户丙'])
   })
 
-  it('merges prepaid recharges and deducts daily prepaid sample usage by customer', () => {
+  it('merges prepaid recharges and deducts exact daily prepaid amounts by customer', () => {
     const sheet: LabSheet = {
       ...makeSheet(),
       sampleBlocks: [
-        makeBlock('001', 1, '预存款'),
-        makeBlock('002', 2, '预存款'),
+        makeBlock('001', 1.23, '预存款'),
+        makeBlock('002', 2.22, '预存款'),
         makeBlock('003', 30, '月结款')
       ]
     }
@@ -323,13 +323,13 @@ describe('finance bill aggregation', () => {
       { '2026-06-25__客户001': '当天消耗' }
     )
 
-    expect(dailyRows).toMatchObject([{ date: '2026-06-25', customer: '客户001', sampleCount: 3 }])
+    expect(dailyRows).toMatchObject([{ date: '2026-06-25', customer: '客户001', deductionAmount: 3.45 }])
     expect(report.customerRows[0]).toMatchObject({
       customer: '客户001',
       totalAmount: 800,
       totalUsableTimes: 8,
-      usedTimes: 3,
-      availableTimes: 5,
+      usedAmount: 3.45,
+      availableAmount: 796.55,
       remark: '重点客户'
     })
     expect(report.dailyRows[0]).toMatchObject({ id: '2026-06-25__客户001', remark: '当天消耗' })

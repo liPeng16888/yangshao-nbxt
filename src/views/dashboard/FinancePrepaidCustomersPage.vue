@@ -4,7 +4,7 @@
       <div class="panel__header">
         <div>
           <h2>预存款客户</h2>
-          <p class="muted">汇总同一客户的累计充值金额、总可用次数和样品消耗后的剩余次数。</p>
+          <p class="muted">汇总同一客户的累计充值金额、已扣除金额和剩余金额。</p>
         </div>
         <div class="panel-actions">
           <el-button @click="router.push('/finance/prepaid/add')">添加预存款客户</el-button>
@@ -16,8 +16,8 @@
         <el-table-column label="累计充值金额" width="150">
           <template #default="{ row }">¥{{ money(row.totalAmount) }}</template>
         </el-table-column>
-        <el-table-column prop="availableTimes" label="可使用次数" width="120" />
-        <el-table-column prop="usedTimes" label="已使用次数" width="120" />
+        <el-table-column label="剩余金额" width="140"><template #default="{ row }">¥{{ money(row.availableAmount) }}</template></el-table-column>
+        <el-table-column label="已扣除金额" width="140"><template #default="{ row }">¥{{ money(row.usedAmount) }}</template></el-table-column>
         <el-table-column label="备注" min-width="260">
           <template #default="{ row }">
             <el-input
@@ -43,7 +43,7 @@
       <el-table :data="report?.dailyRows || []" border v-loading="store.loading" empty-text="暂无预存款样品消耗">
         <el-table-column prop="date" label="日期" width="130" />
         <el-table-column prop="customer" label="客户名称" min-width="180" />
-        <el-table-column prop="sampleCount" label="样品数量" width="120" />
+        <el-table-column label="扣除金额" width="140"><template #default="{ row }">¥{{ money(row.deductionAmount) }}</template></el-table-column>
         <el-table-column label="备注" min-width="280">
           <template #default="{ row }">
             <el-input

@@ -35,6 +35,12 @@ type PreparedBlockSave = {
   fields: SavedFieldSnapshot[]
 }
 
+type PreparedBlockSaveState = {
+  signature: string
+  idempotencyKey: string
+  prepared?: PreparedBlockSave
+}
+
 export type PersistAllBlocksResult = {
   success: boolean
   failedBlockIds: string[]
@@ -59,6 +65,7 @@ type StoredLabDraft = {
       updatedAt?: string
       fields: Partial<Record<keyof LabSampleInput, { baseValue: unknown; value: unknown; revision: number }>>
       changeLogFields: LabChangeLogField[]
+      preparedSave?: { signature: string; idempotencyKey: string }
     }
   >
 }
@@ -94,6 +101,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   const retryingBlockIds = new Set<string>()
   const conflictFieldsByBlock = new Map<string, Set<keyof LabSampleInput>>()
   const blockSaveChains = new Map<string, Promise<BlockSaveResult>>()
+  const preparedBlockSaves = new Map<string, PreparedBlockSaveState>()
   let activeAutoSaveCount = 0
   let realtimeSource: EventSource | null = null
   let realtimeDate = ''
@@ -343,6 +351,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       const saved = await saveBlockWithRetry(sheetId, prepared.payload, blockId)
       succeeded = true
       mergeSavedBlock(saved, prepared.fields, sheetId)
+      if (preparedBlockSaves.get(blockId)?.prepared === prepared) preparedBlockSaves.delete(blockId)
       lastAutoSavedAt.value = new Date().toISOString()
       autoSaveError.value = ''
       persistLocalDraft()
@@ -413,6 +422,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     pendingBlockIds.clear()
     pendingDirtyFields.clear()
     pendingChangeLogFields.clear()
+    preparedBlockSaves.clear()
     blockVersions.clear()
     retryingBlockIds.clear()
     conflictFieldsByBlock.clear()
@@ -508,11 +518,39 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     })
     const hasDirty = Boolean(fields?.size)
     if (hasDirty) pendingDirtyFields.set(block.id, fields!)
-    else pendingDirtyFields.delete(block.id)
+    else {
+      pendingDirtyFields.delete(block.id)
+      preparedBlockSaves.delete(block.id)
+    }
     return { changed, hasDirty }
   }
 
   function prepareBlockSave(block: SampleBlock): PreparedBlockSave | null {
+    const candidate = buildBlockSaveCandidate(block)
+    if (!candidate) return null
+    const existing = preparedBlockSaves.get(block.id)
+    if (existing?.signature === candidate.signature) {
+      if (existing.prepared) {
+        existing.prepared.fields = candidate.fields
+        return existing.prepared
+      }
+      const prepared = {
+        payload: { ...candidate.payload, idempotencyKey: existing.idempotencyKey },
+        fields: candidate.fields
+      }
+      existing.prepared = prepared
+      return prepared
+    }
+    const idempotencyKey = crypto.randomUUID()
+    const prepared = {
+      payload: { ...candidate.payload, idempotencyKey },
+      fields: candidate.fields
+    }
+    preparedBlockSaves.set(block.id, { signature: candidate.signature, idempotencyKey, prepared })
+    return prepared
+  }
+
+  function buildBlockSaveCandidate(block: SampleBlock) {
     const fields = pendingDirtyFields.get(block.id)
     if (!fields?.size) return null
     const changedFields: Partial<LabSampleInput> = {}
@@ -524,17 +562,31 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       baseInputs[field] = cloneValue(dirty.baseValue) as never
       savedFields.push({ field, revision: dirty.revision, value })
     })
-    return {
-      payload: {
-        id: block.id,
-        idempotencyKey: crypto.randomUUID(),
-        baseUpdatedAt: block.updatedAt,
-        baseInputs,
-        changedFields,
-        changeLogFields: Array.from(pendingChangeLogFields.get(block.id)?.values() || [])
-      },
-      fields: savedFields
+    const payload: SampleBlockSavePayload = {
+      id: block.id,
+      baseUpdatedAt: block.updatedAt,
+      baseInputs,
+      changedFields,
+      changeLogFields: Array.from(pendingChangeLogFields.get(block.id)?.values() || [])
     }
+    return { payload, fields: savedFields, signature: stableSaveSignature(payload) }
+  }
+
+  function stableSaveSignature(payload: SampleBlockSavePayload) {
+    return JSON.stringify(canonicalValue(payload))
+  }
+
+  function canonicalValue(value: unknown): unknown {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null
+    if (Array.isArray(value)) return value.map((item) => canonicalValue(item === undefined ? null : item))
+    if (value && typeof value === 'object') {
+      const row = value as Record<string, unknown>
+      return Object.fromEntries(
+        Object.keys(row).sort().flatMap((key) => row[key] === undefined ? [] : [[key, canonicalValue(row[key])]])
+      )
+    }
+    return String(value)
   }
 
   function mergeSavedBlock(saved: SampleBlock, sentFields: SavedFieldSnapshot[], sheetId: string) {
@@ -613,10 +665,15 @@ export const useLabSheetStore = defineStore('labSheet', () => {
             revision: dirty.revision
           }
         })
+        const preparedSave = preparedBlockSaves.get(blockId)
+        const candidate = buildBlockSaveCandidate(block)
         blocks[blockId] = {
           updatedAt: block.updatedAt,
           fields: storedFields,
-          changeLogFields: Array.from(pendingChangeLogFields.get(blockId)?.values() || [])
+          changeLogFields: Array.from(pendingChangeLogFields.get(blockId)?.values() || []),
+          preparedSave: preparedSave && candidate?.signature === preparedSave.signature
+            ? { signature: preparedSave.signature, idempotencyKey: preparedSave.idempotencyKey }
+            : undefined
         }
       })
       if (!Object.keys(blocks).length) {
@@ -691,6 +748,20 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       if (changeLogs.size) pendingChangeLogFields.set(blockId, changeLogs)
       if (conflicts.size) conflictFieldsByBlock.set(blockId, conflicts)
       block.results = calculateSampleResults(block.inputs, block.parameterSnapshot)
+      const restoredPrepared = storedBlock.preparedSave
+      const candidate = buildBlockSaveCandidate(block)
+      if (
+        restoredPrepared &&
+        typeof restoredPrepared.idempotencyKey === 'string' &&
+        restoredPrepared.idempotencyKey.length > 0 &&
+        restoredPrepared.idempotencyKey.length <= 200 &&
+        candidate?.signature === restoredPrepared.signature
+      ) {
+        preparedBlockSaves.set(blockId, {
+          signature: restoredPrepared.signature,
+          idempotencyKey: restoredPrepared.idempotencyKey
+        })
+      }
       if (!conflicts.size) scheduleBlockAutoSave(blockId, 0)
     })
     persistLocalDraft()

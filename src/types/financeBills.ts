@@ -95,6 +95,8 @@ export interface PrepaidCustomerRow {
   totalUsableTimes: number
   usedTimes: number
   availableTimes: number
+  usedAmount: number
+  availableAmount: number
   remark?: string
   remarkUpdatedAt?: string
 }
@@ -103,7 +105,7 @@ export interface PrepaidDailyUsageRow {
   id: string
   date: string
   customer: string
-  sampleCount: number
+  deductionAmount: number
   remark?: string
   remarkUpdatedAt?: string
 }

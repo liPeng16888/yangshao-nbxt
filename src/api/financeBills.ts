@@ -48,6 +48,7 @@ export async function markSampleAsPaid(row: UnsettledSampleRow): Promise<SampleB
   if (!block) throw new Error('未找到对应样品')
   return saveSampleBlock(sheet.id, {
     id: block.id,
+    idempotencyKey: crypto.randomUUID(),
     baseUpdatedAt: block.updatedAt,
     baseInputs: { paymentStatus: block.inputs.paymentStatus || '' },
     changedFields: { paymentStatus: '已结款' }
@@ -82,6 +83,7 @@ export async function markSamplesAsPaid(rows: UnsettledSampleRow[]): Promise<Sam
   for (const { sheet, block } of targets) {
     savedBlocks.push(await saveSampleBlock(sheet.id, {
       id: block.id,
+      idempotencyKey: crypto.randomUUID(),
       baseUpdatedAt: block.updatedAt,
       baseInputs: { paymentStatus: block.inputs.paymentStatus || '' },
       changedFields: { paymentStatus: '已结款' }

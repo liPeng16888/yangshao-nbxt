@@ -40,7 +40,7 @@
 
       <section class="bulk-fill-item">
         <div class="bulk-fill-item__header">
-          样品金额
+          {{ amountLabel }}
         </div>
         <el-input-number
           v-model="price"
@@ -104,8 +104,9 @@ const price = ref<number | null>(null)
 const paymentStatus = ref<SamplePaymentStatus | ''>('')
 const elementNote = ref('')
 
-const pricePrecision = computed(() => (paymentStatus.value === '预存款' ? 0 : 2))
-const priceStep = computed(() => (pricePrecision.value === 0 ? 1 : 0.01))
+const amountLabel = computed(() => (paymentStatus.value === '预存款' ? '扣除金额' : '样品金额'))
+const pricePrecision = computed(() => 2)
+const priceStep = computed(() => 0.01)
 
 watch(
   () => props.visible,
@@ -117,6 +118,10 @@ watch(
 async function confirmApply() {
   if (!props.selectedCount) {
     ElMessage.warning('请先选择至少一个样品')
+    return
+  }
+  if (paymentStatus.value === '预存款' && typeof price.value === 'number' && price.value <= 0) {
+    ElMessage.warning('预存款扣除金额必须大于 0')
     return
   }
 
@@ -164,7 +169,7 @@ function buildPatch(): Partial<LabSampleInput> {
   }
 
   if (typeof price.value === 'number' && Number.isFinite(price.value)) {
-    patch.price = pricePrecision.value === 0 ? Math.trunc(price.value) : Number(price.value.toFixed(2))
+    patch.price = Number(price.value.toFixed(2))
   }
 
   if (paymentStatus.value) {

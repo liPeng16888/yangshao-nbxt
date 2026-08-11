@@ -303,6 +303,67 @@ describe('labSheet store auto save', () => {
     )
   })
 
+  it('reuses the prepared request key when a 409 save is retried later', async () => {
+    apiMocks.saveSampleBlock
+      .mockRejectedValueOnce({
+        response: { status: 409, data: { code: 'PREPAID_BALANCE_INSUFFICIENT', message: '余额不足' } }
+      })
+      .mockResolvedValueOnce(makeBlock({ sampleNumber: 'RETRY-409' }))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { sampleNumber: 'RETRY-409' })
+    await vi.advanceTimersByTimeAsync(900)
+
+    const firstPayload = apiMocks.saveSampleBlock.mock.calls[0][1]
+    const result = await store.retryFailedSaves()
+    const retriedPayload = apiMocks.saveSampleBlock.mock.calls[1][1]
+
+    expect(result.success).toBe(true)
+    expect(retriedPayload).toBe(firstPayload)
+    expect(retriedPayload.idempotencyKey).toBe(firstPayload.idempotencyKey)
+  })
+
+  it('restores the prepared idempotency key with a local draft after reload', async () => {
+    apiMocks.saveSampleBlock.mockRejectedValueOnce({
+      response: { status: 409, data: { code: 'PREPAID_BALANCE_INSUFFICIENT', message: '余额不足' } }
+    })
+    const firstStore = useLabSheetStore()
+    await firstStore.loadCurrentSheet()
+    firstStore.patchBlock('block-1', { sampleNumber: 'RESTORE-KEY' })
+    await vi.advanceTimersByTimeAsync(900)
+    const firstKey = apiMocks.saveSampleBlock.mock.calls[0][1].idempotencyKey
+
+    apiMocks.saveSampleBlock.mockImplementation(async (_sheetId: string, payload: { id: string }) => (
+      makeBlock({ sampleNumber: payload.id === 'block-1' ? 'RESTORE-KEY' : '' })
+    ))
+    setActivePinia(createPinia())
+    const restoredStore = useLabSheetStore()
+    await restoredStore.loadCurrentSheet()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(2)
+    expect(apiMocks.saveSampleBlock.mock.calls[1][1].idempotencyKey).toBe(firstKey)
+  })
+
+  it('creates a new idempotency key when the prepared request contents change after 409', async () => {
+    apiMocks.saveSampleBlock
+      .mockRejectedValueOnce({
+        response: { status: 409, data: { code: 'PREPAID_BALANCE_INSUFFICIENT', message: '余额不足' } }
+      })
+      .mockResolvedValueOnce(makeBlock({ sampleNumber: 'CHANGED', note: '新备注' }))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { sampleNumber: 'CHANGED' })
+    await vi.advanceTimersByTimeAsync(900)
+    const firstKey = apiMocks.saveSampleBlock.mock.calls[0][1].idempotencyKey
+
+    store.patchBlock('block-1', { note: '新备注' })
+    await vi.advanceTimersByTimeAsync(900)
+
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(2)
+    expect(apiMocks.saveSampleBlock.mock.calls[1][1].idempotencyKey).not.toBe(firstKey)
+  })
+
   it('isolates a subaccount draft by both shared owner and actual actor', async () => {
     window.localStorage.setItem('ys_user', JSON.stringify({ id: 'sub-1', dataOwnerId: 'front-1', account: 'sub-1' }))
     apiMocks.saveSampleBlock.mockRejectedValue({ response: { status: 400 }, message: 'bad request' })

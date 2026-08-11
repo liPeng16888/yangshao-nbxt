@@ -29,6 +29,49 @@ describe('FinanceService monthly element counts', () => {
   })
 })
 
+describe('FinanceService prepaid deduction amounts', () => {
+  it('aggregates exact prepaid amounts instead of truncating them into sample counts', () => {
+    const service = new FinanceService({} as never, {} as never, {} as never)
+    const rows = (service as unknown as {
+      getPrepaidDailyRows(sheets: unknown[]): Array<{ deductionAmount: number }>
+    }).getPrepaidDailyRows([{
+      date: '2026-08-12',
+      frontendUserId: 'front-1',
+      frontendUser: { name: '化验室' },
+      sampleBlocks: [
+        { inputs: { sampleNumber: 'A-1', customerText: '王总', paymentStatus: '预存款', price: 1.23 } },
+        { inputs: { sampleNumber: 'A-2', customerText: '王总', paymentStatus: '预存款', price: 2.22 } },
+        { inputs: { sampleNumber: 'A-3', customerText: '王总', paymentStatus: '已结款', price: 99.99 } }
+      ]
+    }])
+
+    expect(rows).toMatchObject([{ deductionAmount: 3.45 }])
+    expect(rows[0]).not.toHaveProperty('sampleCount')
+  })
+
+  it('reports used and available prepaid money from exact deduction amounts', () => {
+    const service = new FinanceService({} as never, {} as never, {} as never)
+    const report = (service as unknown as {
+      buildPrepaidReport(
+        recharges: unknown[],
+        dailyRows: unknown[],
+        customerRemarks: unknown[],
+        usageRemarks: unknown[]
+      ): { customerRows: Array<{ usedAmount: number; availableAmount: number }> }
+    }).buildPrepaidReport(
+      [{ frontendUserId: 'front-1', customer: '王总', amount: 100, usableTimes: 10, remark: null }],
+      [{
+        id: '2026-08-12__王总', date: '2026-08-12', frontendUserId: 'front-1', name: '化验室',
+        customer: '王总', deductionAmount: 3.45, remark: ''
+      }],
+      [],
+      []
+    )
+
+    expect(report.customerRows).toMatchObject([{ usedAmount: 3.45, availableAmount: 96.55 }])
+  })
+})
+
 describe('FinanceService batch sample payment', () => {
   const transaction = {
     $queryRaw: vi.fn(),

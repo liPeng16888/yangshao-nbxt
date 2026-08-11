@@ -386,6 +386,18 @@ model SampleBlock {
   @@index([sheetId])
 }
 
+model LabSampleSaveRequest {
+  idempotencyKey     String   @id
+  requestFingerprint String
+  sheetId            String
+  sampleBlockId      String
+  responseSnapshot   Json
+  createdAt          DateTime @default(now())
+
+  @@index([sheetId, sampleBlockId])
+  @@index([createdAt])
+}
+
 model CellChangeLog {
   id             String   @id @default(uuid())
   sheetId        String

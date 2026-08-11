@@ -27,6 +27,13 @@ function makeSheet(date: string, blocks = [makeBlock(1)], parameters = defaultLa
 }
 
 describe('LabSheetsService default sheet selection', () => {
+  const labSaveRequests = new Map<string, {
+    idempotencyKey: string
+    requestFingerprint: string
+    sheetId: string
+    sampleBlockId: string
+    responseSnapshot: unknown
+  }>()
   const transaction = {
     $queryRaw: vi.fn(),
     labSheet: {
@@ -47,6 +54,10 @@ describe('LabSheetsService default sheet selection', () => {
     abnormalRecord: {
       deleteMany: vi.fn(),
       upsert: vi.fn()
+    },
+    labSampleSaveRequest: {
+      findUnique: vi.fn(),
+      create: vi.fn()
     }
   }
   const prisma = {
@@ -73,6 +84,9 @@ describe('LabSheetsService default sheet selection', () => {
       deleteMany: vi.fn(),
       upsert: vi.fn()
     },
+    labSampleSaveRequest: {
+      findUnique: vi.fn()
+    },
     $transaction: vi.fn(async (operation: (tx: typeof transaction) => unknown) => operation(transaction))
   }
   const realtime = { publish: vi.fn() }
@@ -81,6 +95,7 @@ describe('LabSheetsService default sheet selection', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    labSaveRequests.clear()
     transaction.labSheet.findUnique.mockReset()
     transaction.labSheet.findUnique.mockImplementation((argument) => prisma.labSheet.findUnique(argument))
     transaction.labSheet.update.mockReset()
@@ -104,6 +119,22 @@ describe('LabSheetsService default sheet selection', () => {
     transaction.abnormalRecord.deleteMany.mockImplementation((argument) => prisma.abnormalRecord.deleteMany(argument))
     transaction.abnormalRecord.upsert.mockReset()
     transaction.abnormalRecord.upsert.mockImplementation((argument) => prisma.abnormalRecord.upsert(argument))
+    transaction.labSampleSaveRequest.findUnique.mockReset()
+    transaction.labSampleSaveRequest.findUnique.mockImplementation(async ({ where }) => (
+      labSaveRequests.get(where.idempotencyKey) || null
+    ))
+    transaction.labSampleSaveRequest.create.mockReset()
+    transaction.labSampleSaveRequest.create.mockImplementation(async ({ data }) => {
+      if (labSaveRequests.has(data.idempotencyKey)) {
+        throw Object.assign(new Error('unique constraint'), { code: 'P2002' })
+      }
+      labSaveRequests.set(data.idempotencyKey, data)
+      return data
+    })
+    prisma.labSampleSaveRequest.findUnique.mockReset()
+    prisma.labSampleSaveRequest.findUnique.mockImplementation(async ({ where }) => (
+      labSaveRequests.get(where.idempotencyKey) || null
+    ))
     transaction.labSheet.update.mockImplementation(async ({ data }) => {
       const sheet = await transaction.labSheet.findUnique.mock.results[0]?.value
       if (sheet) Object.assign(sheet, data)
@@ -432,6 +463,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: 'block-1',
+        idempotencyKey: 'merge-fields-1',
         baseUpdatedAt: updatedAt.toISOString(),
         baseInputs: { sampleNumber: 'OLD' },
         changedFields: { sampleNumber: 'NEW', moisture: 4.268, completed: true }
@@ -635,6 +667,237 @@ describe('LabSheetsService default sheet selection', () => {
     expect(prisma.sampleBlock.update).not.toHaveBeenCalled()
   })
 
+  it('reserves a no-op save and returns its immutable response snapshot after later changes', async () => {
+    const today = businessDateInBeijing()
+    const original = {
+      ...makeBlock(1, { sampleNumber: 'UNCHANGED', note: 'original' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    let current: Omit<typeof original, 'inputs'> & { inputs: Record<string, unknown> } = original
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [original]))
+    prisma.sampleBlock.findUnique.mockImplementation(async () => current)
+    const payload = {
+      id: original.id,
+      idempotencyKey: 'noop-save-1',
+      baseUpdatedAt: original.updatedAt.toISOString(),
+      baseInputs: { sampleNumber: 'UNCHANGED' },
+      changedFields: { sampleNumber: 'UNCHANGED' }
+    }
+
+    const first = await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      payload
+    )
+    current = {
+      ...original,
+      updatedAt: new Date('2026-08-11T00:05:00.000Z'),
+      inputs: { ...(original.inputs as Record<string, unknown>), note: 'later change' }
+    }
+    const retry = await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      payload
+    )
+
+    expect(retry).toEqual(first)
+    expect((retry.inputs as Record<string, unknown>).note).toBe('original')
+    expect(transaction.labSampleSaveRequest.create).toHaveBeenCalledTimes(1)
+    expect(prisma.sampleBlock.update).not.toHaveBeenCalled()
+  })
+
+  it('covers note-only saves and rejects reusing their key for a different request', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, { note: 'before' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'note-save-1', changedFields: { note: 'first request' } }
+    )
+
+    await expect(service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'note-save-1', changedFields: { note: 'different request' } }
+    )).rejects.toMatchObject({ response: expect.objectContaining({ code: 'LAB_SAVE_IDEMPOTENCY_CONFLICT' }) })
+    expect(prisma.sampleBlock.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects one idempotency key reused for a different sample before mutating it', async () => {
+    const today = businessDateInBeijing()
+    const firstBlock = {
+      ...makeBlock(1, { note: 'before' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    const secondBlock = {
+      ...makeBlock(2, { note: 'before' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [firstBlock, secondBlock]))
+    prisma.sampleBlock.findUnique.mockImplementation(async ({ where }) => (
+      where.id === firstBlock.id ? firstBlock : secondBlock
+    ))
+    prisma.sampleBlock.update.mockImplementation(async ({ where, data }) => ({
+      ...(where.id === firstBlock.id ? firstBlock : secondBlock),
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: firstBlock.id, idempotencyKey: 'cross-sample-key', changedFields: { note: 'first' } }
+    )
+    await expect(service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: secondBlock.id, idempotencyKey: 'cross-sample-key', changedFields: { note: 'second' } }
+    )).rejects.toMatchObject({ response: expect.objectContaining({ code: 'LAB_SAVE_IDEMPOTENCY_CONFLICT' }) })
+
+    expect(prisma.sampleBlock.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('settles concurrent cross-sheet key reuse with one winner and one stable 409 loser', async () => {
+    const today = businessDateInBeijing()
+    const firstSheetId = `sheet-${today}`
+    const secondSheetId = `${firstSheetId}-other`
+    const firstBlock = {
+      ...makeBlock(1),
+      sheetId: firstSheetId,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    const secondBlock = {
+      ...makeBlock(2),
+      sheetId: secondSheetId,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockImplementation(async ({ where }) => (
+      where.id === firstSheetId
+        ? { ...makeSheet(today, [firstBlock]), id: firstSheetId }
+        : { ...makeSheet(today, [secondBlock]), id: secondSheetId }
+    ))
+    prisma.sampleBlock.findUnique.mockImplementation(async ({ where }) => (
+      where.id === firstBlock.id ? firstBlock : secondBlock
+    ))
+    prisma.sampleBlock.update.mockImplementation(async ({ where, data }) => ({
+      ...(where.id === firstBlock.id ? firstBlock : secondBlock),
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+
+    const outcomes = await Promise.allSettled([
+      service.saveSampleBlock(
+        { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+        firstSheetId,
+        { id: firstBlock.id, idempotencyKey: 'concurrent-cross-sheet', changedFields: { note: 'winner-a' } }
+      ),
+      service.saveSampleBlock(
+        { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+        secondSheetId,
+        { id: secondBlock.id, idempotencyKey: 'concurrent-cross-sheet', changedFields: { note: 'winner-b' } }
+      )
+    ])
+
+    expect(outcomes.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    const loser = outcomes.find((result) => result.status === 'rejected') as PromiseRejectedResult
+    expect(loser.reason).toMatchObject({ response: expect.objectContaining({ code: 'LAB_SAVE_IDEMPOTENCY_CONFLICT' }) })
+    expect(realtime.publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns the committed winner snapshot when an identical concurrent insert reports P2002', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, { note: 'before' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+    transaction.labSampleSaveRequest.create.mockImplementationOnce(async ({ data }) => {
+      labSaveRequests.set(data.idempotencyKey, {
+        ...data,
+        responseSnapshot: { ...(data.responseSnapshot as Record<string, unknown>), updatedAt: 'winner-snapshot' }
+      })
+      throw Object.assign(new Error('concurrent unique constraint'), { code: 'P2002' })
+    })
+
+    const result = await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'same-request-race', changedFields: { note: 'saved' } }
+    )
+
+    expect(result.updatedAt).toBe('winner-snapshot')
+    expect((result.inputs as Record<string, unknown>).note).toBe('saved')
+    expect(realtime.publish).not.toHaveBeenCalled()
+  })
+
+  it('rolls back a prepaid ledger mutation when the later sample update fails', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    const committedLedgerMutations: string[] = []
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prepaid.syncSampleConsumption.mockImplementationOnce(async () => {
+      committedLedgerMutations.push('consumption-created')
+    })
+    prisma.sampleBlock.update.mockRejectedValueOnce(new Error('sample update failed'))
+    prisma.$transaction.mockImplementationOnce(async (operation: (tx: typeof transaction) => unknown) => {
+      const ledgerSnapshot = [...committedLedgerMutations]
+      try {
+        return await operation(transaction)
+      } catch (error) {
+        committedLedgerMutations.splice(0, committedLedgerMutations.length, ...ledgerSnapshot)
+        labSaveRequests.clear()
+        throw error
+      }
+    })
+
+    await expect(service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'rollback-after-ledger',
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        }
+      }
+    )).rejects.toThrow('sample update failed')
+
+    expect(committedLedgerMutations).toEqual([])
+    expect(labSaveRequests.size).toBe(0)
+    expect(block.inputs.paymentStatus).toBe('')
+    expect(transaction.cellChangeLog.create).not.toHaveBeenCalled()
+  })
+
   it('returns granted saved data to the caller but publishes only a metadata refresh signal', async () => {
     const today = businessDateInBeijing()
     const updatedAt = new Date('2026-08-08T00:00:00.000Z')
@@ -656,6 +919,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: block.id,
+        idempotencyKey: 'granted-save-1',
         baseUpdatedAt: updatedAt.toISOString(),
         baseInputs: { note: null },
         changedFields: { note: '已复核' }
@@ -705,6 +969,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: 'block-1',
+        idempotencyKey: 'recipient-save-1',
         baseUpdatedAt: updatedAt.toISOString(),
         baseInputs: {
           recipientCustomerId: undefined,
@@ -762,6 +1027,7 @@ describe('LabSheetsService default sheet selection', () => {
         `sheet-${today}`,
         {
           id: 'block-1',
+          idempotencyKey: 'stale-save-1',
           baseUpdatedAt: '2026-07-03T00:00:00.000Z',
           baseInputs: { sampleNumber: 'OLD' },
           changedFields: { sampleNumber: 'LOCAL' }
@@ -792,6 +1058,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: 'block-1',
+        idempotencyKey: 'repeated-save-1',
         baseUpdatedAt: '2026-07-03T00:00:00.000Z',
         baseInputs: { sampleNumber: 'OLD' },
         changedFields: { sampleNumber: 'ALREADY-SAVED' }
@@ -924,7 +1191,7 @@ describe('LabSheetsService default sheet selection', () => {
     const saved = await service.saveSampleBlock(
       { id: 'front-1' } as never,
       before.id,
-      { id: 'block-2', changedFields: { ironRaw: 2 } }
+      { id: 'block-2', idempotencyKey: 'blank-before-boundary-1', changedFields: { ironRaw: 2 } }
     )
 
     expect((saved.parameterSnapshot as Record<string, unknown>)).toMatchObject({
@@ -964,7 +1231,7 @@ describe('LabSheetsService default sheet selection', () => {
     const saved = await service.saveSampleBlock(
       { id: 'front-1' } as never,
       before.id,
-      { id: 'block-11', changedFields: { ironRaw: 2 } }
+      { id: 'block-11', idempotencyKey: 'added-blank-before-boundary-1', changedFields: { ironRaw: 2 } }
     )
 
     expect((saved.parameterSnapshot as Record<string, unknown>)).toMatchObject({
@@ -1032,6 +1299,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: block.id,
+        idempotencyKey: 'segmented-first-input-1',
         baseUpdatedAt: block.updatedAt.toISOString(),
         baseInputs: { ironRaw: null },
         changedFields: { ironRaw: 2 }
@@ -1067,6 +1335,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: block.id,
+        idempotencyKey: 'ordinary-first-input-1',
         baseUpdatedAt: block.updatedAt.toISOString(),
         baseInputs: { ironRaw: null },
         changedFields: { ironRaw: 2 }
@@ -1124,14 +1393,18 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: latestBlock.id,
+        idempotencyKey: 'locked-save-1',
         baseUpdatedAt: latestBlock.updatedAt.toISOString(),
         baseInputs: { ironRaw: null },
         changedFields: { ironRaw: 2 }
       }
     )
 
-    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1)
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(2)
     expect(transaction.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      transaction.$queryRaw.mock.invocationCallOrder[1]
+    )
+    expect(transaction.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
       transaction.sampleBlock.findUnique.mock.invocationCallOrder[0]
     )
     expect((result.parameterSnapshot as Record<string, unknown>).ironFactor).toBe(10)

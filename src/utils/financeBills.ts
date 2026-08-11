@@ -200,10 +200,10 @@ export function getPrepaidDailyRowsFromSheet(sheet: LabSheet): PrepaidDailyUsage
         id,
         date: sheet.date,
         customer,
-        sampleCount: 0,
+        deductionAmount: 0,
         remark: ''
       }
-      current.sampleCount += getPrepaidDeductionTimes(block)
+      current.deductionAmount = roundMoney(current.deductionAmount + getPrepaidDeductionAmount(block))
       rowMap.set(id, current)
     })
 
@@ -225,6 +225,8 @@ export function summarizePrepaidReport(
       totalUsableTimes: 0,
       usedTimes: 0,
       availableTimes: 0,
+      usedAmount: 0,
+      availableAmount: 0,
       remark: ''
     }
     current.totalAmount = roundMoney(current.totalAmount + row.amount)
@@ -243,9 +245,11 @@ export function summarizePrepaidReport(
         totalUsableTimes: 0,
         usedTimes: 0,
         availableTimes: 0,
+        usedAmount: 0,
+        availableAmount: 0,
         remark: ''
       } satisfies PrepaidCustomerRow)
-    current.usedTimes += row.sampleCount
+    current.usedAmount = roundMoney(current.usedAmount + row.deductionAmount)
     rechargeMap.set(row.customer, current)
   })
 
@@ -254,6 +258,8 @@ export function summarizePrepaidReport(
       ...row,
       totalAmount: roundMoney(row.totalAmount),
       availableTimes: Math.max(0, row.totalUsableTimes - row.usedTimes),
+      usedAmount: roundMoney(row.usedAmount),
+      availableAmount: roundMoney(Math.max(0, row.totalAmount - row.usedAmount)),
       remark: customerRemarks[row.customer] ?? row.remark ?? ''
     }))
     .sort((a, b) => a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
@@ -287,8 +293,9 @@ export function roundMoney(value: number) {
   return Number(value.toFixed(2))
 }
 
-function getPrepaidDeductionTimes(block: SampleBlock) {
-  return Math.max(0, Math.trunc(block.inputs.price || 0))
+function getPrepaidDeductionAmount(block: SampleBlock) {
+  const amount = block.inputs.price
+  return typeof amount === 'number' && Number.isFinite(amount) ? roundMoney(Math.max(0, amount)) : 0
 }
 
 function sortMonthlySettlementDailyRows(rows: MonthlySettlementDailyRow[]) {

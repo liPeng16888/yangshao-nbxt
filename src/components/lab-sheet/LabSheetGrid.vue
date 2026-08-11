@@ -419,15 +419,17 @@ function isPrepaidBlock(block: SampleBlock) {
 }
 
 function getAmountLabel(block: SampleBlock) {
-  return isPrepaidBlock(block) ? '扣除次数' : '样品金额'
+  return isPrepaidBlock(block) ? '扣除金额' : '样品金额'
 }
 
-function getAmountPrecision(block: SampleBlock) {
-  return isPrepaidBlock(block) ? 0 : 2
+function getAmountPrecision(_block: SampleBlock) {
+  return 2
 }
 
 function hasSampleAmount(block: SampleBlock) {
-  return typeof block.inputs.price === 'number' && Number.isFinite(block.inputs.price)
+  return typeof block.inputs.price === 'number' &&
+    Number.isFinite(block.inputs.price) &&
+    (!isPrepaidBlock(block) || block.inputs.price > 0)
 }
 
 function hasPaymentStatus(block: SampleBlock) {
@@ -452,7 +454,7 @@ function isCalculationBlocked(block: SampleBlock) {
 
 function getCalculationBlockMessage(block: SampleBlock) {
   const missingActions: string[] = []
-  if (!hasSampleAmount(block)) missingActions.push(isPrepaidBlock(block) ? '输入扣除次数' : '输入样品金额')
+  if (!hasSampleAmount(block)) missingActions.push(isPrepaidBlock(block) ? '输入大于 0 的扣除金额' : '输入样品金额')
   if (!hasPaymentStatus(block)) missingActions.push('选择费用状态')
   if (!hasElementNote(block)) missingActions.push('选择化验元素')
 
