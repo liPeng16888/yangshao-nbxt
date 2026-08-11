@@ -32,6 +32,7 @@ import {
   mockSaveLeave,
   mockSaveLeaveType,
   mockSaveMonthlySetting,
+  mockSaveMonthlyScheduleDay,
   mockBatchSaveMonthlySchedules,
   mockSaveWeeklySchedule,
   mockUploadEmployeePhoto,
@@ -388,6 +389,83 @@ describe('employee attendance mock repository', () => {
     expect(overview.todayOnLeave).toBe(1)
     expect(overview.todayAbsent).toBe(3)
     expect(overview.todayPresent + overview.todayOnLeave + overview.todayAbsent).toBe(5)
+  })
+
+  it.each([
+    ['HALF_DAY' as const, undefined],
+    ['HOUR' as const, 1]
+  ])('classifies positive approved %s leave coverage once as leave in Mock overview', async (unit, hours) => {
+    const today = dayjs().format('YYYY-MM-DD')
+    const employee = await mockCreateEmployee({ employeeNumber: `YG-${unit}`, name: `${unit}请假员工`, status: 'ACTIVE', hireDate: today })
+    await mockBatchSaveMonthlySchedules({
+      employeeId: employee.id, dates: [today], isWorkday: true,
+      segments: [{ startTime: '08:00', endTime: '16:00' }], remark: ''
+    })
+    await mockSaveAttendance({ employeeId: employee.id, date: today, actualSegments: [], explicitAbsenceMinutes: 480, overtimeMinutes: 0 })
+    const leave = await mockSaveLeave({
+      employeeId: employee.id, leaveTypeId: 'leave-type-sick', startDate: today, endDate: today,
+      unit, hours, reason: '部分请假'
+    })
+    await mockReviewLeave(leave.id, 'APPROVED')
+
+    const overview = await mockGetOverview(dayjs().format('YYYY-MM'))
+
+    expect(overview.todayOnLeave).toBe(1)
+    expect(overview.todayPresent + overview.todayOnLeave + overview.todayAbsent).toBe(3)
+  })
+
+  it('zeros derived attendance after both single and batch changes from workday to explicit rest day', async () => {
+    const today = dayjs().format('YYYY-MM-DD')
+    const employee = await mockCreateEmployee({ employeeNumber: 'YG-REST', name: '休息日员工', status: 'ACTIVE', hireDate: today })
+    await mockSaveMonthlyScheduleDay({
+      employeeId: employee.id, date: today, isWorkday: true,
+      segments: [{ startTime: '08:00', endTime: '16:00' }], remark: '先工作'
+    })
+    const saved = await mockSaveAttendance({
+      employeeId: employee.id, date: today,
+      actualSegments: [{ checkInAt: `${today}T09:00:00+08:00`, checkOutAt: `${today}T12:00:00+08:00` }],
+      explicitAbsenceMinutes: 60, overtimeMinutes: 45, remark: '保留原始信息'
+    })
+    await mockSaveMonthlyScheduleDay({ employeeId: employee.id, date: today, isWorkday: false, segments: [], remark: '单日改休' })
+    await expect(mockGetAttendance({ employeeId: employee.id })).resolves.toMatchObject([{
+      id: saved.id, isScheduledWorkday: false, scheduledMinutes: 0, workedMinutes: 0,
+      lateMinutes: 0, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 60, absenceMinutes: 0,
+      overtimeMinutes: 45, remark: '保留原始信息', actualSegments: saved.actualSegments
+    }])
+
+    await mockSaveMonthlyScheduleDay({
+      employeeId: employee.id, date: today, isWorkday: true,
+      segments: [{ startTime: '08:00', endTime: '16:00' }], remark: '恢复工作'
+    })
+    await mockBatchSaveMonthlySchedules({ employeeId: employee.id, dates: [today], isWorkday: false, segments: [], remark: '批量改休' })
+    await expect(mockGetAttendance({ employeeId: employee.id })).resolves.toMatchObject([{
+      isScheduledWorkday: false, scheduledMinutes: 0, workedMinutes: 0,
+      lateMinutes: 0, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 60, absenceMinutes: 0,
+      overtimeMinutes: 45, remark: '保留原始信息', actualSegments: saved.actualSegments
+    }])
+
+    const payroll = await mockGeneratePayroll(dayjs().format('YYYY-MM'))
+    expect(payroll.items.find((item) => item.employeeId === employee.id)?.calculationSnapshot.input.absenceDays).toBe(0)
+  })
+
+  it('returns zero derived absence immediately when attendance is saved on an explicit rest day', async () => {
+    const today = dayjs().format('YYYY-MM-DD')
+    const employee = await mockCreateEmployee({ employeeNumber: 'YG-REST-SAVE', name: '休息日即时响应', status: 'ACTIVE', hireDate: today })
+    await mockSaveMonthlyScheduleDay({ employeeId: employee.id, date: today, isWorkday: false, segments: [], remark: '明确休息' })
+
+    const saved = await mockSaveAttendance({
+      employeeId: employee.id, date: today, actualSegments: [],
+      explicitAbsenceMinutes: 60, overtimeMinutes: 45, remark: '保留原始信息'
+    })
+
+    expect(saved).toMatchObject({
+      isScheduledWorkday: false, scheduledMinutes: 0, workedMinutes: 0,
+      lateMinutes: 0, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 60, absenceMinutes: 0,
+      overtimeMinutes: 45, remark: '保留原始信息'
+    })
+    await expect(mockGetAttendance({ employeeId: employee.id })).resolves.toMatchObject([{
+      id: saved.id, explicitAbsenceMinutes: 60, absenceMinutes: 0
+    }])
   })
 
   it('derives payroll from monthly schedules and treats missing attendance as normal', async () => {

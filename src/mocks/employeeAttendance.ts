@@ -362,7 +362,7 @@ function currentAttendanceRecord(row: AttendanceRecord): AttendanceRecord {
         workedMinutes: 0,
         lateMinutes: 0,
         earlyLeaveMinutes: 0,
-        absenceMinutes: Math.max(0, explicitAbsenceMinutes - leaveMinutes)
+        absenceMinutes: 0
       }
   return {
     ...row,
@@ -408,7 +408,7 @@ function actualAttendanceRecord(payload: EmployeeAttendanceInput, existing?: Att
   const total = isScheduledWorkday ? schedule.scheduledMinutes : 0
   const metrics = isScheduledWorkday
     ? deriveAttendanceMetrics(schedule.segments, actualSegments, Math.round(total * leaveCoverageForAttendance(payload.employeeId, payload.date, total)), explicitAbsenceMinutes)
-    : { workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: explicitAbsenceMinutes }
+    : { workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0 }
   const first = actualSegments[0]
   const last = actualSegments.at(-1)
   return {
@@ -630,7 +630,7 @@ export async function mockGetOverview(month: string): Promise<AttendanceOverview
   const todaySchedules = state.monthlySchedules.filter((row) => row.date === today && row.isWorkday && row.scheduledMinutes > 0 && employeeIds.has(row.employeeId))
   const todayClassifications = todaySchedules.map((schedule) => {
     const leaveCoverage = leaveCoverageForAttendance(schedule.employeeId, today, schedule.scheduledMinutes)
-    if (leaveCoverage >= 1) return 'LEAVE' as const
+    if (leaveCoverage > 0) return 'LEAVE' as const
     const stored = state.attendance.find((row) => row.employeeId === schedule.employeeId && row.date === today)
     const current = stored ? currentAttendanceRecord(stored) : null
     return current && current.absenceMinutes > 0 ? 'ABSENT' as const : 'PRESENT' as const

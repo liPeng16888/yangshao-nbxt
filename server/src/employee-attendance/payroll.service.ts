@@ -53,7 +53,7 @@ export class PayrollService {
         }
       }, include: { segments: { orderBy: { sequence: 'asc' } } } }),
       this.prisma.employeeMonthlyScheduleDay.findMany({
-        where: { frontendUserId, date: { startsWith: month }, isWorkday: true, scheduledMinutes: { gt: 0 } },
+        where: { frontendUserId, date: { startsWith: month } },
         include: { segments: { orderBy: { sequence: 'asc' } } }
       }),
       this.prisma.employeeLeaveRequest.findMany({ where: {
@@ -87,7 +87,7 @@ export class PayrollService {
     const todayClassifications = new Map<string, 'PRESENT' | 'LEAVE' | 'ABSENT'>()
     for (const schedule of todaySchedules) {
       const leaveMinutes = this.leaveMinutesForDate(todayLeaves.filter((leave) => leave.employeeId === schedule.employeeId), today, schedule.scheduledMinutes)
-      if (leaveMinutes >= schedule.scheduledMinutes) {
+      if (leaveMinutes > 0) {
         todayClassifications.set(schedule.employeeId, 'LEAVE')
         continue
       }
@@ -551,6 +551,9 @@ export class PayrollService {
   }
 
   private metricsForAttendance(schedule: any, attendance: any | undefined, leaves: any[]) {
+    if (!schedule.isWorkday) {
+      return { workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0 }
+    }
     const approvedLeaveMinutes = this.leaveMinutesForDate(
       leaves.filter((leave) => leave.employeeId === schedule.employeeId),
       schedule.date,

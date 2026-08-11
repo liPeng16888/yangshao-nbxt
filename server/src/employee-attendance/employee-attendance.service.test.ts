@@ -329,6 +329,35 @@ describe('EmployeeAttendanceService ownership and conflicts', () => {
     }])
   })
 
+  it('treats an explicit current rest-day schedule as authoritative while preserving raw attendance fields', async () => {
+    const { service, prisma } = createService()
+    const checkInAt = new Date('2026-08-11T00:00:00Z')
+    const checkOutAt = new Date('2026-08-11T04:00:00Z')
+    prisma.employeeAttendanceRecord.findMany.mockResolvedValue([{
+      id: 'attendance-rest', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-11',
+      isScheduledWorkday: true, scheduledMinutes: 480, workedMinutes: 240, lateMinutes: 20, earlyLeaveMinutes: 30,
+      explicitAbsenceMinutes: 60, absenceMinutes: 240, overtimeMinutes: 45, remark: '保留原始信息',
+      segments: [{ sequence: 0, checkInAt, checkOutAt }]
+    }])
+    prisma.employeeMonthlyScheduleDay.findMany.mockResolvedValue([{
+      id: 'schedule-rest', frontendUserId: 'front-1', employeeId: 'employee-1', date: '2026-08-11',
+      isWorkday: false, scheduledMinutes: 0, segments: []
+    }])
+
+    await expect(service.listAttendance('front-1')).resolves.toMatchObject([{
+      isScheduledWorkday: false,
+      scheduledMinutes: 0,
+      workedMinutes: 0,
+      lateMinutes: 0,
+      earlyLeaveMinutes: 0,
+      explicitAbsenceMinutes: 60,
+      absenceMinutes: 0,
+      overtimeMinutes: 45,
+      remark: '保留原始信息',
+      actualSegments: [{ checkInAt, checkOutAt }]
+    }])
+  })
+
   it('validates 24:00 only as a planned end while actual instants remain 00:00-23:59', async () => {
     const validPlan = plainToInstance(ScheduleSegmentDto, { startTime: '16:00', endTime: '24:00' })
     expect(await validate(validPlan)).toHaveLength(0)

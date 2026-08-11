@@ -1124,7 +1124,7 @@ export class EmployeeAttendanceService {
 
   private metricsForSchedule(schedule: any, actualSegments: ActualInterval[], approvedLeaveMinutes: number, explicitAbsenceMinutes: number) {
     if (!schedule.isWorkday) {
-      return { workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: this.minutes(explicitAbsenceMinutes) }
+      return { workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0 }
     }
     const plan = (schedule.segments || []).slice().sort((left: any, right: any) => left.sequence - right.sequence)
       .map((segment: any) => ({ startTime: segment.startTime, endTime: segment.endTime }))

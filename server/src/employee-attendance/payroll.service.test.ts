@@ -336,6 +336,36 @@ describe('PayrollService frontend payroll', () => {
     }])
   })
 
+  it('zeros derived readonly admin metrics for an explicit current rest-day schedule', async () => {
+    const { service, prisma } = serviceFixture()
+    const checkInAt = new Date('2026-08-01T00:00:00Z')
+    const checkOutAt = new Date('2026-08-01T04:00:00Z')
+    prisma.employeeAttendanceRecord.findMany.mockResolvedValue([{
+      id: 'attendance-rest', frontendUserId: 'front-1', employeeId: employee.id, date: '2026-08-01',
+      isScheduledWorkday: true, scheduledMinutes: 480, workedMinutes: 240, lateMinutes: 20, earlyLeaveMinutes: 30,
+      explicitAbsenceMinutes: 60, absenceMinutes: 240, overtimeMinutes: 45, remark: '保留原始信息',
+      employee: { employeeNumber: '001', name: '张三' },
+      segments: [{ sequence: 0, checkInAt, checkOutAt }]
+    }])
+    prisma.employeeMonthlyScheduleDay.findMany.mockResolvedValue([{
+      frontendUserId: 'front-1', employeeId: employee.id, date: '2026-08-01',
+      isWorkday: false, scheduledMinutes: 0, segments: []
+    }])
+
+    await expect(service.adminAttendance(['front-1'], { month: '2026-08' })).resolves.toMatchObject([{
+      isScheduledWorkday: false,
+      scheduledMinutes: 0,
+      workedMinutes: 0,
+      lateMinutes: 0,
+      earlyLeaveMinutes: 0,
+      explicitAbsenceMinutes: 60,
+      absenceMinutes: 0,
+      overtimeMinutes: 45,
+      remark: '保留原始信息',
+      actualSegments: [{ sequence: 0, checkInAt, checkOutAt }]
+    }])
+  })
+
   it('keeps deleted-schedule attendance metrics cleared in readonly admin and overview responses', async () => {
     const deletedScheduleAttendance = {
       id: 'attendance-deleted-schedule', frontendUserId: 'front-1', employeeId: employee.id, date: '2026-08-01',
@@ -482,6 +512,63 @@ describe('PayrollService frontend payroll', () => {
     const result = await service.overview('front-1', '2026-08')
 
     expect(result).toMatchObject({ todayAttendance: 1, todayLeave: 1, todayAbsence: 1 })
+  })
+
+  it.each([
+    ['half-day', EmployeeLeaveUnit.HALF_DAY, undefined],
+    ['hourly', EmployeeLeaveUnit.HOUR, decimal(1)]
+  ])('classifies any positive approved %s leave coverage as leave exactly once', async (_label, unit, hours) => {
+    const { service, prisma } = serviceFixture()
+    prisma.employee.count = vi.fn().mockResolvedValue(1)
+    prisma.employeeAttendanceRecord.findMany
+      .mockResolvedValueOnce([{
+        employeeId: employee.id, date: '2026-08-11', explicitAbsenceMinutes: 480,
+        absenceMinutes: 480, overtimeMinutes: 0, segments: []
+      }])
+      .mockResolvedValueOnce([])
+    prisma.employeeMonthlyScheduleDay.findMany
+      .mockResolvedValueOnce([{
+        employeeId: employee.id, date: '2026-08-11', isWorkday: true, scheduledMinutes: 480,
+        segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }]
+      }])
+      .mockResolvedValueOnce([])
+    prisma.employeeLeaveRequest.findMany.mockResolvedValue([{
+      employeeId: employee.id, startDate: '2026-08-11', endDate: '2026-08-11', unit, hours
+    }])
+    prisma.employeeLeaveRequest.count.mockResolvedValue(0)
+    prisma.employeePayrollRun.findFirst.mockResolvedValue(null)
+
+    await expect(service.overview('front-1', '2026-08')).resolves.toMatchObject({
+      todayAttendance: 0,
+      todayLeave: 1,
+      todayAbsence: 0
+    })
+  })
+
+  it('uses an explicit rest-day schedule to suppress stale monthly attendance reminders', async () => {
+    const { service, prisma } = serviceFixture()
+    prisma.employee.count = vi.fn().mockResolvedValue(1)
+    prisma.employeeAttendanceRecord.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        employeeId: employee.id, date: '2026-08-01', explicitAbsenceMinutes: 60,
+        workedMinutes: 240, lateMinutes: 20, earlyLeaveMinutes: 30, absenceMinutes: 240, overtimeMinutes: 45,
+        segments: []
+      }])
+    prisma.employeeMonthlyScheduleDay.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        employeeId: employee.id, date: '2026-08-01', isWorkday: false, scheduledMinutes: 0, segments: []
+      }])
+    prisma.employeeLeaveRequest.count.mockResolvedValue(0)
+    prisma.employeePayrollRun.findFirst.mockResolvedValue(null)
+
+    const result = await service.overview('front-1', '2026-08')
+
+    expect(result).toMatchObject({ overtimeMinutes: 45, issues: [] })
+    expect(prisma.employeeMonthlyScheduleDay.findMany).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: { frontendUserId: 'front-1', date: { startsWith: '2026-08' } }
+    }))
   })
 
   it('scopes the admin overview pending leave count to the selected month', async () => {
