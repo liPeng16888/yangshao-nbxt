@@ -895,6 +895,16 @@ Expected: all focused customer, admin and server tests PASS.
 
 Run Prisma format, validate and generate with a non-production `DATABASE_URL`. Create a fresh base-to-feature diff, then compare its structural SQL byte-for-byte with `server/prisma/migrations/20260811000000_add_monthly_schedule_segments/migration.sql` up to (but not including) `-- Backfill the deployment month`; use `cmp -s` and require exit code 0. Confirm all new tenant ownership indexes and composite foreign keys are present and no employee/history table is dropped.
 
+```bash
+base_schema_file=$(mktemp /private/tmp/monthly-base-schema.XXXXXX)
+fresh_diff_file=$(mktemp /private/tmp/monthly-fresh-diff.XXXXXX)
+structural_migration_file=$(mktemp /private/tmp/monthly-structural-migration.XXXXXX)
+git show 52e8c7f:server/prisma/schema.prisma > "$base_schema_file"
+server/node_modules/.bin/prisma migrate diff --from-schema-datamodel "$base_schema_file" --to-schema-datamodel server/prisma/schema.prisma --script > "$fresh_diff_file"
+awk '/^-- Backfill the deployment month/ { exit } { print }' server/prisma/migrations/20260811000000_add_monthly_schedule_segments/migration.sql > "$structural_migration_file"
+cmp -s "$fresh_diff_file" "$structural_migration_file"
+```
+
 - [x] **Step 4: Run full repository verification**
 
 ```bash
