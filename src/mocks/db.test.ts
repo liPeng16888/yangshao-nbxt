@@ -121,3 +121,74 @@ describe('segmented parameter mock database validation', () => {
     expect(saved.results.iron).toBe(20)
   })
 })
+
+describe('frontend subaccount mock lifecycle', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    db = await import('./db')
+  })
+
+  it('creates, updates, disables, resets and deletes a subaccount without exposing passwords', async () => {
+    const created = await db.mockCreateFrontendSubAccount({
+      account: 'operator01',
+      username: '操作员一号',
+      password: 'secret123',
+      confirmPassword: 'secret123',
+      permissions: ['DATA_MAIN', 'DATA_MAIN', 'REPORTS'],
+      requiresAccessGuardPassword: true
+    })
+
+    expect(created.permissions).toEqual(['DATA_MAIN', 'REPORTS'])
+    expect(created).not.toHaveProperty('password')
+    expect(created).not.toHaveProperty('passwordHash')
+    expect(created).not.toHaveProperty('passwordCipher')
+
+    const login = await db.mockLogin({ account: 'operator01', password: 'secret123' })
+    expect(login.user).toMatchObject({
+      role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'u-admin',
+      isFrontendSubAccount: true,
+      permissions: ['DATA_MAIN', 'REPORTS']
+    })
+
+    const updated = await db.mockUpdateFrontendSubAccount(created.id, {
+      username: '数据操作员',
+      permissions: ['DATA_STANDARD_SAMPLE'],
+      requiresAccessGuardPassword: false
+    })
+    expect(updated).toMatchObject({
+      username: '数据操作员',
+      permissions: ['DATA_STANDARD_SAMPLE'],
+      requiresAccessGuardPassword: false,
+      permissionVersion: 2
+    })
+
+    await db.mockSetFrontendSubAccountStatus(created.id, true, '暂时停用')
+    expect(await db.mockFrontendSubAccounts()).toEqual([
+      expect.objectContaining({ disabled: true, disabledReason: '暂时停用', permissionVersion: 3 })
+    ])
+
+    await expect(db.mockResetFrontendSubAccountPassword(created.id, {
+      currentPassword: 'wrong',
+      newPassword: 'newpass123',
+      confirmPassword: 'newpass123'
+    })).rejects.toThrow('主账号当前密码错误')
+
+    await db.mockResetFrontendSubAccountPassword(created.id, {
+      currentPassword: 'admin123',
+      newPassword: 'newpass123',
+      confirmPassword: 'newpass123'
+    })
+    expect((await db.mockFrontendSubAccounts())[0].permissionVersion).toBe(4)
+    await expect(db.mockLogin({ account: 'operator01', password: 'secret123' })).rejects.toThrow('子账号已停用')
+
+    await db.mockSetFrontendSubAccountStatus(created.id, false)
+    await expect(db.mockLogin({ account: 'operator01', password: 'secret123' })).rejects.toThrow('账号或密码错误')
+    await expect(db.mockLogin({ account: 'operator01', password: 'newpass123' })).resolves.toMatchObject({
+      user: { role: 'FRONTEND_SUB_USER' }
+    })
+
+    await db.mockDeleteFrontendSubAccount(created.id)
+    expect(await db.mockFrontendSubAccounts()).toEqual([])
+  })
+})

@@ -24,16 +24,33 @@ import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
 import { businessDateInBeijing, getReportRange, todayInBeijing } from '@/utils/date'
 import { medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
 import { hasLabDetectionInput } from '@/utils/sampleReport'
+import type {
+  CreateFrontendSubAccountPayload,
+  FrontendSubAccountDto,
+  ResetFrontendSubAccountPasswordPayload,
+  UpdateFrontendSubAccountPayload
+} from '@/types/frontendSubAccount'
 
 const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
 const MEDICINE_COMMON_NAME_STORAGE_KEY = 'ys_medicine_common_names'
 
-let currentUser: AuthUser = {
+const mainFrontendUser: AuthUser = {
   id: 'u-admin',
   username: '管理员',
   account: 'admin',
-  role: 'admin' as const
+  role: 'FRONTEND_USER' as const,
+  dataOwnerId: 'u-admin',
+  permissionVersion: 1,
+  permissions: [],
+  requiresAccessGuardPassword: true,
+  isFrontendMainAccount: true,
+  isFrontendSubAccount: false
 }
+
+let currentUser: AuthUser = clone(mainFrontendUser)
+
+let frontendSubAccounts: FrontendSubAccountDto[] = []
+const frontendSubAccountPasswordHashes = new Map<string, string>()
 
 let labParameters: LabParameter = {
   ...defaultLabParameters,
@@ -117,6 +134,12 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+async function mockPasswordHash(password: string) {
+  const bytes = new TextEncoder().encode(password)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
 function delay<T>(value: T, ms = 120) {
   return new Promise<T>((resolve) => {
     window.setTimeout(() => resolve(clone(value)), ms)
@@ -180,10 +203,29 @@ function ensureSheet(date = businessDateInBeijing()) {
 }
 
 export async function mockLogin(payload: LoginPayload): Promise<AuthResponse> {
-  if (payload.account !== 'admin' || payload.password !== 'admin123') {
-    throw new Error('账号或密码错误')
+  if (payload.account === 'admin' && payload.password === 'admin123') {
+    currentUser = clone(mainFrontendUser)
+    return delay({ token: 'mock-token-admin', user: currentUser })
   }
-  return delay({ token: 'mock-token-admin', user: currentUser })
+  const subAccount = frontendSubAccounts.find((item) => item.account === payload.account)
+  const passwordHash = subAccount ? frontendSubAccountPasswordHashes.get(subAccount.id) : undefined
+  if (!subAccount || subAccount.disabled || !passwordHash || passwordHash !== await mockPasswordHash(payload.password)) {
+    throw new Error(subAccount?.disabled ? '子账号已停用，请联系主账号' : '账号或密码错误')
+  }
+  subAccount.lastLoginAt = dayjs().toISOString()
+  currentUser = {
+    id: subAccount.id,
+    username: subAccount.username,
+    account: subAccount.account,
+    role: 'FRONTEND_SUB_USER',
+    dataOwnerId: mainFrontendUser.id,
+    permissionVersion: subAccount.permissionVersion,
+    permissions: subAccount.permissions,
+    requiresAccessGuardPassword: subAccount.requiresAccessGuardPassword,
+    isFrontendMainAccount: false,
+    isFrontendSubAccount: true
+  }
+  return delay({ token: `mock-token-${subAccount.id}-${subAccount.permissionVersion}`, user: currentUser })
 }
 
 export async function mockRegister(payload: RegisterPayload): Promise<AuthResponse> {
@@ -207,6 +249,72 @@ export async function mockUpdatePassword(payload: UpdatePasswordPayload) {
   if (!payload.currentPassword || !payload.newPassword || !payload.confirmPassword) throw new Error('请完整填写当前密码、新密码和确认密码')
   if (payload.newPassword.length < 6) throw new Error('新密码至少 6 位')
   if (payload.newPassword !== payload.confirmPassword) throw new Error('两次新密码不一致')
+  return delay({ ok: true })
+}
+
+export async function mockFrontendSubAccounts() {
+  return delay(frontendSubAccounts)
+}
+
+export async function mockCreateFrontendSubAccount(payload: CreateFrontendSubAccountPayload) {
+  if (payload.password.length < 6 || payload.password !== payload.confirmPassword) throw new Error('请正确设置子账号密码')
+  if (!payload.permissions.length) throw new Error('请至少选择一个菜单权限')
+  if (payload.account.trim() === mainFrontendUser.account || frontendSubAccounts.some((item) => item.account === payload.account.trim())) throw new Error('登录账号已存在')
+  const now = dayjs().toISOString()
+  const created: FrontendSubAccountDto = {
+    id: `sub-${Date.now()}`,
+    account: payload.account.trim(),
+    username: payload.username.trim(),
+    disabled: false,
+    requiresAccessGuardPassword: payload.requiresAccessGuardPassword,
+    permissionVersion: 1,
+    permissions: Array.from(new Set(payload.permissions)),
+    lastLoginAt: null,
+    createdAt: now,
+    updatedAt: now
+  }
+  frontendSubAccounts.push(created)
+  frontendSubAccountPasswordHashes.set(created.id, await mockPasswordHash(payload.password))
+  return delay(created)
+}
+
+export async function mockUpdateFrontendSubAccount(id: string, payload: UpdateFrontendSubAccountPayload) {
+  const row = frontendSubAccounts.find((item) => item.id === id)
+  if (!row) throw new Error('子账号不存在')
+  row.username = payload.username.trim()
+  row.permissions = Array.from(new Set(payload.permissions))
+  row.requiresAccessGuardPassword = payload.requiresAccessGuardPassword
+  row.permissionVersion += 1
+  row.updatedAt = dayjs().toISOString()
+  return delay(row)
+}
+
+export async function mockSetFrontendSubAccountStatus(id: string, disabled: boolean, disabledReason?: string) {
+  const row = frontendSubAccounts.find((item) => item.id === id)
+  if (!row) throw new Error('子账号不存在')
+  row.disabled = disabled
+  row.disabledReason = disabled ? disabledReason || '已由主账号停用' : null
+  row.permissionVersion += 1
+  row.updatedAt = dayjs().toISOString()
+  return delay({ ok: true })
+}
+
+export async function mockResetFrontendSubAccountPassword(id: string, payload: ResetFrontendSubAccountPasswordPayload) {
+  const row = frontendSubAccounts.find((item) => item.id === id)
+  if (!row) throw new Error('子账号不存在')
+  if (payload.currentPassword !== 'admin123') throw new Error('主账号当前密码错误')
+  if (payload.newPassword.length < 6 || payload.newPassword !== payload.confirmPassword) throw new Error('请正确设置新密码')
+  frontendSubAccountPasswordHashes.set(id, await mockPasswordHash(payload.newPassword))
+  row.permissionVersion += 1
+  row.updatedAt = dayjs().toISOString()
+  return delay({ ok: true })
+}
+
+export async function mockDeleteFrontendSubAccount(id: string) {
+  const index = frontendSubAccounts.findIndex((item) => item.id === id)
+  if (index < 0) throw new Error('子账号不存在')
+  frontendSubAccountPasswordHashes.delete(id)
+  frontendSubAccounts.splice(index, 1)
   return delay({ ok: true })
 }
 
