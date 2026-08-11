@@ -16,12 +16,14 @@ describe('frontend menu permission catalog', () => {
       'ATTENDANCE_LEAVE',
       'ATTENDANCE_COMPENSATION',
       'ATTENDANCE_PAYROLL',
+      'PREPAID_RECHARGE',
+      'PREPAID_CUSTOMERS',
+      'PREPAID_CONSUMPTIONS',
+      'PREPAID_SETTLEMENTS',
       'FINANCE_EXPENSES',
       'FINANCE_INCOME',
       'FINANCE_UNSETTLED',
       'FINANCE_MONTHLY_SETTLEMENT',
-      'FINANCE_PREPAID_ADD',
-      'FINANCE_PREPAID_CUSTOMERS',
       'REPORTS',
       'MEDICINE_STOCK',
       'MEDICINE_INBOUND',
@@ -29,7 +31,19 @@ describe('frontend menu permission catalog', () => {
       'CUSTOMER_OVERVIEW',
       'BLACKLIST'
     ])
-    expect(new Set(allFrontendMenuPermissions).size).toBe(24)
+    expect(frontendMenuPermissionGroups.find((group) => group.key === 'PREPAID')?.children).toEqual([
+      'PREPAID_RECHARGE',
+      'PREPAID_CUSTOMERS',
+      'PREPAID_CONSUMPTIONS',
+      'PREPAID_SETTLEMENTS'
+    ])
+    expect(frontendMenuPermissionGroups.find((group) => group.key === 'FINANCE')?.children).toEqual([
+      'FINANCE_EXPENSES',
+      'FINANCE_INCOME',
+      'FINANCE_UNSETTLED',
+      'FINANCE_MONTHLY_SETTLEMENT'
+    ])
+    expect(new Set(allFrontendMenuPermissions).size).toBe(26)
     expect(frontendMenuPermissionGroups.every((group) => group.children.length > 0)).toBe(true)
   })
 })

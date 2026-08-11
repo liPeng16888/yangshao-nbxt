@@ -13,8 +13,31 @@ const incomeOnly = { role: 'FRONTEND_SUB_USER', permissions: ['FINANCE_INCOME'],
 
 describe('frontend navigation permissions', () => {
   it('covers every approved leaf exactly once', () => {
-    expect(allFrontendNavigationPermissions).toHaveLength(24)
-    expect(new Set(allFrontendNavigationPermissions).size).toBe(24)
+    expect(frontendNavigation.map((item) => item.key)).toEqual([
+      'DATA',
+      'LAB_REPORT',
+      'ATTENDANCE',
+      'PREPAID',
+      'FINANCE',
+      'REPORTS',
+      'MEDICINE_INVENTORY',
+      'CUSTOMER_OVERVIEW',
+      'BLACKLIST'
+    ])
+    expect(frontendNavigation.find((item) => item.key === 'PREPAID')?.children?.map((child) => child.permission)).toEqual([
+      'PREPAID_RECHARGE',
+      'PREPAID_CUSTOMERS',
+      'PREPAID_CONSUMPTIONS',
+      'PREPAID_SETTLEMENTS'
+    ])
+    expect(frontendNavigation.find((item) => item.key === 'FINANCE')?.children?.map((child) => child.permission)).toEqual([
+      'FINANCE_EXPENSES',
+      'FINANCE_INCOME',
+      'FINANCE_UNSETTLED',
+      'FINANCE_MONTHLY_SETTLEMENT'
+    ])
+    expect(allFrontendNavigationPermissions).toHaveLength(26)
+    expect(new Set(allFrontendNavigationPermissions).size).toBe(26)
     expect(frontendNavigation.every((item) => item.permission || item.children?.length)).toBe(true)
   })
 
@@ -35,7 +58,7 @@ describe('frontend navigation permissions', () => {
 
   it('maps direct URLs to leaves and rejects denied paths', () => {
     expect(permissionForPath('/medicine-inventory/inbound')).toBe('MEDICINE_INBOUND')
-    expect(permissionForPath('/finance/prepaid/customers')).toBe('FINANCE_PREPAID_CUSTOMERS')
+    expect(permissionForPath('/prepaid/settlements')).toBe('PREPAID_SETTLEMENTS')
     expect(canAccessPath(incomeOnly, '/finance/income')).toBe(true)
     expect(canAccessPath(incomeOnly, '/finance/expenses')).toBe(false)
   })

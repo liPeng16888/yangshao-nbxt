@@ -20,14 +20,21 @@ export const frontendMenuPermissionGroups = [
     ]
   },
   {
+    key: 'PREPAID',
+    children: [
+      'PREPAID_RECHARGE',
+      'PREPAID_CUSTOMERS',
+      'PREPAID_CONSUMPTIONS',
+      'PREPAID_SETTLEMENTS'
+    ]
+  },
+  {
     key: 'FINANCE',
     children: [
       'FINANCE_EXPENSES',
       'FINANCE_INCOME',
       'FINANCE_UNSETTLED',
-      'FINANCE_MONTHLY_SETTLEMENT',
-      'FINANCE_PREPAID_ADD',
-      'FINANCE_PREPAID_CUSTOMERS'
+      'FINANCE_MONTHLY_SETTLEMENT'
     ]
   },
   { key: 'REPORTS', children: ['REPORTS'] },

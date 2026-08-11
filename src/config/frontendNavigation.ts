@@ -11,12 +11,14 @@ export const frontendMenuPermissions = [
   'ATTENDANCE_LEAVE',
   'ATTENDANCE_COMPENSATION',
   'ATTENDANCE_PAYROLL',
+  'PREPAID_RECHARGE',
+  'PREPAID_CUSTOMERS',
+  'PREPAID_CONSUMPTIONS',
+  'PREPAID_SETTLEMENTS',
   'FINANCE_EXPENSES',
   'FINANCE_INCOME',
   'FINANCE_UNSETTLED',
   'FINANCE_MONTHLY_SETTLEMENT',
-  'FINANCE_PREPAID_ADD',
-  'FINANCE_PREPAID_CUSTOMERS',
   'REPORTS',
   'MEDICINE_STOCK',
   'MEDICINE_INBOUND',
@@ -78,14 +80,21 @@ export const frontendNavigation: FrontendNavigationItem[] = [
     ]
   },
   {
+    key: 'PREPAID', path: '/prepaid', label: '预充值客户', icon: 'finance',
+    children: [
+      { path: '/prepaid/recharges', label: '预存款充值', permission: 'PREPAID_RECHARGE' },
+      { path: '/prepaid/customers', label: '预存款客户', permission: 'PREPAID_CUSTOMERS' },
+      { path: '/prepaid/consumptions', label: '消费明细', permission: 'PREPAID_CONSUMPTIONS' },
+      { path: '/prepaid/settlements', label: '转账结算', permission: 'PREPAID_SETTLEMENTS' }
+    ]
+  },
+  {
     key: 'FINANCE', path: '/finance', label: '财务', icon: 'finance',
     children: [
       { path: '/finance/expenses', label: '支出账单', permission: 'FINANCE_EXPENSES' },
       { path: '/finance/income', label: '收入账单', permission: 'FINANCE_INCOME' },
       { path: '/finance/unsettled', label: '未结款', permission: 'FINANCE_UNSETTLED' },
-      { path: '/finance/monthly-settlement', label: '月结款', permission: 'FINANCE_MONTHLY_SETTLEMENT' },
-      { path: '/finance/prepaid/add', label: '预存款添加', permission: 'FINANCE_PREPAID_ADD' },
-      { path: '/finance/prepaid/customers', label: '预存款客户', permission: 'FINANCE_PREPAID_CUSTOMERS' }
+      { path: '/finance/monthly-settlement', label: '月结款', permission: 'FINANCE_MONTHLY_SETTLEMENT' }
     ]
   },
   { key: 'REPORTS', path: '/reports', label: '报表', icon: 'reports', permission: 'REPORTS' },
