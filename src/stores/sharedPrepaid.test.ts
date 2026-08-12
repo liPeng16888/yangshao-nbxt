@@ -398,6 +398,27 @@ describe('shared prepaid realtime refresh', () => {
     expect(store.pendingIdempotencyKeys.createSettlement).toBeUndefined()
   })
 
+  it('uses a new key after a conflict when the selected payable request changes', async () => {
+    const conflict = { response: { status: 409 } }
+    apiMocks.createPrepaidSettlement
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce(settlementRowFixture('settlement-2'))
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000031')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000032')
+    const store = useSharedPrepaidStore()
+    store.setSettlementSelection(['payable-stale', 'payable-valid'])
+
+    await expect(store.createSettlement()).rejects.toBe(conflict)
+    store.setSettlementSelection(['payable-valid'])
+    await store.createSettlement()
+
+    expect(apiMocks.createPrepaidSettlement.mock.calls.map((call) => call[1])).toEqual([
+      '00000000-0000-4000-8000-000000000031',
+      '00000000-0000-4000-8000-000000000032'
+    ])
+  })
+
   it('loads independently paginated settlement reads and refreshes only selected payable availability', async () => {
     const first = {
       items: [
@@ -459,16 +480,10 @@ describe('shared prepaid realtime refresh', () => {
     expect(store.pendingIdempotencyKeys.createRecharge).toBe('explicit-retry-key')
   })
 
-  it('serializes same-slot mutations and preserves the latest selection after success then conflict', async () => {
+  it('coalesces identical create clicks under one request/key and clears the successful selection once', async () => {
     const first = deferred<PrepaidSettlementRow>()
-    const second = deferred<PrepaidSettlementRow>()
-    const conflict = { response: { status: 409, data: { code: 'PREPAID_WRITE_CONFLICT' } } }
-    apiMocks.createPrepaidSettlement
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise)
-    vi.spyOn(crypto, 'randomUUID')
-      .mockReturnValueOnce('00000000-0000-4000-8000-000000000011')
-      .mockReturnValueOnce('00000000-0000-4000-8000-000000000012')
+    apiMocks.createPrepaidSettlement.mockReturnValue(first.promise)
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue('00000000-0000-4000-8000-000000000011')
     const store = useSharedPrepaidStore()
     store.setSettlementSelection(['payable-1'])
 
@@ -478,19 +493,17 @@ describe('shared prepaid realtime refresh', () => {
     expect(apiMocks.createPrepaidSettlement).toHaveBeenCalledTimes(1)
 
     first.resolve(settlementRowFixture('settlement-1'))
-    await firstCall
-    await vi.waitFor(() => expect(apiMocks.createPrepaidSettlement).toHaveBeenCalledTimes(2))
-    const secondResult = expect(secondCall).rejects.toBe(conflict)
-    second.reject(conflict)
-    await secondResult
+    await expect(Promise.all([firstCall, secondCall])).resolves.toEqual([
+      expect.objectContaining({ id: 'settlement-1' }),
+      expect.objectContaining({ id: 'settlement-1' })
+    ])
 
     expect(apiMocks.createPrepaidSettlement.mock.calls.map((call) => call[1])).toEqual([
-      '00000000-0000-4000-8000-000000000011',
-      '00000000-0000-4000-8000-000000000012'
+      '00000000-0000-4000-8000-000000000011'
     ])
-    expect(store.settlementSelection).toEqual(['payable-1'])
-    expect(store.dirtyByPage.settlements).toBe(true)
-    expect(store.pendingIdempotencyKeys.createSettlement).toBe('00000000-0000-4000-8000-000000000012')
+    expect(store.settlementSelection).toEqual([])
+    expect(store.dirtyByPage.settlements).toBe(false)
+    expect(store.pendingIdempotencyKeys.createSettlement).toBeUndefined()
   })
 
   it('does not let an earlier conflict overwrite a later successful same-slot mutation', async () => {
@@ -507,6 +520,7 @@ describe('shared prepaid realtime refresh', () => {
     store.setSettlementSelection(['payable-2'])
 
     const firstCall = store.createSettlement()
+    store.setSettlementSelection(['payable-3'])
     const secondCall = store.createSettlement()
     await Promise.resolve()
     const firstResult = expect(firstCall).rejects.toBe(conflict)
@@ -530,19 +544,19 @@ describe('shared prepaid realtime refresh', () => {
     })
     const store = useSharedPrepaidStore()
     store.setSettlementSelection(['payable-1'])
-    store.setSettlementPaymentDraft({
+    store.setSettlementPaymentDraftFor('settlement-1', {
       actualTransferredAt: '2026-08-12T16:00:00+08:00', remark: '待提交付款'
     })
 
     await store.createSettlement()
     expect(store.settlementSelection).toEqual([])
-    expect(store.settlementPaymentDraft.remark).toBe('待提交付款')
+    expect(store.getSettlementPaymentDraft('settlement-1').remark).toBe('待提交付款')
     expect(store.dirtyByPage.settlements).toBe(true)
 
     store.setSettlementSelection(['payable-2'])
     await store.submitSettlementPayment('settlement-1')
     expect(store.settlementSelection).toEqual(['payable-2'])
-    expect(store.settlementPaymentDraft).toEqual({ actualTransferredAt: '' })
+    expect(store.getSettlementPaymentDraft('settlement-1')).toEqual({ actualTransferredAt: '' })
     expect(store.dirtyByPage.settlements).toBe(true)
 
     store.setSettlementSelection([])
@@ -557,13 +571,13 @@ describe('shared prepaid realtime refresh', () => {
     vi.spyOn(crypto, 'randomUUID').mockReturnValue('00000000-0000-4000-8000-000000000019')
     const store = useSharedPrepaidStore()
     store.setSettlementSelection(['payable-other'])
-    store.setSettlementPaymentDraft({
+    store.setSettlementPaymentDraftFor('settlement-1', {
       actualTransferredAt: '2026-08-12T16:00:00+08:00',
       proofUrls: ['/uploads/proof.png'], remark: '网银备注'
     })
 
     await expect(store.submitSettlementPayment('settlement-1')).rejects.toBe(conflict)
-    expect(store.settlementPaymentDraft).toEqual({
+    expect(store.getSettlementPaymentDraft('settlement-1')).toEqual({
       actualTransferredAt: '2026-08-12T16:00:00+08:00',
       proofUrls: ['/uploads/proof.png'], remark: '网银备注'
     })
@@ -574,9 +588,66 @@ describe('shared prepaid realtime refresh', () => {
       '00000000-0000-4000-8000-000000000019',
       '00000000-0000-4000-8000-000000000019'
     ])
-    expect(store.settlementPaymentDraft).toEqual({ actualTransferredAt: '' })
+    expect(store.getSettlementPaymentDraft('settlement-1')).toEqual({ actualTransferredAt: '' })
     expect(store.settlementSelection).toEqual(['payable-other'])
     expect(store.dirtyByPage.settlements).toBe(true)
+  })
+
+  it('scopes payment drafts by settlement so one detail never inherits another settlement metadata', () => {
+    const store = useSharedPrepaidStore()
+
+    store.setSettlementPaymentDraftFor('settlement-a', {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00',
+      proofUrls: ['/uploads/a.png'], remark: 'A 的付款'
+    })
+    store.setSettlementPaymentDraftFor('settlement-b', {
+      actualTransferredAt: '2026-08-13T16:00:00+08:00', remark: 'B 的付款'
+    })
+
+    expect(store.getSettlementPaymentDraft('settlement-a')).toEqual({
+      actualTransferredAt: '2026-08-12T16:00:00+08:00',
+      proofUrls: ['/uploads/a.png'], remark: 'A 的付款'
+    })
+    expect(store.getSettlementPaymentDraft('settlement-b')).toEqual({
+      actualTransferredAt: '2026-08-13T16:00:00+08:00', remark: 'B 的付款'
+    })
+    expect(store.getSettlementPaymentDraft('settlement-c')).toEqual({ actualTransferredAt: '' })
+  })
+
+  it('coalesces duplicate settlement actions so rapid clicks use one promise and idempotency key', async () => {
+    const pending = deferred<PrepaidSettlementRow>()
+    apiMocks.confirmPrepaidSettlement.mockReturnValue(pending.promise)
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue('00000000-0000-4000-8000-000000000021')
+    const store = useSharedPrepaidStore()
+
+    const first = store.confirmSettlement('settlement-1')
+    const second = store.confirmSettlement('settlement-1')
+    await Promise.resolve()
+
+    expect(apiMocks.confirmPrepaidSettlement).toHaveBeenCalledTimes(1)
+    pending.resolve(settlementRowFixture('settlement-1'))
+    await Promise.all([first, second])
+    expect(apiMocks.confirmPrepaidSettlement).toHaveBeenCalledWith(
+      'settlement-1', '00000000-0000-4000-8000-000000000021'
+    )
+  })
+
+  it('keeps stale selected rows visible after a conflict but clears the now-invalid preview', async () => {
+    apiMocks.previewPrepaidSettlement.mockResolvedValue({
+      accountAId: 'front-1', accountBId: 'front-2', aToBAmount: 90.9, bToAAmount: 0,
+      netAmount: 90.9, payerFrontendUserId: 'front-1', receiverFrontendUserId: 'front-2', lines: []
+    })
+    apiMocks.getPrepaidSettlementPayables.mockResolvedValue({
+      items: [{ id: 'payable-1', status: 'HELD', eligible: false }], total: 1, page: 1, pageSize: 1
+    })
+    const store = useSharedPrepaidStore()
+    store.setSettlementSelection(['payable-1'])
+    await store.previewSettlement()
+
+    await store.refreshSelectedSettlementPayables(['payable-1'])
+
+    expect(store.settlementSelection).toEqual(['payable-1'])
+    expect(store.settlementPreview).toBeNull()
   })
 
   it('keeps the newest recharge page when older requests resolve out of order', async () => {

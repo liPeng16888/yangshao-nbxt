@@ -144,6 +144,7 @@ class FakeSettlementPrisma {
   settlements: StoredSettlement[] = []
   lines: StoredLine[] = []
   actions: StoredAction[] = []
+  uploadedUrls = new Set(['/uploads/2026-08/proof.jpg'])
   lockedPayableIds: string[] = []
   lockedSettlementIds: string[] = []
   failPayableUpdateId: string | null = null
@@ -158,8 +159,14 @@ class FakeSettlementPrisma {
   readonly sharedPrepaidSettlement: any = {}
   readonly sharedPrepaidSettlementLine: any = {}
   readonly sharedPrepaidSettlementAction: any = {}
+  readonly uploadedFile: any = {}
 
   constructor() {
+    this.uploadedFile.findMany = async (args: any) => (
+      (args.where?.url?.in ?? [])
+        .filter((url: string) => this.uploadedUrls.has(url))
+        .map((url: string) => ({ url }))
+    )
     this.sharedPrepaidPayable.findMany = async (args: any) => {
       let rows = [...this.payables]
       if (args.where?.id?.in) rows = rows.filter((row) => args.where.id.in.includes(row.id))
@@ -579,6 +586,20 @@ describe('SharedPrepaidSettlementService', () => {
       remark: '已转账'
     })
     expect(submitted.actualTransferredAt).toEqual(new Date(transferredAt))
+  })
+
+  it('rejects a syntactically valid local proof path that was not issued by the upload service', async () => {
+    const settlement = await service.createSettlement(mainA, ['a-to-b-100'], 'unissued-proof-source')
+
+    await expect(service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: transferredAt, proofUrls: ['/uploads/2026-08/not-issued.png'] },
+      'unissued-proof-payment'
+    )).rejects.toBeInstanceOf(BadRequestException)
+
+    expect(prisma.settlements[0]?.status).toBe(SharedPrepaidSettlementStatus.AWAITING_PAYMENT)
+    expect(prisma.actions).toHaveLength(0)
   })
 
   it('only lets the receiver confirm and completes every held payable exactly once', async () => {

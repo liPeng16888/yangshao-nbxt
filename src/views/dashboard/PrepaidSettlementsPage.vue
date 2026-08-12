@@ -216,8 +216,13 @@ const previewOffset = computed(() => moneyTenths(Math.min(
   toTenths(store.settlementPreview?.aToBAmount),
   toTenths(store.settlementPreview?.bToAAmount)
 )))
+const selectedPayableRows = computed(() => {
+  const rowsById = new Map(store.settlementPayablesPage.items.map((row) => [row.id, row]))
+  return store.settlementSelection.map((id) => rowsById.get(id))
+})
+const hasUnavailableSelection = computed(() => selectedPayableRows.value.some((row) => !row?.eligible))
 const canCreatePreview = computed(() => Boolean(
-  store.settlementPreview && store.settlementSelection.length && isMainAccount.value && (
+  store.settlementPreview && store.settlementSelection.length && !hasUnavailableSelection.value && isMainAccount.value && (
     isZeroPreview.value || store.settlementPreview.payerFrontendUserId === ownerId.value
   )
 ))
@@ -247,9 +252,10 @@ const GrossDirectionTable = defineComponent({
                 'data-testid': `payable-select-${row.id}`,
                 'aria-label': `选择应转明细 ${row.id}`,
                 checked: store.settlementSelection.includes(row.id),
-                disabled: !isMainAccount.value || !row.eligible || (
-                  Boolean(activeCounterpartyId.value) && activeCounterpartyId.value !== row.counterpartyFrontendUserId
-                ),
+                disabled: !isMainAccount.value || (!store.settlementSelection.includes(row.id) && (
+                  !row.eligible || (Boolean(activeCounterpartyId.value) &&
+                    activeCounterpartyId.value !== row.counterpartyFrontendUserId)
+                )),
                 onChange: (event: Event) => togglePayable(row, (event.target as HTMLInputElement).checked)
               }),
               h('strong', `应转 ¥${money1(row.amount)}`)
@@ -305,7 +311,12 @@ async function loadSettlements(page = 1) {
 }
 
 async function loadPageData(payablePage = 1, settlementPage = 1) {
-  await Promise.allSettled([loadPayables(payablePage), loadSettlements(settlementPage)])
+  const selectedId = detailOpen.value ? store.selectedSettlement?.id : undefined
+  await Promise.allSettled([
+    loadPayables(payablePage),
+    loadSettlements(settlementPage),
+    ...(selectedId ? [store.loadSettlementDetail(selectedId)] : [])
+  ])
 }
 
 async function togglePayable(row: PrepaidSettlementPayableListRow, checked: boolean) {
@@ -321,6 +332,10 @@ async function togglePayable(row: PrepaidSettlementPayableListRow, checked: bool
   }
   store.setSettlementSelection(ids)
   if (!ids.length) return
+  if (selectedPayableRows.value.some((selectedRow) => !selectedRow?.eligible)) {
+    mutationError.value = '已选明细中有不再可结算的项目，请先取消勾选后重新预览。'
+    return
+  }
   try {
     await store.previewSettlement(ids)
   } catch (error) {
@@ -350,7 +365,7 @@ async function createSettlement() {
     }
   } catch (error) {
     if (prepaidIsConflict(error)) {
-      mutationError.value = `${prepaidErrorMessage(error, '部分应转明细已变化')}，已保留了已选明细、预览和重试编号。`
+      mutationError.value = `${prepaidErrorMessage(error, '部分应转明细已变化')}，已保留了已选明细和重试编号；请取消失效明细后重新预览。`
       try { await store.refreshSelectedSettlementPayables(selectedIds) } catch { /* persistent store error */ }
     } else {
       mutationError.value = prepaidErrorMessage(error, '创建结算单失败')

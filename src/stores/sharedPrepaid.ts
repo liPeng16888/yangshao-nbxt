@@ -31,7 +31,8 @@ import type {
   PrepaidSettlementPayableQuery,
   PrepaidSettlementPreview,
   PrepaidSettlementQuery,
-  PrepaidSettlementRow
+  PrepaidSettlementRow,
+  PrepaidSettlementSummaryRow
 } from '@/types/sharedPrepaid'
 
 export interface SharedPrepaidRealtimeRegistration {
@@ -95,8 +96,10 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     settlements: ''
   })
   const pendingIdempotencyKeys = reactive<Partial<Record<SharedPrepaidMutation, string>>>({})
+  const pendingMutationFingerprints = new Map<SharedPrepaidMutation, string>()
   const loadGenerations = new Map<string, number>()
   const mutationQueues = new Map<SharedPrepaidMutation, Promise<void>>()
+  const inFlightMutationPromises = new Map<string, Promise<unknown>>()
   const mutationPendingCounts = new Map<SharedPrepaidMutation, number>()
   const mutationInvocationVersions = new Map<SharedPrepaidMutation, number>()
   const settlementDirtyState = reactive({ selection: false, payment: false, manual: false })
@@ -110,11 +113,11 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const settlementPayablesPage = ref<PrepaidPage<PrepaidSettlementPayableListRow>>(emptyPage())
   const settlementPreview = ref<PrepaidSettlementPreview | null>(null)
   const settlements = ref<PrepaidSettlementRow[]>([])
-  const settlementsPage = ref<PrepaidPage<PrepaidSettlementDetailRow>>(emptyPage())
+  const settlementsPage = ref<PrepaidPage<PrepaidSettlementSummaryRow>>(emptyPage())
   const selectedSettlement = ref<PrepaidSettlementDetailRow | null>(null)
   const rechargeDraft = ref<CreatePrepaidRechargePayload>(emptyRechargeDraft())
   const settlementSelection = ref<string[]>([])
-  const settlementPaymentDraft = ref<PrepaidSettlementPaymentPayload>({ actualTransferredAt: '' })
+  const settlementPaymentDrafts = reactive<Record<string, PrepaidSettlementPaymentPayload>>({})
   const realtimeConnected = ref(false)
   const realtimeAuthTerminal = ref(false)
   const refreshPromptModules = ref<SharedPrepaidRealtimeModule[]>([])
@@ -191,11 +194,25 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     syncSettlementDirty()
   }
 
-  function setSettlementPaymentDraft(draft: PrepaidSettlementPaymentPayload) {
-    settlementPaymentDraft.value = { ...draft, proofUrls: draft.proofUrls ? [...draft.proofUrls] : undefined }
-    settlementDirtyState.payment = Boolean(
-      draft.actualTransferredAt?.trim() || draft.proofUrls?.length || draft.remark?.trim()
-    )
+  function getSettlementPaymentDraft(id: string): PrepaidSettlementPaymentPayload {
+    const draft = settlementPaymentDrafts[id]
+    return draft
+      ? { ...draft, proofUrls: draft.proofUrls ? [...draft.proofUrls] : undefined }
+      : { actualTransferredAt: '' }
+  }
+
+  function setSettlementPaymentDraftFor(id: string, draft: PrepaidSettlementPaymentPayload) {
+    settlementPaymentDrafts[id] = {
+      ...draft,
+      proofUrls: draft.proofUrls ? [...draft.proofUrls] : undefined
+    }
+    settlementDirtyState.payment = Object.values(settlementPaymentDrafts).some(isPaymentDraftDirty)
+    syncSettlementDirty()
+  }
+
+  function clearSettlementPaymentDraft(id: string) {
+    delete settlementPaymentDrafts[id]
+    settlementDirtyState.payment = Object.values(settlementPaymentDrafts).some(isPaymentDraftDirty)
     syncSettlementDirty()
   }
 
@@ -266,6 +283,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
       ...settlementPayablesPage.value,
       items: settlementPayablesPage.value.items.map((row) => updates.get(row.id) ?? row)
     }
+    settlementPreview.value = null
     return results
   }
 
@@ -285,15 +303,42 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     })
   }
 
-  async function mutate<T>(
+  function mutate<T>(
     page: SharedPrepaidPage,
     mutation: SharedPrepaidMutation,
     explicitKey: string | undefined,
     action: (key: string) => Promise<T>,
-    afterSuccess?: (result: T, isLatestInvocation: boolean) => void
+    afterSuccess?: (result: T, isLatestInvocation: boolean) => void,
+    requestFingerprint = ''
+  ): Promise<T> {
+    const inFlightKey = `${mutation}\u0000${explicitKey ?? ''}\u0000${requestFingerprint}`
+    const existing = inFlightMutationPromises.get(inFlightKey)
+    if (existing) return existing as Promise<T>
+    const promise = executeMutation(page, mutation, explicitKey, action, afterSuccess, requestFingerprint)
+    inFlightMutationPromises.set(inFlightKey, promise)
+    void promise.finally(() => {
+      if (inFlightMutationPromises.get(inFlightKey) === promise) inFlightMutationPromises.delete(inFlightKey)
+    }).catch(() => undefined)
+    return promise
+  }
+
+  async function executeMutation<T>(
+    page: SharedPrepaidPage,
+    mutation: SharedPrepaidMutation,
+    explicitKey: string | undefined,
+    action: (key: string) => Promise<T>,
+    afterSuccess?: (result: T, isLatestInvocation: boolean) => void,
+    requestFingerprint = ''
   ) {
     const pendingCount = mutationPendingCounts.get(mutation) ?? 0
-    const key = explicitKey ?? (pendingCount === 0 ? pendingIdempotencyKeys[mutation] : undefined) ?? crypto.randomUUID()
+    const pendingKeyMatchesRequest = pendingMutationFingerprints.get(mutation) === requestFingerprint
+    if (pendingCount === 0 && !explicitKey && pendingIdempotencyKeys[mutation] && !pendingKeyMatchesRequest) {
+      delete pendingIdempotencyKeys[mutation]
+      pendingMutationFingerprints.delete(mutation)
+    }
+    const key = explicitKey ?? (
+      pendingCount === 0 && pendingKeyMatchesRequest ? pendingIdempotencyKeys[mutation] : undefined
+    ) ?? crypto.randomUUID()
     const invocationVersion = (mutationInvocationVersions.get(mutation) ?? 0) + 1
     mutationInvocationVersions.set(mutation, invocationVersion)
     mutationPendingCounts.set(mutation, pendingCount + 1)
@@ -306,13 +351,21 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     try {
       const result = await execution
       const isLatestInvocation = mutationInvocationVersions.get(mutation) === invocationVersion
-      if (isLatestInvocation) delete pendingIdempotencyKeys[mutation]
+      if (isLatestInvocation) {
+        delete pendingIdempotencyKeys[mutation]
+        pendingMutationFingerprints.delete(mutation)
+      }
       afterSuccess?.(result, isLatestInvocation)
       return result
     } catch (error) {
       if (mutationInvocationVersions.get(mutation) === invocationVersion) {
-        if (isConflict(error)) pendingIdempotencyKeys[mutation] = key
-        else delete pendingIdempotencyKeys[mutation]
+        if (isConflict(error)) {
+          pendingIdempotencyKeys[mutation] = key
+          pendingMutationFingerprints.set(mutation, requestFingerprint)
+        } else {
+          delete pendingIdempotencyKeys[mutation]
+          pendingMutationFingerprints.delete(mutation)
+        }
       }
       throw error
     } finally {
@@ -335,21 +388,21 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
         rechargeDraft.value = emptyRechargeDraft()
         setPageDirty('recharges', false)
       }
-    })
+    }, JSON.stringify(requestPayload))
   }
 
   async function reverseRecharge(id: string, reason: string, idempotencyKey?: string) {
     const payload: PrepaidReasonPayload = { reason }
     return mutate('recharges', `reverseRecharge:${id}`, idempotencyKey, (key) => (
       prepaidApi.reversePrepaidRecharge(id, payload, key)
-    ))
+    ), undefined, JSON.stringify(payload))
   }
 
   async function reverseConsumption(id: string, reason: string, idempotencyKey?: string) {
     const payload: PrepaidReasonPayload = { reason }
     return mutate('consumptions', `reverseConsumption:${id}`, idempotencyKey, (key) => (
       prepaidApi.reversePrepaidConsumption(id, payload, key)
-    ))
+    ), undefined, JSON.stringify(payload))
   }
 
   async function previewSettlement(ids: string[] = settlementSelection.value) {
@@ -373,12 +426,12 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
         settlementDirtyState.selection = false
         syncSettlementDirty()
       }
-    })
+    }, JSON.stringify([...payableIds].sort()))
   }
 
   async function submitSettlementPayment(
     id: string,
-    payload: PrepaidSettlementPaymentPayload = settlementPaymentDraft.value,
+    payload: PrepaidSettlementPaymentPayload = getSettlementPaymentDraft(id),
     idempotencyKey?: string
   ) {
     const requestPayload = {
@@ -390,29 +443,27 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     ), (row, isLatestInvocation) => {
       upsertSettlement(row)
       if (isLatestInvocation) {
-        settlementPaymentDraft.value = { actualTransferredAt: '' }
-        settlementDirtyState.payment = false
-        syncSettlementDirty()
+        clearSettlementPaymentDraft(id)
       }
-    })
+    }, JSON.stringify(requestPayload))
   }
 
   function confirmSettlement(id: string, idempotencyKey?: string) {
     return mutate('settlements', `confirmSettlement:${id}`, idempotencyKey, (key) => (
       prepaidApi.confirmPrepaidSettlement(id, key)
-    ), upsertSettlement)
+    ), upsertSettlement, id)
   }
 
   function rejectSettlement(id: string, reason: string, idempotencyKey?: string) {
     return mutate('settlements', `rejectSettlement:${id}`, idempotencyKey, (key) => (
       prepaidApi.rejectPrepaidSettlement(id, { reason }, key)
-    ), upsertSettlement)
+    ), upsertSettlement, reason.trim())
   }
 
   function cancelSettlement(id: string, idempotencyKey?: string) {
     return mutate('settlements', `cancelSettlement:${id}`, idempotencyKey, (key) => (
       prepaidApi.cancelPrepaidSettlement(id, key)
-    ), upsertSettlement)
+    ), upsertSettlement, id)
   }
 
   function upsertSettlement(row: PrepaidSettlementRow) {
@@ -421,7 +472,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     else settlements.value.unshift(row)
     const pageIndex = settlementsPage.value.items.findIndex((item) => item.id === row.id)
     if (pageIndex >= 0) {
-      settlementsPage.value.items[pageIndex] = mergeSettlementDetail(settlementsPage.value.items[pageIndex], row)
+      settlementsPage.value.items[pageIndex] = mergeSettlementSummary(settlementsPage.value.items[pageIndex], row)
     }
     if (selectedSettlement.value?.id === row.id) {
       selectedSettlement.value = mergeSettlementDetail(selectedSettlement.value, row)
@@ -618,7 +669,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     selectedSettlement,
     rechargeDraft,
     settlementSelection,
-    settlementPaymentDraft,
+    settlementPaymentDrafts,
     realtimeConnected,
     realtimeAuthTerminal,
     refreshPromptModules,
@@ -626,7 +677,9 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     setPageDirty,
     setRechargeDraft,
     setSettlementSelection,
-    setSettlementPaymentDraft,
+    getSettlementPaymentDraft,
+    setSettlementPaymentDraftFor,
+    clearSettlementPaymentDraft,
     loadMembers,
     lookupMember,
     lookupLabMember,
@@ -660,6 +713,10 @@ function isConflict(error: unknown) {
   return (error as { response?: { status?: unknown } } | null)?.response?.status === 409
 }
 
+function isPaymentDraftDirty(draft: PrepaidSettlementPaymentPayload) {
+  return Boolean(draft.actualTransferredAt?.trim() || draft.proofUrls?.length || draft.remark?.trim())
+}
+
 function mergeSettlementDetail(detail: PrepaidSettlementDetailRow, mutation: PrepaidSettlementRow) {
   const { lines: mutationLines, idempotencyKey: _idempotencyKey, ...fields } = mutation
   const linesById = new Map(mutationLines.map((line) => [line.id, line]))
@@ -672,5 +729,20 @@ function mergeSettlementDetail(detail: PrepaidSettlementDetailRow, mutation: Pre
         ? { ...line, ...update, payable: { ...line.payable, status: update.payableStatus } }
         : line
     })
+  }
+}
+
+function mergeSettlementSummary(summary: PrepaidSettlementSummaryRow, mutation: PrepaidSettlementRow) {
+  return {
+    ...summary,
+    accountAId: mutation.accountAId,
+    accountBId: mutation.accountBId,
+    aToBAmount: mutation.aToBAmount,
+    bToAAmount: mutation.bToAAmount,
+    netAmount: mutation.netAmount,
+    payerFrontendUserId: mutation.payerFrontendUserId,
+    receiverFrontendUserId: mutation.receiverFrontendUserId,
+    status: mutation.status,
+    createdAt: mutation.createdAt
   }
 }

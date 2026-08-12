@@ -148,7 +148,17 @@ describe('SharedPrepaidQueryService settlement reads', () => {
     expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'settlement-1', OR: [{ accountAId: 'front-1' }, { accountBId: 'front-1' }] }
     }))
-    expect(result.items[0]).toEqual(detail)
+    expect(result.items[0]).toMatchObject({
+      id: 'settlement-1', aToBAmount: 90.9, bToAAmount: 40.4, netAmount: 50.5,
+      status: 'AWAITING_RECEIPT', accountA, accountB, createdAt
+    })
+    expect(result.items[0]).not.toHaveProperty('proofUrls')
+    expect(result.items[0]).not.toHaveProperty('lines')
+    expect(result.items[0]).not.toHaveProperty('actions')
+    const listSelect = findMany.mock.calls[0]?.[0]?.select as Record<string, unknown>
+    expect(listSelect).not.toHaveProperty('proofUrls')
+    expect(listSelect).not.toHaveProperty('lines')
+    expect(listSelect).not.toHaveProperty('actions')
     expect(detail).toMatchObject({
       id: 'settlement-1', aToBAmount: 90.9, bToAAmount: 40.4, netAmount: 50.5,
       createdBy: accountA, paymentSubmittedBy: actorA,
@@ -192,6 +202,46 @@ describe('SharedPrepaidQueryService settlement reads', () => {
         OR: [{ sourceOwnerId: 'front-1' }, { consumerOwnerId: 'front-1' }]
       }
     }))
+  })
+
+  it('treats a pending payable with only released settlement lines as eligible again', async () => {
+    const original = payableDatabaseRow()
+    const row = {
+      ...original,
+      status: SharedPrepaidPayableStatus.PENDING,
+      settlementLines: original.settlementLines.map((line) => ({ ...line, releasedAt: createdAt }))
+    }
+    const findMany = vi.fn().mockResolvedValue([row])
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidPayable: { findMany, count: vi.fn().mockResolvedValue(1) }
+    } as never)
+
+    const result = await service.listSettlementPayables(subA, { eligibleOnly: true })
+
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        status: SharedPrepaidPayableStatus.PENDING,
+        settlementLines: { none: { releasedAt: null } }
+      })
+    }))
+    expect(result.items[0]).toMatchObject({ eligible: true, settlementAssociations: [
+      expect.objectContaining({ releasedAt: createdAt })
+    ] })
+  })
+
+  it('returns an impossible query instead of broadening a self-counterparty filter', async () => {
+    const payableFindMany = vi.fn().mockResolvedValue([])
+    const settlementFindMany = vi.fn().mockResolvedValue([])
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidPayable: { findMany: payableFindMany, count: vi.fn().mockResolvedValue(0) },
+      sharedPrepaidSettlement: { findMany: settlementFindMany, count: vi.fn().mockResolvedValue(0) }
+    } as never)
+
+    await service.listSettlementPayables(subA, { counterpartyFrontendUserId: subA.dataOwnerId })
+    await service.listSettlements(subA, { counterpartyFrontendUserId: subA.dataOwnerId })
+
+    expect(payableFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: { in: [] } }) }))
+    expect(settlementFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: { in: [] } }) }))
   })
 })
 

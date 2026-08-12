@@ -299,6 +299,9 @@ describe('shared prepaid focused mock', () => {
       settlementAssociations: [expect.objectContaining({ settlementId: settlement.id, status: 'AWAITING_RECEIPT' })]
     })
     expect(history.total).toBe(1)
+    expect(history.items[0]).not.toHaveProperty('proofUrls')
+    expect(history.items[0]).not.toHaveProperty('lines')
+    expect(history.items[0]).not.toHaveProperty('actions')
     expect(unrelated.total).toBe(0)
     expect(detail).toMatchObject({ proofUrls: ['/uploads/proof.png'], remark: '已转账' })
     expect(detail.actions[0]).toMatchObject({ operation: 'SUBMIT_PAYMENT', actorUserId: 'A' })
@@ -306,6 +309,35 @@ describe('shared prepaid focused mock', () => {
     expect(detail).not.toHaveProperty('idempotencyKey')
     expect(detail.actions[0]).not.toHaveProperty('requestFingerprint')
     expect(detail.lines[0].payable.consumption).not.toHaveProperty('sheetId')
+  })
+
+  it('makes released rejected payables eligible again and rejects self-counterparty filters', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 100, giftAmount: 0
+    }, 'released-recharge-a', ownerA)
+    const consumption = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 60, sheetId: 'sheet-1', sampleBlockId: 'block-1',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'released-consume-b', ownerB)
+    const payableId = consumption.payables[0].id
+    const settlement = await mockCreatePrepaidSettlement({ payableIds: [payableId] }, 'released-settlement', ownerA)
+    await mockSubmitPrepaidSettlementPayment(settlement.id, {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00'
+    }, 'released-submit', ownerA)
+    await mockRejectPrepaidSettlement(settlement.id, { reason: '未到账' }, 'released-reject', ownerB)
+
+    const eligible = await mockGetPrepaidSettlementPayables({ eligibleOnly: true }, ownerA)
+    const selfPayables = await mockGetPrepaidSettlementPayables({ counterpartyFrontendUserId: 'A' }, ownerA)
+    const selfSettlements = await mockGetPrepaidSettlements({ counterpartyFrontendUserId: 'A' }, ownerA)
+
+    expect(eligible.items).toEqual([
+      expect.objectContaining({
+        id: payableId, status: 'PENDING', eligible: true,
+        settlementAssociations: [expect.objectContaining({ settlementId: settlement.id, releasedAt: expect.any(String) })]
+      })
+    ])
+    expect(selfPayables.total).toBe(0)
+    expect(selfSettlements.total).toBe(0)
   })
 
   it('appends a reversal consumption and attaches its compensating payable to that row', async () => {

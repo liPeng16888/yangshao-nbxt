@@ -213,6 +213,7 @@ export class SharedPrepaidSettlementService {
     })
     if (current?.netAmount.isZero()) throw this.stateConflict('零净额结算不需要提交转账')
     const input = this.validatePaymentPayload(payload)
+    await this.assertStoredLocalProofUrls(input.proofUrls)
     const expected = this.expectedAction(
       SharedPrepaidSettlementActionOperation.SUBMIT_PAYMENT,
       user,
@@ -769,6 +770,21 @@ export class SharedPrepaidSettlementService {
       throw new BadRequestException('转账凭证不能重复')
     }
     return normalized
+  }
+
+  private async assertStoredLocalProofUrls(proofUrls: string[]) {
+    const localUrls = proofUrls.filter((url) => url.startsWith('/uploads/'))
+    if (!localUrls.length) return
+    const uploaded = await this.prisma.uploadedFile.findMany({
+      where: {
+        url: { in: localUrls },
+        mimeType: { in: ['image/jpeg', 'image/png', 'image/webp'] }
+      },
+      select: { url: true }
+    })
+    if (uploaded.length !== localUrls.length || new Set(uploaded.map((row) => row.url)).size !== localUrls.length) {
+      throw new BadRequestException('转账凭证必须使用本系统签发的安全图片地址')
+    }
   }
 
   private readProofUrls(value: Prisma.JsonValue): string[] {

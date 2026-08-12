@@ -335,6 +335,21 @@ export interface PrepaidSettlementDetailRow extends Omit<PrepaidSettlementRow, '
   actions: PrepaidSettlementActionRow[]
 }
 
+export interface PrepaidSettlementSummaryRow {
+  id: string
+  accountAId: string
+  accountBId: string
+  aToBAmount: number
+  bToAAmount: number
+  netAmount: number
+  payerFrontendUserId: string | null
+  receiverFrontendUserId: string | null
+  status: PrepaidSettlementStatus
+  createdAt: string
+  accountA: PrepaidAccountRow
+  accountB: PrepaidAccountRow
+}
+
 export interface PrepaidPage<T> {
   items: T[]
   total: number

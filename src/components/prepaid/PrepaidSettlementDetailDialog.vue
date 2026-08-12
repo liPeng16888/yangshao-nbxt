@@ -1,7 +1,14 @@
 <template>
-  <div v-if="modelValue" class="settlement-dialog-shell" role="dialog" aria-modal="true" aria-label="结算单详情">
-    <div class="settlement-dialog-shell__title"><h2>结算单详情</h2><el-button aria-label="关闭结算单详情" @click="emit('update:modelValue', false)">关闭</el-button></div>
-    <div v-if="settlement" class="settlement-detail">
+  <el-dialog
+    :model-value="modelValue"
+    title="结算单详情"
+    width="min(1120px, 94vw)"
+    :teleported="false"
+    :close-on-press-escape="true"
+    @update:model-value="handleDialogModelUpdate"
+    @closed="resetTransientState"
+  >
+    <div v-if="settlement" class="settlement-detail" @keydown.esc.stop="handleDialogModelUpdate(false)">
       <header class="settlement-detail__header">
         <div>
           <strong>结算单 {{ settlement.id }}</strong>
@@ -112,7 +119,7 @@
           <input
             data-testid="settlement-proof-input"
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png,image/webp"
             multiple
             @change="selectProofFiles"
           >
@@ -121,7 +128,8 @@
         <el-button
           data-testid="settlement-payment-submit"
           type="primary"
-          :loading="store.loadingByPage.settlements"
+          :loading="isActionPending"
+          :disabled="isActionPending"
           @click="submitPayment"
         >提交转账</el-button>
       </section>
@@ -131,35 +139,34 @@
           v-if="canConfirm"
           data-testid="settlement-confirm"
           type="success"
-          :loading="store.loadingByPage.settlements"
+          :loading="isActionPending"
+          :disabled="isActionPending"
           @click="confirmSettlement"
         >{{ isZeroNet ? '确认核对' : '确认到账' }}</el-button>
-        <el-button v-if="canReject" data-testid="settlement-reject-open" type="warning" @click="rejectOpen = true">
+        <el-button v-if="canReject" data-testid="settlement-reject-open" type="warning" :disabled="isActionPending" @click="rejectOpen = true">
           驳回
         </el-button>
-        <el-button v-if="canCancel" data-testid="settlement-cancel-open" type="danger" plain @click="cancelOpen = true">
+        <el-button v-if="canCancel" data-testid="settlement-cancel-open" type="danger" plain :disabled="isActionPending" @click="cancelOpen = true">
           取消结算
         </el-button>
       </div>
 
-      <div v-if="rejectOpen" class="reason-dialog" role="dialog" aria-modal="true" aria-label="驳回结算">
-        <h3>驳回原因</h3>
+      <el-dialog v-model="rejectOpen" title="驳回原因" width="min(440px, 90vw)" append-to-body>
         <textarea v-model="rejectReason" data-testid="settlement-reject-reason" maxlength="500" />
         <p v-if="rejectError" data-testid="settlement-reject-error" class="error-text">{{ rejectError }}</p>
-        <div><el-button @click="rejectOpen = false">返回</el-button><el-button data-testid="settlement-reject-submit" type="warning" @click="rejectSettlement">确认驳回</el-button></div>
-      </div>
+        <template #footer><el-button @click="rejectOpen = false">返回</el-button><el-button data-testid="settlement-reject-submit" type="warning" :loading="isActionPending" :disabled="isActionPending" @click="rejectSettlement">确认驳回</el-button></template>
+      </el-dialog>
 
-      <div v-if="cancelOpen" class="reason-dialog" role="dialog" aria-modal="true" aria-label="取消结算">
-        <h3>取消结算单</h3>
+      <el-dialog v-model="cancelOpen" title="取消结算单" width="min(440px, 90vw)" append-to-body>
         <p>取消会释放本结算单占用的应转明细；服务端将记录取消人和取消时间。</p>
-        <div><el-button @click="cancelOpen = false">返回</el-button><el-button data-testid="settlement-cancel-submit" type="danger" @click="cancelSettlement">确认取消</el-button></div>
-      </div>
+        <template #footer><el-button @click="cancelOpen = false">返回</el-button><el-button data-testid="settlement-cancel-submit" type="danger" :loading="isActionPending" :disabled="isActionPending" @click="cancelSettlement">确认取消</el-button></template>
+      </el-dialog>
     </div>
-  </div>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, ref } from 'vue'
+import { computed, defineComponent, h, ref, watch } from 'vue'
 
 import { uploadImages } from '@/api/upload'
 import { useAuthStore } from '@/stores/auth'
@@ -198,8 +205,11 @@ const rejectOpen = ref(false)
 const rejectReason = ref('')
 const rejectError = ref('')
 const cancelOpen = ref(false)
+const actionPending = ref(false)
 
-const paymentDraft = computed(() => store.settlementPaymentDraft)
+const paymentDraft = computed(() => props.settlement
+  ? store.getSettlementPaymentDraft(props.settlement.id)
+  : { actualTransferredAt: '' })
 const ownerId = computed(() => auth.user?.dataOwnerId || auth.user?.id || '')
 const isMainAccount = computed(() => Boolean(
   auth.user?.isFrontendMainAccount && auth.user.id === auth.user.dataOwnerId
@@ -212,6 +222,7 @@ const offsetAmount = computed(() => moneyTenths(Math.min(
   toTenths(props.settlement?.bToAAmount)
 )))
 const selectedProofNames = computed(() => proofFiles.value.map((file) => file.name).join('、'))
+const isActionPending = computed(() => actionPending.value || store.loadingByPage.settlements)
 const canSubmitPayment = computed(() => Boolean(
   props.settlement && isMainAccount.value && !isZeroNet.value &&
   props.settlement.status === 'AWAITING_PAYMENT' && props.settlement.payerFrontendUserId === ownerId.value
@@ -227,6 +238,10 @@ const canCancel = computed(() => {
   const row = props.settlement
   if (!row || !isMainAccount.value || row.createdById !== auth.user?.id) return false
   return row.status === 'AWAITING_PAYMENT' || (isZeroNet.value && row.status === 'AWAITING_RECEIPT')
+})
+
+watch(() => props.settlement?.id, (id, previousId) => {
+  if (id !== previousId) resetTransientState()
 })
 
 const SettlementLineContent = defineComponent({
@@ -254,23 +269,32 @@ const SettlementLineContent = defineComponent({
 })
 
 function setPaymentField(field: 'actualTransferredAt' | 'remark', value: string) {
-  store.setSettlementPaymentDraft({ ...paymentDraft.value, [field]: value })
+  if (!props.settlement) return
+  store.setSettlementPaymentDraftFor(props.settlement.id, { ...paymentDraft.value, [field]: value })
   actionError.value = ''
 }
 
 function selectProofFiles(event: Event) {
-  proofFiles.value = Array.from((event.target as HTMLInputElement).files ?? []).slice(0, 10)
+  const files = Array.from((event.target as HTMLInputElement).files ?? []).slice(0, 10)
+  const allowed = new Set(['image/jpeg', 'image/png', 'image/webp'])
+  if (files.some((file) => !allowed.has(file.type) || file.size > 5 * 1024 * 1024)) {
+    proofFiles.value = []
+    actionError.value = '转账凭证仅支持单张不超过 5 MB 的 JPEG、PNG 或 WebP 图片。'
+    return
+  }
+  proofFiles.value = files
   actionError.value = ''
 }
 
 async function submitPayment() {
   const row = props.settlement
-  if (!row) return
+  if (!row || isActionPending.value) return
   if (!paymentDraft.value.actualTransferredAt.trim()) {
     actionError.value = '请选择实际转账时间，并填写包含时区的时间。'
     return
   }
   actionError.value = ''
+  actionPending.value = true
   try {
     const uploaded = proofFiles.value.length ? await uploadImages(proofFiles.value) : []
     const proofUrls = [...new Set([...(paymentDraft.value.proofUrls ?? []), ...uploaded])]
@@ -280,29 +304,34 @@ async function submitPayment() {
       ...(proofUrls.length ? { proofUrls } : {}),
       ...(paymentDraft.value.remark?.trim() ? { remark: paymentDraft.value.remark.trim() } : {})
     }
-    store.setSettlementPaymentDraft(payload)
+    store.setSettlementPaymentDraftFor(row.id, payload)
     await store.submitSettlementPayment(row.id)
     emit('changed', row.id)
   } catch (error) {
     actionError.value = prepaidIsConflict(error)
       ? `${prepaidErrorMessage(error, '结算单已变化')}，已保留转账时间、凭证、备注和重试编号。`
       : prepaidErrorMessage(error, '提交转账失败')
+  } finally {
+    actionPending.value = false
   }
 }
 
 async function confirmSettlement() {
-  if (!props.settlement) return
+  if (!props.settlement || isActionPending.value) return
   actionError.value = ''
+  actionPending.value = true
   try {
     await store.confirmSettlement(props.settlement.id)
     emit('changed', props.settlement.id)
   } catch (error) {
     actionError.value = prepaidErrorMessage(error, isZeroNet.value ? '确认核对失败' : '确认到账失败')
+  } finally {
+    actionPending.value = false
   }
 }
 
 async function rejectSettlement() {
-  if (!props.settlement) return
+  if (!props.settlement || isActionPending.value) return
   const reason = rejectReason.value.trim()
   if (!reason) {
     rejectError.value = '请填写驳回原因'
@@ -310,6 +339,7 @@ async function rejectSettlement() {
   }
   rejectError.value = ''
   actionError.value = ''
+  actionPending.value = true
   try {
     await store.rejectSettlement(props.settlement.id, reason)
     rejectOpen.value = false
@@ -317,19 +347,38 @@ async function rejectSettlement() {
     emit('changed', props.settlement.id)
   } catch (error) {
     actionError.value = prepaidErrorMessage(error, '驳回结算失败')
+  } finally {
+    actionPending.value = false
   }
 }
 
 async function cancelSettlement() {
-  if (!props.settlement) return
+  if (!props.settlement || isActionPending.value) return
   actionError.value = ''
+  actionPending.value = true
   try {
     await store.cancelSettlement(props.settlement.id)
     cancelOpen.value = false
     emit('changed', props.settlement.id)
   } catch (error) {
     actionError.value = prepaidErrorMessage(error, '取消结算失败')
+  } finally {
+    actionPending.value = false
   }
+}
+
+function handleDialogModelUpdate(value: boolean) {
+  emit('update:modelValue', value)
+  if (!value) resetTransientState()
+}
+
+function resetTransientState() {
+  actionError.value = ''
+  proofFiles.value = []
+  rejectOpen.value = false
+  rejectReason.value = ''
+  rejectError.value = ''
+  cancelOpen.value = false
 }
 
 function accountLabel(value: Parameters<typeof prepaidAccountLabel>[0]) {
@@ -384,9 +433,6 @@ function operationLabel(operation: PrepaidSettlementActionOperation) {
 
 <style scoped>
 .settlement-detail { display: grid; gap: 18px; }
-.settlement-dialog-shell { position: fixed; z-index: 2000; inset: 4vh 3vw; overflow: auto; padding: 22px; border-radius: 14px; background: #fff; box-shadow: 0 24px 80px rgb(15 23 42 / 35%); }
-.settlement-dialog-shell__title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-.settlement-dialog-shell__title h2 { margin: 0; }
 .settlement-detail__header, .settlement-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .settlement-detail__header p, .muted { margin: 4px 0 0; color: #64748b; }
 .settlement-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
@@ -398,11 +444,10 @@ function operationLabel(operation: PrepaidSettlementActionOperation) {
 .settlement-line-content, .audit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; }
 .settlement-payment-form { display: grid; gap: 10px; padding: 14px; border: 1px solid #fed7aa; border-radius: 10px; }
 .settlement-payment-form label { display: grid; gap: 5px; }
-.settlement-payment-form input, .settlement-payment-form textarea, .reason-dialog textarea { padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 6px; }
+.settlement-payment-form input, .settlement-payment-form textarea { padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 6px; }
 .proof-list { display: flex; gap: 12px; flex-wrap: wrap; }
 .action-history { display: grid; gap: 6px; padding-left: 22px; }
-.reason-dialog { position: fixed; z-index: 3000; inset: 50% auto auto 50%; transform: translate(-50%, -50%); width: min(440px, 90vw); padding: 20px; border-radius: 12px; background: #fff; box-shadow: 0 20px 60px rgb(15 23 42 / 30%); }
-.reason-dialog textarea { width: 100%; min-height: 90px; box-sizing: border-box; }
+.settlement-detail textarea { width: 100%; min-height: 90px; box-sizing: border-box; }
 .error-text { color: #dc2626; }
 @media (max-width: 720px) {
   .settlement-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }

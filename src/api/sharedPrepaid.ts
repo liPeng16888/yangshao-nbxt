@@ -17,6 +17,7 @@ import type {
   PrepaidRechargeRow,
   PrepaidSettlementPaymentPayload,
   PrepaidSettlementDetailRow,
+  PrepaidSettlementSummaryRow,
   PrepaidSettlementPayableListRow,
   PrepaidSettlementPayableQuery,
   PrepaidSettlementPreview,
@@ -98,7 +99,7 @@ export function getPrepaidSettlementPayables(
 
 export function getPrepaidSettlements(
   query: PrepaidSettlementQuery = {}
-): Promise<PrepaidPage<PrepaidSettlementDetailRow>> {
+): Promise<PrepaidPage<PrepaidSettlementSummaryRow>> {
   if (useMocks) return mock.mockGetPrepaidSettlements(query)
   return request.get('/shared-prepaid/settlements', { params: query })
 }

@@ -278,6 +278,21 @@ const settlementPayableListSelect = {
   }
 } satisfies Prisma.SharedPrepaidPayableSelect
 
+const settlementSummarySelect = {
+  id: true,
+  accountAId: true,
+  accountBId: true,
+  aToBAmount: true,
+  bToAAmount: true,
+  netAmount: true,
+  payerFrontendUserId: true,
+  receiverFrontendUserId: true,
+  status: true,
+  createdAt: true,
+  accountA: { select: accountSelect },
+  accountB: { select: accountSelect }
+} satisfies Prisma.SharedPrepaidSettlementSelect
+
 const settlementReadSelect = {
   id: true,
   accountAId: true,
@@ -344,6 +359,9 @@ type SettlementPayableDatabaseRow = Prisma.SharedPrepaidPayableGetPayload<{
 }>
 type SettlementPayableCoreDatabaseRow = Prisma.SharedPrepaidPayableGetPayload<{
   select: typeof settlementPayableCoreSelect
+}>
+type SettlementSummaryDatabaseRow = Prisma.SharedPrepaidSettlementGetPayload<{
+  select: typeof settlementSummarySelect
 }>
 type SettlementReadDatabaseRow = Prisma.SharedPrepaidSettlementGetPayload<{
   select: typeof settlementReadSelect
@@ -533,6 +551,7 @@ export class SharedPrepaidQueryService {
     const counterpartyId = String(query.counterpartyFrontendUserId ?? '').trim()
     const where: Prisma.SharedPrepaidPayableWhereInput = {}
     if (query.payableIds?.length) where.id = { in: [...query.payableIds] }
+    if (counterpartyId === ownerId) where.id = { in: [] }
     if (query.direction === 'OUTGOING') {
       where.sourceOwnerId = ownerId
       if (counterpartyId) where.consumerOwnerId = counterpartyId
@@ -548,7 +567,7 @@ export class SharedPrepaidQueryService {
     if (query.status) where.status = query.status
     if (this.optionalBoolean(query.eligibleOnly) === true) {
       where.status = SharedPrepaidPayableStatus.PENDING
-      where.settlementLines = { none: {} }
+      where.settlementLines = { none: { releasedAt: null } }
     }
     const phone = String(query.phone ?? '').replace(/\D/g, '')
     if (phone || query.startDate || query.endDate) {
@@ -586,7 +605,7 @@ export class SharedPrepaidQueryService {
     const [rows, total] = await Promise.all([
       this.prisma.sharedPrepaidSettlement.findMany({
         where,
-        select: settlementReadSelect,
+        select: settlementSummarySelect,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: pageSize
@@ -594,7 +613,7 @@ export class SharedPrepaidQueryService {
       this.prisma.sharedPrepaidSettlement.count({ where })
     ])
     return {
-      items: rows.map((row) => this.toSettlementReadRow(row)),
+      items: rows.map((row) => this.toSettlementSummaryRow(row)),
       total,
       page,
       pageSize
@@ -795,7 +814,9 @@ export class SharedPrepaidQueryService {
     const where: Prisma.SharedPrepaidSettlementWhereInput = {
       OR: [{ accountAId: user.dataOwnerId }, { accountBId: user.dataOwnerId }]
     }
-    if (counterpartyId) {
+    if (counterpartyId === user.dataOwnerId) {
+      where.id = { in: [] }
+    } else if (counterpartyId) {
       where.AND = [{ OR: [{ accountAId: counterpartyId }, { accountBId: counterpartyId }] }]
     }
     if (query.status) where.status = query.status
@@ -812,7 +833,8 @@ export class SharedPrepaidQueryService {
     const core = this.toSettlementPayableCore(row)
     return {
       ...core,
-      eligible: row.status === SharedPrepaidPayableStatus.PENDING && row.settlementLines.length === 0,
+      eligible: row.status === SharedPrepaidPayableStatus.PENDING &&
+        !row.settlementLines.some((line) => line.releasedAt === null),
       direction: row.sourceOwnerId === ownerId ? 'OUTGOING' as const : 'INCOMING' as const,
       counterpartyFrontendUserId: row.sourceOwnerId === ownerId ? row.consumerOwnerId : row.sourceOwnerId,
       settlementAssociations: row.settlementLines.map((line) => ({
@@ -855,6 +877,23 @@ export class SharedPrepaidQueryService {
           .filter((allocation) => allocation.sourceOwnerId === row.sourceOwnerId)
           .map((allocation) => allocation.recharge)
       }
+    }
+  }
+
+  private toSettlementSummaryRow(row: SettlementSummaryDatabaseRow) {
+    return {
+      id: row.id,
+      accountAId: row.accountAId,
+      accountBId: row.accountBId,
+      aToBAmount: row.aToBAmount.toNumber(),
+      bToAAmount: row.bToAAmount.toNumber(),
+      netAmount: row.netAmount.toNumber(),
+      payerFrontendUserId: row.payerFrontendUserId,
+      receiverFrontendUserId: row.receiverFrontendUserId,
+      status: row.status,
+      createdAt: row.createdAt,
+      accountA: row.accountA,
+      accountB: row.accountB
     }
   }
 

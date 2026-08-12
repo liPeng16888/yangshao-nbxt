@@ -1,9 +1,10 @@
 import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useAuthStore } from '@/stores/auth'
+import type { PrepaidSettlementDetailRow } from '@/types/sharedPrepaid'
 import PrepaidSettlementDetailDialog from './PrepaidSettlementDetailDialog.vue'
 
 const apiMocks = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ vi.mock('@/api/upload', () => ({ uploadImages }))
 
 const accountA = { id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: '北京店' }
 const accountB = { id: 'front-2', account: 'owner-b', username: '主账号 B', displayRemark: null }
+const mountedWrappers: Array<{ unmount: () => void }> = []
 
 function payable(id: string, direction: 'A_TO_B' | 'B_TO_A', amount: number) {
   const outgoing = direction === 'A_TO_B'
@@ -60,7 +62,7 @@ function settlement(overrides: Record<string, unknown> = {}) {
     lines: [payable('payable-1', 'A_TO_B', 90.9), payable('payable-2', 'B_TO_A', 40.4)],
     actions: [],
     ...overrides
-  }
+  } as PrepaidSettlementDetailRow
 }
 
 function mountDialog(row: any, userOwner = 'front-1', role: 'FRONTEND_USER' | 'FRONTEND_SUB_USER' = 'FRONTEND_USER') {
@@ -74,11 +76,18 @@ function mountDialog(row: any, userOwner = 'front-1', role: 'FRONTEND_USER' | 'F
     requiresAccessGuardPassword: true,
     isFrontendMainAccount: role === 'FRONTEND_USER', isFrontendSubAccount: role === 'FRONTEND_SUB_USER'
   }
-  return mount(PrepaidSettlementDetailDialog, {
+  const wrapper = mount(PrepaidSettlementDetailDialog, {
     props: { modelValue: true, settlement: row },
-    global: { plugins: [pinia, ElementPlus] }
+    attachTo: document.body,
+    global: { plugins: [pinia, ElementPlus], stubs: { teleport: true } }
   })
+  mountedWrappers.push(wrapper)
+  return wrapper
 }
+
+afterEach(() => {
+  mountedWrappers.splice(0).forEach((wrapper) => wrapper.unmount())
+})
 
 describe('PrepaidSettlementDetailDialog', () => {
   beforeEach(() => {
@@ -100,6 +109,7 @@ describe('PrepaidSettlementDetailDialog', () => {
   it('requires a zoned actual transfer time for the payer and uploads optional proof without hiding gross lines', async () => {
     apiMocks.submitPrepaidSettlementPayment.mockResolvedValue(settlement({ status: 'AWAITING_RECEIPT' }))
     const wrapper = mountDialog(settlement())
+    await flushPromises()
 
     expect(wrapper.text()).toContain('A应付B ¥90.9')
     expect(wrapper.text()).toContain('B应付A ¥40.4')
@@ -135,6 +145,7 @@ describe('PrepaidSettlementDetailDialog', () => {
     })
     apiMocks.rejectPrepaidSettlement.mockResolvedValue(settlement({ status: 'REJECTED' }))
     const wrapper = mountDialog(awaitingReceipt, 'front-2')
+    await flushPromises()
 
     expect(wrapper.find('[data-testid="settlement-confirm"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="settlement-reject-open"]').exists()).toBe(true)
@@ -158,16 +169,18 @@ describe('PrepaidSettlementDetailDialog', () => {
       payerFrontendUserId: null, receiverFrontendUserId: null, status: 'AWAITING_RECEIPT'
     })
     const wrapper = mountDialog(zero, 'front-2')
+    await flushPromises()
 
     expect(wrapper.text()).toContain('双方金额已抵平')
     expect(wrapper.find('[data-testid="settlement-transfer-time"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="settlement-confirm"]').text()).toContain('确认核对')
 
     const creator = mountDialog(zero, 'front-1')
+    await flushPromises()
     expect(creator.find('[data-testid="settlement-confirm"]').exists()).toBe(false)
   })
 
-  it('renders immutable proof and audit history while keeping subaccounts and completed records action-free', () => {
+  it('renders immutable proof and audit history while keeping subaccounts and completed records action-free', async () => {
     const completed = settlement({
       status: 'COMPLETED', actualTransferredAt: '2026-08-12T08:30:00.000Z',
       proofUrls: ['/uploads/proof.png'], remark: '到账备注',
@@ -183,6 +196,7 @@ describe('PrepaidSettlementDetailDialog', () => {
       }]
     })
     const wrapper = mountDialog(completed, 'front-1', 'FRONTEND_SUB_USER')
+    await flushPromises()
 
     expect(wrapper.text()).toContain('已完成（不可修改）')
     expect(wrapper.text()).toContain('子账号 A（sub-a）')
@@ -192,5 +206,62 @@ describe('PrepaidSettlementDetailDialog', () => {
     expect(wrapper.find('[data-testid="settlement-confirm"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="settlement-reject-open"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="settlement-cancel-open"]').exists()).toBe(false)
+  })
+
+  it('accepts only the three server-approved raster formats and resets local metadata when switching settlements', async () => {
+    const wrapper = mountDialog(settlement({ id: 'settlement-a' }))
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="settlement-proof-input"]').attributes('accept'))
+      .toBe('image/jpeg,image/png,image/webp')
+    await wrapper.get('[data-testid="settlement-payment-submit"]').trigger('click')
+    await wrapper.get('[data-testid="settlement-transfer-time"]').setValue('2026-08-12T16:30:00+08:00')
+    const file = new File(['proof'], 'a.png', { type: 'image/png' })
+    const input = wrapper.get('[data-testid="settlement-proof-input"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+    await input.trigger('change')
+    expect(wrapper.text()).toContain('a.png')
+
+    await wrapper.setProps({ settlement: settlement({ id: 'settlement-b' }) })
+    await flushPromises()
+
+    expect((wrapper.get('[data-testid="settlement-transfer-time"]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.text()).not.toContain('a.png')
+    expect(wrapper.find('[data-testid="settlement-action-error"]').exists()).toBe(false)
+  })
+
+  it('uses an accessible Element Plus dialog that closes with Escape and restores control to the parent', async () => {
+    const wrapper = mountDialog(settlement())
+    await flushPromises()
+
+    expect(wrapper.find('[role="dialog"]').attributes('role')).toBe('dialog')
+    await wrapper.get('.settlement-detail').trigger('keydown', { key: 'Escape', code: 'Escape' })
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([false])
+  })
+
+  it('disables the payer action while pending and coalesces rapid duplicate submits', async () => {
+    let resolveUpload!: (value: string[]) => void
+    uploadImages.mockReturnValue(new Promise((resolve) => { resolveUpload = resolve }))
+    apiMocks.submitPrepaidSettlementPayment.mockResolvedValue(settlement({ status: 'AWAITING_RECEIPT' }))
+    const wrapper = mountDialog(settlement())
+    await flushPromises()
+    await wrapper.get('[data-testid="settlement-transfer-time"]').setValue('2026-08-12T16:30:00+08:00')
+    const file = new File(['proof'], 'proof.png', { type: 'image/png' })
+    const input = wrapper.get('[data-testid="settlement-proof-input"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+    await input.trigger('change')
+
+    const button = wrapper.get('[data-testid="settlement-payment-submit"]')
+    await Promise.all([button.trigger('click'), button.trigger('click')])
+    await Promise.resolve()
+
+    expect(uploadImages).toHaveBeenCalledTimes(1)
+    expect(apiMocks.submitPrepaidSettlementPayment).not.toHaveBeenCalled()
+    expect(button.attributes('disabled')).toBeDefined()
+    resolveUpload(['/uploads/proof.png'])
+    await flushPromises()
+    expect(apiMocks.submitPrepaidSettlementPayment).toHaveBeenCalledTimes(1)
   })
 })

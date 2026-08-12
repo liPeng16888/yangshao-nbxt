@@ -56,6 +56,27 @@ const rows = [
   payable('payable-held', 'OUTGOING', 10, 'HELD', false)
 ]
 
+function settlementSummary() {
+  return {
+    id: 'settlement-1', accountAId: 'front-1', accountBId: 'front-2',
+    aToBAmount: 90.9, bToAAmount: 40.4, netAmount: 50.5,
+    payerFrontendUserId: 'front-1', receiverFrontendUserId: 'front-2', status: 'AWAITING_PAYMENT',
+    createdAt: '2026-08-12T03:04:05.000Z', accountA, accountB
+  }
+}
+
+function settlementDetail(overrides: Record<string, unknown> = {}) {
+  return {
+    ...settlementSummary(), actualTransferredAt: null, proofUrls: [], remark: null,
+    createdById: 'front-1', paymentSubmittedById: null, paymentSubmittedAt: null,
+    receiptConfirmedById: null, receiptConfirmedAt: null, rejectedById: null, rejectedAt: null,
+    rejectionReason: null, cancelledById: null, cancelledAt: null, version: 1,
+    updatedAt: '2026-08-12T03:04:05.000Z', payerFrontendUser: accountA, receiverFrontendUser: accountB,
+    createdBy: accountA, paymentSubmittedBy: null, receiptConfirmedBy: null,
+    rejectedBy: null, cancelledBy: null, lines: [], actions: [], ...overrides
+  }
+}
+
 function setUser(pinia: ReturnType<typeof createPinia>, role: 'FRONTEND_USER' | 'FRONTEND_SUB_USER' = 'FRONTEND_USER') {
   const auth = useAuthStore(pinia)
   auth.token = 'token'
@@ -74,7 +95,10 @@ function mountPage(role: 'FRONTEND_USER' | 'FRONTEND_SUB_USER' = 'FRONTEND_USER'
   return {
     pinia,
     store: useSharedPrepaidStore(pinia),
-    wrapper: mount(PrepaidSettlementsPage, { global: { plugins: [pinia, ElementPlus] } })
+    wrapper: mount(PrepaidSettlementsPage, {
+      attachTo: document.body,
+      global: { plugins: [pinia, ElementPlus], stubs: { teleport: true } }
+    })
   }
 }
 
@@ -151,6 +175,18 @@ describe('PrepaidSettlementsPage', () => {
     expect(apiMocks.getPrepaidSettlementPayables).toHaveBeenLastCalledWith(expect.objectContaining({
       payableIds: ['payable-out', 'payable-in']
     }))
+    expect(store.settlementPreview).toBeNull()
+    expect(wrapper.find('[data-testid="settlement-create"]').exists()).toBe(false)
+
+    const staleCheckbox = wrapper.get('[data-testid="payable-select-payable-out"]')
+    expect((staleCheckbox.element as HTMLInputElement).checked).toBe(true)
+    expect((staleCheckbox.element as HTMLInputElement).disabled).toBe(false)
+    await staleCheckbox.setValue(false)
+    await flushPromises()
+
+    expect(store.settlementSelection).toEqual(['payable-in'])
+    expect(apiMocks.previewPrepaidSettlement).toHaveBeenLastCalledWith({ payableIds: ['payable-in'] })
+    expect(wrapper.find('[data-testid="settlement-create"]').exists()).toBe(true)
   })
 
   it('shows zero-net reconciliation language and gives subaccounts the same data as a view-only page', async () => {
@@ -191,5 +227,38 @@ describe('PrepaidSettlementsPage', () => {
 
     expect(wrapper.get('[data-testid="settlement-refresh-prompt"]').text()).toContain('已保留当前勾选和输入')
     expect((wrapper.get('[data-testid="payable-select-payable-out"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('refreshes an open detail on a clean realtime event but preserves a dirty payment draft', async () => {
+    apiMocks.getPrepaidSettlements.mockResolvedValue({
+      items: [settlementSummary()], total: 1, page: 1, pageSize: 20
+    })
+    apiMocks.getPrepaidSettlement.mockResolvedValue(settlementDetail())
+    const { wrapper, store } = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="settlement-detail-settlement-1"]').trigger('click')
+    await flushPromises()
+    expect(apiMocks.getPrepaidSettlement).toHaveBeenCalledTimes(1)
+
+    await store.handleRealtimeEvent({
+      type: 'change', module: 'settlements', entityId: 'settlement-1', operation: 'update',
+      changedById: 'front-2', updatedAt: '2026-08-12T08:00:00.000Z'
+    })
+    await flushPromises()
+    expect(apiMocks.getPrepaidSettlement).toHaveBeenCalledTimes(2)
+
+    const transferTime = wrapper.get('[data-testid="settlement-transfer-time"]')
+    await transferTime.setValue('2026-08-12T16:30:00+08:00')
+    await store.handleRealtimeEvent({
+      type: 'change', module: 'settlements', entityId: 'settlement-1', operation: 'update',
+      changedById: 'front-2', updatedAt: '2026-08-12T08:01:00.000Z'
+    })
+    await flushPromises()
+
+    expect(apiMocks.getPrepaidSettlement).toHaveBeenCalledTimes(2)
+    expect((wrapper.get('[data-testid="settlement-transfer-time"]').element as HTMLInputElement).value)
+      .toBe('2026-08-12T16:30:00+08:00')
+    expect(wrapper.get('[data-testid="settlement-refresh-prompt"]').text()).toContain('已保留当前勾选和输入')
   })
 })

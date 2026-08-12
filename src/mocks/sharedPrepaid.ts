@@ -30,6 +30,7 @@ import type {
   PrepaidSettlementPreview,
   PrepaidSettlementQuery,
   PrepaidSettlementRow,
+  PrepaidSettlementSummaryRow,
   PrepaidSettlementSelectionPayload
 } from '@/types/sharedPrepaid'
 
@@ -552,6 +553,7 @@ export async function mockGetPrepaidSettlementPayables(
   identity: MockSharedPrepaidIdentity = readIdentity()
 ): Promise<PrepaidPage<PrepaidSettlementPayableListRow>> {
   const ownerId = identity.ownerFrontendUserId
+  if (query.counterpartyFrontendUserId === ownerId) return paginate([], query.page, query.pageSize)
   const ids = query.payableIds?.length ? new Set(query.payableIds) : null
   const phone = String(query.phone ?? '').replace(/\D/g, '')
   const rows = payables
@@ -580,7 +582,10 @@ export async function mockGetPrepaidSettlementPayables(
 export async function mockGetPrepaidSettlements(
   query: PrepaidSettlementQuery = {},
   identity: MockSharedPrepaidIdentity = readIdentity()
-): Promise<PrepaidPage<PrepaidSettlementDetailRow>> {
+): Promise<PrepaidPage<PrepaidSettlementSummaryRow>> {
+  if (query.counterpartyFrontendUserId === identity.ownerFrontendUserId) {
+    return paginate([], query.page, query.pageSize)
+  }
   const rows = settlements
     .filter((row) => row.accountAId === identity.ownerFrontendUserId || row.accountBId === identity.ownerFrontendUserId)
     .filter((row) => !query.status || row.status === query.status)
@@ -590,7 +595,7 @@ export async function mockGetPrepaidSettlements(
     .filter((row) => !query.startDate || row.createdAt.slice(0, 10) >= query.startDate)
     .filter((row) => !query.endDate || row.createdAt.slice(0, 10) <= query.endDate)
     .sort(descendingCreatedAt)
-    .map(toSettlementDetail)
+    .map(toSettlementSummary)
   return paginate(rows, query.page, query.pageSize)
 }
 
@@ -830,7 +835,7 @@ function toSettlementPayableRead(row: PrepaidPayableRow, ownerId: string): Prepa
     })))
   return clone({
     ...row,
-    eligible: row.status === 'PENDING' && settlementAssociations.length === 0,
+    eligible: row.status === 'PENDING' && !settlementAssociations.some((association) => association.releasedAt === null),
     direction: row.sourceOwnerId === ownerId ? 'OUTGOING' : 'INCOMING',
     counterpartyFrontendUserId: row.sourceOwnerId === ownerId ? row.consumerOwnerId : row.sourceOwnerId,
     consumption: {
@@ -878,6 +883,23 @@ function toSettlementDetail(row: MockSettlement): PrepaidSettlementDetailRow {
       return { ...line, payableStatus: requirePayable(line.payableId).status, payable }
     }),
     actions: row.actions
+  })
+}
+
+function toSettlementSummary(row: MockSettlement): PrepaidSettlementSummaryRow {
+  return clone({
+    id: row.id,
+    accountAId: row.accountAId,
+    accountBId: row.accountBId,
+    aToBAmount: row.aToBAmount,
+    bToAAmount: row.bToAAmount,
+    netAmount: row.netAmount,
+    payerFrontendUserId: row.payerFrontendUserId,
+    receiverFrontendUserId: row.receiverFrontendUserId,
+    status: row.status,
+    createdAt: row.createdAt,
+    accountA: accountFor(row.accountAId),
+    accountB: accountFor(row.accountBId)
   })
 }
 
