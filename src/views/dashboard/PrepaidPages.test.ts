@@ -58,18 +58,17 @@ const consumption: PrepaidConsumptionRow = {
   kind: 'CONSUMPTION', amount: 100, sheetId: 'sheet-1', sampleBlockId: 'block-1', sampleIndex: 0,
   sampleNumberSnapshot: 'A-001', sampleCountSnapshot: 3,
   elementsSnapshot: [{ name: '金', value: 1.2 }, '银'], phoneSnapshot: '13800000000',
-  sheetDate: '2026-08-12', active: true, reversalOfId: null, idempotencyKey: 'consume-1',
+  sheetDate: '2026-08-12', active: true, reversalOfId: null,
   createdAt: '2026-08-12T03:04:05.000Z', consumingFrontendUser: accountB, actorUser: actorB,
   allocations: [{
     id: 'allocation-1', consumptionId: 'consumption-1', rechargeId: 'recharge-1', sourceOwnerId: 'front-1',
     allocatedAmount: 100, paidRatio: 0.9090909091, exactTransferAmount: 90.90909091,
     createdAt: '2026-08-12T03:04:05.100Z', sourceOwner: accountA,
     recharge: {
-      id: 'recharge-1', memberId: 'member-1', ownerFrontendUserId: 'front-1', actorUserId: 'front-1',
+      id: 'recharge-1', ownerFrontendUserId: 'front-1',
       rechargeDate: '2026-08-01', paidAmount: 1000, giftAmount: 100, totalAmount: 1100,
-      remainingAmount: 1000, isOpeningBalance: true, remark: '期初导入', idempotencyKey: 'recharge-1',
-      reversedAt: null, reversedByLedgerId: null, createdAt: '2026-08-01T01:02:03.000Z',
-      updatedAt: '2026-08-12T03:04:05.000Z'
+      remainingAmount: 1000, isOpeningBalance: true,
+      reversedAt: null, createdAt: '2026-08-01T01:02:03.000Z'
     }
   }],
   payables: [{
@@ -84,7 +83,9 @@ const listedConsumption: PrepaidConsumptionListRow = {
   ...consumption,
   allocationOrigin: 'DIRECT',
   allocationSourceConsumptionId: 'consumption-1',
-  originalPayables: []
+  originalPayables: [],
+  relationLimit: 100,
+  relationTruncated: { allocations: false, payables: false, originalPayables: false }
 }
 
 const member: PrepaidMemberRow = {
@@ -101,17 +102,23 @@ const member: PrepaidMemberRow = {
 const detail: PrepaidMemberDetail = {
   ...member,
   recharges: [{ ...recharge }],
-  consumptions: [consumption, {
-    ...consumption,
+  consumptions: [listedConsumption, {
+    ...listedConsumption,
     id: 'reversal-1', kind: 'REVERSAL', active: false, reversalOfId: 'consumption-1', amount: -100,
-    payables: [], allocations: [], createdAt: '2026-08-13T03:04:05.000Z'
+    payables: [], allocations: [], allocationOrigin: 'REVERSAL_TARGET',
+    allocationSourceConsumptionId: 'consumption-1', createdAt: '2026-08-13T03:04:05.000Z'
   }],
   ledgerEntries: [{
     id: 'ledger-1', memberId: 'member-1', kind: 'CONSUMPTION_REVERSAL', balanceDelta: 100,
     ownerFrontendUserId: 'front-2', actorUserId: 'front-2', referenceType: 'SharedPrepaidConsumption',
-    referenceId: 'reversal-1', idempotencyKey: 'reverse-1', requestFingerprint: null,
-    responseSnapshot: null, reason: '样品作废', createdAt: '2026-08-13T03:04:05.000Z'
-  }]
+    referenceId: 'reversal-1', reason: '样品作废', createdAt: '2026-08-13T03:04:05.000Z'
+  }],
+  historyPagination: {
+    pageSize: 100, order: 'createdAt_DESC,id_DESC',
+    recharges: { page: 1, hasMore: false, nextPage: null },
+    consumptions: { page: 1, hasMore: false, nextPage: null },
+    ledgerEntries: { page: 1, hasMore: false, nextPage: null }
+  }
 }
 
 function setMainAuth(pinia: Pinia, main = true, ownerId = 'front-1') {

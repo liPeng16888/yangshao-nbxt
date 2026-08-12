@@ -60,6 +60,12 @@ describe('shared prepaid focused mock', () => {
     expect(detail.recharges).toHaveLength(2)
     expect(detail.recharges[0]).not.toHaveProperty('phone')
     expect(detail.ledgerEntries.map((row) => row.balanceDelta)).toEqual([200, 1100])
+    expect(detail.historyPagination).toMatchObject({
+      pageSize: 100,
+      recharges: { page: 1, hasMore: false, nextPage: null },
+      ledgerEntries: { page: 1, hasMore: false, nextPage: null }
+    })
+    expect(JSON.stringify(detail)).not.toMatch(/idempotencyKey|requestFingerprint|responseSnapshot/)
   })
 
   it('uses the same mainland-phone normalization boundary as the server', async () => {
@@ -368,9 +374,9 @@ describe('shared prepaid focused mock', () => {
     expect(detail.consumptions).toHaveLength(2)
     expect(detail.consumptions.find((row) => row.id === original.id)).toMatchObject({ active: false })
     expect(persistedReversal).toMatchObject({
-      kind: 'REVERSAL', active: false, reversalOfId: original.id,
-      idempotencyKey: 'reverse-consumption'
+      kind: 'REVERSAL', active: false, reversalOfId: original.id
     })
+    expect(persistedReversal).not.toHaveProperty('idempotencyKey')
     expect(persistedReversal?.payables).toEqual([
       expect.objectContaining({
         consumptionId: reversal.id,

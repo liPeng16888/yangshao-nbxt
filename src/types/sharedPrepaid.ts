@@ -90,21 +90,15 @@ export interface PrepaidMemberRechargeRow extends PrepaidRechargeBaseRow {}
 
 export interface PrepaidRechargeLotRow {
   id: string
-  memberId: string
   ownerFrontendUserId: string
-  actorUserId: string
   rechargeDate: string
   paidAmount: number
   giftAmount: number
   totalAmount: number
   remainingAmount: number
   isOpeningBalance: boolean
-  remark: string | null
-  idempotencyKey: string
   reversedAt: string | null
-  reversedByLedgerId: string | null
   createdAt: string
-  updatedAt: string
 }
 
 export interface PrepaidAllocationRow {
@@ -152,7 +146,6 @@ export interface PrepaidConsumptionRow {
   sheetDate: string
   active: boolean
   reversalOfId: string | null
-  idempotencyKey: string
   createdAt: string
   consumingFrontendUser: PrepaidAccountRow
   actorUser: PrepaidAccountRow
@@ -168,11 +161,17 @@ export interface PrepaidConsumptionListAllocationRow extends Omit<PrepaidAllocat
   recharge: PrepaidConsumptionListRechargeRow
 }
 
-export interface PrepaidConsumptionListRow extends Omit<PrepaidConsumptionRow, 'idempotencyKey' | 'allocations'> {
+export interface PrepaidConsumptionListRow extends Omit<PrepaidConsumptionRow, 'allocations'> {
   allocationOrigin: 'DIRECT' | 'REVERSAL_TARGET'
   allocationSourceConsumptionId: string
   allocations: PrepaidConsumptionListAllocationRow[]
   originalPayables: PrepaidPayableRow[]
+  relationLimit: number
+  relationTruncated: {
+    allocations: boolean
+    payables: boolean
+    originalPayables: boolean
+  }
 }
 
 export interface PrepaidLedgerEntryRow {
@@ -184,17 +183,29 @@ export interface PrepaidLedgerEntryRow {
   actorUserId: string
   referenceType: string
   referenceId: string
-  idempotencyKey: string
-  requestFingerprint: string | null
-  responseSnapshot: unknown | null
   reason: string | null
   createdAt: string
 }
 
 export interface PrepaidMemberDetail extends PrepaidMemberRow {
   recharges: PrepaidMemberRechargeRow[]
-  consumptions: PrepaidConsumptionRow[]
+  consumptions: PrepaidConsumptionListRow[]
   ledgerEntries: PrepaidLedgerEntryRow[]
+  historyPagination: PrepaidMemberHistoryPagination
+}
+
+export interface PrepaidMemberHistoryPageState {
+  page: number
+  hasMore: boolean
+  nextPage: number | null
+}
+
+export interface PrepaidMemberHistoryPagination {
+  pageSize: number
+  order: 'createdAt_DESC,id_DESC'
+  recharges: PrepaidMemberHistoryPageState
+  consumptions: PrepaidMemberHistoryPageState
+  ledgerEntries: PrepaidMemberHistoryPageState
 }
 
 export interface PrepaidSettlementPreviewLine {
@@ -315,13 +326,12 @@ export interface PrepaidSettlementRow {
   cancelledById: string | null
   cancelledAt: string | null
   version: number
-  idempotencyKey: string
   createdAt: string
   updatedAt: string
   lines: PrepaidSettlementLineRow[]
 }
 
-export interface PrepaidSettlementDetailRow extends Omit<PrepaidSettlementRow, 'idempotencyKey' | 'lines'> {
+export interface PrepaidSettlementDetailRow extends Omit<PrepaidSettlementRow, 'lines'> {
   accountA: PrepaidAccountRow
   accountB: PrepaidAccountRow
   payerFrontendUser: PrepaidAccountRow | null
@@ -361,6 +371,13 @@ export interface PrepaidMemberQuery {
   page?: number
   pageSize?: number
   phone?: string
+}
+
+export interface PrepaidMemberDetailQuery {
+  historyPageSize?: number
+  rechargePage?: number
+  consumptionPage?: number
+  ledgerPage?: number
 }
 
 export interface PrepaidRechargeQuery extends PrepaidMemberQuery {

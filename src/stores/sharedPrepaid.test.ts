@@ -87,7 +87,6 @@ function settlementRowFixture(id: string): PrepaidSettlementRow {
     cancelledById: null,
     cancelledAt: null,
     version: 1,
-    idempotencyKey: `key-${id}`,
     createdAt: '2026-08-12T08:00:00.000Z',
     updatedAt: '2026-08-12T08:00:00.000Z',
     lines: []

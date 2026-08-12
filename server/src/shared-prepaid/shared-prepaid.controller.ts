@@ -32,6 +32,7 @@ import {
   ReverseSharedPrepaidRechargeDto,
   SharedPrepaidConsumptionQueryDto,
   SharedPrepaidIdempotencyHeadersDto,
+  SharedPrepaidMemberDetailQueryDto,
   SharedPrepaidMemberQueryDto,
   SharedPrepaidRechargeQueryDto,
   SharedPrepaidSettlementIdParamsDto,
@@ -160,8 +161,11 @@ export class SharedPrepaidController {
 
   @Get('members/:id')
   @FrontendPermission('PREPAID_CUSTOMERS')
-  getMemberDetail(@Param('id') id: string) {
-    return this.queryService.getMemberDetail(id)
+  getMemberDetail(
+    @Param('id') id: string,
+    @Query() query: SharedPrepaidMemberDetailQueryDto
+  ) {
+    return this.queryService.getMemberDetail(id, query)
   }
 
   @Get('recharges')

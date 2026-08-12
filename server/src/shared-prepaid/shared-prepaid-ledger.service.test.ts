@@ -169,7 +169,7 @@ class FakePrisma {
   afterNextLock: (() => Promise<void>) | null = null
   private nextId = 1
 
-  private user(id: string) {
+  private userRow(id: string) {
     const users = [mainUser, subUser, otherMainUser]
     const user = users.find((candidate) => candidate.id === id)
     return {
@@ -187,8 +187,8 @@ class FakePrisma {
         .filter((recharge) => recharge.memberId === member.id)
         .map((recharge) => ({
           ...recharge,
-          ownerFrontendUser: this.user(recharge.ownerFrontendUserId),
-          actorUser: this.user(recharge.actorUserId)
+          ownerFrontendUser: this.userRow(recharge.ownerFrontendUserId),
+          actorUser: this.userRow(recharge.actorUserId)
         })),
       consumptions: this.consumptions.filter((consumption) => consumption.memberId === member.id),
       ledgerEntries: this.ledgerEntries.filter((entry) => entry.memberId === member.id)
@@ -201,8 +201,8 @@ class FakePrisma {
     return {
       ...recharge,
       member,
-      ownerFrontendUser: this.user(recharge.ownerFrontendUserId),
-      actorUser: this.user(recharge.actorUserId),
+      ownerFrontendUser: this.userRow(recharge.ownerFrontendUserId),
+      actorUser: this.userRow(recharge.actorUserId),
       reversedByLedger: recharge.reversedByLedgerId
         ? this.ledgerEntries.find((entry) => entry.id === recharge.reversedByLedgerId) ?? null
         : null
@@ -215,6 +215,7 @@ class FakePrisma {
   readonly sharedPrepaidConsumption: any = {}
   readonly sharedPrepaidAllocation: any = {}
   readonly sharedPrepaidPayable: any = {}
+  readonly user: any = {}
 
   constructor() {
     this.sharedPrepaidMember.findUnique = async (args: any) => {
@@ -367,6 +368,28 @@ class FakePrisma {
     this.sharedPrepaidRecharge.count = async (args: any = {}) => (
       (await this.sharedPrepaidRecharge.findMany({ ...args, skip: 0, take: this.recharges.length })).length
     )
+    this.sharedPrepaidRecharge.groupBy = async (args: any) => {
+      const memberIds = args.where?.memberId?.in ?? this.members.map((member) => member.id)
+      const rows = this.recharges.filter((row) => (
+        memberIds.includes(row.memberId) &&
+        (args.where?.reversedAt !== null || row.reversedAt === null)
+      ))
+      const groups = new Map<string, StoredRecharge[]>()
+      for (const row of rows) {
+        const key = `${row.memberId}\u0000${row.ownerFrontendUserId}`
+        groups.set(key, [...(groups.get(key) ?? []), row])
+      }
+      return [...groups.values()].map((group) => ({
+        memberId: group[0].memberId,
+        ownerFrontendUserId: group[0].ownerFrontendUserId,
+        _sum: {
+          paidAmount: group.reduce((sum, row) => sum.add(row.paidAmount), new Prisma.Decimal(0)),
+          giftAmount: group.reduce((sum, row) => sum.add(row.giftAmount), new Prisma.Decimal(0)),
+          remainingAmount: group.reduce((sum, row) => sum.add(row.remainingAmount), new Prisma.Decimal(0))
+        },
+        _max: { createdAt: group.reduce((latest, row) => row.createdAt > latest ? row.createdAt : latest, group[0].createdAt) }
+      }))
+    }
 
     this.sharedPrepaidLedgerEntry.findUnique = async (args: any) => (
       this.ledgerEntries.find((entry) => entry.idempotencyKey === args.where.idempotencyKey) ?? null
@@ -387,6 +410,11 @@ class FakePrisma {
       this.ledgerEntries.push(entry)
       return { ...entry }
     }
+    this.sharedPrepaidLedgerEntry.findMany = async (args: any) => this.ledgerEntries
+      .filter((entry) => !args.where?.memberId || entry.memberId === args.where.memberId)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))
+      .slice(args.skip ?? 0, (args.skip ?? 0) + (args.take ?? this.ledgerEntries.length))
+      .map((entry) => ({ ...entry }))
 
     const consumptionWithRelations = (row: StoredConsumption) => ({
       ...row,
@@ -415,7 +443,26 @@ class FakePrisma {
     this.sharedPrepaidConsumption.findMany = async (args: any) => this.consumptions.filter((row) => (
       (!args.where?.memberId || row.memberId === args.where.memberId) &&
       (typeof args.where?.active !== 'boolean' || row.active === args.where.active)
-    )).map((row) => consumptionWithRelations(row))
+    ))
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))
+      .slice(args.skip ?? 0, (args.skip ?? 0) + (args.take ?? this.consumptions.length))
+      .map((row) => consumptionWithRelations(row))
+    this.sharedPrepaidConsumption.groupBy = async (args: any) => {
+      const memberIds = args.where?.memberId?.in ?? this.members.map((member) => member.id)
+      const groups = new Map<string, StoredConsumption[]>()
+      for (const row of this.consumptions.filter((candidate) => (
+        memberIds.includes(candidate.memberId) &&
+        (args.where?.kind === undefined || candidate.kind === args.where.kind) &&
+        (args.where?.active === undefined || candidate.active === args.where.active)
+      ))) {
+        groups.set(row.memberId, [...(groups.get(row.memberId) ?? []), row])
+      }
+      return [...groups.entries()].map(([memberId, group]) => ({
+        memberId,
+        _sum: { amount: group.reduce((sum, row) => sum.add(row.amount), new Prisma.Decimal(0)) },
+        _max: { createdAt: group.reduce((latest, row) => row.createdAt > latest ? row.createdAt : latest, group[0].createdAt) }
+      }))
+    }
     this.sharedPrepaidConsumption.create = async (args: any) => {
       if (this.consumptions.some((row) => row.idempotencyKey === args.data.idempotencyKey)) {
         throw { code: 'P2002', meta: { target: ['idempotencyKey'] } }
@@ -481,6 +528,8 @@ class FakePrisma {
       rows.forEach((row) => Object.assign(row, args.data, { updatedAt: createdAt }))
       return { count: rows.length }
     }
+    this.user.findMany = async (args: any) => (args.where?.id?.in ?? [])
+      .map((id: string) => this.userRow(id))
   }
 
   async $transaction<T>(callback: (tx: FakePrisma) => Promise<T>): Promise<T> {
@@ -1698,6 +1747,7 @@ describe('SharedPrepaidQueryService', () => {
     prisma.consumptions.push({
       id: 'consumption-1',
       memberId: member.id,
+      kind: SharedPrepaidConsumptionKind.CONSUMPTION,
       amount: new Prisma.Decimal(20),
       active: true,
       createdAt: new Date('2026-08-12T03:00:00.000Z')
@@ -1763,14 +1813,31 @@ describe('SharedPrepaidQueryService', () => {
     prisma.consumptions.push({
       id: 'consumption-dates',
       memberId: recharge.memberId,
+      consumingFrontendUserId: mainUser.dataOwnerId,
+      actorUserId: mainUser.id,
+      kind: SharedPrepaidConsumptionKind.CONSUMPTION,
       amount: new Prisma.Decimal('12.50'),
+      sheetId: 'sheet-dates',
+      sampleBlockId: 'block-dates',
+      sampleIndex: 0,
+      sampleNumberSnapshot: 'S-DATES',
+      sampleCountSnapshot: 1,
+      elementsSnapshot: ['Au'],
+      phoneSnapshot: '13800000000',
+      sheetDate: '2026-08-12',
       active: true,
-      createdAt: consumptionCreatedAt,
-      allocations: [{
-        id: 'allocation-dates',
-        allocatedAmount: new Prisma.Decimal('12.50'),
-        createdAt: allocationCreatedAt
-      }]
+      reversalOfId: null,
+      createdAt: consumptionCreatedAt
+    })
+    prisma.allocations.push({
+      id: 'allocation-dates',
+      consumptionId: 'consumption-dates',
+      rechargeId: recharge.id,
+      sourceOwnerId: mainUser.dataOwnerId,
+      allocatedAmount: new Prisma.Decimal('12.50'),
+      paidRatio: new Prisma.Decimal(1),
+      exactTransferAmount: new Prisma.Decimal('12.50'),
+      createdAt: allocationCreatedAt
     })
     const query = new SharedPrepaidQueryService(prisma as never)
 

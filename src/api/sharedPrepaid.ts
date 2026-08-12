@@ -7,6 +7,7 @@ import type {
   PrepaidConsumptionListRow,
   PrepaidConsumptionReversalResult,
   PrepaidMemberDetail,
+  PrepaidMemberDetailQuery,
   PrepaidLabMemberLookupRow,
   PrepaidMemberQuery,
   PrepaidMemberRow,
@@ -66,9 +67,12 @@ export function lookupLabPrepaidMember(phone: string): Promise<PrepaidLabMemberL
   return request.get('/shared-prepaid/lab-members/lookup', { params: { phone } })
 }
 
-export function getPrepaidMemberDetail(id: string): Promise<PrepaidMemberDetail> {
-  if (useMocks) return mock.mockGetPrepaidMemberDetail(id)
-  return request.get(`/shared-prepaid/members/${id}`)
+export function getPrepaidMemberDetail(
+  id: string,
+  query: PrepaidMemberDetailQuery = {}
+): Promise<PrepaidMemberDetail> {
+  if (useMocks) return mock.mockGetPrepaidMemberDetail(id, query)
+  return request.get(`/shared-prepaid/members/${id}`, { params: query })
 }
 
 export function getPrepaidRecharges(query: PrepaidRechargeQuery = {}): Promise<PrepaidPage<PrepaidRechargeRow>> {

@@ -10,6 +10,7 @@ import type {
   PrepaidConsumptionRow,
   PrepaidLedgerEntryRow,
   PrepaidMemberDetail,
+  PrepaidMemberDetailQuery,
   PrepaidLabMemberLookupRow,
   PrepaidMemberQuery,
   PrepaidMemberRechargeRow,
@@ -72,8 +73,19 @@ interface MockRecharge extends PrepaidRechargeRow {
 }
 
 interface MockSettlement extends PrepaidSettlementRow {
+  idempotencyKey: string
   creatorOwnerId: string
   actions: PrepaidSettlementActionRow[]
+}
+
+interface MockConsumption extends PrepaidConsumptionRow {
+  idempotencyKey: string
+}
+
+interface MockLedgerEntry extends PrepaidLedgerEntryRow {
+  idempotencyKey: string
+  requestFingerprint: string | null
+  responseSnapshot: unknown | null
 }
 
 interface IdempotentRecord {
@@ -84,9 +96,9 @@ interface IdempotentRecord {
 const accounts = new Map<string, PrepaidAccountRow>()
 const members: MockMember[] = []
 const recharges: MockRecharge[] = []
-const consumptions: PrepaidConsumptionRow[] = []
+const consumptions: MockConsumption[] = []
 const payables: PrepaidPayableRow[] = []
-const ledgerEntries: PrepaidLedgerEntryRow[] = []
+const ledgerEntries: MockLedgerEntry[] = []
 const settlements: MockSettlement[] = []
 const idempotentRecords = new Map<string, IdempotentRecord>()
 let sequence = 1
@@ -136,28 +148,44 @@ export async function mockLookupLabPrepaidMember(phone: string): Promise<Prepaid
   return member ? { id: member.id, phone: member.phone, currentBalance: memberBalance(member.id) } : null
 }
 
-export async function mockGetPrepaidMemberDetail(id: string): Promise<PrepaidMemberDetail> {
+export async function mockGetPrepaidMemberDetail(
+  id: string,
+  query: PrepaidMemberDetailQuery = {}
+): Promise<PrepaidMemberDetail> {
   const member = members.find((row) => row.id === id)
   if (!member) throw mockError(404, '预存款会员不存在')
+  const pageSize = historyPositiveInteger(query.historyPageSize, 100, '历史每页数量')
+  if (pageSize > 100) throw mockError(400, '历史每页最多 100 条')
+  const rechargePage = historyPositiveInteger(query.rechargePage, 1, '充值历史页码')
+  const consumptionPage = historyPositiveInteger(query.consumptionPage, 1, '消费历史页码')
+  const ledgerPage = historyPositiveInteger(query.ledgerPage, 1, '账本历史页码')
+  const page = <T>(rows: T[], current: number) => {
+    const start = (current - 1) * pageSize
+    const items = rows.slice(start, start + pageSize)
+    const hasMore = rows.length > start + pageSize
+    return { items, state: { page: current, hasMore, nextPage: hasMore ? current + 1 : null } }
+  }
+  const rechargeHistory = page(recharges
+    .filter((row) => row.memberId === id)
+    .sort(descendingCreatedAt), rechargePage)
+  const consumptionHistory = page(consumptions
+    .filter((row) => row.memberId === id)
+    .sort(descendingCreatedAt), consumptionPage)
+  const ledgerHistory = page(ledgerEntries
+    .filter((row) => row.memberId === id)
+    .sort(descendingCreatedAt), ledgerPage)
   return clone({
     ...toMemberRow(member),
-    recharges: recharges
-      .filter((row) => row.memberId === id)
-      .sort(descendingCreatedAt)
-      .map(toMemberRechargeRow),
-    consumptions: consumptions
-      .filter((row) => row.memberId === id)
-      .sort(descendingCreatedAt)
-      .map((row) => ({
-        ...row,
-        allocations: row.allocations.map((allocation) => {
-          const recharge = recharges.find((item) => item.id === allocation.rechargeId)
-          return recharge ? { ...allocation, recharge: toRechargeLotRow(recharge) } : allocation
-        })
-      })),
-    ledgerEntries: ledgerEntries
-      .filter((row) => row.memberId === id)
-      .sort(descendingCreatedAt)
+    recharges: rechargeHistory.items.map(toMemberRechargeRow),
+    consumptions: consumptionHistory.items.map(toConsumptionListRow),
+    ledgerEntries: ledgerHistory.items.map(toPublicLedgerEntry),
+    historyPagination: {
+      pageSize,
+      order: 'createdAt_DESC,id_DESC',
+      recharges: rechargeHistory.state,
+      consumptions: consumptionHistory.state,
+      ledgerEntries: ledgerHistory.state
+    }
   })
 }
 
@@ -210,7 +238,7 @@ export async function mockGetPrepaidConsumptionFilterOptions(): Promise<PrepaidC
   return { sourceOwners: options(sourceIds), consumingOwners: options(consumingIds) }
 }
 
-function toConsumptionListRow(row: PrepaidConsumptionRow): PrepaidConsumptionListRow {
+function toConsumptionListRow(row: MockConsumption): PrepaidConsumptionListRow {
   const { idempotencyKey: _consumptionKey, ...consumption } = row
   const allocations = effectiveAllocations(row)
   const original = row.kind === 'REVERSAL' ? consumptions.find((item) => item.id === row.reversalOfId) : undefined
@@ -218,34 +246,42 @@ function toConsumptionListRow(row: PrepaidConsumptionRow): PrepaidConsumptionLis
     ...consumption,
     allocationOrigin: original ? 'REVERSAL_TARGET' : 'DIRECT',
     allocationSourceConsumptionId: original?.id ?? row.id,
-    allocations: allocations.map((allocation) => {
+    allocations: allocations.slice(0, 100).map((allocation) => {
       const { recharge, ...publicAllocation } = allocation
+      const currentRecharge = recharges.find((candidate) => candidate.id === allocation.rechargeId) ?? recharge
       return {
         ...publicAllocation,
         recharge: {
-          id: recharge.id,
-          ownerFrontendUserId: recharge.ownerFrontendUserId,
-          rechargeDate: recharge.rechargeDate,
-          paidAmount: recharge.paidAmount,
-          giftAmount: recharge.giftAmount,
-          totalAmount: recharge.totalAmount,
-          remainingAmount: recharge.remainingAmount,
-          isOpeningBalance: recharge.isOpeningBalance,
-          reversedAt: recharge.reversedAt,
-          createdAt: recharge.createdAt
+          id: currentRecharge.id,
+          ownerFrontendUserId: currentRecharge.ownerFrontendUserId,
+          rechargeDate: currentRecharge.rechargeDate,
+          paidAmount: currentRecharge.paidAmount,
+          giftAmount: currentRecharge.giftAmount,
+          totalAmount: currentRecharge.totalAmount,
+          remainingAmount: currentRecharge.remainingAmount,
+          isOpeningBalance: currentRecharge.isOpeningBalance,
+          reversedAt: currentRecharge.reversedAt,
+          createdAt: currentRecharge.createdAt
         }
       }
     }),
-    originalPayables: original?.payables ?? []
+    originalPayables: (original?.payables ?? []).slice(0, 100),
+    relationLimit: 100,
+    relationTruncated: {
+      allocations: allocations.length > 100,
+      payables: row.payables.length > 100,
+      originalPayables: (original?.payables.length ?? 0) > 100
+    },
+    payables: row.payables.slice(0, 100)
   })
 }
 
-function effectiveAllocations(row: PrepaidConsumptionRow) {
+function effectiveAllocations(row: MockConsumption) {
   if (row.kind !== 'REVERSAL') return row.allocations
   return consumptions.find((item) => item.id === row.reversalOfId)?.allocations ?? []
 }
 
-function originalPayables(row: PrepaidConsumptionRow) {
+function originalPayables(row: MockConsumption) {
   if (row.kind !== 'REVERSAL') return []
   return consumptions.find((item) => item.id === row.reversalOfId)?.payables ?? []
 }
@@ -393,7 +429,7 @@ export async function mockRecordPrepaidConsumption(
 
     const account = accountFor(identity.ownerFrontendUserId)
     const actor = actorAccount(identity)
-    const row: PrepaidConsumptionRow = {
+    const row: MockConsumption = {
       id: consumptionId,
       memberId: member.id,
       consumingFrontendUserId: identity.ownerFrontendUserId,
@@ -420,7 +456,7 @@ export async function mockRecordPrepaidConsumption(
     consumptions.push(row)
     touchMember(member)
     appendLedger(member.id, 'CONSUMPTION', -row.amount, identity, 'SharedPrepaidConsumption', row.id, idempotencyKey)
-    return clone(row)
+    return toPublicConsumptionRow(row)
   })
 }
 
@@ -470,7 +506,7 @@ export async function mockReversePrepaidConsumption(
     registerAccount(identity)
     const reversalId = nextId()
     const reversalPayables: PrepaidPayableRow[] = []
-    const reversal: PrepaidConsumptionRow = {
+    const reversal: MockConsumption = {
       id: reversalId,
       memberId: original.memberId,
       consumingFrontendUserId: original.consumingFrontendUserId,
@@ -809,9 +845,12 @@ function selectSettlement(payableIds: string[], identity: MockSharedPrepaidIdent
 }
 
 function settlementResult(row: MockSettlement): PrepaidSettlementRow {
-  const result = clone(row) as MockSettlement
-  delete (result as Partial<MockSettlement>).creatorOwnerId
-  delete (result as Partial<MockSettlement>).actions
+  const {
+    creatorOwnerId: _creatorOwnerId,
+    actions: _actions,
+    idempotencyKey: _idempotencyKey,
+    ...result
+  } = clone(row)
   result.lines.forEach((line) => {
     line.payableStatus = requirePayable(line.payableId).status
   })
@@ -860,7 +899,7 @@ function toSettlementPayableRead(row: PrepaidPayableRow, ownerId: string): Prepa
 }
 
 function toSettlementDetail(row: MockSettlement): PrepaidSettlementDetailRow {
-  const { idempotencyKey: _idempotencyKey, ...publicRow } = settlementResult(row)
+  const publicRow = settlementResult(row)
   const actorFor = (actorId: string | null, operation?: PrepaidSettlementActionOperation) => {
     if (!actorId) return null
     return row.actions.find((action) => action.operation === operation)?.actorUser ?? accountFor(actorId)
@@ -974,21 +1013,15 @@ function toMemberRechargeRow(row: MockRecharge): PrepaidMemberRechargeRow {
 function toRechargeLotRow(row: MockRecharge): PrepaidRechargeLotRow {
   return {
     id: row.id,
-    memberId: row.memberId,
     ownerFrontendUserId: row.ownerFrontendUserId,
-    actorUserId: row.actorUserId,
     rechargeDate: row.rechargeDate,
     paidAmount: row.paidAmount,
     giftAmount: row.giftAmount,
     totalAmount: row.totalAmount,
     remainingAmount: row.remainingAmount,
     isOpeningBalance: row.isOpeningBalance,
-    remark: row.remark,
-    idempotencyKey: row.idempotencyKey,
     reversedAt: row.reversedAt,
-    reversedByLedgerId: row.reversedByLedgerId,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt
+    createdAt: row.createdAt
   }
 }
 
@@ -1022,7 +1055,7 @@ function appendLedger(
   idempotencyKey: string,
   reason: string | null = null
 ) {
-  const row: PrepaidLedgerEntryRow = {
+  const row: MockLedgerEntry = {
     id: nextId(),
     memberId,
     kind,
@@ -1039,6 +1072,21 @@ function appendLedger(
   }
   ledgerEntries.push(row)
   return row
+}
+
+function toPublicConsumptionRow(row: MockConsumption): PrepaidConsumptionRow {
+  const { idempotencyKey: _idempotencyKey, ...publicRow } = row
+  return clone(publicRow)
+}
+
+function toPublicLedgerEntry(row: MockLedgerEntry): PrepaidLedgerEntryRow {
+  const {
+    idempotencyKey: _idempotencyKey,
+    requestFingerprint: _requestFingerprint,
+    responseSnapshot: _responseSnapshot,
+    ...publicRow
+  } = row
+  return clone(publicRow)
 }
 
 function findOrCreateMember(phone: string) {
@@ -1121,6 +1169,12 @@ function paginate<T>(rows: T[], pageValue?: number, pageSizeValue?: number): Pre
     ? Math.min(Number(pageSizeValue), 100)
     : 20
   return clone({ items: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize })
+}
+
+function historyPositiveInteger(value: number | undefined, fallback: number, label: string) {
+  const parsed = Number(value ?? fallback)
+  if (!Number.isInteger(parsed) || parsed < 1) throw mockError(400, `${label}必须为正整数`)
+  return parsed
 }
 
 function runIdempotent<T>(key: string, input: unknown, create: () => T): T {

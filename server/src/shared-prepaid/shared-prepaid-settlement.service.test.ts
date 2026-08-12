@@ -535,7 +535,9 @@ describe('SharedPrepaidSettlementService', () => {
 
     const result = await service.createSettlement(mainA, ['a-to-b-100'], 'concurrent-create')
 
-    expect(result).toMatchObject({ id: 'settlement-1', idempotencyKey: 'concurrent-create' })
+    expect(result).toMatchObject({ id: 'settlement-1' })
+    expect(result).not.toHaveProperty('idempotencyKey')
+    expect(prisma.settlements[0]).toMatchObject({ idempotencyKey: 'concurrent-create' })
     expect(prisma.settlements).toHaveLength(1)
     expect(prisma.lines).toHaveLength(1)
   })

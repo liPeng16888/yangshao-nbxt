@@ -195,6 +195,33 @@ export class SharedPrepaidMemberQueryDto {
   phone?: string
 }
 
+export class SharedPrepaidMemberDetailQueryDto {
+  @Transform(({ value }) => queryNumber(value))
+  @IsOptional()
+  @IsInt({ message: '历史每页数量必须为正整数' })
+  @Min(1, { message: '历史每页数量必须为正整数' })
+  @Max(100, { message: '历史每页最多 100 条' })
+  historyPageSize?: number
+
+  @Transform(({ value }) => queryNumber(value))
+  @IsOptional()
+  @IsInt({ message: '充值历史页码必须为正整数' })
+  @Min(1, { message: '充值历史页码必须为正整数' })
+  rechargePage?: number
+
+  @Transform(({ value }) => queryNumber(value))
+  @IsOptional()
+  @IsInt({ message: '消费历史页码必须为正整数' })
+  @Min(1, { message: '消费历史页码必须为正整数' })
+  consumptionPage?: number
+
+  @Transform(({ value }) => queryNumber(value))
+  @IsOptional()
+  @IsInt({ message: '账本历史页码必须为正整数' })
+  @Min(1, { message: '账本历史页码必须为正整数' })
+  ledgerPage?: number
+}
+
 export class SharedPrepaidRechargeQueryDto extends SharedPrepaidMemberQueryDto {
   @Transform(({ value }) => trim(value))
   @IsOptional()

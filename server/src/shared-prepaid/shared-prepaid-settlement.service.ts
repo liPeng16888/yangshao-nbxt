@@ -521,7 +521,6 @@ export class SharedPrepaidSettlementService {
       cancelledById: settlement.cancelledById,
       cancelledAt: settlement.cancelledAt,
       version: settlement.version,
-      idempotencyKey: settlement.idempotencyKey,
       createdAt: settlement.createdAt,
       updatedAt: settlement.updatedAt,
       lines: settlement.lines.map((line) => ({

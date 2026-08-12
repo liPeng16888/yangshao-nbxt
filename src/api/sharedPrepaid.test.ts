@@ -59,7 +59,7 @@ describe('shared prepaid realtime transport', () => {
     await getPrepaidMembers({ page: 2, pageSize: 10, phone: '138' })
     await lookupPrepaidMember('138 0000-0000')
     await lookupLabPrepaidMember('138 0000-0000')
-    await getPrepaidMemberDetail('member-1')
+    await getPrepaidMemberDetail('member-1', { historyPageSize: 50, rechargePage: 2 })
     await getPrepaidRecharges({ ownerFrontendUserId: 'front-1', isOpeningBalance: false })
     await getPrepaidConsumptions({
       page: 3,
@@ -77,7 +77,7 @@ describe('shared prepaid realtime transport', () => {
       ['/shared-prepaid/members', { params: { page: 2, pageSize: 10, phone: '138' } }],
       ['/shared-prepaid/members/lookup', { params: { phone: '138 0000-0000' } }],
       ['/shared-prepaid/lab-members/lookup', { params: { phone: '138 0000-0000' } }],
-      ['/shared-prepaid/members/member-1'],
+      ['/shared-prepaid/members/member-1', { params: { historyPageSize: 50, rechargePage: 2 } }],
       ['/shared-prepaid/recharges', { params: { ownerFrontendUserId: 'front-1', isOpeningBalance: false } }],
       ['/shared-prepaid/consumptions', { params: {
         page: 3,
@@ -107,7 +107,13 @@ describe('shared prepaid realtime transport', () => {
       consumedTotal: 0, balance: 1100, version: 1, ownerComposition: [],
       latestRechargeTime: '2026-08-12T08:00:00.000Z', latestConsumptionTime: null,
       createdAt: '2026-08-12T08:00:00.000Z', updatedAt: '2026-08-12T08:00:00.000Z',
-      recharges: [detailRecharge], consumptions: [], ledgerEntries: []
+      recharges: [detailRecharge], consumptions: [], ledgerEntries: [],
+      historyPagination: {
+        pageSize: 100, order: 'createdAt_DESC,id_DESC',
+        recharges: { page: 1, hasMore: false, nextPage: null },
+        consumptions: { page: 1, hasMore: false, nextPage: null },
+        ledgerEntries: { page: 1, hasMore: false, nextPage: null }
+      }
     } satisfies PrepaidMemberDetail
     requestMocks.get.mockResolvedValue(serverDetail)
 

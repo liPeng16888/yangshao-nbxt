@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException, RequestMethod } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, NotFoundException, RequestMethod } from '@nestjs/common'
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { Prisma, SharedPrepaidConsumptionKind, SharedPrepaidPayableStatus, UserRole } from '@prisma/client'
@@ -8,6 +8,137 @@ import { FRONTEND_PERMISSIONS_KEY } from '../auth/frontend-permission.decorator'
 import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
 import { SharedPrepaidController } from './shared-prepaid.controller'
 import { SharedPrepaidQueryService } from './shared-prepaid-query.service'
+
+describe('SharedPrepaidQueryService public member reads', () => {
+  const createdAt = new Date('2026-08-12T03:04:05.000Z')
+  const owner = { id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: null }
+  const member = {
+    id: 'member-1', phone: '13800000000', cachedBalance: new Prisma.Decimal(80),
+    version: 2, createdAt, updatedAt: createdAt
+  }
+
+  it('uses explicit base selects and fixed aggregate batches for a member page instead of loading histories', async () => {
+    const memberFindMany = vi.fn().mockResolvedValue([member])
+    const rechargeGroupBy = vi.fn().mockResolvedValue([{
+      memberId: member.id, ownerFrontendUserId: owner.id,
+      _sum: {
+        paidAmount: new Prisma.Decimal(100), giftAmount: new Prisma.Decimal(10),
+        remainingAmount: new Prisma.Decimal(80)
+      },
+      _max: { createdAt }
+    }])
+    const consumptionGroupBy = vi.fn().mockResolvedValue([{
+      memberId: member.id,
+      _sum: { amount: new Prisma.Decimal(30) },
+      _max: { createdAt }
+    }])
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidMember: { findMany: memberFindMany, count: vi.fn().mockResolvedValue(1) },
+      sharedPrepaidRecharge: { groupBy: rechargeGroupBy },
+      sharedPrepaidConsumption: { groupBy: consumptionGroupBy },
+      user: { findMany: vi.fn().mockResolvedValue([owner]) }
+    } as never)
+
+    const result = await service.listMembers({ page: 1, pageSize: 100 })
+
+    expect(memberFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: {
+        id: true, phone: true, cachedBalance: true, version: true,
+        createdAt: true, updatedAt: true
+      },
+      take: 100
+    }))
+    expect(memberFindMany.mock.calls[0]?.[0]).not.toHaveProperty('include')
+    expect(rechargeGroupBy).toHaveBeenCalledOnce()
+    expect(consumptionGroupBy).toHaveBeenCalledOnce()
+    expect(result.items).toEqual([expect.objectContaining({
+      id: member.id, paidTotal: 100, giftTotal: 10, consumedTotal: 30,
+      balance: 80, ownerComposition: [expect.objectContaining({ balance: 80 })]
+    })])
+  })
+
+  it('caps every member-detail collection with a 100+1 sentinel and returns independent continuation state', async () => {
+    const recharges = Array.from({ length: 101 }, (_, index) => ({
+      id: `recharge-${index}`, memberId: member.id, ownerFrontendUserId: owner.id,
+      actorUserId: owner.id, rechargeDate: '2026-08-12', paidAmount: new Prisma.Decimal(1),
+      giftAmount: new Prisma.Decimal(0), totalAmount: new Prisma.Decimal(1),
+      remainingAmount: new Prisma.Decimal(1), isOpeningBalance: false, remark: null,
+      reversedAt: null, reversedByLedgerId: null, createdAt, updatedAt: createdAt,
+      idempotencyKey: `secret-recharge-${index}`, ownerFrontendUser: owner, actorUser: owner,
+      reversedByLedger: null
+    }))
+    const consumptions = Array.from({ length: 101 }, (_, index) => ({
+      id: `consumption-${index}`, memberId: member.id, consumingFrontendUserId: owner.id,
+      actorUserId: owner.id, kind: SharedPrepaidConsumptionKind.CONSUMPTION,
+      amount: new Prisma.Decimal(1), sheetId: 'sheet-1', sampleBlockId: `block-${index}`,
+      sampleIndex: index, sampleNumberSnapshot: `S-${index}`, sampleCountSnapshot: 1,
+      elementsSnapshot: ['Au'], phoneSnapshot: member.phone, sheetDate: '2026-08-12',
+      active: true, reversalOfId: null, idempotencyKey: `secret-consumption-${index}`,
+      createdAt, consumingFrontendUser: owner, actorUser: owner, allocations: [], payables: [],
+      reversalOf: null
+    }))
+    const ledgerEntries = Array.from({ length: 101 }, (_, index) => ({
+      id: `ledger-${index}`, memberId: member.id, kind: 'RECHARGE', balanceDelta: new Prisma.Decimal(1),
+      ownerFrontendUserId: owner.id, actorUserId: owner.id,
+      referenceType: 'SharedPrepaidRecharge', referenceId: `recharge-${index}`,
+      idempotencyKey: `secret-ledger-${index}`, requestFingerprint: `fingerprint-${index}`,
+      responseSnapshot: { secret: true }, reason: null, createdAt
+    }))
+    const memberFindUnique = vi.fn().mockResolvedValue(member)
+    const rechargeFindMany = vi.fn().mockResolvedValue(recharges)
+    const consumptionFindMany = vi.fn().mockResolvedValue(consumptions)
+    const ledgerFindMany = vi.fn().mockResolvedValue(ledgerEntries)
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidMember: { findUnique: memberFindUnique },
+      sharedPrepaidRecharge: {
+        groupBy: vi.fn().mockResolvedValue([]), findMany: rechargeFindMany
+      },
+      sharedPrepaidConsumption: {
+        groupBy: vi.fn().mockResolvedValue([]), findMany: consumptionFindMany
+      },
+      sharedPrepaidLedgerEntry: { findMany: ledgerFindMany },
+      user: { findMany: vi.fn().mockResolvedValue([]) }
+    } as never)
+
+    const result = await service.getMemberDetail(member.id, {
+      historyPageSize: 100, rechargePage: 2, consumptionPage: 3, ledgerPage: 4
+    }) as Record<string, any>
+
+    expect(memberFindUnique).toHaveBeenCalledWith({
+      where: { id: member.id },
+      select: {
+        id: true, phone: true, cachedBalance: true, version: true,
+        createdAt: true, updatedAt: true
+      }
+    })
+    expect(rechargeFindMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 100, take: 101, select: expect.any(Object) }))
+    expect(consumptionFindMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 200, take: 101, select: expect.any(Object) }))
+    expect(ledgerFindMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 300, take: 101, select: expect.any(Object) }))
+    expect(result.recharges).toHaveLength(100)
+    expect(result.consumptions).toHaveLength(100)
+    expect(result.ledgerEntries).toHaveLength(100)
+    expect(result.historyPagination).toEqual({
+      pageSize: 100,
+      order: 'createdAt_DESC,id_DESC',
+      recharges: { page: 2, hasMore: true, nextPage: 3 },
+      consumptions: { page: 3, hasMore: true, nextPage: 4 },
+      ledgerEntries: { page: 4, hasMore: true, nextPage: 5 }
+    })
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toMatch(/idempotencyKey|requestFingerprint|responseSnapshot|secret-ledger|fingerprint-/)
+  })
+
+  it('rejects invalid public member-history pagination before issuing queries', async () => {
+    const findUnique = vi.fn()
+    const service = new SharedPrepaidQueryService({ sharedPrepaidMember: { findUnique } } as never)
+
+    await expect(service.getMemberDetail(member.id, { historyPageSize: 101 }))
+      .rejects.toBeInstanceOf(BadRequestException)
+    await expect(service.getMemberDetail(member.id, { rechargePage: 0 }))
+      .rejects.toBeInstanceOf(BadRequestException)
+    expect(findUnique).not.toHaveBeenCalled()
+  })
+})
 
 describe('SharedPrepaidQueryService consumption list', () => {
   it('applies normalized global filters, stable pagination, and returns full allocation detail', async () => {

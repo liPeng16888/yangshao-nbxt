@@ -86,6 +86,12 @@
             <el-table-column label="状态" width="100"><template #default="{ row }">{{ row.reversedAt ? '已冲正' : '有效' }}</template></el-table-column>
             <el-table-column prop="remark" label="备注" min-width="160" />
           </el-table>
+          <el-button
+            v-if="store.selectedMember.historyPagination.recharges.hasMore"
+            data-testid="member-more-recharges"
+            :loading="store.loadingByPage.members"
+            @click="store.loadMoreMemberHistory('recharges')"
+          >加载更多充值历史</el-button>
         </div>
 
         <div>
@@ -102,6 +108,12 @@
             <el-table-column label="精确时间" width="180"><template #default="{ row }">{{ prepaidPreciseDateTime(row.createdAt) }}</template></el-table-column>
             <el-table-column label="状态" width="110"><template #default="{ row }">{{ consumptionStatus(row) }}</template></el-table-column>
           </el-table>
+          <el-button
+            v-if="store.selectedMember.historyPagination.consumptions.hasMore"
+            data-testid="member-more-consumptions"
+            :loading="store.loadingByPage.members"
+            @click="store.loadMoreMemberHistory('consumptions')"
+          >加载更多消费历史</el-button>
         </div>
 
         <div>
@@ -114,6 +126,12 @@
             <el-table-column prop="reason" label="原因" min-width="180" />
             <el-table-column label="精确审计时间" width="180"><template #default="{ row }">{{ prepaidPreciseDateTime(row.createdAt) }}</template></el-table-column>
           </el-table>
+          <el-button
+            v-if="store.selectedMember.historyPagination.ledgerEntries.hasMore"
+            data-testid="member-more-ledger"
+            :loading="store.loadingByPage.members"
+            @click="store.loadMoreMemberHistory('ledgerEntries')"
+          >加载更多账本历史</el-button>
         </div>
       </div>
     </section>

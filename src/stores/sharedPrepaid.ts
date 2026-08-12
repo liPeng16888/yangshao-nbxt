@@ -283,12 +283,51 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     return runLatest('members:lab-lookup', 'members', () => prepaidApi.lookupLabPrepaidMember(phone), () => undefined)
   }
 
-  async function loadMemberDetail(id: string, page: 'members' | 'consumptions' = 'members') {
+  async function loadMemberDetail(
+    id: string,
+    page: 'members' | 'consumptions' = 'members'
+  ) {
     return runLatest('member:detail', page, () => prepaidApi.getPrepaidMemberDetail(id), (result) => {
       selectedMember.value = result
       consumptions.value = result.consumptions
       payables.value = result.consumptions.flatMap((row) => row.payables)
     })
+  }
+
+  async function loadMoreMemberHistory(
+    collection: 'recharges' | 'consumptions' | 'ledgerEntries'
+  ) {
+    const current = selectedMember.value
+    if (!current) return null
+    const nextPage = current.historyPagination[collection].nextPage
+    if (!nextPage) return current
+    const pageKey = collection === 'recharges'
+      ? 'rechargePage'
+      : collection === 'consumptions' ? 'consumptionPage' : 'ledgerPage'
+    return runLatest(
+      `member:detail:${current.id}:${collection}`,
+      'members',
+      () => prepaidApi.getPrepaidMemberDetail(current.id, {
+        historyPageSize: current.historyPagination.pageSize,
+        [pageKey]: nextPage
+      }),
+      (result) => {
+        if (selectedMember.value?.id !== current.id) return
+        const merged = {
+          ...selectedMember.value,
+          [collection]: [...selectedMember.value[collection], ...result[collection]],
+          historyPagination: {
+            ...selectedMember.value.historyPagination,
+            [collection]: result.historyPagination[collection]
+          }
+        }
+        selectedMember.value = merged
+        if (collection === 'consumptions') {
+          consumptions.value = merged.consumptions
+          payables.value = merged.consumptions.flatMap((row) => row.payables)
+        }
+      }
+    )
   }
 
   async function loadRecharges(query: PrepaidRechargeQuery = {}) {
@@ -755,6 +794,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     lookupMember,
     lookupLabMember,
     loadMemberDetail,
+    loadMoreMemberHistory,
     loadRecharges,
     loadConsumptions,
     loadConsumptionFilterOptions,
@@ -785,7 +825,7 @@ function isPaymentDraftDirty(draft: PrepaidSettlementPaymentPayload) {
 }
 
 function mergeSettlementDetail(detail: PrepaidSettlementDetailRow, mutation: PrepaidSettlementRow) {
-  const { lines: mutationLines, idempotencyKey: _idempotencyKey, ...fields } = mutation
+  const { lines: mutationLines, ...fields } = mutation
   const linesById = new Map(mutationLines.map((line) => [line.id, line]))
   return {
     ...detail,
