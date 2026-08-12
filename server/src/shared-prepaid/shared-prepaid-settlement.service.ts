@@ -621,12 +621,15 @@ export class SharedPrepaidSettlementService {
     changedById: string,
     operation: 'create' | 'update'
   ) {
+    const updatedAt = new Date().toISOString()
     this.realtime.publish({
-      module: 'settlements',
-      entityId: settlementId,
-      operation,
-      changedById,
-      updatedAt: new Date().toISOString()
+      module: 'settlements', entityId: settlementId, operation, changedById, updatedAt
+    })
+    this.realtime.publish({
+      module: 'consumptions', entityId: settlementId, operation: 'update', changedById, updatedAt
+    })
+    this.realtime.publish({
+      module: 'members', entityId: settlementId, operation: 'update', changedById, updatedAt
     })
   }
 

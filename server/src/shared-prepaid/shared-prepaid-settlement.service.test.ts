@@ -386,11 +386,15 @@ describe('SharedPrepaidSettlementService', () => {
     service = new SharedPrepaidSettlementService(prisma as never, realtime as never)
   })
 
-  it('publishes one global settlement invalidation after each committed mutation, excluding retries and rollback', async () => {
+  it('publishes one metadata-only invalidation per dependent leaf after commit, excluding retries and rollback', async () => {
     const settlement = await service.createSettlement(mainA, ['a-to-b-100'], 'realtime-create')
-    expect(realtime.publish).toHaveBeenLastCalledWith(expect.objectContaining({
-      module: 'settlements', entityId: settlement.id, operation: 'create', changedById: mainA.id
-    }))
+    expect(realtime.publish).toHaveBeenCalledTimes(3)
+    expect(realtime.publish.mock.calls.map(([event]) => event)).toEqual([
+      expect.objectContaining({ module: 'settlements', entityId: settlement.id, operation: 'create', changedById: mainA.id }),
+      expect.objectContaining({ module: 'consumptions', entityId: settlement.id, operation: 'update', changedById: mainA.id }),
+      expect.objectContaining({ module: 'members', entityId: settlement.id, operation: 'update', changedById: mainA.id })
+    ])
+    expect(JSON.stringify(realtime.publish.mock.calls)).not.toMatch(/phone|balance|proof|remark/i)
 
     realtime.publish.mockClear()
     await service.createSettlement(mainA, ['a-to-b-100'], 'realtime-create')
@@ -402,12 +406,30 @@ describe('SharedPrepaidSettlementService', () => {
       { actualTransferredAt: transferredAt },
       'realtime-submit'
     )
-    expect(realtime.publish).toHaveBeenCalledTimes(1)
-    expect(realtime.publish).toHaveBeenLastCalledWith(expect.objectContaining({
-      module: 'settlements', entityId: settlement.id, operation: 'update', changedById: mainA.id
-    }))
+    expect(realtime.publish).toHaveBeenCalledTimes(3)
+    expect(realtime.publish.mock.calls.map(([event]) => event.module)).toEqual([
+      'settlements', 'consumptions', 'members'
+    ])
 
     realtime.publish.mockClear()
+    await service.submitPayment(
+      mainA,
+      settlement.id,
+      { actualTransferredAt: transferredAt },
+      'realtime-submit'
+    )
+    expect(realtime.publish).not.toHaveBeenCalled()
+
+    await service.rejectSettlement(mainB, settlement.id, '未收到', 'realtime-release')
+    expect(realtime.publish).toHaveBeenCalledTimes(3)
+    expect(realtime.publish.mock.calls.map(([event]) => event.module)).toEqual([
+      'settlements', 'consumptions', 'members'
+    ])
+
+    realtime.publish.mockClear()
+    await service.rejectSettlement(mainB, settlement.id, '未收到', 'realtime-release')
+    expect(realtime.publish).not.toHaveBeenCalled()
+
     prisma.addPayable('a-to-b-20', 'A', 'B', 20)
     prisma.failPayableUpdateId = 'a-to-b-20'
     await expect(service.createSettlement(mainA, ['a-to-b-20'], 'realtime-rollback'))

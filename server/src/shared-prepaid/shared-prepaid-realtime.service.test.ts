@@ -219,6 +219,31 @@ describe('shared prepaid global realtime', () => {
     stream.close()
   })
 
+  it.each([
+    ['PREPAID_CUSTOMERS', 'members'],
+    ['PREPAID_CONSUMPTIONS', 'consumptions'],
+    ['PREPAID_SETTLEMENTS', 'settlements']
+  ] as const)('delivers a settlement dependency invalidation to a subaccount with only %s', async (permission, module) => {
+    const user = subUser([permission])
+    const { controller, realtime } = makeController([user])
+    const stream = subscribeForChange(controller, issue(controller, user))
+
+    await stream.connected
+    realtime.publish({
+      module, entityId: 'settlement-1', operation: 'update',
+      changedById: 'front-2', updatedAt: '2026-08-12T08:00:01.000Z',
+      phone: '13800138000', balance: 88, proofUrl: '/uploads/proof.png'
+    } as never)
+
+    await expect(stream.change).resolves.toEqual({
+      data: {
+        type: 'change', module, entityId: 'settlement-1', operation: 'update',
+        changedById: 'front-2', updatedAt: '2026-08-12T08:00:01.000Z'
+      }
+    })
+    stream.close()
+  })
+
   it('bounds bursts per module, delivers the latest event, and strips sensitive fields', async () => {
     const user = mainUser()
     const { controller, realtime, findUnique } = makeController([user])
