@@ -32,10 +32,10 @@ export VERIFY_AFTER="$BACKUP_DIR/shared-prepaid-verify-after-$CUTOVER_ID.json"
 export VERIFY_RESTORE_PHASE_A="$BACKUP_DIR/shared-prepaid-verify-restore-phase-a-$CUTOVER_ID.json"
 export PHASE_A_DIR='<immutable phase-A release directory>'
 export PHASE_B_DIR='<immutable phase-B release directory>'
-export PHASE_A_REVISION='0e35d886769697f13e3dc71c5c124dffa28a27de'
-export PHASE_B_REVISION='5c6ccd082044668630f84aa5134341a0cedb7329'
-export PHASE_A_TREE='ce41a3236e0015a836a23dae55ec426cd62fd95c'
-export PHASE_B_TREE='c92e5ea54120c9bc0cee1825167d0828b897835b'
+export PHASE_A_REVISION='86b0b005b8c0657058740fc9f84c014d8c0777d4'
+export PHASE_B_REVISION='6057d3b926e9ae770a6f926cbcf54076355a89a9'
+export PHASE_A_TREE='f5c2e309136ef5abd03d3e6ff495aac073b56087'
+export PHASE_B_TREE='e9614b9c78e3852830e420622f79f2a84937be9d'
 ```
 
 Use a directory owned by the deployment user with mode `0700`; backup and verifier files may contain business identifiers and counts. Check free space before starting. The examples assume the repository is already deployed at the intended revision and `pnpm install --frozen-lockfile` has completed.
@@ -222,7 +222,7 @@ Gate: restore, `SELECT 1`, the exact baseline-count diff, and the exact legacy-c
 
 ### 5. Apply the immutable non-destructive Phase-A artifact
 
-The reviewed release lineage is fixed to the full commit and tree identifiers declared above. Phase A's parent is `c4b31779b4b19721d35090ee563ba827e550d7fc`; Phase B's direct parent is Phase A. These commits were created as new descendants without rewriting the earlier history. Verify the release system's signature/checksum and, when the artifacts retain Git metadata, run:
+The reviewed release lineage is fixed to the full commit and tree identifiers declared above. It supersedes the earlier `0e35d886769697f13e3dc71c5c124dffa28a27de` / `5c6ccd082044668630f84aa5134341a0cedb7329` pair. Phase A's parent is `1dc84c95d2cecda85effd27bb4220798c01dc020`; Phase B's direct parent is Phase A. These commits were created as new descendants without rewriting the earlier history. Verify the release system's signature/checksum and, when the artifacts retain Git metadata, run:
 
 ```bash
 test "$(git -C "$PHASE_A_DIR" rev-parse HEAD)" = "$PHASE_A_REVISION"
