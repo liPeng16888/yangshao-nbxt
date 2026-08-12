@@ -106,6 +106,7 @@ function canonicalDateTime(value: string) {
 
 export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const authStore = useAuthStore()
+  let mutationSessionVersion = 0
   const loadingCounts = reactive<Record<SharedPrepaidPage, number>>({
     recharges: 0,
     members: 0,
@@ -131,12 +132,13 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     settlements: ''
   })
   const pendingIdempotencyKeys = reactive<Partial<Record<SharedPrepaidMutation, string>>>({})
-  const pendingMutationFingerprints = new Map<SharedPrepaidMutation, string>()
+  const preparedMutationKeys = new Map<string, string>()
+  const pendingMutationFingerprints = new Map<string, string>()
   const loadGenerations = new Map<string, number>()
-  const mutationQueues = new Map<SharedPrepaidMutation, Promise<void>>()
+  const mutationQueues = new Map<string, Promise<void>>()
   const inFlightMutationPromises = new Map<string, Promise<unknown>>()
-  const mutationPendingCounts = new Map<SharedPrepaidMutation, number>()
-  const mutationInvocationVersions = new Map<SharedPrepaidMutation, number>()
+  const mutationPendingCounts = new Map<string, number>()
+  const mutationInvocationVersions = new Map<string, number>()
   const settlementDirtyState = reactive({ selection: false, payment: false, manual: false })
   const membersPage = ref<PrepaidPage<PrepaidMemberRow>>(emptyPage())
   const rechargesPage = ref<PrepaidPage<PrepaidRechargeRow>>(emptyPage())
@@ -169,6 +171,29 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   let connectingEpoch: number | null = null
 
   const hasRefreshPrompt = computed(() => refreshPromptModules.value.length > 0)
+  const authSessionSignature = computed(() => {
+    const user = authStore.user
+    return canonicalJson({
+      token: authStore.token,
+      actorUserId: user?.id ?? '',
+      dataOwnerId: user?.dataOwnerId ?? user?.id ?? '',
+      permissionVersion: user?.permissionVersion ?? '',
+      role: user?.role ?? '',
+      permissions: [...(user?.permissions ?? [])].sort()
+    })
+  })
+
+  function currentMutationScope() {
+    return `${mutationSessionVersion}\u0000${authSessionSignature.value}`
+  }
+
+  function clearPreparedMutationIdentities() {
+    preparedMutationKeys.clear()
+    pendingMutationFingerprints.clear()
+    for (const mutation of Object.keys(pendingIdempotencyKeys) as SharedPrepaidMutation[]) {
+      delete pendingIdempotencyKeys[mutation]
+    }
+  }
 
   async function runPage<T>(page: SharedPrepaidPage, action: () => Promise<T>): Promise<T> {
     loadingCounts[page] += 1
@@ -414,10 +439,13 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     afterSuccess?: (result: T, isLatestInvocation: boolean) => void,
     requestFingerprint = ''
   ): Promise<T> {
-    const inFlightKey = `${mutation}\u0000${explicitKey ?? ''}\u0000${requestFingerprint}`
+    const mutationScope = currentMutationScope()
+    const inFlightKey = `${mutationScope}\u0000${mutation}\u0000${explicitKey ?? ''}\u0000${requestFingerprint}`
     const existing = inFlightMutationPromises.get(inFlightKey)
     if (existing) return existing as Promise<T>
-    const promise = executeMutation(page, mutation, explicitKey, action, afterSuccess, requestFingerprint)
+    const promise = executeMutation(
+      page, mutationScope, mutation, explicitKey, action, afterSuccess, requestFingerprint
+    )
     inFlightMutationPromises.set(inFlightKey, promise)
     void promise.finally(() => {
       if (inFlightMutationPromises.get(inFlightKey) === promise) inFlightMutationPromises.delete(inFlightKey)
@@ -427,53 +455,80 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
 
   async function executeMutation<T>(
     page: SharedPrepaidPage,
+    mutationScope: string,
     mutation: SharedPrepaidMutation,
     explicitKey: string | undefined,
     action: (key: string) => Promise<T>,
     afterSuccess?: (result: T, isLatestInvocation: boolean) => void,
     requestFingerprint = ''
   ) {
-    const pendingCount = mutationPendingCounts.get(mutation) ?? 0
-    const pendingKeyMatchesRequest = pendingMutationFingerprints.get(mutation) === requestFingerprint
-    if (pendingCount === 0 && !explicitKey && pendingIdempotencyKeys[mutation] && !pendingKeyMatchesRequest) {
+    const scopedMutation = `${mutationScope}\u0000${mutation}`
+    const pendingCount = mutationPendingCounts.get(scopedMutation) ?? 0
+    const pendingKeyMatchesRequest = pendingMutationFingerprints.get(scopedMutation) === requestFingerprint
+    if (pendingCount === 0 && !explicitKey && preparedMutationKeys.has(scopedMutation) && !pendingKeyMatchesRequest) {
+      preparedMutationKeys.delete(scopedMutation)
       delete pendingIdempotencyKeys[mutation]
-      pendingMutationFingerprints.delete(mutation)
+      pendingMutationFingerprints.delete(scopedMutation)
     }
     const key = explicitKey ?? (
-      pendingCount === 0 && pendingKeyMatchesRequest ? pendingIdempotencyKeys[mutation] : undefined
+      pendingCount === 0 && pendingKeyMatchesRequest ? preparedMutationKeys.get(scopedMutation) : undefined
     ) ?? crypto.randomUUID()
-    const invocationVersion = (mutationInvocationVersions.get(mutation) ?? 0) + 1
-    mutationInvocationVersions.set(mutation, invocationVersion)
-    mutationPendingCounts.set(mutation, pendingCount + 1)
+    const invocationVersion = (mutationInvocationVersions.get(scopedMutation) ?? 0) + 1
+    mutationInvocationVersions.set(scopedMutation, invocationVersion)
+    mutationPendingCounts.set(scopedMutation, pendingCount + 1)
 
-    const previous = mutationQueues.get(mutation) ?? Promise.resolve()
-    const execution = previous.then(() => runPage(page, () => action(key)))
+    const previous = mutationQueues.get(scopedMutation) ?? Promise.resolve()
+    const execution = previous.then(() => {
+      if (currentMutationScope() !== mutationScope) {
+        throw new Error('登录身份已变更，请重新提交')
+      }
+      loadingCounts[page] += 1
+      errorsByPage[page] = ''
+      return action(key).catch((error) => {
+        if (currentMutationScope() === mutationScope) {
+          errorsByPage[page] = error instanceof Error ? error.message : '操作失败'
+        }
+        throw error
+      }).finally(() => {
+        loadingCounts[page] -= 1
+      })
+    })
     const queueTail = execution.then(() => undefined, () => undefined)
-    mutationQueues.set(mutation, queueTail)
+    mutationQueues.set(scopedMutation, queueTail)
 
     try {
       const result = await execution
-      const isLatestInvocation = mutationInvocationVersions.get(mutation) === invocationVersion
+      const isCurrentIdentity = currentMutationScope() === mutationScope
+      const isLatestInvocation = isCurrentIdentity &&
+        mutationInvocationVersions.get(scopedMutation) === invocationVersion
       if (isLatestInvocation) {
+        preparedMutationKeys.delete(scopedMutation)
         delete pendingIdempotencyKeys[mutation]
-        pendingMutationFingerprints.delete(mutation)
+        pendingMutationFingerprints.delete(scopedMutation)
       }
-      afterSuccess?.(result, isLatestInvocation)
+      if (isCurrentIdentity) afterSuccess?.(result, isLatestInvocation)
       return result
     } catch (error) {
-      if (mutationInvocationVersions.get(mutation) === invocationVersion) {
+      if (
+        currentMutationScope() === mutationScope &&
+        mutationInvocationVersions.get(scopedMutation) === invocationVersion
+      ) {
         // Any failed response may have been committed before the connection was lost.
         // Keeping the prepared request identity is safe for definitive 4xx failures too;
         // only confirmed success or a canonical payload change rotates it.
+        preparedMutationKeys.set(scopedMutation, key)
         pendingIdempotencyKeys[mutation] = key
-        pendingMutationFingerprints.set(mutation, requestFingerprint)
+        pendingMutationFingerprints.set(scopedMutation, requestFingerprint)
       }
       throw error
     } finally {
-      const remaining = (mutationPendingCounts.get(mutation) ?? 1) - 1
-      if (remaining > 0) mutationPendingCounts.set(mutation, remaining)
-      else mutationPendingCounts.delete(mutation)
-      if (mutationQueues.get(mutation) === queueTail) mutationQueues.delete(mutation)
+      const remaining = (mutationPendingCounts.get(scopedMutation) ?? 1) - 1
+      if (remaining > 0) mutationPendingCounts.set(scopedMutation, remaining)
+      else {
+        mutationPendingCounts.delete(scopedMutation)
+        mutationInvocationVersions.delete(scopedMutation)
+      }
+      if (mutationQueues.get(scopedMutation) === queueTail) mutationQueues.delete(scopedMutation)
     }
   }
 
@@ -736,20 +791,11 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     if (clearPrompts) clearRefreshPrompt()
   }
 
-  const authSessionSignature = computed(() => {
-    const user = authStore.user
-    return [
-      authStore.token,
-      user?.id ?? '',
-      user?.permissionVersion ?? '',
-      user?.role ?? '',
-      [...(user?.permissions ?? [])].sort().join(',')
-    ].join('|')
-  })
-
   watch(
     authSessionSignature,
     () => {
+      mutationSessionVersion += 1
+      clearPreparedMutationIdentities()
       disconnectRealtime()
       realtimeAuthTerminal.value = false
       if (canUseRealtime()) void connectRealtime()

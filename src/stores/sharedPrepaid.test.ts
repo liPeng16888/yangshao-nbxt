@@ -569,6 +569,144 @@ describe('shared prepaid realtime refresh', () => {
     expect(crypto.randomUUID).toHaveBeenCalledTimes(1)
   })
 
+  it('scopes every retained mutation identity and in-flight promise to the authenticated account', async () => {
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+    let keySequence = 100
+    vi.spyOn(crypto, 'randomUUID').mockImplementation(() => (
+      `00000000-0000-4000-8000-${String(++keySequence).padStart(12, '0')}` as ReturnType<typeof crypto.randomUUID>
+    ))
+
+    const rechargeDraft = {
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000,
+      giftAmount: 100, isOpeningBalance: false, remark: 'account-scoped retry'
+    }
+    const paymentDraft = {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00', remark: 'account-scoped retry'
+    }
+    const cases = [
+      {
+        name: 'recharge', slot: 'createRecharge', mock: apiMocks.createPrepaidRecharge,
+        prepare: () => store.setRechargeDraft(rechargeDraft),
+        invoke: () => store.createRecharge(rechargeDraft),
+        oldResult: { id: 'old-recharge' }, nextResult: { id: 'new-recharge' }, keyIndex: 1
+      },
+      {
+        name: 'recharge reversal', slot: 'reverseRecharge:recharge-1', mock: apiMocks.reversePrepaidRecharge,
+        prepare: () => undefined,
+        invoke: () => store.reverseRecharge('recharge-1', '误充值'),
+        oldResult: { id: 'old-recharge-reversal' }, nextResult: { id: 'new-recharge-reversal' }, keyIndex: 2
+      },
+      {
+        name: 'consumption reversal', slot: 'reverseConsumption:consumption-1', mock: apiMocks.reversePrepaidConsumption,
+        prepare: () => undefined,
+        invoke: () => store.reverseConsumption('consumption-1', '误扣款'),
+        oldResult: { id: 'old-consumption-reversal' }, nextResult: { id: 'new-consumption-reversal' }, keyIndex: 2
+      },
+      {
+        name: 'settlement create', slot: 'createSettlement', mock: apiMocks.createPrepaidSettlement,
+        prepare: () => store.setSettlementSelection(['payable-1']),
+        invoke: () => store.createSettlement(['payable-1']),
+        oldResult: settlementRowFixture('old-settlement-create'),
+        nextResult: settlementRowFixture('new-settlement-create'), keyIndex: 1
+      },
+      {
+        name: 'settlement payment', slot: 'submitPayment:settlement-pay', mock: apiMocks.submitPrepaidSettlementPayment,
+        prepare: () => store.setSettlementPaymentDraftFor('settlement-pay', paymentDraft),
+        invoke: () => store.submitSettlementPayment('settlement-pay', paymentDraft),
+        oldResult: settlementRowFixture('old-settlement-payment'),
+        nextResult: settlementRowFixture('new-settlement-payment'), keyIndex: 2
+      },
+      {
+        name: 'settlement confirmation', slot: 'confirmSettlement:settlement-confirm', mock: apiMocks.confirmPrepaidSettlement,
+        prepare: () => undefined,
+        invoke: () => store.confirmSettlement('settlement-confirm'),
+        oldResult: settlementRowFixture('old-settlement-confirm'),
+        nextResult: settlementRowFixture('new-settlement-confirm'), keyIndex: 1
+      },
+      {
+        name: 'settlement rejection', slot: 'rejectSettlement:settlement-reject', mock: apiMocks.rejectPrepaidSettlement,
+        prepare: () => undefined,
+        invoke: () => store.rejectSettlement('settlement-reject', '未到账'),
+        oldResult: settlementRowFixture('old-settlement-reject'),
+        nextResult: settlementRowFixture('new-settlement-reject'), keyIndex: 2
+      },
+      {
+        name: 'settlement cancellation', slot: 'cancelSettlement:settlement-cancel', mock: apiMocks.cancelPrepaidSettlement,
+        prepare: () => undefined,
+        invoke: () => store.cancelSettlement('settlement-cancel'),
+        oldResult: settlementRowFixture('old-settlement-cancel'),
+        nextResult: settlementRowFixture('new-settlement-cancel'), keyIndex: 1
+      }
+    ] as const
+
+    for (const [index, testCase] of cases.entries()) {
+      testCase.mock.mockReset()
+      auth.token = `account-a-token-${index}`
+      auth.user = {
+        id: `account-a-${index}`, dataOwnerId: `owner-a-${index}`, account: `account-a-${index}`,
+        username: '账号 A', role: 'FRONTEND_USER', permissionVersion: index + 1,
+        permissions: [], isFrontendMainAccount: true, isFrontendSubAccount: false
+      }
+      testCase.prepare()
+      const oldAttempt = deferred<never>()
+      const newFailedAttempt = deferred<never>()
+      const accountBFailure = new Error(`${testCase.name} account B lost response`)
+      testCase.mock
+        .mockReturnValueOnce(oldAttempt.promise)
+        .mockReturnValueOnce(newFailedAttempt.promise)
+        .mockResolvedValueOnce(testCase.nextResult)
+
+      const oldRequest = testCase.invoke()
+      await vi.waitFor(() => expect(testCase.mock).toHaveBeenCalledTimes(1))
+
+      auth.token = `account-b-token-${index}`
+      auth.user = {
+        id: `account-b-${index}`, dataOwnerId: `owner-b-${index}`, account: `account-b-${index}`,
+        username: '账号 B', role: 'FRONTEND_USER', permissionVersion: index + 101,
+        permissions: [], isFrontendMainAccount: true, isFrontendSubAccount: false
+      }
+      store.setRechargeDraft({ ...rechargeDraft, remark: `账号 B 草稿 ${testCase.name}` })
+      testCase.prepare()
+      const failedRequest = testCase.invoke()
+      await vi.waitFor(() => expect(testCase.mock).toHaveBeenCalledTimes(2))
+      store.setRechargeDraft({ ...rechargeDraft, remark: `账号 B 草稿 ${testCase.name}` })
+      if (testCase.name === 'settlement create') store.setSettlementSelection(['payable-b-draft'])
+      if (testCase.name === 'settlement payment') {
+        store.setSettlementPaymentDraftFor('settlement-pay', {
+          ...paymentDraft, remark: '账号 B 付款草稿'
+        })
+      }
+      const failedAssertion = expect(failedRequest).rejects.toBe(accountBFailure)
+      newFailedAttempt.reject(accountBFailure)
+      await failedAssertion
+
+      const firstKey = testCase.mock.mock.calls[0][testCase.keyIndex]
+      const accountBKey = testCase.mock.mock.calls[1][testCase.keyIndex]
+      expect(accountBKey, testCase.name).not.toBe(firstKey)
+      expect(store.pendingIdempotencyKeys[testCase.slot], testCase.name).toBe(accountBKey)
+
+      oldAttempt.resolve(testCase.oldResult as never)
+      await oldRequest
+
+      expect(store.pendingIdempotencyKeys[testCase.slot], testCase.name).toBe(accountBKey)
+      expect(store.rechargeDraft.remark, testCase.name).toContain('账号 B')
+      expect(store.settlements.some((row) => row.id.startsWith('old-settlement')), testCase.name).toBe(false)
+      if (testCase.name === 'settlement create') {
+        expect(store.settlementSelection).toEqual(['payable-b-draft'])
+      }
+      if (testCase.name === 'settlement payment') {
+        expect(store.getSettlementPaymentDraft('settlement-pay')).toEqual({
+          ...paymentDraft, remark: '账号 B 付款草稿'
+        })
+      }
+
+      await testCase.invoke()
+      expect(testCase.mock.mock.calls[2][testCase.keyIndex], testCase.name).toBe(accountBKey)
+      expect(store.pendingIdempotencyKeys[testCase.slot], testCase.name).toBeUndefined()
+    }
+  })
+
   it('loads independently paginated settlement reads and refreshes only selected payable availability', async () => {
     const first = {
       items: [
