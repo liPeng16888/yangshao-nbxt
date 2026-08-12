@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common'
+import { BadRequestException, ConflictException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 
 import type {
@@ -9,6 +9,79 @@ import type {
 } from './shared-prepaid.types'
 
 const INVALID_PHONE_MESSAGE = '会员手机号必须为中国大陆 11 位手机号'
+
+export const PREPAID_MONEY_MAX = new Prisma.Decimal('999999999999.99')
+export const PREPAID_SETTLEMENT_MONEY_MAX = new Prisma.Decimal('9999999999999.9')
+export const PREPAID_EXACT_MONEY_MAX = new Prisma.Decimal('999999999999.99999999')
+
+function amountOutOfRange(label: string): BadRequestException {
+  return new BadRequestException({
+    code: 'PREPAID_AMOUNT_OUT_OF_RANGE',
+    message: `${label}超出允许范围`
+  })
+}
+
+function amountStateInvalid(label: string): BadRequestException {
+  return new BadRequestException({
+    code: 'PREPAID_AMOUNT_STATE_INVALID',
+    message: `${label}状态异常`
+  })
+}
+
+export function assertPrepaidMoney(value: Prisma.Decimal, label: string): Prisma.Decimal {
+  if (!value.isFinite() || value.abs().greaterThan(PREPAID_MONEY_MAX)) throw amountOutOfRange(label)
+  return value
+}
+
+export function assertNonnegativePrepaidMoney(
+  value: Prisma.Decimal,
+  label: string
+): Prisma.Decimal {
+  assertPrepaidMoney(value, label)
+  if (value.isNegative()) throw amountStateInvalid(label)
+  return value
+}
+
+export function assertPositivePrepaidMoney(value: Prisma.Decimal, label: string): Prisma.Decimal {
+  assertPrepaidMoney(value, label)
+  if (value.lessThanOrEqualTo(0)) throw amountStateInvalid(label)
+  return value
+}
+
+export function assertPrepaidSettlementMoney(
+  value: Prisma.Decimal,
+  label: string
+): Prisma.Decimal {
+  if (!value.isFinite() || value.abs().greaterThan(PREPAID_SETTLEMENT_MONEY_MAX)) {
+    throw amountOutOfRange(label)
+  }
+  return value
+}
+
+export function assertNonnegativePrepaidSettlementMoney(
+  value: Prisma.Decimal,
+  label: string
+): Prisma.Decimal {
+  assertPrepaidSettlementMoney(value, label)
+  if (value.isNegative()) throw amountStateInvalid(label)
+  return value
+}
+
+export function assertPositivePrepaidSettlementMoney(
+  value: Prisma.Decimal,
+  label: string
+): Prisma.Decimal {
+  assertPrepaidSettlementMoney(value, label)
+  if (value.lessThanOrEqualTo(0)) throw amountStateInvalid(label)
+  return value
+}
+
+export function assertPrepaidExactMoney(value: Prisma.Decimal, label: string): Prisma.Decimal {
+  if (!value.isFinite() || value.isNegative() || value.greaterThan(PREPAID_EXACT_MONEY_MAX)) {
+    throw amountOutOfRange(label)
+  }
+  return value
+}
 
 export function normalizePrepaidPhone(value: unknown): string {
   const phone = String(value ?? '').replace(/\D/g, '')
@@ -41,10 +114,22 @@ function compareLots(consumingFrontendUserId: string, left: PrepaidLot, right: P
 }
 
 export function allocatePrepaidLots(input: AllocationInput): AllocationResult {
+  assertPositivePrepaidMoney(input.amount, '预存款扣除金额')
+  for (const lot of input.lots) {
+    assertPositivePrepaidMoney(lot.paidAmount, '充值本金')
+    assertNonnegativePrepaidMoney(lot.giftAmount, '赠送金额')
+    const totalAmount = assertPositivePrepaidMoney(
+      lot.paidAmount.add(lot.giftAmount),
+      '充值批次总额'
+    )
+    assertNonnegativePrepaidMoney(lot.remainingAmount, '充值批次剩余金额')
+    if (lot.remainingAmount.greaterThan(totalAmount)) throw amountStateInvalid('充值批次剩余金额')
+  }
   const availableBalance = input.lots.reduce(
     (sum, lot) => sum.add(lot.remainingAmount),
     new Prisma.Decimal(0)
   )
+  assertNonnegativePrepaidMoney(availableBalance, '会员当前余额')
   if (availableBalance.lessThan(input.amount)) {
     throw new ConflictException({
       code: 'PREPAID_BALANCE_INSUFFICIENT',
@@ -68,6 +153,8 @@ export function allocatePrepaidLots(input: AllocationInput): AllocationResult {
     const allocatedAmount = Prisma.Decimal.min(lot.remainingAmount, amountToAllocate)
     const paidRatio = lot.paidAmount.div(lot.paidAmount.add(lot.giftAmount))
     const exactTransferAmount = exactTransfer(allocatedAmount, lot.paidAmount, lot.giftAmount)
+    assertPositivePrepaidMoney(allocatedAmount, '预存款分摊金额')
+    assertPrepaidExactMoney(exactTransferAmount, '精确应转金额')
 
     allocations.push({
       rechargeId: lot.id,
@@ -79,20 +166,32 @@ export function allocatePrepaidLots(input: AllocationInput): AllocationResult {
 
     if (lot.ownerFrontendUserId !== input.consumingFrontendUserId) {
       const ownerTransfer = transfersByOwner.get(lot.ownerFrontendUserId) ?? new Prisma.Decimal(0)
-      transfersByOwner.set(lot.ownerFrontendUserId, ownerTransfer.add(exactTransferAmount))
+      transfersByOwner.set(
+        lot.ownerFrontendUserId,
+        assertPrepaidExactMoney(ownerTransfer.add(exactTransferAmount), '精确应转合计')
+      )
     }
 
     amountToAllocate = amountToAllocate.sub(allocatedAmount)
   }
 
-  return {
-    allocations,
-    payables: [...transfersByOwner].map(([sourceOwnerId, exactAmount]) => ({
+  const payables = [...transfersByOwner].map(([sourceOwnerId, exactAmount]) => {
+    const amount = roundPayable(exactAmount)
+    assertNonnegativePrepaidSettlementMoney(amount, '应转款金额')
+    return {
       sourceOwnerId,
       consumerOwnerId: input.consumingFrontendUserId,
       exactAmount,
-      amount: roundPayable(exactAmount)
-    })),
-    remainingBalance: availableBalance.sub(input.amount)
+      amount
+    }
+  })
+  const remainingBalance = assertNonnegativePrepaidMoney(
+    availableBalance.sub(input.amount),
+    '会员扣款后余额'
+  )
+  return {
+    allocations,
+    payables,
+    remainingBalance
   }
 }

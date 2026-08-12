@@ -872,6 +872,34 @@ describe('SharedPrepaidLedgerService', () => {
     expect(prisma.recharges).toHaveLength(0)
   })
 
+  it('accepts the exact Decimal(14,2) recharge maximum but rejects paid-plus-gift one cent over it', async () => {
+    const exact = await service.createRecharge(mainUser, rechargePayload({
+      paidAmount: '999999999999.99', giftAmount: '0.00'
+    }), 'money-exact-max')
+    expect(exact.totalAmount).toBe(999999999999.99)
+
+    await expect(service.createRecharge(otherMainUser, rechargePayload({
+      phone: '13900000000', paidAmount: '999999999999.99', giftAmount: '0.01'
+    }), 'money-total-overflow')).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_AMOUNT_OUT_OF_RANGE' })
+    })
+    expect(prisma.recharges).toHaveLength(1)
+  })
+
+  it('rejects cumulative cached-balance overflow before creating the next recharge', async () => {
+    await service.createRecharge(mainUser, rechargePayload({
+      paidAmount: '999999999999.99', giftAmount: '0'
+    }), 'money-balance-max')
+
+    await expect(service.createRecharge(mainUser, rechargePayload({
+      paidAmount: '0.01', giftAmount: '0'
+    }), 'money-balance-overflow')).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_AMOUNT_OUT_OF_RANGE' })
+    })
+    expect(prisma.recharges).toHaveLength(1)
+    expect(prisma.members[0].cachedBalance.equals(new Prisma.Decimal('999999999999.99'))).toBe(true)
+  })
+
   it('derives owner from a subaccount data owner and audits the actor while locking the balance', async () => {
     const result = await service.createRecharge(subUser, rechargePayload(), 'idem-1')
 

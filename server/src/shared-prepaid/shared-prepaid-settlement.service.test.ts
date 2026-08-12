@@ -455,6 +455,31 @@ describe('SharedPrepaidSettlementService', () => {
     expect(prisma.settlements).toHaveLength(0)
   })
 
+  it('accepts the exact Decimal(14,1) settlement maximum and rejects an aggregate one tenth over it', async () => {
+    const exactIds = Array.from({ length: 10 }, (_, index) => `exact-max-${index}`)
+    exactIds.forEach((id) => prisma.addPayable(id, 'A', 'B', '999999999999.9'))
+    prisma.addPayable('exact-max-tail', 'A', 'B', '0.9')
+    exactIds.push('exact-max-tail')
+    await expect(service.previewSettlement(mainA, exactIds)).resolves.toMatchObject({
+      aToBAmount: 9999999999999.9,
+      netAmount: 9999999999999.9
+    })
+
+    const overflowIds = Array.from({ length: 10 }, (_, index) => `gross-over-${index}`)
+    overflowIds.forEach((id) => prisma.addPayable(id, 'A', 'B', '999999999999.9'))
+    prisma.addPayable('gross-over-tail', 'A', 'B', '1.0')
+    overflowIds.push('gross-over-tail')
+    await expect(service.createSettlement(
+      mainA,
+      overflowIds,
+      'settlement-gross-overflow'
+    )).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_AMOUNT_OUT_OF_RANGE' })
+    })
+    expect(prisma.settlements).toHaveLength(0)
+    expect(prisma.payables.slice(-11).every((row) => row.status === SharedPrepaidPayableStatus.PENDING)).toBe(true)
+  })
+
   it('lets an authorized subaccount preview for its owner but not create or perform money actions', async () => {
     await expect(service.previewSettlement(subA, ['a-to-b-100'])).resolves.toMatchObject({
       accountAId: 'A',

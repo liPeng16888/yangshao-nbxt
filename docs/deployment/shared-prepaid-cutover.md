@@ -235,6 +235,7 @@ The expected Phase-A shared migrations, in order, are exactly:
 2. `20260812010000_add_shared_prepaid_idempotency_snapshots`
 3. `20260812020000_add_lab_sample_save_requests`
 4. `20260812030000_add_shared_prepaid_settlement_actions`
+5. `20260812035000_add_shared_prepaid_money_checks`
 
 First exercise Phase A on the restored temporary database. Run every command from the immutable Phase-A directory:
 
@@ -250,7 +251,7 @@ psql "$RESTORE_DATABASE_URL" -v ON_ERROR_STOP=1 -X -At -f /tmp/yangshao-permissi
 test ! -s "$PERMISSION_ISSUES_RESTORE_PHASE_A"
 ```
 
-Before deploy, `prisma migrate status` must list the four expected shared migrations above as pending and must not know about `20260812040000_remove_legacy_prepaid`; stop on any unexpected pending migration. After deploy, status must report the Phase-A schema up to date. The restored-database verifier must exit 0 with `"ok": true`, both settlement subtable presence fields true, and an empty `failures` array. The permission diff must be empty and the issues file must remain empty, proving unaffected permissions were preserved, exact per-subaccount mapping, no retired values, no unexpected settlement grant, and no duplicate subaccount-permission pair.
+Before deploy, `prisma migrate status` must list the five expected shared migrations above as pending and must not know about `20260812040000_remove_legacy_prepaid`; stop on any unexpected pending migration. After deploy, status must report the Phase-A schema up to date. The restored-database verifier must exit 0 with `"ok": true`, both settlement subtable presence fields true, and an empty `failures` array. The permission diff must be empty and the issues file must remain empty, proving unaffected permissions were preserved, exact per-subaccount mapping, no retired values, no unexpected settlement grant, and no duplicate subaccount-permission pair.
 
 Only after that restored-Phase-A gate passes, apply the same immutable Phase-A revision to production:
 

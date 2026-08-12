@@ -20,6 +20,11 @@ import {
   isSharedPrepaidProofUrl,
   SHARED_PREPAID_ZONED_DATE_TIME_PATTERN
 } from './shared-prepaid.dto'
+import {
+  assertNonnegativePrepaidSettlementMoney,
+  assertPositivePrepaidSettlementMoney,
+  assertPrepaidExactMoney
+} from './shared-prepaid-money'
 import { SharedPrepaidRealtimeService } from './shared-prepaid-realtime.service'
 
 export interface SubmitSettlementPaymentPayload {
@@ -400,6 +405,8 @@ export class SharedPrepaidSettlementService {
     const accountAId = user.dataOwnerId
     const counterparties = new Set<string>()
     for (const payable of payables) {
+      assertPrepaidExactMoney(payable.exactAmount, '精确应转金额')
+      assertPositivePrepaidSettlementMoney(payable.amount, '应转款金额')
       if (payable.sourceOwnerId === payable.consumerOwnerId) {
         throw new BadRequestException('结算明细必须是跨主账号应转款')
       }
@@ -418,10 +425,14 @@ export class SharedPrepaidSettlementService {
     const bToAAmount = payables.reduce((sum, payable) => (
       payable.sourceOwnerId === accountBId ? sum.add(payable.amount) : sum
     ), zero).toDecimalPlaces(1, Prisma.Decimal.ROUND_HALF_UP)
+    assertNonnegativePrepaidSettlementMoney(aToBAmount, 'A 向 B 结算总额')
+    assertNonnegativePrepaidSettlementMoney(bToAAmount, 'B 向 A 结算总额')
+    assertNonnegativePrepaidSettlementMoney(aToBAmount.add(bToAAmount), '结算总额')
     const signedNet = aToBAmount.sub(bToAAmount)
     const payerFrontendUserId = signedNet.gt(0) ? accountAId : signedNet.lt(0) ? accountBId : null
     const receiverFrontendUserId = signedNet.gt(0) ? accountBId : signedNet.lt(0) ? accountAId : null
     const netAmount = signedNet.abs().toDecimalPlaces(1, Prisma.Decimal.ROUND_HALF_UP)
+    assertNonnegativePrepaidSettlementMoney(netAmount, '结算净额')
 
     return {
       accountAId,

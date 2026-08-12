@@ -1,9 +1,13 @@
-import { ConflictException } from '@nestjs/common'
+import { BadRequestException, ConflictException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { describe, expect, it } from 'vitest'
 
 import {
   allocatePrepaidLots,
+  assertPrepaidMoney,
+  assertPrepaidSettlementMoney,
+  PREPAID_MONEY_MAX,
+  PREPAID_SETTLEMENT_MONEY_MAX,
   exactTransfer,
   normalizePrepaidPhone,
   roundPayable
@@ -43,9 +47,53 @@ describe('prepaid money rules', () => {
   it('returns the paid portion exactly when a lot has no gift amount', () => {
     expect(exactTransfer(decimal('12.34'), decimal(100), decimal(0))).toEqual(decimal('12.34'))
   })
+
+  it('accepts exact Decimal column maxima and rejects one unit beyond them with a stable 400 domain error', () => {
+    expect(assertPrepaidMoney(PREPAID_MONEY_MAX, '测试金额')).toEqual(decimal('999999999999.99'))
+    expect(assertPrepaidSettlementMoney(PREPAID_SETTLEMENT_MONEY_MAX, '测试结算金额'))
+      .toEqual(decimal('9999999999999.9'))
+
+    for (const [value, assertion] of [
+      ['1000000000000.00', assertPrepaidMoney],
+      ['10000000000000.0', assertPrepaidSettlementMoney]
+    ] as const) {
+      let caught: unknown
+      try { assertion(decimal(value), '测试金额') } catch (error) { caught = error }
+      expect(caught).toBeInstanceOf(BadRequestException)
+      expect((caught as BadRequestException).getResponse()).toMatchObject({
+        code: 'PREPAID_AMOUNT_OUT_OF_RANGE'
+      })
+    }
+  })
 })
 
 describe('allocatePrepaidLots', () => {
+  it('accepts an exact-max consumption/allocation and rejects one cent over', () => {
+    const exact = allocatePrepaidLots({
+      consumingFrontendUserId: 'B',
+      amount: PREPAID_MONEY_MAX,
+      lots: [lot({ paidAmount: PREPAID_MONEY_MAX, remainingAmount: PREPAID_MONEY_MAX })]
+    })
+    expect(exact.allocations[0].allocatedAmount).toEqual(PREPAID_MONEY_MAX)
+    expect(exact.remainingBalance).toEqual(decimal(0))
+
+    expect(() => allocatePrepaidLots({
+      consumingFrontendUserId: 'B',
+      amount: decimal('1000000000000.00'),
+      lots: [lot({ paidAmount: PREPAID_MONEY_MAX, remainingAmount: PREPAID_MONEY_MAX })]
+    })).toThrow(BadRequestException)
+  })
+
+  it('rejects an aggregate balance above Decimal(14,2) before creating allocations', () => {
+    expect(() => allocatePrepaidLots({
+      consumingFrontendUserId: 'B',
+      amount: decimal(1),
+      lots: [
+        lot({ id: 'max', paidAmount: PREPAID_MONEY_MAX, remainingAmount: PREPAID_MONEY_MAX }),
+        lot({ id: 'cent', paidAmount: decimal('0.01'), remainingAmount: decimal('0.01') })
+      ]
+    })).toThrow(BadRequestException)
+  })
   it('calculates the cross-owner payable from the paid portion of a lot', () => {
     const result = allocatePrepaidLots({
       consumingFrontendUserId: 'B',

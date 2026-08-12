@@ -44,4 +44,15 @@ describe('shared prepaid cutover runbook contract', () => {
     expect(rollback).toContain('BASELINE_COUNTS_BEFORE')
     expect(rollback).not.toContain('FrontendSubAccountPermission')
   })
+
+  it('places the non-destructive money constraints in Phase A before cleanup', () => {
+    const phaseAList = runbook.slice(
+      runbook.indexOf('The expected Phase-A shared migrations'),
+      runbook.indexOf('First exercise Phase A')
+    )
+
+    expect(phaseAList).toContain('5. `20260812035000_add_shared_prepaid_money_checks`')
+    expect(phaseAList).not.toContain('20260812040000_remove_legacy_prepaid')
+    expect(runbook).toContain('five expected shared migrations')
+  })
 })

@@ -16,7 +16,13 @@ import { createHash } from 'node:crypto'
 import type { CurrentUser } from '../auth/current-user'
 import { labDetectionInputFields } from '../common/lab'
 import { PrismaService } from '../prisma/prisma.service'
-import { allocatePrepaidLots, normalizePrepaidPhone } from './shared-prepaid-money'
+import {
+  allocatePrepaidLots,
+  assertNonnegativePrepaidMoney,
+  assertPositivePrepaidMoney,
+  assertPrepaidMoney,
+  normalizePrepaidPhone
+} from './shared-prepaid-money'
 import { SharedPrepaidRealtimeService } from './shared-prepaid-realtime.service'
 
 export interface SyncSampleConsumptionInput {
@@ -423,7 +429,11 @@ export class SharedPrepaidLedgerService {
       select: { cachedBalance: true }
     })
     if (!lockedMember) throw new NotFoundException('预存款会员不存在')
-    const balanceAfter = lockedMember.cachedBalance.add(input.totalAmount)
+    assertNonnegativePrepaidMoney(lockedMember.cachedBalance, '会员当前余额')
+    const balanceAfter = assertNonnegativePrepaidMoney(
+      lockedMember.cachedBalance.add(input.totalAmount),
+      '充值后会员余额'
+    )
 
     const recharge = await tx.sharedPrepaidRecharge.create({
       data: {
@@ -514,7 +524,13 @@ export class SharedPrepaidLedgerService {
     }
 
     const reversedAt = new Date()
-    const balanceAfter = recharge.member.cachedBalance.sub(recharge.totalAmount)
+    assertPositivePrepaidMoney(recharge.totalAmount, '充值批次总额')
+    assertNonnegativePrepaidMoney(recharge.remainingAmount, '充值批次剩余金额')
+    assertNonnegativePrepaidMoney(recharge.member.cachedBalance, '会员当前余额')
+    const balanceAfter = assertNonnegativePrepaidMoney(
+      recharge.member.cachedBalance.sub(recharge.totalAmount),
+      '充值冲正后会员余额'
+    )
     const result = this.buildRechargeResult(recharge, recharge.member.phone, balanceAfter, reversedAt)
     const reversal = await tx.sharedPrepaidLedgerEntry.create({
       data: {
@@ -661,6 +677,12 @@ export class SharedPrepaidLedgerService {
       amount: tuple.amount,
       lots
     })
+    assertNonnegativePrepaidMoney(member.cachedBalance, '会员当前余额')
+    const balanceAfter = assertNonnegativePrepaidMoney(
+      member.cachedBalance.sub(tuple.amount),
+      '消费后会员余额'
+    )
+    if (!allocation.remainingBalance.equals(balanceAfter)) throw this.balanceVersionConflict()
     const consumption = await tx.sharedPrepaidConsumption.create({
       data: {
         memberId: tuple.memberId,
@@ -716,7 +738,6 @@ export class SharedPrepaidLedgerService {
       })
       if (updated.count !== 1) throw this.balanceVersionConflict()
     }
-    const balanceAfter = member.cachedBalance.sub(tuple.amount)
     const updatedMember = await tx.sharedPrepaidMember.updateMany({
       where: {
         id: member.id,
@@ -861,6 +882,24 @@ export class SharedPrepaidLedgerService {
     })
     if (!member) throw new NotFoundException('预存款会员不存在')
 
+    assertPositivePrepaidMoney(active.amount, '消费金额')
+    assertNonnegativePrepaidMoney(member.cachedBalance, '会员当前余额')
+    for (const allocation of active.allocations) {
+      assertPositivePrepaidMoney(allocation.allocatedAmount, '预存款分摊金额')
+      if (!allocation.recharge || allocation.recharge.reversedAt) throw this.balanceVersionConflict()
+      assertPositivePrepaidMoney(allocation.recharge.totalAmount, '充值批次总额')
+      assertNonnegativePrepaidMoney(allocation.recharge.remainingAmount, '充值批次剩余金额')
+      const restoredRemaining = assertNonnegativePrepaidMoney(
+        allocation.recharge.remainingAmount.add(allocation.allocatedAmount),
+        '冲正后充值批次剩余金额'
+      )
+      if (restoredRemaining.greaterThan(allocation.recharge.totalAmount)) throw this.balanceVersionConflict()
+    }
+    const balanceAfter = assertNonnegativePrepaidMoney(
+      member.cachedBalance.add(active.amount),
+      '消费冲正后会员余额'
+    )
+
     const reversal = await tx.sharedPrepaidConsumption.create({
       data: {
         memberId: active.memberId,
@@ -884,8 +923,7 @@ export class SharedPrepaidLedgerService {
 
     for (const allocation of active.allocations) {
       if (
-        !allocation.recharge ||
-        allocation.recharge.reversedAt ||
+        !allocation.recharge || allocation.recharge.reversedAt ||
         allocation.recharge.remainingAmount.add(allocation.allocatedAmount).greaterThan(allocation.recharge.totalAmount)
       ) throw this.balanceVersionConflict()
       const restored = await tx.sharedPrepaidRecharge.updateMany({
@@ -894,7 +932,6 @@ export class SharedPrepaidLedgerService {
       })
       if (restored.count !== 1) throw this.balanceVersionConflict()
     }
-    const balanceAfter = member.cachedBalance.add(active.amount)
     const updatedMember = await tx.sharedPrepaidMember.updateMany({
       where: { id: member.id, version: member.version },
       data: {
@@ -1143,6 +1180,10 @@ export class SharedPrepaidLedgerService {
     if (paidAmount.lessThanOrEqualTo(0)) throw new BadRequestException('充值金额必须大于 0')
     const giftAmount = this.requireMoney(payload.giftAmount, '赠送金额')
     if (giftAmount.lessThan(0)) throw new BadRequestException('赠送金额不能为负数')
+    const totalAmount = assertPositivePrepaidMoney(
+      paidAmount.add(giftAmount),
+      '充值总额'
+    )
     if (payload.isOpeningBalance !== undefined && typeof payload.isOpeningBalance !== 'boolean') {
       throw new BadRequestException('期初余额标记必须为布尔值')
     }
@@ -1157,7 +1198,7 @@ export class SharedPrepaidLedgerService {
       rechargeDate,
       paidAmount,
       giftAmount,
-      totalAmount: paidAmount.add(giftAmount),
+      totalAmount,
       isOpeningBalance: payload.isOpeningBalance === true,
       remark
     }
@@ -1178,10 +1219,7 @@ export class SharedPrepaidLedgerService {
     }
     if (!amount.isFinite()) throw new BadRequestException(`${label}格式错误`)
     if (amount.decimalPlaces() > 2) throw new BadRequestException(`${label}最多保留 2 位小数`)
-    if (amount.abs().greaterThan('999999999999.99')) {
-      throw new BadRequestException(`${label}超出允许范围`)
-    }
-    return amount
+    return assertPrepaidMoney(amount, label)
   }
 
   private requireReversalReason(reason: unknown): string {
