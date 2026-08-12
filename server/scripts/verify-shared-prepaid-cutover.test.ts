@@ -1,9 +1,11 @@
 import { Prisma } from '@prisma/client'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
+  assertRequiredNewLedgerTables,
   assertReadOnlySql,
   evaluateCutoverSnapshot,
   jsonStringifyDecimalSafe,
+  runReadOnlySnapshotTransaction,
   runCutoverVerifier,
   type CutoverSnapshot
 } from './verify-shared-prepaid-cutover'
@@ -12,6 +14,17 @@ function validSnapshot(): CutoverSnapshot {
   return {
     ordinaryTableCounts: { User: '2', LabSheet: '4' },
     missingOrdinaryTables: [],
+    newLedgerSchemaPresence: {
+      SharedPrepaidMember: true,
+      SharedPrepaidRecharge: true,
+      SharedPrepaidLedgerEntry: true,
+      SharedPrepaidConsumption: true,
+      SharedPrepaidAllocation: true,
+      SharedPrepaidPayable: true,
+      SharedPrepaidSettlement: true,
+      SharedPrepaidSettlementLine: true,
+      SharedPrepaidSettlementAction: true
+    },
     legacyPrepaidCounts: {
       PrepaidRechargeRecord: { exists: true, count: '3' },
       PrepaidCustomerRemark: { exists: true, count: '2' },
@@ -26,6 +39,8 @@ function validSnapshot(): CutoverSnapshot {
       allocations: '2',
       payables: '1',
       settlements: '1',
+      settlementLines: '2',
+      settlementActions: '1',
       memberCachedBalance: '1000.00',
       ledgerBalanceDelta: '1000.00',
       remainingLotBalance: '1000.00'
@@ -54,7 +69,15 @@ describe('shared prepaid cutover verifier', () => {
       checkedAt: '2026-08-12T00:00:00.000Z',
       failures: [],
       ordinaryTableCounts: { User: '2', LabSheet: '4' },
-      newLedgerTotals: expect.objectContaining({ memberCachedBalance: '1000.00' })
+      newLedgerSchemaPresence: expect.objectContaining({
+        SharedPrepaidSettlementLine: true,
+        SharedPrepaidSettlementAction: true
+      }),
+      newLedgerTotals: expect.objectContaining({
+        settlementLines: '2',
+        settlementActions: '1',
+        memberCachedBalance: '1000.00'
+      })
     }))
   })
 
@@ -115,5 +138,58 @@ describe('shared prepaid cutover verifier', () => {
     expect(() => assertReadOnlySql('DELETE FROM "User"')).toThrow(/read-only/i)
     expect(() => assertReadOnlySql('SELECT * FROM "User" FOR UPDATE')).toThrow(/read-only/i)
     expect(() => assertReadOnlySql('SELECT 1; DROP TABLE "User"')).toThrow(/read-only/i)
+  })
+
+  it.each(['SharedPrepaidSettlementLine', 'SharedPrepaidSettlementAction'] as const)(
+    'execution-fails when required table %s is missing',
+    async (tableName) => {
+      const snapshot = validSnapshot()
+      snapshot.newLedgerSchemaPresence[tableName] = false
+      const output: string[] = []
+
+      const exitCode = await runCutoverVerifier({
+        collect: async () => {
+          assertRequiredNewLedgerTables(snapshot.newLedgerSchemaPresence)
+          return snapshot
+        },
+        now: () => new Date('2026-08-12T00:00:00.000Z'),
+        write: (value) => output.push(value)
+      })
+
+      expect(exitCode).toBe(2)
+      expect(JSON.parse(output.join(''))).toMatchObject({
+        ok: false,
+        failures: [{ code: 'VERIFIER_EXECUTION_FAILED', count: 1 }]
+      })
+    }
+  )
+
+  it('uses a bounded repeatable-read transaction with read-only and statement-timeout guards', async () => {
+    const executeRaw = vi.fn(async () => 0)
+    const queryRaw = vi.fn(async () => [])
+    const transaction = {
+      $executeRawUnsafe: executeRaw,
+      $queryRawUnsafe: queryRaw
+    }
+    const transactionRunner = vi.fn(async (callback) => callback(transaction))
+
+    const value = await runReadOnlySnapshotTransaction(
+      { $transaction: transactionRunner } as never,
+      async (client) => {
+        expect(client).toBe(transaction)
+        return 'snapshot'
+      }
+    )
+
+    expect(value).toBe('snapshot')
+    expect(transactionRunner).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+      maxWait: 15_000,
+      timeout: 120_000
+    })
+    expect(executeRaw.mock.calls).toEqual([
+      ['SET TRANSACTION READ ONLY'],
+      ["SET LOCAL statement_timeout = '90s'"]
+    ])
   })
 })

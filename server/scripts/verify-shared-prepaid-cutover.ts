@@ -2,6 +2,21 @@ import { Prisma, PrismaClient } from '@prisma/client'
 
 type Count = string
 
+export const requiredNewLedgerTableNames = [
+  'SharedPrepaidMember',
+  'SharedPrepaidRecharge',
+  'SharedPrepaidLedgerEntry',
+  'SharedPrepaidConsumption',
+  'SharedPrepaidAllocation',
+  'SharedPrepaidPayable',
+  'SharedPrepaidSettlement',
+  'SharedPrepaidSettlementLine',
+  'SharedPrepaidSettlementAction'
+] as const
+
+type NewLedgerTableName = typeof requiredNewLedgerTableNames[number]
+export type NewLedgerSchemaPresence = Record<NewLedgerTableName, boolean>
+
 export interface NegativeMemberBalance {
   memberId: string
   phone: string
@@ -60,6 +75,7 @@ interface LegacyTableCount {
 export interface CutoverSnapshot {
   ordinaryTableCounts: Record<string, Count>
   missingOrdinaryTables: string[]
+  newLedgerSchemaPresence: NewLedgerSchemaPresence
   legacyPrepaidCounts: {
     PrepaidRechargeRecord: LegacyTableCount
     PrepaidCustomerRemark: LegacyTableCount
@@ -74,6 +90,8 @@ export interface CutoverSnapshot {
     allocations: Count
     payables: Count
     settlements: Count
+    settlementLines: Count
+    settlementActions: Count
     memberCachedBalance: string
     ledgerBalanceDelta: string
     remainingLotBalance: string
@@ -102,6 +120,10 @@ export interface CutoverReport extends CutoverSnapshot {
 
 interface RawQueryClient {
   $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>
+}
+
+interface ReadSnapshotClient extends RawQueryClient {
+  $executeRawUnsafe(query: string): Promise<unknown>
 }
 
 const ordinaryTableNames = [
@@ -142,6 +164,19 @@ const ordinaryTableNames = [
   'EmployeeAuditLog'
 ] as const
 
+const legacyTableNames = [
+  'PrepaidRechargeRecord',
+  'PrepaidCustomerRemark',
+  'PrepaidUsageRemark'
+] as const
+
+const schemaProbeTableNames = [
+  ...ordinaryTableNames,
+  'FinanceDeletionRequest',
+  ...legacyTableNames,
+  ...requiredNewLedgerTableNames
+] as const
+
 const prohibitedReadTokens = /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY|CALL|DO|MERGE|VACUUM|ANALYZE)\b/i
 const lockingRead = /\bFOR\s+(?:UPDATE|NO\s+KEY\s+UPDATE|SHARE|KEY\s+SHARE)\b|\bLOCK\s+TABLE\b/i
 
@@ -161,6 +196,13 @@ export function jsonStringifyDecimalSafe(value: unknown) {
     if (Prisma.Decimal.isDecimal(item)) return item.toString()
     return item
   }, 2)
+}
+
+export function assertRequiredNewLedgerTables(presence: NewLedgerSchemaPresence) {
+  const missing = requiredNewLedgerTableNames.filter((tableName) => !presence[tableName])
+  if (missing.length > 0) {
+    throw new Error(`Required shared prepaid tables are missing: ${missing.join(', ')}`)
+  }
 }
 
 function differenceExceedsTolerance(value: string) {
@@ -227,65 +269,96 @@ function quoteIdentifier(value: string) {
   return `"${value}"`
 }
 
-async function tableExists(client: RawQueryClient, tableName: string) {
-  const rows = await queryRows<Array<{ relationName: string | null }>>(
+async function collectExistingTables(client: RawQueryClient) {
+  const rows = await queryRows<Array<{ tableName: string }>>(
     client,
-    'SELECT to_regclass($1)::text AS "relationName"',
-    `public.${quoteIdentifier(tableName)}`
+    `SELECT class.relname AS "tableName"
+     FROM pg_catalog.pg_class class
+     JOIN pg_catalog.pg_namespace namespace ON namespace.oid = class.relnamespace
+     WHERE namespace.nspname = 'public'
+       AND class.relkind IN ('r', 'p')
+       AND class.relname = ANY($1::text[])
+     ORDER BY class.relname`,
+    [...schemaProbeTableNames]
   )
-  return Boolean(rows[0]?.relationName)
+  return new Set(rows.map((row) => row.tableName))
 }
 
-async function countOptionalTable(client: RawQueryClient, tableName: string): Promise<LegacyTableCount> {
-  const exists = await tableExists(client, tableName)
-  if (!exists) return { exists: false, count: '0' }
-  const rows = await queryRows<Array<{ count: string }>>(
-    client,
-    `SELECT COUNT(*)::text AS "count" FROM ${quoteIdentifier(tableName)}`
-  )
-  return { exists: true, count: rows[0]?.count ?? '0' }
+interface CountQuerySpec {
+  label: string
+  tableName: string
+  where?: string
 }
 
-async function collectOrdinaryCounts(client: RawQueryClient) {
+async function collectCounts(client: RawQueryClient, specs: CountQuerySpec[]) {
+  if (specs.length === 0) return {} as Record<string, Count>
+  const sql = specs.map(({ label, tableName, where }) => {
+    quoteIdentifier(label)
+    const filter = where ? ` WHERE ${where}` : ''
+    return `SELECT '${label}'::text AS "tableName", COUNT(*)::text AS "count" FROM ${quoteIdentifier(tableName)}${filter}`
+  }).join('\nUNION ALL\n')
+  const rows = await queryRows<Array<{ tableName: string, count: string }>>(client, sql)
+  return Object.fromEntries(rows.map((row) => [row.tableName, row.count]))
+}
+
+function collectNewLedgerSchemaPresence(existingTables: Set<string>): NewLedgerSchemaPresence {
+  return Object.fromEntries(
+    requiredNewLedgerTableNames.map((tableName) => [tableName, existingTables.has(tableName)])
+  ) as NewLedgerSchemaPresence
+}
+
+async function collectOrdinaryCounts(client: RawQueryClient, existingTables: Set<string>) {
   const counts: Record<string, string> = {}
-  const missing: string[] = []
-  for (const tableName of ordinaryTableNames) {
-    if (!await tableExists(client, tableName)) {
-      missing.push(tableName)
-      continue
-    }
-    const rows = await queryRows<Array<{ count: string }>>(
-      client,
-      `SELECT COUNT(*)::text AS "count" FROM ${quoteIdentifier(tableName)}`
-    )
-    counts[tableName] = rows[0]?.count ?? '0'
-  }
+  const missing = ordinaryTableNames.filter((tableName) => !existingTables.has(tableName)) as string[]
+  const specs: CountQuerySpec[] = ordinaryTableNames
+    .filter((tableName) => existingTables.has(tableName))
+    .map((tableName) => ({ label: tableName, tableName }))
 
-  if (!await tableExists(client, 'FinanceDeletionRequest')) {
-    missing.push('FinanceDeletionRequest')
-  } else {
-    const rows = await queryRows<Array<{ count: string }>>(
-      client,
-      `SELECT COUNT(*)::text AS "count"
-       FROM "FinanceDeletionRequest"
-       WHERE "sourceType" <> 'PREPAID_RECHARGE'`
-    )
-    counts.FinanceDeletionRequestOrdinary = rows[0]?.count ?? '0'
-  }
+  if (existingTables.has('FinanceDeletionRequest')) {
+    specs.push({
+      label: 'FinanceDeletionRequestOrdinary',
+      tableName: 'FinanceDeletionRequest',
+      where: `"sourceType" <> 'PREPAID_RECHARGE'`
+    })
+  } else missing.push('FinanceDeletionRequest')
+
+  Object.assign(counts, await collectCounts(client, specs))
   return { counts, missing }
 }
 
+async function collectLegacyPrepaidCounts(client: RawQueryClient, existingTables: Set<string>) {
+  const specs: CountQuerySpec[] = legacyTableNames
+    .filter((tableName) => existingTables.has(tableName))
+    .map((tableName) => ({ label: tableName, tableName }))
+  if (existingTables.has('FinanceDeletionRequest')) {
+    specs.push({
+      label: 'FinanceDeletionRequestPrepaidRecharge',
+      tableName: 'FinanceDeletionRequest',
+      where: `"sourceType" = 'PREPAID_RECHARGE'`
+    })
+  }
+  const counts = await collectCounts(client, specs)
+  const optionalCount = (tableName: typeof legacyTableNames[number]): LegacyTableCount => ({
+    exists: existingTables.has(tableName),
+    count: counts[tableName] ?? '0'
+  })
+  return {
+    PrepaidRechargeRecord: optionalCount('PrepaidRechargeRecord'),
+    PrepaidCustomerRemark: optionalCount('PrepaidCustomerRemark'),
+    PrepaidUsageRemark: optionalCount('PrepaidUsageRemark'),
+    FinanceDeletionRequestPrepaidRecharge: {
+      exists: existingTables.has('FinanceDeletionRequest'),
+      count: counts.FinanceDeletionRequestPrepaidRecharge ?? '0'
+    }
+  }
+}
+
 async function collectSnapshotFromClient(client: RawQueryClient): Promise<CutoverSnapshot> {
-  const ordinary = await collectOrdinaryCounts(client)
-  const financeDeletionRequestExists = await tableExists(client, 'FinanceDeletionRequest')
-  const financeDeletionRequestRows = financeDeletionRequestExists
-    ? await queryRows<Array<{ count: string }>>(
-      client,
-      `SELECT COUNT(*)::text AS "count"
-       FROM "FinanceDeletionRequest"
-       WHERE "sourceType" = 'PREPAID_RECHARGE'`
-    )
-    : []
+  const existingTables = await collectExistingTables(client)
+  const ordinary = await collectOrdinaryCounts(client, existingTables)
+  const newLedgerSchemaPresence = collectNewLedgerSchemaPresence(existingTables)
+  assertRequiredNewLedgerTables(newLedgerSchemaPresence)
+  const legacyPrepaidCounts = await collectLegacyPrepaidCounts(client, existingTables)
 
   const totals = await queryRows<CutoverSnapshot['newLedgerTotals'][]>(client, `
     SELECT
@@ -296,6 +369,8 @@ async function collectSnapshotFromClient(client: RawQueryClient): Promise<Cutove
       (SELECT COUNT(*)::text FROM "SharedPrepaidAllocation") AS "allocations",
       (SELECT COUNT(*)::text FROM "SharedPrepaidPayable") AS "payables",
       (SELECT COUNT(*)::text FROM "SharedPrepaidSettlement") AS "settlements",
+      (SELECT COUNT(*)::text FROM "SharedPrepaidSettlementLine") AS "settlementLines",
+      (SELECT COUNT(*)::text FROM "SharedPrepaidSettlementAction") AS "settlementActions",
       (SELECT COALESCE(SUM("cachedBalance"), 0)::text FROM "SharedPrepaidMember") AS "memberCachedBalance",
       (SELECT COALESCE(SUM("balanceDelta"), 0)::text FROM "SharedPrepaidLedgerEntry") AS "ledgerBalanceDelta",
       (SELECT COALESCE(SUM("remainingAmount"), 0)::text FROM "SharedPrepaidRecharge" WHERE "reversedAt" IS NULL) AS "remainingLotBalance"
@@ -435,15 +510,8 @@ async function collectSnapshotFromClient(client: RawQueryClient): Promise<Cutove
   return {
     ordinaryTableCounts: ordinary.counts,
     missingOrdinaryTables: ordinary.missing,
-    legacyPrepaidCounts: {
-      PrepaidRechargeRecord: await countOptionalTable(client, 'PrepaidRechargeRecord'),
-      PrepaidCustomerRemark: await countOptionalTable(client, 'PrepaidCustomerRemark'),
-      PrepaidUsageRemark: await countOptionalTable(client, 'PrepaidUsageRemark'),
-      FinanceDeletionRequestPrepaidRecharge: {
-        exists: financeDeletionRequestExists,
-        count: financeDeletionRequestRows[0]?.count ?? '0'
-      }
-    },
+    newLedgerSchemaPresence,
+    legacyPrepaidCounts,
     newLedgerTotals: totals[0],
     negativeBalanceRows: { members: negativeMembers, lots: negativeLots },
     lotVsMemberBalanceDifferences: lotDifferences,
@@ -454,11 +522,23 @@ async function collectSnapshotFromClient(client: RawQueryClient): Promise<Cutove
   }
 }
 
-export async function collectCutoverSnapshot(prisma: PrismaClient): Promise<CutoverSnapshot> {
+export async function runReadOnlySnapshotTransaction<T>(
+  prisma: Pick<PrismaClient, '$transaction'>,
+  collect: (transaction: ReadSnapshotClient) => Promise<T>
+): Promise<T> {
   return prisma.$transaction(async (transaction) => {
-    await transaction.$executeRawUnsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
-    return collectSnapshotFromClient(transaction)
+    await transaction.$executeRawUnsafe('SET TRANSACTION READ ONLY')
+    await transaction.$executeRawUnsafe("SET LOCAL statement_timeout = '90s'")
+    return collect(transaction)
+  }, {
+    isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+    maxWait: 15_000,
+    timeout: 120_000
   })
+}
+
+export async function collectCutoverSnapshot(prisma: PrismaClient): Promise<CutoverSnapshot> {
+  return runReadOnlySnapshotTransaction(prisma, collectSnapshotFromClient)
 }
 
 async function main() {

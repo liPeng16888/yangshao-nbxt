@@ -15,16 +15,23 @@ export DATABASE_URL="$SOURCE_DATABASE_URL"
 export CUTOVER_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 export BACKUP_DIR='<restricted backup directory outside the repository and web root>'
 export BACKUP_FILE="$BACKUP_DIR/yangshao-before-shared-prepaid-$CUTOVER_ID.dump"
-export COUNTS_BEFORE="$BACKUP_DIR/ordinary-counts-before-$CUTOVER_ID.tsv"
-export COUNTS_RESTORE="$BACKUP_DIR/ordinary-counts-restore-$CUTOVER_ID.tsv"
-export COUNTS_AFTER="$BACKUP_DIR/ordinary-counts-after-$CUTOVER_ID.tsv"
+export BASELINE_COUNTS_BEFORE="$BACKUP_DIR/baseline-counts-before-$CUTOVER_ID.tsv"
+export BASELINE_COUNTS_RESTORE="$BACKUP_DIR/baseline-counts-restore-$CUTOVER_ID.tsv"
+export BASELINE_COUNTS_AFTER="$BACKUP_DIR/baseline-counts-after-$CUTOVER_ID.tsv"
+export LEGACY_COUNTS_BEFORE="$BACKUP_DIR/legacy-counts-before-$CUTOVER_ID.tsv"
+export LEGACY_COUNTS_RESTORE="$BACKUP_DIR/legacy-counts-restore-$CUTOVER_ID.tsv"
 export VERIFY_BEFORE="$BACKUP_DIR/shared-prepaid-verify-before-$CUTOVER_ID.json"
 export VERIFY_AFTER="$BACKUP_DIR/shared-prepaid-verify-after-$CUTOVER_ID.json"
+export VERIFY_RESTORE_PHASE_A="$BACKUP_DIR/shared-prepaid-verify-restore-phase-a-$CUTOVER_ID.json"
+export PHASE_A_DIR='<immutable phase-A release directory>'
+export PHASE_B_DIR='<immutable phase-B release directory>'
+export PHASE_A_REVISION='<approved immutable phase-A revision>'
+export PHASE_B_REVISION='<approved immutable phase-B revision>'
 ```
 
 Use a directory owned by the deployment user with mode `0700`; backup and verifier files may contain business identifiers and counts. Check free space before starting. The examples assume the repository is already deployed at the intended revision and `pnpm install --frozen-lockfile` has completed.
 
-The ordinary-count query used at all three checkpoints is:
+The baseline-count query used at every pre/post-cutover and rollback checkpoint contains only tables guaranteed to exist before Phase A. In particular, it intentionally excludes `LabSampleSaveRequest` and every shared-prepaid table created by Phase A:
 
 ```sql
 SELECT table_name, row_count
@@ -39,7 +46,6 @@ FROM (
     ('SubAdminFrontendPermission', (SELECT COUNT(*)::bigint FROM "SubAdminFrontendPermission")),
     ('LabSheet', (SELECT COUNT(*)::bigint FROM "LabSheet")),
     ('SampleBlock', (SELECT COUNT(*)::bigint FROM "SampleBlock")),
-    ('LabSampleSaveRequest', (SELECT COUNT(*)::bigint FROM "LabSampleSaveRequest")),
     ('CellChangeLog', (SELECT COUNT(*)::bigint FROM "CellChangeLog")),
     ('AbnormalRecord', (SELECT COUNT(*)::bigint FROM "AbnormalRecord")),
     ('FinanceEntry', (SELECT COUNT(*)::bigint FROM "FinanceEntry")),
@@ -70,7 +76,25 @@ FROM (
 ORDER BY table_name;
 ```
 
-Save that SQL once as a protected temporary operator file, for example `/tmp/yangshao-ordinary-counts.sql`, then use the same unchanged file at every checkpoint. Remove it after the cutover. A verifier JSON file contains the same ordinary count map and is a second comparison source.
+Save that SQL once as a protected temporary operator file, `/tmp/yangshao-baseline-counts.sql`. Also save this legacy-only query as `/tmp/yangshao-legacy-counts.sql`:
+
+```sql
+SELECT table_name, row_count
+FROM (
+  VALUES
+    ('PrepaidRechargeRecord', (SELECT COUNT(*)::bigint FROM "PrepaidRechargeRecord")),
+    ('PrepaidCustomerRemark', (SELECT COUNT(*)::bigint FROM "PrepaidCustomerRemark")),
+    ('PrepaidUsageRemark', (SELECT COUNT(*)::bigint FROM "PrepaidUsageRemark")),
+    ('FinanceDeletionRequest PREPAID_RECHARGE', (
+      SELECT COUNT(*)::bigint
+      FROM "FinanceDeletionRequest"
+      WHERE "sourceType" = 'PREPAID_RECHARGE'
+    ))
+) AS counts(table_name, row_count)
+ORDER BY table_name;
+```
+
+Use both files unchanged at every applicable checkpoint and remove them after the cutover. The shared verifier is a Phase-A schema check and must never be used as a substitute for these baseline queries on a restored pre-Phase-A database.
 
 ## Cutover procedure
 
@@ -85,19 +109,15 @@ Keep prepaid writes blocked until Step 10 passes. Read-only static frontend page
 With writes already stopped, use a read-only transaction and save the result:
 
 ```bash
-psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-ordinary-counts.sql > "$COUNTS_BEFORE"
-test -s "$COUNTS_BEFORE"
+psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-baseline-counts.sql > "$BASELINE_COUNTS_BEFORE"
+test -s "$BASELINE_COUNTS_BEFORE"
 ```
 
 Also record the legacy counts separately for operator review:
 
 ```bash
-psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv <<'SQL'
-SELECT 'PrepaidRechargeRecord' AS table_name, COUNT(*) FROM "PrepaidRechargeRecord"
-UNION ALL SELECT 'PrepaidCustomerRemark', COUNT(*) FROM "PrepaidCustomerRemark"
-UNION ALL SELECT 'PrepaidUsageRemark', COUNT(*) FROM "PrepaidUsageRemark"
-UNION ALL SELECT 'FinanceDeletionRequest PREPAID_RECHARGE', COUNT(*) FROM "FinanceDeletionRequest" WHERE "sourceType" = 'PREPAID_RECHARGE';
-SQL
+psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-legacy-counts.sql > "$LEGACY_COUNTS_BEFORE"
+test -s "$LEGACY_COUNTS_BEFORE"
 ```
 
 Gate: stop if any ordinary table is missing or the saved count file is empty.
@@ -122,29 +142,53 @@ Gate: the backup filename must contain `$CUTOVER_ID`; `test -s`, `pg_restore --l
 ```bash
 pg_restore --exit-on-error --no-owner --no-acl --dbname="$RESTORE_DATABASE_URL" "$BACKUP_FILE"
 psql "$RESTORE_DATABASE_URL" -v ON_ERROR_STOP=1 -X -c 'SELECT 1;'
-psql "$RESTORE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-ordinary-counts.sql > "$COUNTS_RESTORE"
-diff -u "$COUNTS_BEFORE" "$COUNTS_RESTORE"
+psql "$RESTORE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-baseline-counts.sql > "$BASELINE_COUNTS_RESTORE"
+psql "$RESTORE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-legacy-counts.sql > "$LEGACY_COUNTS_RESTORE"
+diff -u "$BASELINE_COUNTS_BEFORE" "$BASELINE_COUNTS_RESTORE"
+diff -u "$LEGACY_COUNTS_BEFORE" "$LEGACY_COUNTS_RESTORE"
 ```
 
-Run the cutover verifier against the restored database as an additional readability/integrity check:
+Gate: restore, `SELECT 1`, the exact baseline-count diff, and the exact legacy-count diff must all exit 0. Do not run the shared verifier yet: the restored backup is pre-Phase-A and is expected not to contain all required shared tables. Any failure means there is no verified backup: stop here and keep production unchanged. Keep the restored temporary database until the whole cutover is accepted.
+
+### 5. Apply the immutable non-destructive Phase-A artifact
+
+Use two immutable artifacts/revisions from one reviewed lineage. Phase A must physically exclude the cleanup migration directory. Phase B must be its approved descendant and add the cleanup migration at the final timestamp. Record both revision identifiers in the change record and verify the release system's signature/checksum; if the artifacts retain Git metadata, also run:
 
 ```bash
-DATABASE_URL="$RESTORE_DATABASE_URL" pnpm --filter yangshao-server prepaid:verify-cutover
+test "$(git -C "$PHASE_A_DIR" rev-parse HEAD)" = "$PHASE_A_REVISION"
+test "$(git -C "$PHASE_B_DIR" rev-parse HEAD)" = "$PHASE_B_REVISION"
+test ! -e "$PHASE_A_DIR/server/prisma/migrations/20260812040000_remove_legacy_prepaid"
+test -f "$PHASE_B_DIR/server/prisma/migrations/20260812040000_remove_legacy_prepaid/migration.sql"
 ```
 
-Gate: restore, `SELECT 1`, the exact ordinary-count diff, and the verifier must all exit 0. Any failure means there is no verified backup: stop here and keep production unchanged. Keep the restored temporary database until the whole cutover is accepted.
+The expected Phase-A shared migrations, in order, are exactly:
 
-### 5. Run only the non-destructive ledger migrations
+1. `20260811230000_add_shared_prepaid_ledger`
+2. `20260812010000_add_shared_prepaid_idempotency_snapshots`
+3. `20260812020000_add_lab_sample_save_requests`
+4. `20260812030000_add_shared_prepaid_settlement_actions`
 
-Confirm the cleanup migration is not yet marked as applied:
+First exercise Phase A on the restored temporary database. Run every command from the immutable Phase-A directory:
 
 ```bash
-DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status
+(cd "$PHASE_A_DIR" && DATABASE_URL="$RESTORE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status)
+(cd "$PHASE_A_DIR" && DATABASE_URL="$RESTORE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate deploy)
+(cd "$PHASE_A_DIR" && DATABASE_URL="$RESTORE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status)
+(cd "$PHASE_A_DIR" && DATABASE_URL="$RESTORE_DATABASE_URL" pnpm --filter yangshao-server prepaid:verify-cutover > "$VERIFY_RESTORE_PHASE_A")
+test -s "$VERIFY_RESTORE_PHASE_A"
 ```
 
-Apply the shared-ledger migrations up through `20260812030000_add_shared_prepaid_settlement_actions` using the approved deployment artifact/process. Do not run an unrestricted `prisma migrate deploy` while the cleanup migration is present in that artifact: it would apply the destructive cleanup before the pre-cleanup verifier gate. A safe release uses two artifacts/phases: phase A contains only the non-destructive migrations; phase B adds `20260811235900_remove_legacy_prepaid` after Step 6.
+Before deploy, `prisma migrate status` must list the four expected shared migrations above as pending and must not know about `20260812040000_remove_legacy_prepaid`; stop on any unexpected pending migration. After deploy, status must report the Phase-A schema up to date. The restored-database verifier must exit 0 with `"ok": true`, both settlement subtable presence fields true, and an empty `failures` array.
 
-Gate: the four shared prepaid tables/migrations and later non-destructive idempotency/sample-save/action migrations are present, while `20260811235900_remove_legacy_prepaid` is still unapplied.
+Only after that restored-Phase-A gate passes, apply the same immutable Phase-A revision to production:
+
+```bash
+(cd "$PHASE_A_DIR" && DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status)
+(cd "$PHASE_A_DIR" && DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate deploy)
+(cd "$PHASE_A_DIR" && DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status)
+```
+
+Gate: production's pre-deploy status lists only the same expected pending Phase-A migrations; post-deploy status is up to date; the cleanup migration is absent from the artifact and therefore cannot be applied. Preserve both status outputs.
 
 ### 6. Run the verifier before cleanup
 
@@ -157,13 +201,17 @@ Inspect the JSON. It must contain `"ok": true` and an empty `failures` array. Le
 
 Gate: the command must exit 0. Do not redirect stderr into this file, and do not bypass a nonzero status.
 
-### 7. Run the legacy cleanup migration
+### 7. Apply the immutable Phase-B cleanup migration
 
-Reconfirm the verified backup filename, checksum, successful temporary restore, exact count diff, and Step 6 verifier result in the change record. Only then deploy the phase-B artifact and run:
+Reconfirm the verified backup filename/checksum, successful temporary restore, both exact baseline diffs, restored-Phase-A verifier, production Phase-A status, and Step 6 verifier in the change record. Switch to the approved immutable Phase-B artifact. Its timestamp ordering places cleanup after every non-destructive shared migration. Before deploy, status must show exactly one pending migration, `20260812040000_remove_legacy_prepaid`:
 
 ```bash
-DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate deploy
+(cd "$PHASE_B_DIR" && DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status)
+(cd "$PHASE_B_DIR" && DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate deploy)
+(cd "$PHASE_B_DIR" && DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status)
 ```
+
+Gate: the pre-deploy status contains no pending migration other than `20260812040000_remove_legacy_prepaid`; deploy exits 0; post-deploy status reports the Phase-B schema up to date. Stop if the Phase-B revision differs from the approved descendant or contains any unreviewed migration.
 
 The migration deletes only `FinanceDeletionRequest` rows whose `sourceType` is `PREPAID_RECHARGE`, then drops the three named legacy tables in one transaction. It must not be run manually piecemeal. Do not run `prisma migrate reset`, `prisma db push --force-reset`, or any SQL using `CASCADE`.
 
@@ -172,8 +220,8 @@ The migration deletes only `FinanceDeletionRequest` rows whose `sourceType` is `
 ```bash
 DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server prepaid:verify-cutover > "$VERIFY_AFTER"
 test -s "$VERIFY_AFTER"
-psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-ordinary-counts.sql > "$COUNTS_AFTER"
-diff -u "$COUNTS_BEFORE" "$COUNTS_AFTER"
+psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-baseline-counts.sql > "$BASELINE_COUNTS_AFTER"
+diff -u "$BASELINE_COUNTS_BEFORE" "$BASELINE_COUNTS_AFTER"
 ```
 
 Gate: verifier exit 0; JSON `ok` is true; the three legacy table entries report `exists: false`; legacy deletion-request count is zero; and the exact ordinary-count diff is empty. Old `LabSheet.parameters`, `SampleBlock.inputs`, `SampleBlock.results`, and `SampleBlock.parameterSnapshot` JSON remain untouched. Historical `paymentStatus='预存款'` input values are display/history only and never create balances.
@@ -206,7 +254,7 @@ Approved URLs:
 - Settlements: `/prepaid/settlements`
 - Admin login: `/admin/login`
 - Admin recharge: `/admin/shared-prepaid/recharges`
-- Admin members: `/admin/shared-prepaid/members`
+- Admin members: `/admin/shared-prepaid/customers`
 - Admin consumptions: `/admin/shared-prepaid/consumptions`
 - Admin settlements: `/admin/shared-prepaid/settlements`
 
@@ -220,11 +268,11 @@ If any migration, verifier, count comparison, service startup, opening-balance r
 
 1. Immediately stop/block every API writer again. Do not attempt to repair cached balances, lots, payables, settlements, or historical lab JSON manually.
 2. Preserve failed verifier JSON and service/database logs without exposing credentials.
-3. Verify the backup checksum still matches the checksum recorded in Step 3 and that the temporary restored database from Step 4 still answers `SELECT 1` and matches `$COUNTS_BEFORE`.
+3. Verify the backup checksum still matches the checksum recorded in Step 3. The temporary restored database must still answer `SELECT 1` and match both `$BASELINE_COUNTS_BEFORE` and `$LEGACY_COUNTS_BEFORE` using the protected baseline SQL files. Its later Phase-A tables do not replace these baseline comparisons.
 4. Restore exactly that verified backup into a newly created empty replacement production database, or use the provider's atomic database replacement workflow. Do not overlay the dump onto the partially migrated database.
-5. Point the API to the restored replacement database through the approved secret/config mechanism, start one API instance, run `SELECT 1`, run the ordinary-count query, and require an exact match to `$COUNTS_BEFORE`.
-6. Run `DATABASE_URL='<restored production URL>' pnpm --filter yangshao-server prepaid:verify-cutover`; require exit 0 and compare its ordinary counts to the before JSON.
-7. Deploy/start the pre-cutover application revision that matches the restored migration history. Verify customer login, ordinary lab read/write, finance, and legacy prepaid read paths before reopening traffic.
+5. Point one isolated API check process at the restored replacement database through the approved secret/config mechanism. Run `SELECT 1`, save the baseline and legacy counts again, and require exact diffs against `$BASELINE_COUNTS_BEFORE` and `$LEGACY_COUNTS_BEFORE`.
+6. Do **not** run the shared verifier on this exact pre-Phase-A restore: missing new shared tables are expected, so it must execution-fail. For an exact rollback, deploy/start the pre-cutover application revision that matches the restored migration history.
+7. Verify customer login, ordinary lab read/write, finance, and legacy prepaid read paths before reopening traffic. If the incident owner instead authorizes a renewed Phase-A attempt, reapply the same approved immutable Phase-A artifact with `prisma migrate status`, `prisma migrate deploy`, and post-deploy status exactly as in Step 5; only then may the shared verifier run.
 8. Keep prepaid writes in maintenance mode until the incident owner explicitly approves reopening. Opening balances or test transactions created after the backup are intentionally discarded by rollback and must not be recreated until the cutover is rescheduled.
 
 Record the rollback database identifier and backup checksum, but never print or store database URLs, passwords, JWT secrets, encryption keys, dumps, or backup files in the repository.
