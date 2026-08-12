@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   addSampleBlocks,
+  applyCurrentParametersFromIndex as applyCurrentParametersFromIndexApi,
   createLabSheetEventSource,
   getCurrentLabSheet,
   getLabSheetByDate,
@@ -34,6 +35,12 @@ type PreparedBlockSave = {
   fields: SavedFieldSnapshot[]
 }
 
+type PreparedBlockSaveState = {
+  signature: string
+  idempotencyKey: string
+  prepared?: PreparedBlockSave
+}
+
 export type PersistAllBlocksResult = {
   success: boolean
   failedBlockIds: string[]
@@ -58,6 +65,7 @@ type StoredLabDraft = {
       updatedAt?: string
       fields: Partial<Record<keyof LabSampleInput, { baseValue: unknown; value: unknown; revision: number }>>
       changeLogFields: LabChangeLogField[]
+      preparedSave?: { signature: string; idempotencyKey: string }
     }
   >
 }
@@ -73,6 +81,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   const sheet = ref<LabSheet | null>(null)
   const loading = ref(false)
   const saving = ref(false)
+  const applyingParameters = ref(false)
   const adding = ref(false)
   const autoSaving = ref(false)
   const autoSaveStatus = ref<AutoSaveStatus>('idle')
@@ -92,6 +101,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   const retryingBlockIds = new Set<string>()
   const conflictFieldsByBlock = new Map<string, Set<keyof LabSampleInput>>()
   const blockSaveChains = new Map<string, Promise<BlockSaveResult>>()
+  const preparedBlockSaves = new Map<string, PreparedBlockSaveState>()
   let activeAutoSaveCount = 0
   let realtimeSource: EventSource | null = null
   let realtimeDate = ''
@@ -153,8 +163,27 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     }
   }
 
+  async function applyParametersFromIndex(parameters: LabParameter, startIndex: number) {
+    if (!sheet.value || sheet.value.readonly || applyingParameters.value) return false
+    const targetSheetId = sheet.value.id
+    applyingParameters.value = true
+    try {
+      const persisted = await persistAllBlocks()
+      if (!persisted.success) return false
+      saving.value = true
+      const response = await applyCurrentParametersFromIndexApi(parameters, startIndex)
+      if (sheet.value?.id !== targetSheetId) return false
+      applyRemoteSheet(response)
+      syncRealtimeForLoadedSheet()
+      return true
+    } finally {
+      saving.value = false
+      applyingParameters.value = false
+    }
+  }
+
   function patchBlock(blockId: string, patch: Partial<LabSampleInput>) {
-    if (!sheet.value) return
+    if (!sheet.value || applyingParameters.value) return
     const block = sheet.value.sampleBlocks.find((item) => item.id === blockId)
     if (!block || block.readonly || sheet.value.readonly) return
     const nextVersion = (blockVersions.get(blockId) || 0) + 1
@@ -162,8 +191,8 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (!dirtyState.changed) return
     const hadDetectionInput = hasLabDetectionInput(block.inputs)
     block.inputs = { ...block.inputs, ...patch }
-    if (!hadDetectionInput && hasLabDetectionInput(block.inputs)) {
-      block.parameterSnapshot = sheet.value.parameters
+    if (!hadDetectionInput && hasLabDetectionInput(block.inputs) && !block.parameterSnapshot.segmentedApplication) {
+      block.parameterSnapshot = { ...sheet.value.parameters }
     }
     block.results = calculateSampleResults(block.inputs, block.parameterSnapshot)
     blockVersions.set(blockId, nextVersion)
@@ -182,7 +211,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   }
 
   function commitBlockFieldChange(blockId: string, field: keyof LabSampleInput, oldValue: unknown, newValue: unknown) {
-    if (!sheet.value || sheet.value.readonly) return
+    if (!sheet.value || sheet.value.readonly || applyingParameters.value) return
     const block = sheet.value.sampleBlocks.find((item) => item.id === blockId)
     if (!block || block.readonly) return
     if (JSON.stringify(oldValue ?? null) === JSON.stringify(newValue ?? null)) return
@@ -322,6 +351,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       const saved = await saveBlockWithRetry(sheetId, prepared.payload, blockId)
       succeeded = true
       mergeSavedBlock(saved, prepared.fields, sheetId)
+      if (preparedBlockSaves.get(blockId)?.prepared === prepared) preparedBlockSaves.delete(blockId)
       lastAutoSavedAt.value = new Date().toISOString()
       autoSaveError.value = ''
       persistLocalDraft()
@@ -333,9 +363,10 @@ export const useLabSheetStore = defineStore('labSheet', () => {
         autoSaveError.value = '该样品格已被另一台设备修改'
         ElMessage.error('该样品格存在修改冲突，已保留本机内容')
       } else {
+        const businessConflictMessage = getBusinessConflictMessage(error)
         autoSaveStatus.value = 'error'
-        autoSaveError.value = error instanceof Error ? error.message : '自动保存失败'
-        ElMessage.error('自动保存失败，数据已保存在本机草稿中')
+        autoSaveError.value = businessConflictMessage || (error instanceof Error ? error.message : '自动保存失败')
+        ElMessage.error(businessConflictMessage || '自动保存失败，数据已保存在本机草稿中')
       }
       persistLocalDraft()
     } finally {
@@ -391,6 +422,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     pendingBlockIds.clear()
     pendingDirtyFields.clear()
     pendingChangeLogFields.clear()
+    preparedBlockSaves.clear()
     blockVersions.clear()
     retryingBlockIds.clear()
     conflictFieldsByBlock.clear()
@@ -486,11 +518,39 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     })
     const hasDirty = Boolean(fields?.size)
     if (hasDirty) pendingDirtyFields.set(block.id, fields!)
-    else pendingDirtyFields.delete(block.id)
+    else {
+      pendingDirtyFields.delete(block.id)
+      preparedBlockSaves.delete(block.id)
+    }
     return { changed, hasDirty }
   }
 
   function prepareBlockSave(block: SampleBlock): PreparedBlockSave | null {
+    const candidate = buildBlockSaveCandidate(block)
+    if (!candidate) return null
+    const existing = preparedBlockSaves.get(block.id)
+    if (existing?.signature === candidate.signature) {
+      if (existing.prepared) {
+        existing.prepared.fields = candidate.fields
+        return existing.prepared
+      }
+      const prepared = {
+        payload: { ...candidate.payload, idempotencyKey: existing.idempotencyKey },
+        fields: candidate.fields
+      }
+      existing.prepared = prepared
+      return prepared
+    }
+    const idempotencyKey = crypto.randomUUID()
+    const prepared = {
+      payload: { ...candidate.payload, idempotencyKey },
+      fields: candidate.fields
+    }
+    preparedBlockSaves.set(block.id, { signature: candidate.signature, idempotencyKey, prepared })
+    return prepared
+  }
+
+  function buildBlockSaveCandidate(block: SampleBlock) {
     const fields = pendingDirtyFields.get(block.id)
     if (!fields?.size) return null
     const changedFields: Partial<LabSampleInput> = {}
@@ -502,16 +562,31 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       baseInputs[field] = cloneValue(dirty.baseValue) as never
       savedFields.push({ field, revision: dirty.revision, value })
     })
-    return {
-      payload: {
-        id: block.id,
-        baseUpdatedAt: block.updatedAt,
-        baseInputs,
-        changedFields,
-        changeLogFields: Array.from(pendingChangeLogFields.get(block.id)?.values() || [])
-      },
-      fields: savedFields
+    const payload: SampleBlockSavePayload = {
+      id: block.id,
+      baseUpdatedAt: block.updatedAt,
+      baseInputs,
+      changedFields,
+      changeLogFields: Array.from(pendingChangeLogFields.get(block.id)?.values() || [])
     }
+    return { payload, fields: savedFields, signature: stableSaveSignature(payload) }
+  }
+
+  function stableSaveSignature(payload: SampleBlockSavePayload) {
+    return JSON.stringify(canonicalValue(payload))
+  }
+
+  function canonicalValue(value: unknown): unknown {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null
+    if (Array.isArray(value)) return value.map((item) => canonicalValue(item === undefined ? null : item))
+    if (value && typeof value === 'object') {
+      const row = value as Record<string, unknown>
+      return Object.fromEntries(
+        Object.keys(row).sort().flatMap((key) => row[key] === undefined ? [] : [[key, canonicalValue(row[key])]])
+      )
+    }
+    return String(value)
   }
 
   function mergeSavedBlock(saved: SampleBlock, sentFields: SavedFieldSnapshot[], sheetId: string) {
@@ -559,10 +634,12 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (typeof window === 'undefined') return 'server'
     try {
       const raw = window.localStorage.getItem('ys_user')
-      const user = raw ? (JSON.parse(raw) as { id?: string; account?: string }) : null
-      return user?.id || user?.account || 'guest'
+      const user = raw ? (JSON.parse(raw) as { id?: string; account?: string; dataOwnerId?: string }) : null
+      const actorId = user?.id || user?.account || 'guest'
+      const ownerId = user?.dataOwnerId || actorId
+      return `${ownerId}:${actorId}`
     } catch {
-      return 'guest'
+      return 'guest:guest'
     }
   }
 
@@ -588,10 +665,15 @@ export const useLabSheetStore = defineStore('labSheet', () => {
             revision: dirty.revision
           }
         })
+        const preparedSave = preparedBlockSaves.get(blockId)
+        const candidate = buildBlockSaveCandidate(block)
         blocks[blockId] = {
           updatedAt: block.updatedAt,
           fields: storedFields,
-          changeLogFields: Array.from(pendingChangeLogFields.get(blockId)?.values() || [])
+          changeLogFields: Array.from(pendingChangeLogFields.get(blockId)?.values() || []),
+          preparedSave: preparedSave && candidate?.signature === preparedSave.signature
+            ? { signature: preparedSave.signature, idempotencyKey: preparedSave.idempotencyKey }
+            : undefined
         }
       })
       if (!Object.keys(blocks).length) {
@@ -666,6 +748,20 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       if (changeLogs.size) pendingChangeLogFields.set(blockId, changeLogs)
       if (conflicts.size) conflictFieldsByBlock.set(blockId, conflicts)
       block.results = calculateSampleResults(block.inputs, block.parameterSnapshot)
+      const restoredPrepared = storedBlock.preparedSave
+      const candidate = buildBlockSaveCandidate(block)
+      if (
+        restoredPrepared &&
+        typeof restoredPrepared.idempotencyKey === 'string' &&
+        restoredPrepared.idempotencyKey.length > 0 &&
+        restoredPrepared.idempotencyKey.length <= 200 &&
+        candidate?.signature === restoredPrepared.signature
+      ) {
+        preparedBlockSaves.set(blockId, {
+          signature: restoredPrepared.signature,
+          idempotencyKey: restoredPrepared.idempotencyKey
+        })
+      }
       if (!conflicts.size) scheduleBlockAutoSave(blockId, 0)
     })
     persistLocalDraft()
@@ -836,7 +932,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (!sheet.value || payload.sheetId !== sheet.value.id || payload.date !== sheet.value.date) return
 
     if (payload.type === 'block-saved') {
-      applyRemoteBlock(payload.block)
+      void refreshLoadedSheetFromServer()
       return
     }
     if (payload.type === 'parameters-updated') {
@@ -844,22 +940,8 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       return
     }
     if (payload.type === 'sheet-reloaded') {
-      applyRemoteSheet(payload.sheet)
+      void refreshLoadedSheetFromServer()
     }
-  }
-
-  function applyRemoteBlock(block: SampleBlock) {
-    if (!sheet.value) return
-    const nextBlock = cloneBlock(block)
-    const index = sheet.value.sampleBlocks.findIndex((item) => item.id === nextBlock.id)
-    if (index >= 0) {
-      sheet.value.sampleBlocks[index] = mergeRemoteBlockState(nextBlock, sheet.value.sampleBlocks[index])
-    } else {
-      sheet.value.sampleBlocks.push(nextBlock)
-      sheet.value.sampleBlocks.sort((a, b) => a.index - b.index)
-    }
-    persistLocalDraft()
-    syncAutoSaveStatus()
   }
 
   function applyRemoteParameters(parameters: LabParameter) {
@@ -975,10 +1057,32 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return data?.block || data?.message?.block || null
   }
 
+  function getBusinessConflictMessage(error: unknown): string {
+    const response = (error as {
+      response?: {
+        status?: number
+        data?: {
+          message?: string | { message?: string; availableBalance?: unknown }
+          availableBalance?: unknown
+        }
+      }
+    })?.response
+    if (response?.status !== 409 || !response.data) return ''
+    const nested = typeof response.data.message === 'object' ? response.data.message : undefined
+    const message = typeof response.data.message === 'string'
+      ? response.data.message
+      : nested?.message || '业务状态已变化，请刷新后重试'
+    const availableBalance = response.data.availableBalance ?? nested?.availableBalance
+    return availableBalance === undefined || availableBalance === null
+      ? message
+      : `${message}，当前可用余额：${String(availableBalance)} 元`
+  }
+
   return {
     sheet,
     loading,
     saving,
+    applyingParameters,
     adding,
     autoSaving,
     autoSaveStatus,
@@ -993,6 +1097,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     loadCurrentSheet,
     loadSheetByDate,
     saveParameters,
+    applyParametersFromIndex,
     patchBlock,
     commitBlockFieldChange,
     persistBlock,

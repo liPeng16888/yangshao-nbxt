@@ -99,14 +99,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { correctMedicineMovement, createMedicineOutbound, getMedicineItems, getMedicineMovements } from '@/api/medicineInventory'
 import type { MedicineInventoryItem, MedicineInventoryMovement } from '@/types/medicineInventory'
 import { formatDateTime, todayInBeijing } from '@/utils/date'
 import { formatMedicineQuantity, validateMedicineQuantity } from '@/utils/medicineInventory'
+import { tryUseTenantRealtimeStore } from '@/stores/tenantRealtime'
 
 const formRef = ref<FormInstance>()
+const tenantRealtime = tryUseTenantRealtimeStore()
+let unregisterRealtime: (() => void) | undefined
 const items = ref<MedicineInventoryItem[]>([])
 const movements = ref<MedicineInventoryMovement[]>([])
 const loading = ref(false)
@@ -144,6 +147,7 @@ const remainingLabel = computed(() => {
 })
 const canSubmit = computed(() => Boolean(selectedItem.value && quantityValidation.value?.ok && remainingQuantity.value !== null && remainingQuantity.value >= 0 && !saving.value))
 const correctedMovementIds = computed(() => new Set(movements.value.flatMap((movement) => movement.correctionOfId ? [movement.correctionOfId] : [])))
+const hasUnsavedInput = computed(() => Boolean(form.medicineItemId || form.quantity.trim() || form.remark.trim() || correctionVisible.value))
 
 const rules: FormRules<typeof form> = {
   occurredOn: [{ required: true, message: '请选择出库日期', trigger: 'change' }],
@@ -156,7 +160,13 @@ const rules: FormRules<typeof form> = {
 
 onMounted(() => {
   void Promise.all([loadItems(), loadHistory()])
+  unregisterRealtime = tenantRealtime?.registerModule('medicine-inventory', {
+    isDirty: () => hasUnsavedInput.value,
+    refresh: () => Promise.all([loadItems(), loadHistory()]).then(() => undefined)
+  })
 })
+
+onBeforeUnmount(() => unregisterRealtime?.())
 
 async function loadItems() {
   loading.value = true

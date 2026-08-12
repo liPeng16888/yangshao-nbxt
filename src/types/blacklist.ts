@@ -1,6 +1,7 @@
 export interface BlacklistRecord {
   id: string
   uploadedAt: string
+  updatedAt?: string
   uploadedBy: string
   phone?: string
   wechat?: string
@@ -21,7 +22,7 @@ export interface BlacklistPayload {
   note?: string
 }
 
-export type BlacklistUpdatePayload = BlacklistPayload
+export type BlacklistUpdatePayload = BlacklistPayload & { baseUpdatedAt: string }
 
 export interface BlacklistCheckResult {
   hit: boolean

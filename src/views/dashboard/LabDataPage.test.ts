@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   labStore: {
     loading: false,
     saving: false,
+    applyingParameters: false,
     adding: false,
     autoSaving: false,
     autoSaveStatus: 'idle',
@@ -56,13 +57,14 @@ function mountPage() {
   const LabSheetGridStub = defineComponent({
     props: {
       blocks: { type: Array, default: () => [] },
+      readonly: { type: Boolean, default: false },
       selectionMode: { type: Boolean, default: false },
       selectedBlockIds: { type: Array, default: () => [] }
     },
     emits: ['selectionChange'],
     setup(props, { emit }) {
       return () =>
-        h('div', { class: 'lab-grid-stub' }, [
+        h('div', { class: 'lab-grid-stub', 'data-readonly': String(props.readonly) }, [
           props.selectionMode
             ? h(
                 'button',
@@ -200,6 +202,7 @@ describe('LabDataPage table layout', () => {
     mocks.accessGuard.hasFeatureAccess.mockReset()
     mocks.accessGuard.hasFeatureAccess.mockReturnValue(true)
     mocks.labStore.autoSaveStatus = 'idle'
+    mocks.labStore.applyingParameters = false
     mocks.labStore.autoSaveError = ''
     mocks.labStore.conflictBlockIds = []
     mocks.labStore.sheet = { date: '2026-06-24', readonly: false }
@@ -337,6 +340,15 @@ describe('LabDataPage table layout', () => {
     expect(wrapper.find('.append-panel').exists()).toBe(true)
   })
 
+  it('makes the data grid readonly and hides append controls while parameters are being applied', async () => {
+    mocks.labStore.applyingParameters = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(wrapper.get('.lab-grid-stub').attributes('data-readonly')).toBe('true')
+    expect(wrapper.find('.append-panel').exists()).toBe(false)
+  })
+
   it('appends sample blocks from the controls below the table', async () => {
     const wrapper = mountPage()
     await settleMountedPage()
@@ -398,6 +410,36 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.patchBlock).not.toHaveBeenCalledWith('block-2', expect.anything())
     expect(mocks.labStore.commitBlockFieldChange).toHaveBeenCalledWith('block-1', 'price', null, 20)
     expect(mocks.labStore.commitBlockFieldChange).toHaveBeenCalledWith('block-1', 'paymentStatus', '', '月结款')
+    expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
+  })
+
+  it('clears prepaid member fields when bulk fill changes an existing prepaid sample to another status', async () => {
+    mocks.labStore.sampleBlocks[0].inputs = {
+      sequence: '001',
+      price: 30.25,
+      paymentStatus: '预存款',
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    }
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '填写已选1个样品').trigger('click')
+    await wrapper.find('.bulk-fill-apply').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.patchBlock.mock.calls[0]).toStrictEqual([
+      'block-1',
+      {
+        price: 20,
+        paymentStatus: '月结款',
+        prepaidMemberId: undefined,
+        prepaidMemberPhone: undefined
+      }
+    ])
+    expect(mocks.labStore.patchBlock).not.toHaveBeenCalledWith('block-2', expect.anything())
     expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
   })
 

@@ -147,7 +147,9 @@ const smsTemplate = ref<LabReportSmsTemplate>(loadLabReportSmsTemplate())
 let businessDayBoundaryTimer: number | undefined
 let businessDayPreflushTimer: number | undefined
 
-const isPageReadonly = computed(() => Boolean(labStore.sheet?.readonly || switchingBusinessDay.value))
+const isPageReadonly = computed(() => Boolean(
+  labStore.sheet?.readonly || switchingBusinessDay.value || labStore.applyingParameters
+))
 const canViewCompletedSensitiveData = computed(() => {
   accessGuard.accessSessionRevision
   return accessGuard.hasFeatureAccess('COMPLETED_SAMPLE_DATA')
@@ -470,12 +472,21 @@ async function applyBulkSampleFill(payload: { patch: Partial<LabSampleInput> }) 
     ElMessage.warning('请先选择至少一个样品')
     return
   }
-  const fields = getBulkFillChangeLogFields(payload.patch)
   selectedBlocks.forEach((block) => {
+    const blockPatch = { ...payload.patch }
+    if (
+      block.inputs.paymentStatus === '预存款' &&
+      hasPatchField(blockPatch, 'paymentStatus') &&
+      blockPatch.paymentStatus !== '预存款'
+    ) {
+      blockPatch.prepaidMemberId = undefined
+      blockPatch.prepaidMemberPhone = undefined
+    }
+    const fields = getBulkFillChangeLogFields(blockPatch)
     fields.forEach((field) => {
-      labStore.commitBlockFieldChange(block.id, field, block.inputs[field] ?? null, payload.patch[field] ?? null)
+      labStore.commitBlockFieldChange(block.id, field, block.inputs[field] ?? null, blockPatch[field] ?? null)
     })
-    labStore.patchBlock(block.id, payload.patch)
+    labStore.patchBlock(block.id, blockPatch)
   })
   const saved = await labStore.persistAllBlocks({ silent: true })
   if (!saved.success) {

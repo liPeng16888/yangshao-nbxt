@@ -1,0 +1,55 @@
+import { describe, expect, it } from 'vitest'
+import {
+  deleteCoefficientRows,
+  inferCoefficientRowAutoCode,
+  normalizeCoefficientAddCount,
+  normalizeCoefficientRowId,
+  renumberAutomaticCoefficientRows
+} from './coefficientRows'
+
+describe('coefficient row identity', () => {
+  it('infers legacy automatic codes only when code matches the loaded position', () => {
+    expect(inferCoefficientRowAutoCode('003', 3)).toBe(true)
+    expect(inferCoefficientRowAutoCode('A-03', 3)).toBe(false)
+    expect(inferCoefficientRowAutoCode('010', 3)).toBe(false)
+    expect(inferCoefficientRowAutoCode('CUSTOM', 3, true)).toBe(true)
+  })
+
+  it('renumbers only automatic rows in display order', () => {
+    const rows = [
+      { id: '1', code: '001', autoCode: true },
+      { id: '2', code: 'A-02', autoCode: false },
+      { id: '4', code: '004', autoCode: true }
+    ]
+    renumberAutomaticCoefficientRows(rows)
+    expect(rows.map((row) => row.code)).toEqual(['001', 'A-02', '003'])
+  })
+
+  it('deletes multiple rows but rejects deleting every row', () => {
+    const rows = [
+      { id: '1', code: '001', autoCode: true },
+      { id: '2', code: '002', autoCode: true },
+      { id: '3', code: '003', autoCode: true }
+    ]
+    expect(deleteCoefficientRows(rows, new Set(['2']))).toHaveLength(2)
+    expect(() => deleteCoefficientRows(rows, new Set(['1', '2', '3']))).toThrow('至少保留一个样品')
+  })
+
+  it.each([
+    [null, 1],
+    [0, 1],
+    [-3, 1],
+    [2.8, 2],
+    [75, 50]
+  ])('normalizes add count %s into the supported integer range', (value, expected) => {
+    expect(normalizeCoefficientAddCount(value)).toBe(expected)
+  })
+
+  it('keeps a valid unique ID and regenerates blank or duplicate IDs', () => {
+    const used = new Set<string>()
+    expect(normalizeCoefficientRowId('stored-1', used, () => 'generated-1')).toBe('stored-1')
+    expect(normalizeCoefficientRowId('stored-1', used, () => 'generated-2')).toBe('generated-2')
+    expect(normalizeCoefficientRowId('   ', used, () => 'generated-3')).toBe('generated-3')
+    expect([...used]).toEqual(['stored-1', 'generated-2', 'generated-3'])
+  })
+})

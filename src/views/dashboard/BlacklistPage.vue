@@ -71,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import type { UploadFile, UploadFiles, UploadUserFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -80,12 +80,15 @@ import BlacklistTable from '@/components/blacklist/BlacklistTable.vue'
 import BlacklistUploadForm from '@/components/blacklist/BlacklistUploadForm.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useBlacklistStore } from '@/stores/blacklist'
+import { tryUseTenantRealtimeStore } from '@/stores/tenantRealtime'
 import type { BlacklistPayload, BlacklistRecord } from '@/types/blacklist'
 import { validateBlacklistPayload } from '@/utils/validators'
 
 const route = useRoute()
 const authStore = useAuthStore()
 const blacklistStore = useBlacklistStore()
+const tenantRealtime = tryUseTenantRealtimeStore()
+let unregisterRealtime: (() => void) | undefined
 const highlightId = computed(() => (typeof route.query.hit === 'string' ? route.query.hit : ''))
 const supplementVisible = ref(false)
 const supplementRecord = ref<BlacklistRecord | null>(null)
@@ -102,7 +105,13 @@ const supplementForm = reactive<BlacklistPayload>({
 
 onMounted(() => {
   blacklistStore.loadRecords()
+  unregisterRealtime = tenantRealtime?.registerModule('blacklist', {
+    isDirty: () => supplementVisible.value,
+    refresh: () => blacklistStore.loadRecords()
+  })
 })
+
+onBeforeUnmount(() => unregisterRealtime?.())
 
 watch(
   () => route.query.hit,
@@ -189,7 +198,11 @@ async function submitSupplement() {
     cancelButtonText: '取消',
     type: 'warning'
   })
-  await blacklistStore.updateRecord(supplementRecord.value.id, { ...supplementForm, images: [...supplementForm.images] })
+  await blacklistStore.updateRecord(supplementRecord.value.id, {
+    ...supplementForm,
+    images: [...supplementForm.images],
+    baseUpdatedAt: supplementRecord.value.updatedAt || ''
+  })
   ElMessage.success('黑名单信息已补充')
   supplementVisible.value = false
 }

@@ -11,6 +11,36 @@ enum UserRole {
   ROOT_ADMIN
   SUB_ADMIN
   FRONTEND_USER
+  FRONTEND_SUB_USER
+}
+
+enum FrontendMenuPermission {
+  DATA_MAIN
+  DATA_STANDARD_SAMPLE
+  DATA_COEFFICIENT
+  LAB_REPORT_IMAGE_TEMPLATE
+  LAB_REPORT_SMS_TEMPLATE
+  ATTENDANCE_OVERVIEW
+  ATTENDANCE_EMPLOYEES
+  ATTENDANCE_SCHEDULES
+  ATTENDANCE_RECORDS
+  ATTENDANCE_LEAVE
+  ATTENDANCE_COMPENSATION
+  ATTENDANCE_PAYROLL
+  FINANCE_EXPENSES
+  FINANCE_INCOME
+  FINANCE_UNSETTLED
+  FINANCE_MONTHLY_SETTLEMENT
+  PREPAID_RECHARGE
+  PREPAID_CUSTOMERS
+  PREPAID_CONSUMPTIONS
+  PREPAID_SETTLEMENTS
+  REPORTS
+  MEDICINE_STOCK
+  MEDICINE_INBOUND
+  MEDICINE_OUTBOUND
+  CUSTOMER_OVERVIEW
+  BLACKLIST
 }
 
 enum PaymentMethod {
@@ -72,65 +102,189 @@ enum AccessGuardFeature {
   MEDICINE_INVENTORY
   CUSTOMER_OVERVIEW
   COMPLETED_SAMPLE_DATA
+  EMPLOYEE_ATTENDANCE
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum EmployeeLeaveUnit {
+  HOUR
+  HALF_DAY
+  FULL_DAY
+}
+
+enum EmployeeLeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum EmployeePayrollStatus {
+  DRAFT
+  CONFIRMED
+}
+
+enum EmployeeAuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  CONFIRM
+  REOPEN
+  REVEAL
+}
+
+enum SharedPrepaidLedgerKind {
+  RECHARGE
+  CONSUMPTION
+  CONSUMPTION_REVERSAL
+  RECHARGE_REVERSAL
+}
+
+enum SharedPrepaidConsumptionKind {
+  CONSUMPTION
+  REVERSAL
+}
+
+enum SharedPrepaidPayableStatus {
+  PENDING
+  HELD
+  COMPLETED
+  REVERSED
+}
+
+enum SharedPrepaidSettlementStatus {
+  AWAITING_PAYMENT
+  AWAITING_RECEIPT
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum SharedPrepaidSettlementActionOperation {
+  SUBMIT_PAYMENT
+  CONFIRM_RECEIPT
+  REJECT
+  CANCEL
 }
 
 model User {
-  id                        String    @id @default(uuid())
-  account                   String    @unique
-  username                  String
-  displayRemark             String?
-  role                      UserRole
-  passwordHash              String
-  passwordCipher            String?
-  accessGuardEnabled        Boolean   @default(false)
-  accessGuardPassword       String?
-  accessGuardTtlMinutes     Int       @default(5)
-  accessGuardRecoveryPrompt String?
-  accessGuardRecoveryAnswer String?
-  disabled                  Boolean   @default(false)
-  disabledReason            String?
-  deletedAt                 DateTime?
-  createdAt                 DateTime  @default(now())
-  updatedAt                 DateTime  @updatedAt
+  id                          String    @id @default(uuid())
+  account                     String    @unique
+  username                    String
+  displayRemark               String?
+  role                        UserRole
+  parentFrontendUserId        String?
+  permissionVersion           Int       @default(1)
+  requiresAccessGuardPassword Boolean   @default(true)
+  lastLoginAt                 DateTime?
+  passwordHash                String
+  passwordCipher              String?
+  accessGuardEnabled          Boolean   @default(false)
+  accessGuardPassword         String?
+  accessGuardTtlMinutes       Int       @default(5)
+  accessGuardRecoveryPrompt   String?
+  accessGuardRecoveryAnswer   String?
+  disabled                    Boolean   @default(false)
+  disabledReason              String?
+  deletedAt                   DateTime?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
 
-  frontendSheets                  LabSheet[]                   @relation("FrontendSheets")
-  financeEntries                  FinanceEntry[]               @relation("FrontendFinance")
-  monthlyCustomerRemarks          MonthlyCustomerRemark[]      @relation("FrontendMonthlyCustomerRemarks")
-  prepaidRecharges                PrepaidRechargeRecord[]      @relation("FrontendPrepaidRecharges")
-  prepaidCustomerRemarks          PrepaidCustomerRemark[]      @relation("FrontendPrepaidCustomerRemarks")
-  prepaidUsageRemarks             PrepaidUsageRemark[]         @relation("FrontendPrepaidUsageRemarks")
-  customers                       Customer[]                   @relation("FrontendCustomers")
-  blacklistUploads                BlacklistRecord[]            @relation("BlacklistUploader")
-  reminders                       Reminder[]                   @relation("FrontendReminders")
-  createdReminders                Reminder[]                   @relation("ReminderCreator")
-  financeDeletionRequests         FinanceDeletionRequest[]     @relation("FrontendFinanceDeletionRequests")
-  reviewedFinanceDeletionRequests FinanceDeletionRequest[]     @relation("ReviewedFinanceDeletionRequests")
-  inviteCodes                     InviteCode[]                 @relation("InviteCreator")
-  usedInviteCodes                 InviteCode[]                 @relation("InviteUser")
-  createdSubPerms                 SubAdminFrontendPermission[] @relation("PermissionCreator")
-  subAdminPerms                   SubAdminFrontendPermission[] @relation("SubAdminPermissions")
-  frontendPerms                   SubAdminFrontendPermission[] @relation("FrontendPermissions")
-  medicineItems                   MedicineInventoryItem[]      @relation("FrontendMedicineItems")
-  medicineMovements               MedicineInventoryMovement[]  @relation("FrontendMedicineMovements")
-  medicineCommonNames             MedicineCommonName[]         @relation("FrontendMedicineCommonNames")
-  accessGuardGroups               AccessGuardGroup[]           @relation("FrontendAccessGuardGroups")
-  accessGuardGroupFeatures        AccessGuardGroupFeature[]    @relation("FrontendAccessGuardGroupFeatures")
+  frontendSheets                      LabSheet[]                      @relation("FrontendSheets")
+  financeEntries                      FinanceEntry[]                  @relation("FrontendFinance")
+  monthlyCustomerRemarks              MonthlyCustomerRemark[]         @relation("FrontendMonthlyCustomerRemarks")
+  customers                           Customer[]                      @relation("FrontendCustomers")
+  blacklistUploads                    BlacklistRecord[]               @relation("BlacklistUploader")
+  reminders                           Reminder[]                      @relation("FrontendReminders")
+  createdReminders                    Reminder[]                      @relation("ReminderCreator")
+  financeDeletionRequests             FinanceDeletionRequest[]        @relation("FrontendFinanceDeletionRequests")
+  reviewedFinanceDeletionRequests     FinanceDeletionRequest[]        @relation("ReviewedFinanceDeletionRequests")
+  inviteCodes                         InviteCode[]                    @relation("InviteCreator")
+  usedInviteCodes                     InviteCode[]                    @relation("InviteUser")
+  createdSubPerms                     SubAdminFrontendPermission[]    @relation("PermissionCreator")
+  subAdminPerms                       SubAdminFrontendPermission[]    @relation("SubAdminPermissions")
+  frontendPerms                       SubAdminFrontendPermission[]    @relation("FrontendPermissions")
+  medicineItems                       MedicineInventoryItem[]         @relation("FrontendMedicineItems")
+  medicineMovements                   MedicineInventoryMovement[]     @relation("FrontendMedicineMovements")
+  medicineCommonNames                 MedicineCommonName[]            @relation("FrontendMedicineCommonNames")
+  accessGuardGroups                   AccessGuardGroup[]              @relation("FrontendAccessGuardGroups")
+  accessGuardGroupFeatures            AccessGuardGroupFeature[]       @relation("FrontendAccessGuardGroupFeatures")
+  employees                           Employee[]
+  employeeWeeklySchedules             EmployeeWeeklySchedule[]
+  employeeDateOverrides               EmployeeDateOverride[]
+  employeeMonthlySettings             EmployeeMonthlySetting[]
+  employeeAttendanceRecords           EmployeeAttendanceRecord[]
+  employeeLeaveTypes                  EmployeeLeaveType[]
+  employeeLeaveRequests               EmployeeLeaveRequest[]          @relation("FrontendEmployeeLeaveRequests")
+  reviewedEmployeeLeaveRequests       EmployeeLeaveRequest[]          @relation("EmployeeLeaveReviewer")
+  employeeCommissionTypes             EmployeeCommissionType[]
+  employeeCommissionRecords           EmployeeCommissionRecord[]
+  employeeBonuses                     EmployeeBonus[]
+  employeePayrollRuns                 EmployeePayrollRun[]            @relation("FrontendEmployeePayrollRuns")
+  confirmedEmployeePayrollRuns        EmployeePayrollRun[]            @relation("EmployeePayrollConfirmer")
+  employeePayrollItems                EmployeePayrollItem[]
+  employeePayrollAdjustments          EmployeePayrollAdjustment[]
+  employeeAuditLogs                   EmployeeAuditLog[]              @relation("FrontendEmployeeAuditLogs")
+  performedEmployeeAuditLogs          EmployeeAuditLog[]              @relation("EmployeeAuditActor")
+  createdSharedPrepaidMembers         SharedPrepaidMember[]           @relation("SharedPrepaidMemberCreator")
+  ownedSharedPrepaidRecharges         SharedPrepaidRecharge[]         @relation("SharedPrepaidRechargeOwner")
+  actedSharedPrepaidRecharges         SharedPrepaidRecharge[]         @relation("SharedPrepaidRechargeActor")
+  ownedSharedPrepaidLedgerEntries     SharedPrepaidLedgerEntry[]      @relation("SharedPrepaidLedgerEntryOwner")
+  actedSharedPrepaidLedgerEntries     SharedPrepaidLedgerEntry[]      @relation("SharedPrepaidLedgerEntryActor")
+  sharedPrepaidConsumptions           SharedPrepaidConsumption[]      @relation("SharedPrepaidConsumptionOwner")
+  actedSharedPrepaidConsumptions      SharedPrepaidConsumption[]      @relation("SharedPrepaidConsumptionActor")
+  sharedPrepaidAllocationSources      SharedPrepaidAllocation[]       @relation("SharedPrepaidAllocationSourceOwner")
+  sourceSharedPrepaidPayables         SharedPrepaidPayable[]          @relation("SharedPrepaidPayableSourceOwner")
+  consumerSharedPrepaidPayables       SharedPrepaidPayable[]          @relation("SharedPrepaidPayableConsumerOwner")
+  sharedPrepaidSettlementsAsA         SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementAccountA")
+  sharedPrepaidSettlementsAsB         SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementAccountB")
+  paidSharedPrepaidSettlements        SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementPayer")
+  receivedSharedPrepaidSettlements    SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementReceiver")
+  createdSharedPrepaidSettlements     SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementCreator")
+  submittedSharedPrepaidPayments      SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementPaymentSubmitter")
+  confirmedSharedPrepaidReceipts      SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementReceiptConfirmer")
+  rejectedSharedPrepaidSettlements    SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementRejector")
+  cancelledSharedPrepaidSettlements   SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementCanceller")
+  actedSharedPrepaidSettlementActions SharedPrepaidSettlementAction[] @relation("SharedPrepaidSettlementActionActor")
+  ownedSharedPrepaidSettlementActions SharedPrepaidSettlementAction[] @relation("SharedPrepaidSettlementActionOwner")
+  parentFrontendUser                  User?                           @relation("FrontendSubAccounts", fields: [parentFrontendUserId], references: [id], onDelete: Restrict)
+  frontendSubAccounts                 User[]                          @relation("FrontendSubAccounts")
+  frontendSubAccountPermissions       FrontendSubAccountPermission[]
 
   @@index([role])
+  @@index([parentFrontendUserId])
   @@index([deletedAt])
 }
 
+model FrontendSubAccountPermission {
+  id           String                 @id @default(uuid())
+  subAccountId String
+  permission   FrontendMenuPermission
+  createdAt    DateTime               @default(now())
+
+  subAccount User @relation(fields: [subAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([subAccountId, permission])
+  @@index([subAccountId])
+}
+
 model AccessGuardGroup {
-  id             String                    @id @default(uuid())
+  id             String   @id @default(uuid())
   frontendUserId String
   name           String
-  enabled        Boolean                   @default(true)
-  ttlMinutes     Int                       @default(5)
+  enabled        Boolean  @default(true)
+  ttlMinutes     Int      @default(5)
+  grantVersion   Int      @default(1)
   password       String
   recoveryPrompt String
   recoveryAnswer String
-  createdAt      DateTime                  @default(now())
-  updatedAt      DateTime                  @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   frontendUser User                      @relation("FrontendAccessGuardGroups", fields: [frontendUserId], references: [id], onDelete: Cascade)
   features     AccessGuardGroupFeature[]
@@ -208,10 +362,11 @@ model LabSheet {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  frontendUser    User             @relation("FrontendSheets", fields: [frontendUserId], references: [id])
-  sampleBlocks    SampleBlock[]
-  changeLogs      CellChangeLog[]
-  abnormalRecords AbnormalRecord[]
+  frontendUser              User                       @relation("FrontendSheets", fields: [frontendUserId], references: [id])
+  sampleBlocks              SampleBlock[]
+  changeLogs                CellChangeLog[]
+  abnormalRecords           AbnormalRecord[]
+  sharedPrepaidConsumptions SharedPrepaidConsumption[] @relation("SharedPrepaidConsumptionSheet")
 
   @@unique([frontendUserId, date])
   @@index([date])
@@ -228,12 +383,25 @@ model SampleBlock {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  sheet           LabSheet         @relation(fields: [sheetId], references: [id], onDelete: Cascade)
-  changeLogs      CellChangeLog[]
-  abnormalRecords AbnormalRecord[]
+  sheet                     LabSheet                   @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  changeLogs                CellChangeLog[]
+  abnormalRecords           AbnormalRecord[]
+  sharedPrepaidConsumptions SharedPrepaidConsumption[] @relation("SharedPrepaidConsumptionBlock")
 
   @@unique([sheetId, index])
   @@index([sheetId])
+}
+
+model LabSampleSaveRequest {
+  idempotencyKey     String   @id
+  requestFingerprint String
+  sheetId            String
+  sampleBlockId      String
+  responseSnapshot   Json
+  createdAt          DateTime @default(now())
+
+  @@index([sheetId, sampleBlockId])
+  @@index([createdAt])
 }
 
 model CellChangeLog {
@@ -320,50 +488,223 @@ model MonthlyCustomerRemark {
   @@index([frontendUserId])
 }
 
-model PrepaidRechargeRecord {
-  id             String   @id @default(uuid())
-  frontendUserId String
-  rechargeDate   String
-  customer       String
-  amount         Decimal  @db.Decimal(12, 2)
-  usableTimes    Int
-  remark         String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+model SharedPrepaidMember {
+  id            String   @id @default(uuid())
+  phone         String   @unique
+  cachedBalance Decimal  @default(0) @db.Decimal(14, 2)
+  version       Int      @default(1)
+  createdById   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  frontendUser User @relation("FrontendPrepaidRecharges", fields: [frontendUserId], references: [id])
-
-  @@index([frontendUserId, rechargeDate])
-  @@index([frontendUserId, customer])
+  createdBy     User                       @relation("SharedPrepaidMemberCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  recharges     SharedPrepaidRecharge[]    @relation("SharedPrepaidRechargeMember")
+  ledgerEntries SharedPrepaidLedgerEntry[] @relation("SharedPrepaidLedgerEntryMember")
+  consumptions  SharedPrepaidConsumption[] @relation("SharedPrepaidConsumptionMember")
 }
 
-model PrepaidCustomerRemark {
-  id             String   @id @default(uuid())
-  frontendUserId String
-  customer       String
-  remark         String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+model SharedPrepaidRecharge {
+  id                  String    @id @default(uuid())
+  memberId            String
+  ownerFrontendUserId String
+  actorUserId         String
+  rechargeDate        String
+  paidAmount          Decimal   @db.Decimal(14, 2)
+  giftAmount          Decimal   @db.Decimal(14, 2)
+  totalAmount         Decimal   @db.Decimal(14, 2)
+  remainingAmount     Decimal   @db.Decimal(14, 2)
+  isOpeningBalance    Boolean   @default(false)
+  remark              String?
+  idempotencyKey      String    @unique
+  reversedAt          DateTime?
+  reversedByLedgerId  String?   @unique
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  frontendUser User @relation("FrontendPrepaidCustomerRemarks", fields: [frontendUserId], references: [id])
+  member            SharedPrepaidMember       @relation("SharedPrepaidRechargeMember", fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  ownerFrontendUser User                      @relation("SharedPrepaidRechargeOwner", fields: [ownerFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorUser         User                      @relation("SharedPrepaidRechargeActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reversedByLedger  SharedPrepaidLedgerEntry? @relation("SharedPrepaidRechargeReversalLedger", fields: [reversedByLedgerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  allocations       SharedPrepaidAllocation[] @relation("SharedPrepaidAllocationRecharge")
 
-  @@unique([frontendUserId, customer])
-  @@index([frontendUserId])
+  @@index([memberId, ownerFrontendUserId, rechargeDate, createdAt, id])
 }
 
-model PrepaidUsageRemark {
-  id             String   @id @default(uuid())
-  frontendUserId String
-  usageDate      String
-  customer       String
-  remark         String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+model SharedPrepaidLedgerEntry {
+  id                  String                  @id @default(uuid())
+  memberId            String
+  kind                SharedPrepaidLedgerKind
+  balanceDelta        Decimal                 @db.Decimal(14, 2)
+  ownerFrontendUserId String
+  actorUserId         String
+  referenceType       String
+  referenceId         String
+  idempotencyKey      String                  @unique
+  requestFingerprint  String?
+  responseSnapshot    Json?
+  reason              String?
+  createdAt           DateTime                @default(now())
 
-  frontendUser User @relation("FrontendPrepaidUsageRemarks", fields: [frontendUserId], references: [id])
+  member            SharedPrepaidMember    @relation("SharedPrepaidLedgerEntryMember", fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  ownerFrontendUser User                   @relation("SharedPrepaidLedgerEntryOwner", fields: [ownerFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorUser         User                   @relation("SharedPrepaidLedgerEntryActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reversedRecharge  SharedPrepaidRecharge? @relation("SharedPrepaidRechargeReversalLedger")
 
-  @@unique([frontendUserId, usageDate, customer])
-  @@index([frontendUserId, usageDate])
+  @@index([memberId, createdAt])
+  @@index([referenceType, referenceId])
+}
+
+model SharedPrepaidConsumption {
+  id                      String                       @id @default(uuid())
+  memberId                String
+  consumingFrontendUserId String
+  actorUserId             String
+  kind                    SharedPrepaidConsumptionKind
+  amount                  Decimal                      @db.Decimal(14, 2)
+  sheetId                 String
+  sampleBlockId           String
+  sampleIndex             Int
+  sampleNumberSnapshot    String?
+  sampleCountSnapshot     Int                          @default(1)
+  elementsSnapshot        Json
+  phoneSnapshot           String
+  sheetDate               String
+  active                  Boolean                      @default(true)
+  reversalOfId            String?                      @unique
+  idempotencyKey          String                       @unique
+  createdAt               DateTime                     @default(now())
+
+  member                SharedPrepaidMember       @relation("SharedPrepaidConsumptionMember", fields: [memberId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  consumingFrontendUser User                      @relation("SharedPrepaidConsumptionOwner", fields: [consumingFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorUser             User                      @relation("SharedPrepaidConsumptionActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sheet                 LabSheet                  @relation("SharedPrepaidConsumptionSheet", fields: [sheetId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sampleBlock           SampleBlock               @relation("SharedPrepaidConsumptionBlock", fields: [sampleBlockId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reversalOf            SharedPrepaidConsumption? @relation("SharedPrepaidConsumptionReversal", fields: [reversalOfId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reversal              SharedPrepaidConsumption? @relation("SharedPrepaidConsumptionReversal")
+  allocations           SharedPrepaidAllocation[] @relation("SharedPrepaidAllocationConsumption")
+  payables              SharedPrepaidPayable[]    @relation("SharedPrepaidPayableConsumption")
+
+  @@index([memberId, createdAt])
+  @@index([consumingFrontendUserId, createdAt])
+  @@index([sampleBlockId, active])
+}
+
+model SharedPrepaidAllocation {
+  id                  String   @id @default(uuid())
+  consumptionId       String
+  rechargeId          String
+  sourceOwnerId       String
+  allocatedAmount     Decimal  @db.Decimal(14, 2)
+  paidRatio           Decimal  @db.Decimal(20, 10)
+  exactTransferAmount Decimal  @db.Decimal(20, 8)
+  createdAt           DateTime @default(now())
+
+  consumption SharedPrepaidConsumption @relation("SharedPrepaidAllocationConsumption", fields: [consumptionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  recharge    SharedPrepaidRecharge    @relation("SharedPrepaidAllocationRecharge", fields: [rechargeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sourceOwner User                     @relation("SharedPrepaidAllocationSourceOwner", fields: [sourceOwnerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([consumptionId, rechargeId])
+  @@index([rechargeId])
+}
+
+model SharedPrepaidPayable {
+  id              String                     @id @default(uuid())
+  consumptionId   String
+  sourceOwnerId   String
+  consumerOwnerId String
+  exactAmount     Decimal                    @db.Decimal(20, 8)
+  amount          Decimal                    @db.Decimal(14, 1)
+  status          SharedPrepaidPayableStatus @default(PENDING)
+  reversalOfId    String?                    @unique
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  consumption     SharedPrepaidConsumption      @relation("SharedPrepaidPayableConsumption", fields: [consumptionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sourceOwner     User                          @relation("SharedPrepaidPayableSourceOwner", fields: [sourceOwnerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  consumerOwner   User                          @relation("SharedPrepaidPayableConsumerOwner", fields: [consumerOwnerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reversalOf      SharedPrepaidPayable?         @relation("SharedPrepaidPayableReversal", fields: [reversalOfId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reversal        SharedPrepaidPayable?         @relation("SharedPrepaidPayableReversal")
+  settlementLines SharedPrepaidSettlementLine[] @relation("SharedPrepaidSettlementLinePayable")
+
+  @@unique([consumptionId, sourceOwnerId, consumerOwnerId])
+  @@index([sourceOwnerId, consumerOwnerId, status, createdAt])
+}
+
+model SharedPrepaidSettlement {
+  id                     String                        @id @default(uuid())
+  accountAId             String
+  accountBId             String
+  aToBAmount             Decimal                       @db.Decimal(14, 1)
+  bToAAmount             Decimal                       @db.Decimal(14, 1)
+  netAmount              Decimal                       @db.Decimal(14, 1)
+  payerFrontendUserId    String?
+  receiverFrontendUserId String?
+  status                 SharedPrepaidSettlementStatus
+  actualTransferredAt    DateTime?
+  proofUrls              Json
+  remark                 String?
+  createdById            String
+  paymentSubmittedById   String?
+  paymentSubmittedAt     DateTime?
+  receiptConfirmedById   String?
+  receiptConfirmedAt     DateTime?
+  rejectedById           String?
+  rejectedAt             DateTime?
+  rejectionReason        String?
+  cancelledById          String?
+  cancelledAt            DateTime?
+  version                Int                           @default(1)
+  idempotencyKey         String                        @unique
+  createdAt              DateTime                      @default(now())
+  updatedAt              DateTime                      @updatedAt
+
+  accountA             User                            @relation("SharedPrepaidSettlementAccountA", fields: [accountAId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  accountB             User                            @relation("SharedPrepaidSettlementAccountB", fields: [accountBId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  payerFrontendUser    User?                           @relation("SharedPrepaidSettlementPayer", fields: [payerFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  receiverFrontendUser User?                           @relation("SharedPrepaidSettlementReceiver", fields: [receiverFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdBy            User                            @relation("SharedPrepaidSettlementCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  paymentSubmittedBy   User?                           @relation("SharedPrepaidSettlementPaymentSubmitter", fields: [paymentSubmittedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  receiptConfirmedBy   User?                           @relation("SharedPrepaidSettlementReceiptConfirmer", fields: [receiptConfirmedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  rejectedBy           User?                           @relation("SharedPrepaidSettlementRejector", fields: [rejectedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  cancelledBy          User?                           @relation("SharedPrepaidSettlementCanceller", fields: [cancelledById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  lines                SharedPrepaidSettlementLine[]   @relation("SharedPrepaidSettlementLineSettlement")
+  actions              SharedPrepaidSettlementAction[]
+
+  @@index([accountAId, accountBId, status, createdAt])
+}
+
+model SharedPrepaidSettlementLine {
+  id           String    @id @default(uuid())
+  settlementId String
+  payableId    String
+  direction    String
+  amount       Decimal   @db.Decimal(14, 1)
+  releasedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  settlement SharedPrepaidSettlement @relation("SharedPrepaidSettlementLineSettlement", fields: [settlementId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  payable    SharedPrepaidPayable    @relation("SharedPrepaidSettlementLinePayable", fields: [payableId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([settlementId, payableId])
+  @@index([payableId, releasedAt])
+}
+
+model SharedPrepaidSettlementAction {
+  id                  String                                 @id @default(uuid())
+  settlementId        String
+  operation           SharedPrepaidSettlementActionOperation
+  actorUserId         String
+  actorFrontendUserId String
+  idempotencyKey      String                                 @unique
+  requestFingerprint  String
+  responseSnapshot    Json
+  createdAt           DateTime                               @default(now())
+
+  settlement        SharedPrepaidSettlement @relation(fields: [settlementId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorUser         User                    @relation("SharedPrepaidSettlementActionActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorFrontendUser User                    @relation("SharedPrepaidSettlementActionOwner", fields: [actorFrontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([settlementId, createdAt])
 }
 
 model BlacklistRecord {
@@ -377,6 +718,7 @@ model BlacklistRecord {
   images         Json
   other          String?
   note           String?
+  updatedAt      DateTime @updatedAt
 
   uploadedBy User @relation("BlacklistUploader", fields: [uploadedById], references: [id])
 }
@@ -480,4 +822,338 @@ model MedicineCommonName {
 
   @@unique([frontendUserId, name])
   @@index([frontendUserId, name])
+}
+
+model Employee {
+  id                     String         @id @default(uuid())
+  frontendUserId         String
+  employeeNumber         String
+  name                   String
+  status                 EmployeeStatus @default(ACTIVE)
+  phone                  String?
+  idCardCipher           String?
+  bankCardCipher         String?
+  addressCipher          String?
+  emergencyContactCipher String?
+  photoPath              String?
+  hireDate               String
+  terminationDate        String?
+  baseSalary             Decimal        @default(0) @db.Decimal(12, 2)
+  attendanceBonus        Decimal        @default(0) @db.Decimal(12, 2)
+  overtimeHourlyRate     Decimal        @default(0) @db.Decimal(12, 2)
+  restQuotaDays          Decimal        @default(0) @db.Decimal(6, 2)
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  frontendUser       User                        @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  weeklySchedules    EmployeeWeeklySchedule[]
+  dateOverrides      EmployeeDateOverride[]
+  monthlySettings    EmployeeMonthlySetting[]
+  attendanceRecords  EmployeeAttendanceRecord[]
+  leaveRequests      EmployeeLeaveRequest[]
+  commissionRecords  EmployeeCommissionRecord[]
+  bonuses            EmployeeBonus[]
+  payrollItems       EmployeePayrollItem[]
+  payrollAdjustments EmployeePayrollAdjustment[]
+
+  @@unique([frontendUserId, employeeNumber])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, status])
+  @@index([frontendUserId, name])
+}
+
+model EmployeeWeeklySchedule {
+  id               String   @id @default(uuid())
+  frontendUserId   String
+  employeeId       String
+  weekday          Int
+  isWorkday        Boolean  @default(true)
+  plannedStartTime String?
+  plannedEndTime   String?
+  scheduledMinutes Int      @default(480)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([employeeId, weekday])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, employeeId])
+}
+
+model EmployeeDateOverride {
+  id               String   @id @default(uuid())
+  frontendUserId   String
+  employeeId       String
+  date             String
+  isWorkday        Boolean
+  plannedStartTime String?
+  plannedEndTime   String?
+  scheduledMinutes Int      @default(480)
+  remark           String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([employeeId, date])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, date])
+}
+
+model EmployeeMonthlySetting {
+  id                String   @id @default(uuid())
+  frontendUserId    String
+  employeeId        String
+  month             String
+  scheduledWorkDays Decimal  @db.Decimal(6, 2)
+  restQuotaDays     Decimal  @default(0) @db.Decimal(6, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([employeeId, month])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, month])
+}
+
+model EmployeeAttendanceRecord {
+  id                 String    @id @default(uuid())
+  frontendUserId     String
+  employeeId         String
+  date               String
+  isScheduledWorkday Boolean
+  scheduledMinutes   Int       @default(0)
+  checkInAt          DateTime?
+  checkOutAt         DateTime?
+  workedMinutes      Int       @default(0)
+  lateMinutes        Int       @default(0)
+  earlyLeaveMinutes  Int       @default(0)
+  absenceMinutes     Int       @default(0)
+  overtimeMinutes    Int       @default(0)
+  manuallyEdited     Boolean   @default(false)
+  remark             String?
+  payrollLockedAt    DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([employeeId, date])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, date])
+  @@index([frontendUserId, employeeId, date])
+}
+
+model EmployeeLeaveType {
+  id                    String   @id @default(uuid())
+  frontendUserId        String
+  name                  String
+  active                Boolean  @default(true)
+  countsTowardRestQuota Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  frontendUser  User                   @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  leaveRequests EmployeeLeaveRequest[]
+
+  @@unique([frontendUserId, name])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, active])
+}
+
+model EmployeeLeaveRequest {
+  id              String              @id @default(uuid())
+  frontendUserId  String
+  employeeId      String
+  leaveTypeId     String
+  startDate       String
+  endDate         String
+  unit            EmployeeLeaveUnit
+  hours           Decimal?            @db.Decimal(6, 2)
+  countedDays     Decimal             @db.Decimal(6, 2)
+  reason          String
+  status          EmployeeLeaveStatus @default(PENDING)
+  reviewRemark    String?
+  reviewedById    String?
+  reviewedAt      DateTime?
+  payrollLockedAt DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  frontendUser User              @relation("FrontendEmployeeLeaveRequests", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee          @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  leaveType    EmployeeLeaveType @relation(fields: [leaveTypeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  reviewedBy   User?             @relation("EmployeeLeaveReviewer", fields: [reviewedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, status, startDate])
+  @@index([frontendUserId, employeeId, startDate, endDate])
+  @@index([leaveTypeId])
+}
+
+model EmployeeCommissionType {
+  id             String   @id @default(uuid())
+  frontendUserId String
+  name           String
+  unitName       String
+  unitPrice      Decimal  @db.Decimal(12, 2)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  frontendUser User                       @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  records      EmployeeCommissionRecord[]
+
+  @@unique([frontendUserId, name])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, active])
+}
+
+model EmployeeCommissionRecord {
+  id                String    @id @default(uuid())
+  frontendUserId    String
+  employeeId        String
+  commissionTypeId  String
+  date              String
+  quantity          Decimal   @db.Decimal(12, 3)
+  unitPriceSnapshot Decimal   @db.Decimal(12, 2)
+  amount            Decimal   @db.Decimal(12, 2)
+  remark            String?
+  payrollLockedAt   DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  frontendUser   User                   @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee       Employee               @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  commissionType EmployeeCommissionType @relation(fields: [commissionTypeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, date])
+  @@index([frontendUserId, employeeId, date])
+  @@index([commissionTypeId])
+}
+
+model EmployeeBonus {
+  id              String    @id @default(uuid())
+  frontendUserId  String
+  employeeId      String
+  date            String
+  amount          Decimal   @db.Decimal(12, 2)
+  reason          String
+  payrollLockedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  frontendUser User     @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee     Employee @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, date])
+  @@index([frontendUserId, employeeId, date])
+}
+
+model EmployeePayrollRun {
+  id             String                @id @default(uuid())
+  frontendUserId String
+  month          String
+  status         EmployeePayrollStatus @default(DRAFT)
+  confirmedById  String?
+  confirmedAt    DateTime?
+  reopenReason   String?
+  reopenedAt     DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  frontendUser User                  @relation("FrontendEmployeePayrollRuns", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  confirmedBy  User?                 @relation("EmployeePayrollConfirmer", fields: [confirmedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  items        EmployeePayrollItem[]
+
+  @@unique([frontendUserId, month])
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, status, month])
+}
+
+model EmployeePayrollItem {
+  id                     String   @id @default(uuid())
+  frontendUserId         String
+  payrollRunId           String
+  employeeId             String
+  employeeNumberSnapshot String
+  employeeNameSnapshot   String
+  baseSalary             Decimal  @db.Decimal(12, 2)
+  attendanceBonus        Decimal  @db.Decimal(12, 2)
+  scheduledWorkDays      Decimal  @db.Decimal(6, 2)
+  restQuotaDays          Decimal  @db.Decimal(6, 2)
+  countedLeaveDays       Decimal  @db.Decimal(6, 2)
+  excessLeaveDays        Decimal  @db.Decimal(6, 2)
+  absenceDays            Decimal  @db.Decimal(6, 2)
+  dailyRate              Decimal  @db.Decimal(12, 2)
+  leaveDeduction         Decimal  @db.Decimal(12, 2)
+  absenceDeduction       Decimal  @db.Decimal(12, 2)
+  overtimeMinutes        Int
+  overtimeHourlyRate     Decimal  @db.Decimal(12, 2)
+  overtimePay            Decimal  @db.Decimal(12, 2)
+  commissionAmount       Decimal  @db.Decimal(12, 2)
+  bonusAmount            Decimal  @db.Decimal(12, 2)
+  adjustmentAmount       Decimal  @db.Decimal(12, 2)
+  payableAmount          Decimal  @db.Decimal(12, 2)
+  issues                 Json
+  calculationSnapshot    Json
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  frontendUser User                        @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  payrollRun   EmployeePayrollRun          @relation(fields: [payrollRunId, frontendUserId], references: [id, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+  employee     Employee                    @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+  adjustments  EmployeePayrollAdjustment[]
+
+  @@unique([payrollRunId, employeeId])
+  @@unique([id, employeeId, frontendUserId])
+  @@index([frontendUserId, employeeId])
+}
+
+model EmployeePayrollAdjustment {
+  id             String   @id @default(uuid())
+  frontendUserId String
+  payrollItemId  String
+  employeeId     String
+  amount         Decimal  @db.Decimal(12, 2)
+  reason         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  frontendUser User                @relation(fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  payrollItem  EmployeePayrollItem @relation(fields: [payrollItemId, employeeId, frontendUserId], references: [id, employeeId, frontendUserId], onDelete: Cascade, onUpdate: Cascade)
+  employee     Employee            @relation(fields: [employeeId, frontendUserId], references: [id, frontendUserId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, payrollItemId])
+  @@index([frontendUserId, employeeId])
+}
+
+model EmployeeAuditLog {
+  id             String              @id @default(uuid())
+  frontendUserId String
+  actorUserId    String
+  action         EmployeeAuditAction
+  entityType     String
+  entityId       String
+  reason         String?
+  beforeData     Json?
+  afterData      Json?
+  createdAt      DateTime            @default(now())
+
+  frontendUser User @relation("FrontendEmployeeAuditLogs", fields: [frontendUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorUser    User @relation("EmployeeAuditActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id, frontendUserId])
+  @@index([frontendUserId, createdAt])
+  @@index([frontendUserId, entityType, entityId])
+  @@index([actorUserId, createdAt])
 }

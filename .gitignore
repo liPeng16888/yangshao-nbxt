@@ -6,10 +6,15 @@ server/dist/
 server/generated/
 /uploads/
 .DS_Store
+.env
 .env.local
 .env.production
 server/.env
+server/.env.local
+admin/.env
 admin/.env.local
+/private-uploads/
+/server/private-uploads/
 *.log
 coverage/
 playwright-report/

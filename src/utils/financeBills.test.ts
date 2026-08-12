@@ -6,12 +6,10 @@ import {
   filterMonthlySettlementDailyRows,
   filterUnsettledRows,
   getMonthlySettlementDailyRowsFromSheet,
-  getPrepaidDailyRowsFromSheet,
   getUnsettledRowsFromSheet,
   summarizeIncomeSheet,
   summarizeIncomeRows,
-  summarizeMonthlySettlementReport,
-  summarizePrepaidReport
+  summarizeMonthlySettlementReport
 } from './financeBills'
 
 function makeBlock(id: string, price: number | null, paymentStatus = ''): SampleBlock {
@@ -36,6 +34,7 @@ function makeBlock(id: string, price: number | null, paymentStatus = ''): Sample
       calcium: 0,
       magnesium: 0,
       titanium: 0,
+      bottleDensity: 0,
       moisture: 0,
       burnLoss: 0
     },
@@ -69,7 +68,7 @@ describe('finance bill aggregation', () => {
     expect(row.statusSummaries.find((item) => item.status === '月结款')).toMatchObject({ count: 1, amount: 30 })
   })
 
-  it('counts prepaid income by recharge date and usable times instead of prepaid sample rows', () => {
+  it('counts prepaid samples once and recognizes paid principal without gift or sample price as income', () => {
     const sheet: LabSheet = {
       ...makeSheet(),
       sampleBlocks: [
@@ -79,17 +78,21 @@ describe('finance bill aggregation', () => {
     }
 
     const row = summarizeIncomeSheet(sheet)
-    const report = summarizeIncomeRows('2026-06', [row], [
-      { id: 'p-1', rechargeDate: '2026-06-30', customer: '客户甲', amount: 1000, usableTimes: 10, remark: '' },
-      { id: 'p-2', rechargeDate: '2026-06-30', customer: '客户乙', amount: 500, usableTimes: 4, remark: '' }
-    ])
+    const report = summarizeIncomeRows('2026-06', [row], [{
+      rechargeDate: '2026-06-25',
+      paidAmount: 1000,
+      giftAmount: 100,
+      totalAmount: 1100
+    }])
 
-    expect(row.statusSummaries.find((item) => item.status === '预存款')).toMatchObject({ count: 0, amount: 0 })
-    expect(report.statusSummaries.find((item) => item.status === '预存款')).toMatchObject({ count: 14, amount: 1500 })
-    expect(report.rows.find((item) => item.date === '2026-06-30')).toMatchObject({
-      sampleCount: 14,
-      totalAmount: 1500
+    expect(row.statusSummaries.find((item) => item.status === '预存款')).toMatchObject({ count: 1, amount: 0 })
+    expect(report.statusSummaries.find((item) => item.status === '预存款')).toMatchObject({ count: 1, amount: 1000 })
+    expect(report.rows.find((item) => item.date === '2026-06-25')).toMatchObject({
+      sampleCount: 2,
+      totalAmount: 1020
     })
+    expect(report.totalAmount).toBe(1020)
+    expect(report.totalSamples).toBe(2)
   })
 
   it('lists only unpaid samples that have a numeric amount', () => {
@@ -116,7 +119,7 @@ describe('finance bill aggregation', () => {
     expect(filterUnsettledRows(rows, ['客户甲', '客户丙']).map((row) => row.customer)).toEqual(['客户甲', '客户丙'])
   })
 
-  it('uses only the payer for unsettled, monthly settlement, and prepaid finance ownership', () => {
+  it('uses only the payer for unsettled and monthly settlement finance ownership', () => {
     const payer = {
       id: 'customer-wang',
       name: '王总',
@@ -155,8 +158,6 @@ describe('finance bill aggregation', () => {
 
     const unsettledRows = getUnsettledRowsFromSheet(sheet)
     const monthlyRows = getMonthlySettlementDailyRowsFromSheet(sheet)
-    const prepaidRows = getPrepaidDailyRowsFromSheet(sheet)
-
     expect(unsettledRows[0]).toMatchObject({ customer: '王总' })
     expect(filterUnsettledRows(unsettledRows, ['王总'])).toHaveLength(1)
     expect(filterUnsettledRows(unsettledRows, ['李总'])).toEqual([])
@@ -164,7 +165,6 @@ describe('finance bill aggregation', () => {
       customer: '王总',
       customerDisplay: '王总 13055558888 wangzong 王总微信 付款客户'
     })
-    expect(prepaidRows[0]).toMatchObject({ customer: '王总', sampleCount: 3 })
   })
 
   it('groups monthly settlement samples by date and customer, then summarizes by customer for the month', () => {
@@ -300,37 +300,4 @@ describe('finance bill aggregation', () => {
     expect(filterMonthlySettlementDailyRows(rows, ['客户甲', '客户丙']).map((row) => row.customer)).toEqual(['客户甲', '客户丙'])
   })
 
-  it('merges prepaid recharges and deducts daily prepaid sample usage by customer', () => {
-    const sheet: LabSheet = {
-      ...makeSheet(),
-      sampleBlocks: [
-        makeBlock('001', 1, '预存款'),
-        makeBlock('002', 2, '预存款'),
-        makeBlock('003', 30, '月结款')
-      ]
-    }
-    sheet.sampleBlocks[1].inputs.customerText = '客户001'
-
-    const dailyRows = getPrepaidDailyRowsFromSheet(sheet)
-    const report = summarizePrepaidReport(
-      [
-        { id: 'p-1', rechargeDate: '2026-06-20', customer: '客户001', amount: 300, usableTimes: 3, remark: '首次预存' },
-        { id: 'p-2', rechargeDate: '2026-06-25', customer: '客户001', amount: 500, usableTimes: 5, remark: '' }
-      ],
-      dailyRows,
-      { 客户001: '重点客户' },
-      { '2026-06-25__客户001': '当天消耗' }
-    )
-
-    expect(dailyRows).toMatchObject([{ date: '2026-06-25', customer: '客户001', sampleCount: 3 }])
-    expect(report.customerRows[0]).toMatchObject({
-      customer: '客户001',
-      totalAmount: 800,
-      totalUsableTimes: 8,
-      usedTimes: 3,
-      availableTimes: 5,
-      remark: '重点客户'
-    })
-    expect(report.dailyRows[0]).toMatchObject({ id: '2026-06-25__客户001', remark: '当天消耗' })
-  })
 })

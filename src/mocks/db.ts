@@ -15,24 +15,41 @@ import type {
   MedicineUnit
 } from '@/types/medicineInventory'
 import type { DateRange, FinanceReport, SampleDetectionReport } from '@/types/report'
-import type { PrepaidRechargeRow } from '@/types/financeBills'
-import type { LabParameter, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
+import type { LabParameter, LabParameterKey, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
 import { defaultLabParameters, DEFAULT_SAMPLE_BLOCK_COUNT } from '@/constants/labSheetTemplate'
 import { financeCategoryRules } from '@/constants/reportCategories'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
 import { businessDateInBeijing, getReportRange, todayInBeijing } from '@/utils/date'
 import { medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
+import { hasLabDetectionInput } from '@/utils/sampleReport'
+import { getMockSharedPrepaidOwnerId, listMockSharedPrepaidIncomeRecharges } from './sharedPrepaidLedger'
+import type {
+  CreateFrontendSubAccountPayload,
+  FrontendSubAccountDto,
+  ResetFrontendSubAccountPasswordPayload,
+  UpdateFrontendSubAccountPayload
+} from '@/types/frontendSubAccount'
 
-const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
 const MEDICINE_COMMON_NAME_STORAGE_KEY = 'ys_medicine_common_names'
 
-let currentUser: AuthUser = {
+const mainFrontendUser: AuthUser = {
   id: 'u-admin',
   username: '管理员',
   account: 'admin',
-  role: 'admin' as const
+  role: 'FRONTEND_USER' as const,
+  dataOwnerId: 'u-admin',
+  permissionVersion: 1,
+  permissions: [],
+  requiresAccessGuardPassword: true,
+  isFrontendMainAccount: true,
+  isFrontendSubAccount: false
 }
+
+let currentUser: AuthUser = clone(mainFrontendUser)
+
+let frontendSubAccounts: FrontendSubAccountDto[] = []
+const frontendSubAccountPasswordHashes = new Map<string, string>()
 
 let labParameters: LabParameter = {
   ...defaultLabParameters,
@@ -116,6 +133,12 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+async function mockPasswordHash(password: string) {
+  const bytes = new TextEncoder().encode(password)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
 function delay<T>(value: T, ms = 120) {
   return new Promise<T>((resolve) => {
     window.setTimeout(() => resolve(clone(value)), ms)
@@ -179,10 +202,29 @@ function ensureSheet(date = businessDateInBeijing()) {
 }
 
 export async function mockLogin(payload: LoginPayload): Promise<AuthResponse> {
-  if (payload.account !== 'admin' || payload.password !== 'admin123') {
-    throw new Error('账号或密码错误')
+  if (payload.account === 'admin' && payload.password === 'admin123') {
+    currentUser = clone(mainFrontendUser)
+    return delay({ token: 'mock-token-admin', user: currentUser })
   }
-  return delay({ token: 'mock-token-admin', user: currentUser })
+  const subAccount = frontendSubAccounts.find((item) => item.account === payload.account)
+  const passwordHash = subAccount ? frontendSubAccountPasswordHashes.get(subAccount.id) : undefined
+  if (!subAccount || subAccount.disabled || !passwordHash || passwordHash !== await mockPasswordHash(payload.password)) {
+    throw new Error(subAccount?.disabled ? '子账号已停用，请联系主账号' : '账号或密码错误')
+  }
+  subAccount.lastLoginAt = dayjs().toISOString()
+  currentUser = {
+    id: subAccount.id,
+    username: subAccount.username,
+    account: subAccount.account,
+    role: 'FRONTEND_SUB_USER',
+    dataOwnerId: mainFrontendUser.id,
+    permissionVersion: subAccount.permissionVersion,
+    permissions: subAccount.permissions,
+    requiresAccessGuardPassword: subAccount.requiresAccessGuardPassword,
+    isFrontendMainAccount: false,
+    isFrontendSubAccount: true
+  }
+  return delay({ token: `mock-token-${subAccount.id}-${subAccount.permissionVersion}`, user: currentUser })
 }
 
 export async function mockRegister(payload: RegisterPayload): Promise<AuthResponse> {
@@ -209,6 +251,72 @@ export async function mockUpdatePassword(payload: UpdatePasswordPayload) {
   return delay({ ok: true })
 }
 
+export async function mockFrontendSubAccounts() {
+  return delay(frontendSubAccounts)
+}
+
+export async function mockCreateFrontendSubAccount(payload: CreateFrontendSubAccountPayload) {
+  if (payload.password.length < 6 || payload.password !== payload.confirmPassword) throw new Error('请正确设置子账号密码')
+  if (!payload.permissions.length) throw new Error('请至少选择一个菜单权限')
+  if (payload.account.trim() === mainFrontendUser.account || frontendSubAccounts.some((item) => item.account === payload.account.trim())) throw new Error('登录账号已存在')
+  const now = dayjs().toISOString()
+  const created: FrontendSubAccountDto = {
+    id: `sub-${Date.now()}`,
+    account: payload.account.trim(),
+    username: payload.username.trim(),
+    disabled: false,
+    requiresAccessGuardPassword: payload.requiresAccessGuardPassword,
+    permissionVersion: 1,
+    permissions: Array.from(new Set(payload.permissions)),
+    lastLoginAt: null,
+    createdAt: now,
+    updatedAt: now
+  }
+  frontendSubAccounts.push(created)
+  frontendSubAccountPasswordHashes.set(created.id, await mockPasswordHash(payload.password))
+  return delay(created)
+}
+
+export async function mockUpdateFrontendSubAccount(id: string, payload: UpdateFrontendSubAccountPayload) {
+  const row = frontendSubAccounts.find((item) => item.id === id)
+  if (!row) throw new Error('子账号不存在')
+  row.username = payload.username.trim()
+  row.permissions = Array.from(new Set(payload.permissions))
+  row.requiresAccessGuardPassword = payload.requiresAccessGuardPassword
+  row.permissionVersion += 1
+  row.updatedAt = dayjs().toISOString()
+  return delay(row)
+}
+
+export async function mockSetFrontendSubAccountStatus(id: string, disabled: boolean, disabledReason?: string) {
+  const row = frontendSubAccounts.find((item) => item.id === id)
+  if (!row) throw new Error('子账号不存在')
+  row.disabled = disabled
+  row.disabledReason = disabled ? disabledReason || '已由主账号停用' : null
+  row.permissionVersion += 1
+  row.updatedAt = dayjs().toISOString()
+  return delay({ ok: true })
+}
+
+export async function mockResetFrontendSubAccountPassword(id: string, payload: ResetFrontendSubAccountPasswordPayload) {
+  const row = frontendSubAccounts.find((item) => item.id === id)
+  if (!row) throw new Error('子账号不存在')
+  if (payload.currentPassword !== 'admin123') throw new Error('主账号当前密码错误')
+  if (payload.newPassword.length < 6 || payload.newPassword !== payload.confirmPassword) throw new Error('请正确设置新密码')
+  frontendSubAccountPasswordHashes.set(id, await mockPasswordHash(payload.newPassword))
+  row.permissionVersion += 1
+  row.updatedAt = dayjs().toISOString()
+  return delay({ ok: true })
+}
+
+export async function mockDeleteFrontendSubAccount(id: string) {
+  const index = frontendSubAccounts.findIndex((item) => item.id === id)
+  if (index < 0) throw new Error('子账号不存在')
+  frontendSubAccountPasswordHashes.delete(id)
+  frontendSubAccounts.splice(index, 1)
+  return delay({ ok: true })
+}
+
 export async function mockCurrentLabSheet() {
   return delay(ensureSheet())
 }
@@ -227,6 +335,36 @@ export async function mockUpdateParameters(parameters: LabParameter) {
   labParameters = { ...parameters, savedAt: dayjs().toISOString() }
   sheet.parameters = clone(labParameters)
   return delay(labParameters)
+}
+
+export async function mockApplyParametersFromIndex(parameters: LabParameter, startIndex: number) {
+  if (typeof startIndex !== 'number' || !Number.isInteger(startIndex) || startIndex <= 0) {
+    throw new Error('起始样品编号必须是正整数')
+  }
+  const validatedParameters = requireCompleteLabParameters(parameters)
+  const sheet = ensureSheet()
+  if (sheet.readonly) throw new Error('历史日期表格仅支持查看，不能修改')
+  if (!sheet.sampleBlocks.some((block) => block.index === startIndex)) {
+    throw new Error('起始样品不存在，请刷新后重新选择')
+  }
+  labParameters = { ...validatedParameters, savedAt: dayjs().toISOString() }
+  sheet.parameters = clone(labParameters)
+  sheet.sampleBlocks = sheet.sampleBlocks.map((block) => {
+    if (block.index < startIndex) {
+      if (hasLabDetectionInput(block.inputs)) return block
+      return {
+        ...block,
+        parameterSnapshot: { ...clone(block.parameterSnapshot), segmentedApplication: true as const }
+      }
+    }
+    const parameterSnapshot = { ...clone(labParameters), segmentedApplication: true as const }
+    return {
+      ...block,
+      parameterSnapshot,
+      results: calculateSampleResults(block.inputs, parameterSnapshot)
+    }
+  })
+  return delay(sheet)
 }
 
 export async function mockAddSampleBlocks(sheetId: string, count: number) {
@@ -248,15 +386,34 @@ export async function mockSaveSampleBlock(sheetId: string, block: SampleBlockSav
     ...currentBlock.inputs,
     ...(block.changedFields || block.inputs || {})
   }
+  const firstDetectionInput = !hasLabDetectionInput(currentBlock.inputs) && hasLabDetectionInput(inputs)
+  const parameterSnapshot = firstDetectionInput && !currentBlock.parameterSnapshot.segmentedApplication
+    ? clone(sheet.parameters)
+    : currentBlock.parameterSnapshot
   const nextBlock = {
     ...currentBlock,
     inputs,
     updatedAt: dayjs().toISOString(),
-    results: calculateSampleResults(inputs, currentBlock.parameterSnapshot)
+    parameterSnapshot,
+    results: calculateSampleResults(inputs, parameterSnapshot)
   }
   if (index >= 0) sheet.sampleBlocks[index] = nextBlock
   else sheet.sampleBlocks.push(nextBlock)
   return delay(nextBlock)
+}
+
+function requireCompleteLabParameters(parameters: unknown): LabParameter {
+  if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
+    throw new Error('参数必须是有限数值')
+  }
+  return Object.keys(defaultLabParameters).reduce<LabParameter>((next, key) => {
+    const value = (parameters as Record<string, unknown>)[key]
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error('参数必须是有限数值')
+    }
+    next[key as LabParameterKey] = value
+    return next
+  }, { ...defaultLabParameters })
 }
 
 export async function mockLabHistory() {
@@ -565,7 +722,7 @@ export async function mockSampleDetectionReport(range: DateRange): Promise<Sampl
   const incomeReport = summarizeIncomeRows(
     startDate.slice(0, 7),
     dates.map((date) => summarizeIncomeSheet(ensureSheet(date))),
-    loadPrepaidRecharges().filter((row) => row.rechargeDate >= startDate && row.rechargeDate <= endDate),
+    listMockSharedPrepaidIncomeRecharges(getMockSharedPrepaidOwnerId(currentUser), startDate, endDate),
     new Set(dates)
   )
   const rows = incomeReport.rows
@@ -589,17 +746,6 @@ export async function mockSampleDetectionReport(range: DateRange): Promise<Sampl
     },
     rows
   })
-}
-
-function loadPrepaidRecharges(): PrepaidRechargeRow[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(PREPAID_RECHARGE_STORAGE_KEY)
-    if (!raw) return []
-    return JSON.parse(raw) as PrepaidRechargeRow[]
-  } catch {
-    return []
-  }
 }
 
 function classifyFinanceItem(item: string) {

@@ -1,5 +1,4 @@
 import type { SamplePaymentStatus } from './labSheet'
-import type { FinanceDeleteRequestStatus } from './finance'
 
 export type IncomePaymentStatus = SamplePaymentStatus | '未选择'
 
@@ -62,6 +61,7 @@ export interface MonthlySettlementSummaryRow {
   settlementStatus: MonthlySettlementStatus
   paidAmount?: number | null
   remark?: string
+  updatedAt?: string
 }
 
 export interface MonthlySettlementReport {
@@ -70,42 +70,4 @@ export interface MonthlySettlementReport {
   totalAmount: number
   dailyRows: MonthlySettlementDailyRow[]
   summaryRows: MonthlySettlementSummaryRow[]
-}
-
-export interface PrepaidRechargePayload {
-  rechargeDate: string
-  customer: string
-  amount: number
-  usableTimes: number
-  remark?: string
-}
-
-export interface PrepaidRechargeRow extends PrepaidRechargePayload {
-  id: string
-  createdAt?: string
-  deleteRequestId?: string
-  deleteRequestStatus?: FinanceDeleteRequestStatus
-}
-
-export interface PrepaidCustomerRow {
-  id: string
-  customer: string
-  totalAmount: number
-  totalUsableTimes: number
-  usedTimes: number
-  availableTimes: number
-  remark?: string
-}
-
-export interface PrepaidDailyUsageRow {
-  id: string
-  date: string
-  customer: string
-  sampleCount: number
-  remark?: string
-}
-
-export interface PrepaidReport {
-  customerRows: PrepaidCustomerRow[]
-  dailyRows: PrepaidDailyUsageRow[]
 }

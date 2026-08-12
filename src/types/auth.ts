@@ -1,8 +1,16 @@
+import type { FrontendMenuPermission } from '@/config/frontendNavigation'
+
 export interface AuthUser {
   id: string
   username: string
   account: string
-  role: 'ROOT_ADMIN' | 'SUB_ADMIN' | 'FRONTEND_USER' | 'admin' | 'staff'
+  role: 'ROOT_ADMIN' | 'SUB_ADMIN' | 'FRONTEND_USER' | 'FRONTEND_SUB_USER' | 'admin' | 'staff'
+  dataOwnerId?: string
+  permissionVersion?: number
+  permissions?: FrontendMenuPermission[]
+  requiresAccessGuardPassword?: boolean
+  isFrontendMainAccount?: boolean
+  isFrontendSubAccount?: boolean
 }
 
 export interface LoginPayload {

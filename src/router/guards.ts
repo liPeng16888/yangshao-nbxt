@@ -2,10 +2,12 @@ export interface AuthRedirectInput {
   isLoggedIn: boolean
   toPath: string
   requiresAuth?: boolean
+  authenticatedHome?: string
 }
 
 export const accessGuardFeatures = [
   'FINANCE',
+  'EMPLOYEE_ATTENDANCE',
   'REPORTS',
   'BLACKLIST',
   'HISTORICAL_DATES',
@@ -17,6 +19,7 @@ export const accessGuardFeatures = [
 export type AccessGuardFeature = typeof accessGuardFeatures[number]
 
 export function featureForPath(path: string): AccessGuardFeature | null {
+  if (path.startsWith('/employee-attendance')) return 'EMPLOYEE_ATTENDANCE'
   if (path.startsWith('/finance')) return 'FINANCE'
   if (path.startsWith('/reports')) return 'REPORTS'
   if (path.startsWith('/blacklist')) return 'BLACKLIST'
@@ -27,7 +30,7 @@ export function featureForPath(path: string): AccessGuardFeature | null {
 
 export function resolveAuthRedirect(input: AuthRedirectInput) {
   if (input.requiresAuth && !input.isLoggedIn) return '/login'
-  if (input.toPath === '/login' && input.isLoggedIn) return '/data'
+  if (input.toPath === '/login' && input.isLoggedIn) return input.authenticatedHome || '/data'
   return null
 }
 

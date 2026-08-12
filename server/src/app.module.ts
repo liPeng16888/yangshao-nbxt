@@ -12,6 +12,9 @@ import { CustomersModule } from './customers/customers.module'
 import { ReportsModule } from './reports/reports.module'
 import { CustomerOverviewModule } from './customer-overview/customer-overview.module'
 import { MedicineInventoryModule } from './medicine-inventory/medicine-inventory.module'
+import { EmployeeAttendanceModule } from './employee-attendance/employee-attendance.module'
+import { TenantRealtimeModule } from './realtime/tenant-realtime.module'
+import { SharedPrepaidModule } from './shared-prepaid/shared-prepaid.module'
 
 @Module({
   imports: [
@@ -27,7 +30,10 @@ import { MedicineInventoryModule } from './medicine-inventory/medicine-inventory
     ReportsModule,
     CustomerOverviewModule,
     AdminModule,
-    MedicineInventoryModule
+    MedicineInventoryModule,
+    EmployeeAttendanceModule,
+    TenantRealtimeModule,
+    SharedPrepaidModule
   ]
 })
 export class AppModule {}

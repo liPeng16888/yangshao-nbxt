@@ -5,96 +5,84 @@ import { CurrentUserInfo } from '../auth/current-user.decorator'
 import type { CurrentUser } from '../auth/current-user'
 import { Roles } from '../auth/roles.decorator'
 import { RolesGuard } from '../auth/roles.guard'
+import { FrontendPermission } from '../auth/frontend-permission.decorator'
+import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
 import { FinanceService } from './finance.service'
 
 @Controller()
-@UseGuards(AuthGuard, RolesGuard)
+@UseGuards(AuthGuard, RolesGuard, FrontendPermissionGuard)
 export class FinanceController {
   constructor(private readonly finance: FinanceService) {}
 
   @Get('finance')
   @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_EXPENSES')
   listEntries(@CurrentUserInfo() user: CurrentUser, @Query('month') month?: string) {
-    return this.finance.listFrontendExpenses(user.id, month)
+    return this.finance.listFrontendExpenses(user.dataOwnerId, month)
   }
 
   @Post('finance')
   @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_EXPENSES')
   createEntry(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    if (Array.isArray(body)) return this.finance.createFrontendExpenses(user.id, body)
-    return this.finance.createFrontendExpense(user.id, body)
+    if (Array.isArray(body)) return this.finance.createFrontendExpenses(user.dataOwnerId, user.id, body)
+    return this.finance.createFrontendExpense(user.dataOwnerId, user.id, body)
   }
 
   @Get('finance/months')
   @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_EXPENSES')
   listMonths(@CurrentUserInfo() user: CurrentUser) {
-    return this.finance.listFrontendExpenseMonths(user.id)
+    return this.finance.listFrontendExpenseMonths(user.dataOwnerId)
   }
 
   @Get('finance/income-bills')
   @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_INCOME')
   incomeBills(@CurrentUserInfo() user: CurrentUser, @Query('month') month?: string) {
-    return this.finance.getFrontendIncomeReport(user.id, month)
+    return this.finance.getFrontendIncomeReport(user.dataOwnerId, month)
   }
 
   @Get('finance/unsettled-samples')
   @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_UNSETTLED')
   unsettledSamples(@CurrentUserInfo() user: CurrentUser) {
-    return this.finance.getFrontendUnsettledSamples(user.id)
+    return this.finance.getFrontendUnsettledSamples(user.dataOwnerId)
+  }
+
+  @Put('finance/unsettled-samples/paid')
+  @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_UNSETTLED')
+  markSamplesPaid(@CurrentUserInfo() user: CurrentUser, @Body() body: { blockIds?: string[] }) {
+    return this.finance.markFrontendSamplesPaid(user.dataOwnerId, body?.blockIds || [], user.id)
   }
 
   @Put('finance/unsettled-samples/:blockId/paid')
   @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_UNSETTLED')
   markPaid(@CurrentUserInfo() user: CurrentUser, @Param('blockId') blockId: string) {
-    return this.finance.markFrontendSamplePaid(user.id, blockId)
+    return this.finance.markFrontendSamplePaid(user.dataOwnerId, blockId, user.id)
   }
 
   @Get('finance/monthly-settlements')
   @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_MONTHLY_SETTLEMENT')
   monthlySettlements(@CurrentUserInfo() user: CurrentUser, @Query('month') month?: string) {
-    return this.finance.getFrontendMonthlySettlementReport(user.id, month)
+    return this.finance.getFrontendMonthlySettlementReport(user.dataOwnerId, month)
   }
 
   @Put('finance/monthly-settlements/:id')
   @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_MONTHLY_SETTLEMENT')
   updateMonthlySettlement(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.updateFrontendMonthlySettlement(user.id, body)
-  }
-
-  @Get('finance/prepaid-recharges')
-  @Roles(UserRole.FRONTEND_USER)
-  prepaidRecharges(@CurrentUserInfo() user: CurrentUser) {
-    return this.finance.getFrontendPrepaidRecharges(user.id)
-  }
-
-  @Post('finance/prepaid-recharges')
-  @Roles(UserRole.FRONTEND_USER)
-  createPrepaidRecharge(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.createFrontendPrepaidRecharge(user.id, body)
+    return this.finance.updateFrontendMonthlySettlement(user.dataOwnerId, user.id, body)
   }
 
   @Post('finance/delete-requests')
   @Roles(UserRole.FRONTEND_USER)
+  @FrontendPermission('FINANCE_EXPENSES')
   createDeletionRequest(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.createFrontendDeletionRequest(user.id, body)
-  }
-
-  @Get('finance/prepaid-report')
-  @Roles(UserRole.FRONTEND_USER)
-  prepaidReport(@CurrentUserInfo() user: CurrentUser) {
-    return this.finance.getFrontendPrepaidReport(user.id)
-  }
-
-  @Patch('finance/prepaid-customers/remark')
-  @Roles(UserRole.FRONTEND_USER)
-  updatePrepaidCustomerRemark(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.updateFrontendPrepaidCustomerRemark(user.id, body)
-  }
-
-  @Patch('finance/prepaid-usage-remarks')
-  @Roles(UserRole.FRONTEND_USER)
-  updatePrepaidUsageRemark(@CurrentUserInfo() user: CurrentUser, @Body() body: any) {
-    return this.finance.updateFrontendPrepaidUsageRemark(user.id, body)
+    return this.finance.createFrontendDeletionRequest(user.dataOwnerId, user.id, body)
   }
 
   @Get('admin/finance/income')
@@ -143,18 +131,6 @@ export class FinanceController {
   @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
   adminMonthlyCustomers(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
     return this.finance.getAdminMonthlyCustomers(user, query)
-  }
-
-  @Get('admin/finance/prepaid-recharges')
-  @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
-  adminPrepaidRecharges(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
-    return this.finance.getAdminPrepaidRecharges(user, query)
-  }
-
-  @Get('admin/finance/prepaid-report')
-  @Roles(UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
-  adminPrepaidReport(@CurrentUserInfo() user: CurrentUser, @Query() query: any) {
-    return this.finance.getAdminPrepaidReport(user, query)
   }
 
   @Get('admin/finance/delete-requests')

@@ -1,9 +1,11 @@
 import request, { useMocks } from '@/utils/request'
+import { readAccessGuardSessions, selectAccessGuardGrant } from '@/api/accessGuard'
 import type { LabParameter, LabSheet, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
 import {
   mockAddSampleBlocks,
   mockCurrentLabSheet,
   mockCurrentParameters,
+  mockApplyParametersFromIndex,
   mockLabHistory,
   mockLabSheetByDate,
   mockSaveSampleBlock,
@@ -25,8 +27,8 @@ export type LabSheetRealtimeEvent =
       date: string
       sheetId: string
       sourceClientId?: string
+      changedById?: string
       updatedAt: string
-      block: SampleBlock
     }
   | {
       type: 'parameters-updated'
@@ -34,6 +36,7 @@ export type LabSheetRealtimeEvent =
       date: string
       sheetId: string
       sourceClientId?: string
+      changedById?: string
       updatedAt: string
       parameters: LabParameter
     }
@@ -43,8 +46,8 @@ export type LabSheetRealtimeEvent =
       date: string
       sheetId: string
       sourceClientId?: string
+      changedById?: string
       updatedAt: string
-      sheet: LabSheet
     }
   | {
       type: 'heartbeat'
@@ -78,8 +81,7 @@ function clientHeaders() {
 
 function accessGrantHeaders() {
   try {
-    const sessions = JSON.parse(window.localStorage.getItem('ys_access_guard_group_sessions') || '{}') as Record<string, { expiresAt?: number; token?: string }>
-    const token = Object.values(sessions).find((session) => (session.expiresAt || 0) > Date.now() && session.token)?.token
+    const token = selectAccessGuardGrant(readAccessGuardSessions(), 'COMPLETED_SAMPLE_DATA')
     return token ? { headers: { 'X-YS-Access-Grant': token } } : undefined
   } catch { return undefined }
 }
@@ -104,9 +106,25 @@ export async function updateCurrentParameters(parameters: LabParameter): Promise
   return request.put('/lab-sheets/parameters/current', parameters, clientHeaders())
 }
 
+export async function applyCurrentParametersFromIndex(
+  parameters: LabParameter,
+  startIndex: number
+): Promise<LabSheet> {
+  if (useMocks) return mockApplyParametersFromIndex(parameters, startIndex)
+  return request.put(
+    '/lab-sheets/parameters/current/apply',
+    { parameters, startIndex },
+    { headers: { ...clientHeaders().headers, ...(accessGrantHeaders()?.headers || {}) } }
+  )
+}
+
 export async function addSampleBlocks(sheetId: string, count: number): Promise<LabSheet> {
   if (useMocks) return mockAddSampleBlocks(sheetId, count)
-  return request.post(`/lab-sheets/${sheetId}/sample-blocks`, { count }, clientHeaders())
+  return request.post(
+    `/lab-sheets/${sheetId}/sample-blocks`,
+    { count },
+    { headers: { ...clientHeaders().headers, ...(accessGrantHeaders()?.headers || {}) } }
+  )
 }
 
 export async function saveSampleBlock(sheetId: string, block: SampleBlockSavePayload): Promise<SampleBlock> {

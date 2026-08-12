@@ -154,13 +154,31 @@
               <FormulaCell :value="block.results.calcium" />
               <FormulaCell :value="block.results.magnesium" />
               <FormulaCell :value="block.results.titanium" />
-              <FormulaCell class="cell--span-3" :value="block.results.moisture" />
+              <FormulaCell class="cell--span-3" :value="block.results.bottleDensity" />
               <FormulaCell class="cell--span-3" :value="block.results.burnLoss" />
             </template>
 
             <div class="cell cell--label cell--remark cell--required-label">{{ getAmountLabel(block) }}</div>
             <div v-if="isCompletedSensitiveHidden(block.id)" class="cell cell--input cell--remark completed-data-compact-mask" :data-block-id="block.id" data-field="price" aria-label="样品金额已加密">
               <span aria-hidden="true">🔒</span>
+            </div>
+            <div
+              v-else-if="isPrepaidBlock(block)"
+              class="cell cell--input cell--remark cell--prepaid-picker"
+              :class="{ 'cell--required': isAmountRequired(block) }"
+              :data-block-id="block.id"
+              data-field="price"
+            >
+              <button
+                type="button"
+                class="prepaid-picker-trigger"
+                :data-testid="`prepaid-picker-trigger-${block.id}`"
+                :disabled="isDisabled(block)"
+                @click="openPrepaidPicker(block)"
+              >
+                <strong>{{ formatPrepaidAmount(block.inputs.price) }}</strong>
+                <span>{{ prepaidMemberCaption(block) }}</span>
+              </button>
             </div>
             <NumberInputCell
               v-else
@@ -224,6 +242,14 @@
         </div>
       </div>
     </div>
+    <PrepaidMemberPickerDialog
+      v-if="prepaidPickerVisible"
+      :visible="prepaidPickerVisible"
+      :initial-phone="activePrepaidInitialPhone"
+      :initial-amount="activePrepaidBlock?.inputs.price ?? null"
+      @close="closePrepaidPicker"
+      @confirm="confirmPrepaidSelection"
+    />
   </section>
 </template>
 
@@ -233,8 +259,9 @@ import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 import { ScaleToOriginal, ZoomIn, ZoomOut } from '@element-plus/icons-vue'
 import CustomerCellEditor from './CustomerCellEditor.vue'
 import LabElementSelector from './LabElementSelector.vue'
+import PrepaidMemberPickerDialog from '@/components/prepaid/PrepaidMemberPickerDialog.vue'
 import type { BlacklistRecord } from '@/types/blacklist'
-import type { LabSampleInput, SampleBlock, SamplePaymentStatus } from '@/types/labSheet'
+import type { LabSampleInput, PrepaidMemberPickerResult, SampleBlock, SamplePaymentStatus } from '@/types/labSheet'
 import { labSheetColumns } from '@/constants/labSheetTemplate'
 import { formatFormulaValue, parseNumericInput } from '@/utils/formulaEngine'
 
@@ -272,6 +299,16 @@ function isCompletedSensitiveHidden(blockId: string) {
 const scrollRef = ref<HTMLElement | null>(null)
 const gridRef = ref<HTMLElement | null>(null)
 const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款']
+const prepaidPickerVisible = ref(false)
+const activePrepaidBlockId = ref('')
+const activePrepaidBlock = computed(() => (
+  props.blocks.find((block) => block.id === activePrepaidBlockId.value)
+))
+const activePrepaidInitialPhone = computed(() => (
+  activePrepaidBlock.value?.inputs.paymentStatus === '预存款'
+    ? activePrepaidBlock.value.inputs.prepaidMemberPhone || ''
+    : ''
+))
 let resizeObserver: ResizeObserver | null = null
 const focusedFieldValues = new Map<string, unknown>()
 
@@ -419,15 +456,20 @@ function isPrepaidBlock(block: SampleBlock) {
 }
 
 function getAmountLabel(block: SampleBlock) {
-  return isPrepaidBlock(block) ? '扣除次数' : '样品金额'
+  return isPrepaidBlock(block) ? '扣除金额' : '样品金额'
 }
 
-function getAmountPrecision(block: SampleBlock) {
-  return isPrepaidBlock(block) ? 0 : 2
+function getAmountPrecision(_block: SampleBlock) {
+  return 2
 }
 
 function hasSampleAmount(block: SampleBlock) {
-  return typeof block.inputs.price === 'number' && Number.isFinite(block.inputs.price)
+  if (typeof block.inputs.price !== 'number' || !Number.isFinite(block.inputs.price)) return false
+  return !isPrepaidBlock(block) || block.inputs.price > 0
+}
+
+function hasPrepaidMember(block: SampleBlock) {
+  return !isPrepaidBlock(block) || Boolean(block.inputs.prepaidMemberId && block.inputs.prepaidMemberPhone)
 }
 
 function hasPaymentStatus(block: SampleBlock) {
@@ -447,12 +489,15 @@ function isElementNoteRequired(block: SampleBlock) {
 }
 
 function isCalculationBlocked(block: SampleBlock) {
-  return isAmountRequired(block) && (!hasSampleAmount(block) || !hasPaymentStatus(block) || !hasElementNote(block))
+  return isAmountRequired(block) && (
+    !hasSampleAmount(block) || !hasPrepaidMember(block) || !hasPaymentStatus(block) || !hasElementNote(block)
+  )
 }
 
 function getCalculationBlockMessage(block: SampleBlock) {
   const missingActions: string[] = []
-  if (!hasSampleAmount(block)) missingActions.push(isPrepaidBlock(block) ? '输入扣除次数' : '输入样品金额')
+  if (!hasPrepaidMember(block)) missingActions.push('选择预存款会员')
+  if (!hasSampleAmount(block)) missingActions.push(isPrepaidBlock(block) ? '输入大于 0 的扣除金额' : '输入样品金额')
   if (!hasPaymentStatus(block)) missingActions.push('选择费用状态')
   if (!hasElementNote(block)) missingActions.push('选择化验元素')
 
@@ -497,7 +542,51 @@ function updateText(blockId: string, field: keyof LabSampleInput, value: string 
 }
 
 function updatePaymentStatus(blockId: string, value: string | number | boolean | undefined) {
-  emitUpdate(blockId, { paymentStatus: String(value || '') as SamplePaymentStatus | '' })
+  const block = props.blocks.find((item) => item.id === blockId)
+  if (!block) return
+  const paymentStatus = String(value || '') as SamplePaymentStatus | ''
+  if (paymentStatus === '预存款') {
+    openPrepaidPicker(block)
+    return
+  }
+
+  const patch: Partial<LabSampleInput> = { paymentStatus }
+  if (isPrepaidBlock(block) || block.inputs.prepaidMemberId || block.inputs.prepaidMemberPhone) {
+    patch.prepaidMemberId = undefined
+    patch.prepaidMemberPhone = undefined
+  }
+  emitUpdate(blockId, patch)
+}
+
+function openPrepaidPicker(block: SampleBlock) {
+  if (isDisabled(block)) return
+  activePrepaidBlockId.value = block.id
+  prepaidPickerVisible.value = true
+}
+
+function closePrepaidPicker() {
+  prepaidPickerVisible.value = false
+  activePrepaidBlockId.value = ''
+}
+
+function confirmPrepaidSelection(result: PrepaidMemberPickerResult) {
+  if (!activePrepaidBlockId.value) return
+  emitUpdate(activePrepaidBlockId.value, {
+    paymentStatus: '预存款',
+    price: result.amount,
+    prepaidMemberId: result.memberId,
+    prepaidMemberPhone: result.phone
+  })
+  closePrepaidPicker()
+}
+
+function formatPrepaidAmount(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)} 元` : '选择会员并填写金额'
+}
+
+function prepaidMemberCaption(block: SampleBlock) {
+  if (block.inputs.prepaidMemberId && block.inputs.prepaidMemberPhone) return block.inputs.prepaidMemberPhone
+  return '历史预存款记录（未关联新台账）'
 }
 
 function handleFieldFocusIn(event: FocusEvent) {
@@ -759,6 +848,32 @@ const FormulaCell = defineComponent({
 .cell--input {
   position: relative;
   background: #ffffff;
+}
+
+.prepaid-picker-trigger {
+  display: grid;
+  width: 100%;
+  min-height: 32px;
+  place-content: center;
+  gap: 1px;
+  padding: 2px 6px;
+  color: #0f172a;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+
+  strong {
+    font-variant-numeric: tabular-nums;
+  }
+
+  span {
+    color: #64748b;
+    font-size: 11px;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+  }
 }
 
 .cell--blocked {

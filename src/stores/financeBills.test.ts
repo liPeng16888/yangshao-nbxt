@@ -11,15 +11,16 @@ const apiMocks = vi.hoisted(() => ({
   getMonthlySettlementReport: vi.fn(),
   getUnsettledSamples: vi.fn(),
   markSampleAsPaid: vi.fn(),
+  markSamplesAsPaid: vi.fn(),
   updateMonthlySettlementSummary: vi.fn()
 }))
 
 vi.mock('@/api/financeBills', () => apiMocks)
 
-function makeBlock(paymentStatus: SampleBlock['inputs']['paymentStatus']): SampleBlock {
+function makeBlock(paymentStatus: SampleBlock['inputs']['paymentStatus'], id = '2026-06-25-1'): SampleBlock {
   return {
-    id: '2026-06-25-1',
-    index: 1,
+    id,
+    index: id.endsWith('-2') ? 2 : 1,
     readonly: false,
     inputs: {
       sequence: '001',
@@ -38,6 +39,7 @@ function makeBlock(paymentStatus: SampleBlock['inputs']['paymentStatus']): Sampl
       calcium: 0,
       magnesium: 0,
       titanium: 0,
+      bottleDensity: 0,
       moisture: 0,
       burnLoss: 0
     },
@@ -69,6 +71,7 @@ describe('finance bills store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     apiMocks.markSampleAsPaid.mockReset()
+    apiMocks.markSamplesAsPaid.mockReset()
     apiMocks.updateMonthlySettlementSummary.mockReset()
   })
 
@@ -83,6 +86,44 @@ describe('finance bills store', () => {
 
     expect(financeBillsStore.unsettledRows).toEqual([])
     expect(labSheetStore.sheet?.sampleBlocks[0].inputs.paymentStatus).toBe('已结款')
+  })
+
+  it('removes every paid row and syncs matching blocks after a successful batch', async () => {
+    const secondRow: UnsettledSampleRow = {
+      ...row,
+      blockId: '2026-06-25-2',
+      sequence: '002',
+      sampleNumber: '块矿',
+      amount: 120
+    }
+    const labSheetStore = useLabSheetStore()
+    labSheetStore.sheet = {
+      ...makeSheet(),
+      sampleBlocks: [makeBlock('未结款'), makeBlock('未结款', secondRow.blockId)]
+    }
+    const financeBillsStore = useFinanceBillsStore()
+    financeBillsStore.unsettledRows = [row, secondRow]
+    apiMocks.markSamplesAsPaid.mockResolvedValue([
+      makeBlock('已结款'),
+      makeBlock('已结款', secondRow.blockId)
+    ])
+
+    await financeBillsStore.settleRows([row, secondRow])
+
+    expect(financeBillsStore.unsettledRows).toEqual([])
+    expect(labSheetStore.sheet.sampleBlocks.map((block) => block.inputs.paymentStatus)).toEqual(['已结款', '已结款'])
+    expect(financeBillsStore.settlingBatch).toBe(false)
+  })
+
+  it('keeps every row and restores batch state when the batch request fails', async () => {
+    const financeBillsStore = useFinanceBillsStore()
+    financeBillsStore.unsettledRows = [row]
+    apiMocks.markSamplesAsPaid.mockRejectedValue(new Error('批量失败'))
+
+    await expect(financeBillsStore.settleRows([row])).rejects.toThrow('批量失败')
+
+    expect(financeBillsStore.unsettledRows).toEqual([row])
+    expect(financeBillsStore.settlingBatch).toBe(false)
   })
 
   it('updates monthly settlement summary rows after saving', async () => {

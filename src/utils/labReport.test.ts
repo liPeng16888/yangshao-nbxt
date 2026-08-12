@@ -54,6 +54,7 @@ function makeBlock(): SampleBlock {
       calcium: 0,
       magnesium: 0,
       titanium: 0,
+      bottleDensity: 0,
       moisture: 0,
       burnLoss: 0
     },

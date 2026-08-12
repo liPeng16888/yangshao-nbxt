@@ -16,7 +16,7 @@ pnpm dev:admin
 pnpm dev:server
 ```
 
-客户前端默认使用开发 Mock 数据，可直接用下面账号登录：
+客户前端以 Mock 标志启动后，可直接用下面账号登录：
 
 ```text
 账号：admin
@@ -37,7 +37,38 @@ YANGSHAO-2026
 密码：admin123456
 ```
 
-开发预览数据不连接数据库；真实联调或部署时设置 `VITE_ADMIN_USE_MOCKS=false` 并启动后端服务。
+Mock 预览数据不连接数据库；已提交的环境模板默认关闭 Mock，避免生产构建误用演示数据。
+
+首次运行分别创建三个环境文件：
+
+```bash
+cp .env.example .env.local
+cp admin/.env.example admin/.env.local
+cp server/.env.example server/.env
+```
+
+前两个文件使用已被 Git 忽略的 Vite `.env.local`，后端使用已被 Git 忽略的 `server/.env`，真实密钥不会因为这套复制方式进入版本控制。模板中的两个 Mock 开关均为 `false`。仅在本地演示时，通过启动命令临时覆盖为 `true`：
+
+```bash
+VITE_USE_MOCKS=true ./node_modules/.bin/vite --host 127.0.0.1 --port 5173
+cd admin && VITE_ADMIN_USE_MOCKS=true ./node_modules/.bin/vite --host 127.0.0.1 --port 5174
+```
+
+- 客户前端登录后访问 `http://127.0.0.1:5173/employee-attendance/overview`。
+- 后台使用 `admin / admin123456` 登录 `http://127.0.0.1:5174/admin/login`，随后访问 `http://127.0.0.1:5174/admin/employee-attendance/overview`。
+- 后台 Mock 子账号 `sub001 / sub123456` 只能查看已授权的前端账号数据，可用于验证账号隔离。
+
+## 员工考勤与工资
+
+“员工考勤”位于“化验报告”和“财务”之间，包含七个二级页面：考勤概览、员工档案、排班管理、考勤记录、请假管理、提成与奖金、工资统计。
+
+客户前端的 `/employee-attendance/*` 页面用于录入和管理；后台 `/admin/employee-attendance/*` 页面严格只读，只提供筛选、汇总和脱敏查看。后台只有查看单个员工敏感信息时会要求重新输入当前后台账号密码，并记录审计；后台没有业务新增、修改、删除、请假审批、工资确认或 PNG 导出入口。
+
+排班工作日必须填写 24 小时制 `HH:mm` 计划上下班时间，工时由系统派生；休息日统一为空时间和 0 分钟。本版不支持跨日排班，结束时间必须晚于开始时间。打卡时间按北京业务日校验，上下班必须成对。
+
+工资统计采用员工月薪、全勤奖、手工加班、提成、奖金、人工调整、超额请假和缺勤计算。工资确认前会检查所选月份的待审批请假、排班和考勤缺失；确认后锁定当月来源记录，填写原因撤销确认后才可修改。个人工资条和当月全员工资汇总均可从客户前端导出为高清 PNG。
+
+本地 Mock 数据按登录的前端账号隔离并保存在浏览器 `localStorage`，适合界面演示，不等同于数据库备份或生产数据。
 
 ## 环境变量
 
@@ -46,10 +77,10 @@ YANGSHAO-2026
 ```text
 VITE_API_BASE_URL=/api
 VITE_APP_TITLE=仰韶化验室内部系统
-VITE_USE_MOCKS=true
+VITE_USE_MOCKS=false
 ```
 
-接入真实后端时，将 `VITE_USE_MOCKS` 改为 `false`，并确认 `VITE_API_BASE_URL` 指向后端网关或 Nginx 代理路径。
+接入真实后端时保持 `VITE_USE_MOCKS=false`。本地开发的客户前端使用 `VITE_API_BASE_URL=/api`，根目录 Vite 会把 `/api` 代理到 `http://127.0.0.1:3000`；部署时由 Nginx 或后端网关接管同一路径。后台同样保持 `VITE_ADMIN_USE_MOCKS=false`。
 
 后端需要配置 PostgreSQL、JWT 和主账号：
 
@@ -57,12 +88,18 @@ VITE_USE_MOCKS=true
 DATABASE_URL=postgresql://yangshao:password@127.0.0.1:5432/yangshao?schema=public
 JWT_SECRET=请换成强随机字符串
 PASSWORD_CIPHER_SECRET=请换成强随机字符串
+EMPLOYEE_DATA_CIPHER_SECRET=请换成独立且不少于 32 个 UTF-8 字节的强随机字符串
+PRIVATE_EMPLOYEE_PHOTO_DIR=/var/lib/yangshao/private/employee-photos
 ROOT_ADMIN_ACCOUNT=root
 ROOT_ADMIN_PASSWORD=请换成主账号密码
 ROOT_ADMIN_NAME=主账号
 UPLOAD_DIR=/var/www/yangshao/uploads
 SERVER_PORT=3000
 ```
+
+`EMPLOYEE_DATA_CIPHER_SECRET` 专门用于员工身份证号、银行卡号、住址和紧急联系人等敏感字段的 AES-256-GCM 加密，不能复用 `PASSWORD_CIPHER_SECRET`。该密钥必须在同一套数据的整个生命周期保持不变；丢失或随意更换会导致已保存数据无法解密。请通过部署平台的密钥管理或仅管理员可读的环境文件保存，不要提交真实密钥。
+
+`PRIVATE_EMPLOYEE_PHOTO_DIR` 必须指向后端进程可读写、但 Nginx/静态站点不能直接公开访问的目录；不能等于或位于 `UPLOAD_DIR` 之下，否则后端会拒绝读写。员工照片只能通过已鉴权接口读取，响应禁止公开缓存。该目录与数据库应一起纳入备份。本地相对路径的 `private-uploads/` 和 `server/private-uploads/` 已加入 Git 忽略，但生产环境仍必须使用仓库之外的绝对路径。
 
 初始化数据库：
 
@@ -72,13 +109,34 @@ pnpm --filter yangshao-server prisma:migrate
 pnpm --filter yangshao-server seed
 ```
 
+### 员工考勤数据库迁移
+
+员工考勤迁移位于：
+
+```text
+server/prisma/migrations/20260810000000_add_employee_attendance/migration.sql
+```
+
+迁移新增员工考勤枚举、14 张业务表、账号归属索引/复合外键、`EMPLOYEE_ATTENDANCE` 访问保护类型，并为已有访问组合表增加默认为 1 的 `grantVersion` 撤销版本列；不包含删表、删列或清理业务数据。开发环境可执行 `prisma:migrate`；已部署环境先备份 PostgreSQL，再执行不会交互创建迁移的 `prisma:deploy`：
+
+```bash
+pnpm --filter yangshao-server prisma:generate
+pnpm --filter yangshao-server prisma:migrate   # 仅本地开发
+pnpm --filter yangshao-server prisma:deploy    # 已部署环境
+```
+
+本仓库不提供自动执行的破坏性 down migration。若上线后需要回滚，先停止写入并回退应用代码，再恢复执行该迁移前的 PostgreSQL 备份；直接删除这 14 张表会永久丢失员工、考勤、工资快照和审计数据。不要在未备份的数据库上手工回滚，也不要把本次本地验证当成已部署或已执行生产迁移。
+
 ## 构建与测试
 
 ```bash
 pnpm test
+./node_modules/.bin/vitest run admin/src
+./server/node_modules/.bin/vitest run --root server
 pnpm build
 pnpm build:admin
 pnpm build:server
+pnpm build:all
 ```
 
 ## 腾讯云 VPS / Nginx 部署要点

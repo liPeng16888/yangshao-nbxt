@@ -26,6 +26,8 @@ export const editableInputFields = [
   'recipientCustomerText',
   'price',
   'paymentStatus',
+  'prepaidMemberId',
+  'prepaidMemberPhone',
   'ironRaw',
   'siliconRaw',
   'siliconAdjust',
@@ -122,6 +124,7 @@ export function calculateResults(inputs: Record<string, unknown>, parameters: ty
     calcium: 0,
     magnesium: 0,
     titanium: 0,
+    bottleDensity: 0,
     moisture: 0,
     burnLoss: 0
   }
@@ -143,6 +146,10 @@ export function calculateResults(inputs: Record<string, unknown>, parameters: ty
   if (number('calciumRaw') !== null) result.calcium = round(number('calciumRaw')! * parameters.calciumFactor)
   if (number('magnesiumRaw') !== null && number('calciumRaw') !== null) result.magnesium = round((number('magnesiumRaw')! - number('calciumRaw')!) * parameters.magnesiumFactor)
   if (number('titaniumRaw') !== null) result.titanium = round(number('titaniumRaw')! * parameters.titaniumFactor)
+  if (number('waterSample') !== null && number('bottleWater') !== null && number('bottleWaterSample') !== null) {
+    const denominator = number('waterSample')! + number('bottleWater')! - number('bottleWaterSample')!
+    result.bottleDensity = round(divide(number('waterSample')!, denominator) * 0.99823)
+  }
   if (number('moisture') !== null) {
     result.moisture = round(number('moisture')!)
   }

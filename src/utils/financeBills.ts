@@ -6,10 +6,6 @@ import type {
   MonthlySettlementDailyRow,
   MonthlySettlementReport,
   MonthlySettlementSummaryRow,
-  PrepaidCustomerRow,
-  PrepaidDailyUsageRow,
-  PrepaidRechargeRow,
-  PrepaidReport,
   UnsettledSampleRow
 } from '@/types/financeBills'
 import type { LabSheet, SampleBlock } from '@/types/labSheet'
@@ -17,6 +13,13 @@ import { getSmsElementLabel, labReportElements, parseLabElementKeys } from './la
 import { getPayerCustomerDisplayText, getPayerCustomerName } from './sampleCustomers'
 
 export const incomePaymentStatuses: IncomePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款', '未选择']
+
+export interface SharedPrepaidIncomeRecharge {
+  rechargeDate: string
+  paidAmount: number
+  giftAmount?: number
+  totalAmount?: number
+}
 
 export function isIncomeSample(block: SampleBlock) {
   return typeof block.inputs.price === 'number' && Number.isFinite(block.inputs.price)
@@ -32,24 +35,27 @@ export function createEmptyStatusSummaries(): IncomeStatusSummary[] {
 
 export function summarizeIncomeSheet(sheet: LabSheet): IncomeDailyRow {
   const statusSummaries = createEmptyStatusSummaries()
-  const samples = sheet.sampleBlocks.filter((block) => isIncomeSample(block) && block.inputs.paymentStatus !== '预存款')
+  const samples = sheet.sampleBlocks.filter(isIncomeSample)
   samples.forEach((block) => {
     const status = getIncomePaymentStatus(block)
     const summary = statusSummaries.find((item) => item.status === status)
     if (!summary) return
     summary.count += 1
-    summary.amount += block.inputs.price || 0
+    if (status !== '预存款') summary.amount += block.inputs.price || 0
   })
 
   return {
     date: sheet.date,
     sampleCount: samples.length,
-    totalAmount: roundMoney(samples.reduce((sum, block) => sum + (block.inputs.price || 0), 0)),
+    totalAmount: roundMoney(samples.reduce(
+      (sum, block) => sum + (block.inputs.paymentStatus === '预存款' ? 0 : block.inputs.price || 0),
+      0
+    )),
     statusSummaries: statusSummaries.map((item) => ({ ...item, amount: roundMoney(item.amount) }))
   }
 }
 
-export function summarizeIncomeRows(month: string, rows: IncomeDailyRow[], prepaidRecharges: PrepaidRechargeRow[] = [], allowedDates?: Set<string>) {
+export function summarizeIncomeRows(month: string, rows: IncomeDailyRow[], prepaidRecharges: SharedPrepaidIncomeRecharge[] = [], allowedDates?: Set<string>) {
   const rowMap = new Map(rows.map((row) => [row.date, cloneIncomeDailyRow(row)]))
   prepaidRecharges
     .filter((row) => (allowedDates ? allowedDates.has(row.rechargeDate) : row.rechargeDate.startsWith(month)))
@@ -61,12 +67,8 @@ export function summarizeIncomeRows(month: string, rows: IncomeDailyRow[], prepa
         statusSummaries: createEmptyStatusSummaries()
       }
       const summary = row.statusSummaries.find((item) => item.status === '预存款')
-      if (summary) {
-        summary.count += recharge.usableTimes
-        summary.amount = roundMoney(summary.amount + recharge.amount)
-      }
-      row.sampleCount += recharge.usableTimes
-      row.totalAmount = roundMoney(row.totalAmount + recharge.amount)
+      if (summary) summary.amount = roundMoney(summary.amount + recharge.paidAmount)
+      row.totalAmount = roundMoney(row.totalAmount + recharge.paidAmount)
       rowMap.set(row.date, row)
     })
   const mergedRows = Array.from(rowMap.values()).sort((a, b) => b.date.localeCompare(a.date))
@@ -189,88 +191,6 @@ export function filterMonthlySettlementDailyRows(rows: MonthlySettlementDailyRow
   return rows.filter((row) => selectedCustomerSet.has(row.customer))
 }
 
-export function getPrepaidDailyRowsFromSheet(sheet: LabSheet): PrepaidDailyUsageRow[] {
-  const rowMap = new Map<string, PrepaidDailyUsageRow>()
-  sheet.sampleBlocks
-    .filter((block) => isIncomeSample(block) && block.inputs.paymentStatus === '预存款')
-    .forEach((block) => {
-      const customer = getPayerCustomerName(block.inputs) || '无信息'
-      const id = createPrepaidDailyUsageId(sheet.date, customer)
-      const current = rowMap.get(id) || {
-        id,
-        date: sheet.date,
-        customer,
-        sampleCount: 0,
-        remark: ''
-      }
-      current.sampleCount += getPrepaidDeductionTimes(block)
-      rowMap.set(id, current)
-    })
-
-  return sortPrepaidDailyRows(Array.from(rowMap.values()))
-}
-
-export function summarizePrepaidReport(
-  recharges: PrepaidRechargeRow[],
-  dailyRows: PrepaidDailyUsageRow[],
-  customerRemarks: Record<string, string> = {},
-  usageRemarks: Record<string, string> = {}
-): PrepaidReport {
-  const rechargeMap = new Map<string, PrepaidCustomerRow>()
-  recharges.forEach((row) => {
-    const current = rechargeMap.get(row.customer) || {
-      id: row.customer,
-      customer: row.customer,
-      totalAmount: 0,
-      totalUsableTimes: 0,
-      usedTimes: 0,
-      availableTimes: 0,
-      remark: ''
-    }
-    current.totalAmount = roundMoney(current.totalAmount + row.amount)
-    current.totalUsableTimes += row.usableTimes
-    if (!current.remark && row.remark) current.remark = row.remark
-    rechargeMap.set(row.customer, current)
-  })
-
-  dailyRows.forEach((row) => {
-    const current =
-      rechargeMap.get(row.customer) ||
-      ({
-        id: row.customer,
-        customer: row.customer,
-        totalAmount: 0,
-        totalUsableTimes: 0,
-        usedTimes: 0,
-        availableTimes: 0,
-        remark: ''
-      } satisfies PrepaidCustomerRow)
-    current.usedTimes += row.sampleCount
-    rechargeMap.set(row.customer, current)
-  })
-
-  const customerRows = Array.from(rechargeMap.values())
-    .map((row) => ({
-      ...row,
-      totalAmount: roundMoney(row.totalAmount),
-      availableTimes: Math.max(0, row.totalUsableTimes - row.usedTimes),
-      remark: customerRemarks[row.customer] ?? row.remark ?? ''
-    }))
-    .sort((a, b) => a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
-
-  return {
-    customerRows,
-    dailyRows: sortPrepaidDailyRows(dailyRows).map((row) => ({
-      ...row,
-      remark: usageRemarks[row.id] ?? row.remark ?? ''
-    }))
-  }
-}
-
-export function createPrepaidDailyUsageId(date: string, customer: string) {
-  return `${date}__${customer}`
-}
-
 export function createMonthlySettlementSummaryId(month: string, customer: string) {
   return `${month}__${customer}`
 }
@@ -285,10 +205,6 @@ export function createPaidSettlementRemark() {
 
 export function roundMoney(value: number) {
   return Number(value.toFixed(2))
-}
-
-function getPrepaidDeductionTimes(block: SampleBlock) {
-  return Math.max(0, Math.trunc(block.inputs.price || 0))
 }
 
 function sortMonthlySettlementDailyRows(rows: MonthlySettlementDailyRow[]) {
@@ -318,10 +234,6 @@ function mergeMonthlyElementCounts(current: MonthlySettlementElementCount[], nex
     else map.set(item.key, { ...item })
   })
   return labReportElements.map((element) => map.get(element.key)).filter(Boolean) as MonthlySettlementElementCount[]
-}
-
-function sortPrepaidDailyRows(rows: PrepaidDailyUsageRow[]) {
-  return [...rows].sort((a, b) => b.date.localeCompare(a.date) || a.customer.localeCompare(b.customer, 'zh-Hans-CN'))
 }
 
 function cloneIncomeDailyRow(row: IncomeDailyRow): IncomeDailyRow {

@@ -20,6 +20,7 @@ request.interceptors.response.use(
     const status = error?.response?.status
     const data = error?.response?.data
     const rawMessage = data?.message
+    const code = data?.code || (rawMessage && typeof rawMessage === 'object' ? rawMessage.code : undefined)
     const message =
       typeof rawMessage === 'string'
         ? rawMessage
@@ -31,9 +32,13 @@ request.interceptors.response.use(
     if (status === 401) {
       localStorage.removeItem('ys_token')
       localStorage.removeItem('ys_user')
+      localStorage.removeItem('ys_access_guard_group_sessions')
       ElMessage.error(message)
       window.location.href = '/login'
       return Promise.reject(error)
+    }
+    if (status === 403 && code === 'ACCESS_GRANT_INVALID') {
+      localStorage.removeItem('ys_access_guard_group_sessions')
     }
     ElMessage.error(message)
     return Promise.reject(error)

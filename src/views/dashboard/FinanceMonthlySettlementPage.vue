@@ -42,11 +42,30 @@
             <span class="customer-info">{{ getCustomerDisplay(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="金额" width="130">
+        <el-table-column
+          prop="amount"
+          label="金额"
+          width="130"
+          sortable
+          :sort-orders="settlementSortOrders"
+        >
           <template #default="{ row }">¥{{ money(row.amount) }}</template>
         </el-table-column>
-        <el-table-column prop="sampleCount" label="样品数量" width="110" />
-        <el-table-column label="结款状态" width="150">
+        <el-table-column
+          prop="sampleCount"
+          label="样品数量"
+          width="110"
+          sortable
+          :sort-orders="settlementSortOrders"
+        />
+        <el-table-column
+          prop="settlementStatus"
+          label="结款状态"
+          width="150"
+          sortable
+          :sort-orders="settlementSortOrders"
+          :sort-method="compareMonthlySettlementStatusRows"
+        >
           <template #default="{ row }">
             <el-select
               :model-value="row.settlementStatus"
@@ -76,7 +95,7 @@
         </el-table-column>
         <el-table-column label="备注" min-width="260">
           <template #default="{ row }">
-            <el-input v-model="row.remark" size="small" placeholder="可填写备注" @blur="() => handleRemarkBlur(row)" />
+            <el-input v-model="row.remark" size="small" placeholder="可填写备注" @input="() => markDirty(row.id)" @blur="() => handleRemarkBlur(row)" />
           </template>
         </el-table-column>
       </el-table>
@@ -135,18 +154,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import MonthlySettlementBillExportDialog from '@/components/finance/MonthlySettlementBillExportDialog.vue'
 import type { MonthlySettlementDailyRow, MonthlySettlementElementCount, MonthlySettlementStatus, MonthlySettlementSummaryRow } from '@/types/financeBills'
 import { useFinanceBillsStore } from '@/stores/financeBills'
+import { tryUseTenantRealtimeStore } from '@/stores/tenantRealtime'
 import { createPaidSettlementRemark, createPartialSettlementRemark, filterMonthlySettlementDailyRows, roundMoney } from '@/utils/financeBills'
+import { compareMonthlySettlementStatusRows } from '@/utils/monthlySettlementSorting'
 
 const store = useFinanceBillsStore()
+const tenantRealtime = tryUseTenantRealtimeStore()
+const dirtyRows = ref(new Set<string>())
+let unregisterRealtime: (() => void) | undefined
 const report = computed(() => store.monthlySettlementReport)
 const selectedDailyCustomers = ref<string[]>([])
 const billExportVisible = ref(false)
 const settlementStatusOptions: MonthlySettlementStatus[] = ['已结款', '未结款', '部分结款']
+const settlementSortOrders: Array<'ascending' | 'descending' | null> = ['ascending', 'descending', null]
 
 const dailyCustomerOptions = computed(() => {
   const map = new Map<string, string>()
@@ -164,7 +189,23 @@ const filteredDailyRows = computed(() => {
 
 onMounted(() => {
   store.loadMonthlySettlementReport()
+  unregisterRealtime = tenantRealtime?.registerModule('finance-monthly', {
+    isDirty: () => dirtyRows.value.size > 0,
+    refresh: () => store.loadMonthlySettlementReport()
+  })
 })
+
+onBeforeUnmount(() => unregisterRealtime?.())
+
+function markDirty(id: string) {
+  dirtyRows.value = new Set(dirtyRows.value).add(id)
+}
+
+function clearDirty(id: string) {
+  const next = new Set(dirtyRows.value)
+  next.delete(id)
+  dirtyRows.value = next
+}
 
 function handleMonthChange(value: string) {
   selectedDailyCustomers.value = []
@@ -172,6 +213,7 @@ function handleMonthChange(value: string) {
 }
 
 async function handleStatusChange(row: MonthlySettlementSummaryRow, settlementStatus: MonthlySettlementStatus) {
+  markDirty(row.id)
   const next: MonthlySettlementSummaryRow = {
     ...row,
     settlementStatus,
@@ -185,11 +227,17 @@ async function handleStatusChange(row: MonthlySettlementSummaryRow, settlementSt
     next.remark = createPartialSettlementRemark(row.amount, next.paidAmount || 0)
   }
   Object.assign(row, next)
-  await store.saveMonthlySettlementRow(next)
-  ElMessage.success('月结款信息已保存')
+  try {
+    await store.saveMonthlySettlementRow(next)
+    clearDirty(row.id)
+    ElMessage.success('月结款信息已保存')
+  } catch (error) {
+    throw error
+  }
 }
 
 async function handlePaidAmountChange(row: MonthlySettlementSummaryRow, value: number | undefined) {
+  markDirty(row.id)
   const paidAmount = roundMoney(Math.min(Math.max(Number(value || 0), 0), row.amount))
   const next = {
     ...row,
@@ -198,11 +246,13 @@ async function handlePaidAmountChange(row: MonthlySettlementSummaryRow, value: n
   }
   Object.assign(row, next)
   await store.saveMonthlySettlementRow(next)
+  clearDirty(row.id)
   ElMessage.success('结款金额已保存')
 }
 
 async function handleRemarkBlur(row: MonthlySettlementSummaryRow) {
   await store.saveMonthlySettlementRow({ ...row, remark: row.remark || '' })
+  clearDirty(row.id)
 }
 
 function money(value: number) {

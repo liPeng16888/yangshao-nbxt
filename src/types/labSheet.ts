@@ -13,6 +13,13 @@ export type LabParameterKey =
 
 export type SamplePaymentStatus = '已结款' | '未结款' | '月结款' | '预存款'
 
+export interface PrepaidMemberPickerResult {
+  memberId: string
+  phone: string
+  amount: number
+  currentBalance: number
+}
+
 export interface LabParameter {
   ironBlank: number
   ironFactor: number
@@ -24,6 +31,10 @@ export interface LabParameter {
   magnesiumFactor: number
   titaniumFactor: number
   savedAt?: string
+}
+
+export interface LabParameterSnapshot extends LabParameter {
+  segmentedApplication?: true
 }
 
 export interface LabSampleInput {
@@ -40,6 +51,8 @@ export interface LabSampleInput {
   recipientCustomerText?: string
   price?: number | null
   paymentStatus?: SamplePaymentStatus | ''
+  prepaidMemberId?: string
+  prepaidMemberPhone?: string
   ironRaw?: number | null
   siliconRaw?: number | null
   siliconAdjust?: number | null
@@ -73,6 +86,7 @@ export interface LabFormulaResult {
   calcium: number
   magnesium: number
   titanium: number
+  bottleDensity: number
   moisture: number
   burnLoss: number
 }
@@ -85,7 +99,7 @@ export interface SampleBlock {
   sensitiveFieldsHidden?: boolean
   inputs: LabSampleInput
   results: LabFormulaResult
-  parameterSnapshot: LabParameter
+  parameterSnapshot: LabParameterSnapshot
 }
 
 export interface LabChangeLogField {
@@ -96,6 +110,7 @@ export interface LabChangeLogField {
 
 export interface SampleBlockSavePayload {
   id: string
+  idempotencyKey?: string
   baseUpdatedAt?: string
   baseInputs?: Partial<LabSampleInput>
   changedFields?: Partial<LabSampleInput>

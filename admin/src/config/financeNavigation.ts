@@ -1,4 +1,4 @@
-export type FinanceGroupId = 'income' | 'monthly' | 'prepaid'
+export type FinanceGroupId = 'income' | 'monthly'
 
 export type FinancePageId =
   | 'income'
@@ -7,9 +7,6 @@ export type FinancePageId =
   | 'monthlyDaily'
   | 'monthlyBills'
   | 'monthlyCustomers'
-  | 'prepaidRecharges'
-  | 'prepaidDaily'
-  | 'prepaidCustomers'
 
 export interface FinanceNavigationPage {
   path: string
@@ -43,16 +40,6 @@ export const financeNavigationGroups: FinanceNavigationGroup[] = [
       { path: '/finance/monthly/daily', label: '月结款每日明细', page: 'monthlyDaily' },
       { path: '/finance/monthly/bills', label: '月结款账单明细', page: 'monthlyBills' },
       { path: '/finance/monthly/customers', label: '月结客户信息收录', page: 'monthlyCustomers' }
-    ]
-  },
-  {
-    id: 'prepaid',
-    label: '预存款明细',
-    path: '/finance/prepaid/recharges',
-    children: [
-      { path: '/finance/prepaid/recharges', label: '预存款添加记录', page: 'prepaidRecharges' },
-      { path: '/finance/prepaid/daily', label: '预存款每日明细', page: 'prepaidDaily' },
-      { path: '/finance/prepaid/customers', label: '预存款客户', page: 'prepaidCustomers' }
     ]
   }
 ]

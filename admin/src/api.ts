@@ -1,9 +1,26 @@
 import axios from 'axios'
+import type { AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
 import type {
+  AdminAttendanceAuditRow,
+  AdminAttendanceAuditQuery,
+  AdminAttendanceRecord,
+  AdminAttendanceRevealPayload,
+  AdminBonusRecord,
+  AdminCommissionRecord,
+  AdminAttendanceEmployee,
+  AdminAttendanceEmployeeResponse,
+  AdminAttendanceOverview,
+  AdminAttendancePayrollRun,
+  AdminAttendanceSchedules,
   AdminCustomerOverviewRow,
+  AdminFrontendAccount,
+  AdminEmployeeAttendanceQuery,
+  AdminLeaveRequest,
   AdminMedicineInventoryItem,
   AdminMedicineInventoryMovement,
+  AdminRevealedAttendanceEmployee,
+  AdminRevealedAttendanceEmployeeResponse,
   AdminUser,
   FrontendOption
 } from './types'
@@ -21,11 +38,14 @@ export type AdminProfilePayload = {
 }
 
 type AdminRequest = {
-  get<T = any, R = any>(url: string, config?: any): Promise<R>
-  post<T = any, R = any>(url: string, payload?: any, config?: any): Promise<R>
-  patch<T = any, R = any>(url: string, payload?: any, config?: any): Promise<R>
-  delete<T = any, R = any>(url: string, config?: any): Promise<R>
+  get<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
+  post<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
+  put<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
+  patch<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
+  delete<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
 }
+
+type AdminRequestConfig = AxiosRequestConfig & { preserveAdminSessionOnUnauthorized?: boolean }
 
 const realRequest = axios.create({
   baseURL: import.meta.env.VITE_ADMIN_API_BASE_URL || '/api',
@@ -51,7 +71,8 @@ realRequest.interceptors.response.use(
           : typeof data?.error === 'string'
             ? data.error
             : error?.message || '请求失败'
-    if (error?.response?.status === 401) {
+    const preserveSession = Boolean((error?.config as AdminRequestConfig | undefined)?.preserveAdminSessionOnUnauthorized)
+    if (error?.response?.status === 401 && !preserveSession) {
       localStorage.removeItem(ADMIN_TOKEN_KEY)
       localStorage.removeItem(ADMIN_USER_KEY)
       window.location.href = `${import.meta.env.BASE_URL}login`
@@ -152,6 +173,11 @@ const mockRows = {
         { id: 'group-1', name: '经营数据', enabled: true, password: '2580', ttlMinutes: 5, recoveryPrompt: '管理员提示', recoveryAnswer: '凯里', features: ['FINANCE', 'REPORTS'] },
         { id: 'group-2', name: '样品历史', enabled: true, password: '9527', ttlMinutes: 10, recoveryPrompt: '城市', recoveryAnswer: '凯里', features: ['HISTORICAL_DATES', 'COMPLETED_SAMPLE_DATA'] }
       ],
+      frontendSubAccounts: [{
+        id: 'frontend-sub-1', account: 'operator01', username: '操作员', disabled: false,
+        requiresAccessGuardPassword: true, permissions: ['DATA_MAIN', 'REPORTS'],
+        createdAt: '2026-08-11T09:00:00.000Z', lastLoginAt: null
+      }],
       disabled: false,
       createdAt: '2026-06-25 09:00:00'
     },
@@ -163,6 +189,7 @@ const mockRows = {
       displayName: '仰韶客户二',
       password: '123456',
       accessGroups: [],
+      frontendSubAccounts: [],
       disabled: false,
       createdAt: '2026-06-25 10:00:00'
     }
@@ -185,15 +212,6 @@ const mockRows = {
   monthlyCustomers: [
     { frontendUserId: 'front-1', name: '凯里化验室', customer: '李四', firstDate: '2026-06-01', lastDate: '2026-06-25', amount: 1280, sampleCount: 16, remark: '示例月结客户' }
   ],
-  prepaidRecharges: [
-    { id: 'p-1', rechargeDate: '2026-06-25', createdAt: '2026-06-25 10:30:00', frontendUserId: 'front-1', name: '凯里化验室', customer: '王总', amount: 1000, usableTimes: 10, remark: '预存款示例' }
-  ],
-  prepaidCustomers: [
-    { id: 'front-1__王总', frontendUserId: 'front-1', name: '凯里化验室', customer: '王总', totalAmount: 1000, totalUsableTimes: 10, usedTimes: 2, availableTimes: 8, remark: '预存款示例' }
-  ],
-  prepaidDaily: [
-    { id: '2026-06-25__王总', date: '2026-06-25', frontendUserId: 'front-1', name: '凯里化验室', customer: '王总', sampleCount: 2, remark: '当天扣除 2 次' }
-  ],
   deletionRequests: [
     {
       id: 'delete-1',
@@ -212,6 +230,443 @@ const mockRows = {
       updatedAt: '2026-06-25 12:00:00'
     }
   ]
+}
+
+const mockPrepaidAccountA = {
+  id: 'front-1', account: 'kaili001', username: '凯里化验室', displayRemark: ''
+}
+const mockPrepaidAccountB = {
+  id: 'front-2', account: 'yangshao002', username: '仰韶客户二', displayRemark: ''
+}
+const mockSharedPrepaid = {
+  recharges: [
+    {
+      id: 'recharge-1', memberId: 'member-1', phone: '13800000001', ownerFrontendUserId: 'front-1',
+      ownerAccount: 'kaili001', ownerUsername: '凯里化验室', actorUserId: 'front-1',
+      actorAccount: 'kaili001', actorUsername: '凯里化验室', rechargeDate: '2026-08-01',
+      paidAmount: 1000, giftAmount: 100, totalAmount: 1100, remainingAmount: 900,
+      isOpeningBalance: false, remark: '现金充值', reversedAt: null, reversedByLedgerId: null,
+      createdAt: '2026-08-01T01:00:00.000Z', updatedAt: '2026-08-01T01:00:00.000Z'
+    },
+    {
+      id: 'recharge-2', memberId: 'member-2', phone: '13800000002', ownerFrontendUserId: 'front-2',
+      ownerAccount: 'yangshao002', ownerUsername: '仰韶客户二', actorUserId: 'front-2',
+      actorAccount: 'yangshao002', actorUsername: '仰韶客户二', rechargeDate: '2026-08-02',
+      paidAmount: 500, giftAmount: 50, totalAmount: 550, remainingAmount: 0,
+      isOpeningBalance: true, remark: '期初导入', reversedAt: '2026-08-03T02:00:00.000Z',
+      reversedByLedgerId: 'ledger-reversal-2', createdAt: '2026-08-02T01:00:00.000Z',
+      updatedAt: '2026-08-03T02:00:00.000Z', reversal: {
+        id: 'ledger-reversal-2', reason: '重复导入', actorUserId: 'front-2', actorUser: mockPrepaidAccountB,
+        createdAt: '2026-08-03T02:00:00.000Z'
+      }
+    },
+    {
+      id: 'recharge-mixed-b', memberId: 'member-1', phone: '13800000001', ownerFrontendUserId: 'front-2',
+      ownerAccount: 'yangshao002', ownerUsername: '仰韶客户二', actorUserId: 'front-2',
+      actorAccount: 'yangshao002', actorUsername: '仰韶客户二', rechargeDate: '2026-08-01',
+      paidAmount: 90, giftAmount: 0, totalAmount: 90, remainingAmount: 0,
+      isOpeningBalance: false, remark: '混合来源', reversedAt: null, reversedByLedgerId: null,
+      createdAt: '2026-08-01T01:30:00.000Z', updatedAt: '2026-08-01T01:30:00.000Z'
+    }
+  ],
+  members: [
+    {
+      id: 'member-1', phone: '13800000001',
+      ledgerEntries: [{ id: 'ledger-1', kind: 'RECHARGE', balanceDelta: 1100, ownerFrontendUserId: 'front-1' }],
+    },
+    {
+      id: 'member-2', phone: '13800000002',
+      ledgerEntries: [{ id: 'ledger-reversal-2', kind: 'RECHARGE_REVERSAL', balanceDelta: -550, ownerFrontendUserId: 'front-2' }]
+    },
+    {
+      id: 'member-consumer-only', phone: '13800000003', ledgerEntries: []
+    },
+    {
+      id: 'member-settlement-only', phone: '13800000004', ledgerEntries: []
+    }
+  ],
+  consumptions: [
+    {
+      id: 'consumption-1', memberId: 'member-1', phoneSnapshot: '13800000001',
+      sampleNumberSnapshot: 'YS-001', sampleCountSnapshot: 2, elementsSnapshot: ['金', '银'], amount: 100,
+      kind: 'CONSUMPTION', active: true, reversalOfId: null, consumingFrontendUserId: 'front-2',
+      consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB,
+      allocations: [
+        { id: 'allocation-1', sourceOwnerId: 'front-1', sourceOwner: mockPrepaidAccountA, allocatedAmount: 10, recharge: { id: 'recharge-1', rechargeDate: '2026-08-01' } },
+        { id: 'allocation-2', sourceOwnerId: 'front-2', sourceOwner: mockPrepaidAccountB, allocatedAmount: 90, recharge: { id: 'recharge-mixed-b', rechargeDate: '2026-08-01' } }
+      ],
+      payables: [{ id: 'payable-1', status: 'PENDING', amount: 181.82, sourceOwner: mockPrepaidAccountA, consumerOwner: mockPrepaidAccountB }],
+      originalPayables: [], sheetDate: '2026-08-04', createdAt: '2026-08-04T01:00:00.000Z'
+    },
+    {
+      id: 'consumption-consumer-only', memberId: 'member-consumer-only', phoneSnapshot: '13800000003',
+      sampleNumberSnapshot: 'YS-002', sampleCountSnapshot: 1, elementsSnapshot: ['金'], amount: 30,
+      kind: 'CONSUMPTION', active: true, reversalOfId: null, consumingFrontendUserId: 'front-1',
+      consumingFrontendUser: mockPrepaidAccountA, actorUser: mockPrepaidAccountA, allocations: [], payables: [],
+      originalPayables: [], sheetDate: '2026-08-06', createdAt: '2026-08-06T01:00:00.000Z'
+    },
+    {
+      id: 'consumption-settlement-only', memberId: 'member-settlement-only', phoneSnapshot: '13800000004',
+      sampleNumberSnapshot: 'YS-003', sampleCountSnapshot: 1, elementsSnapshot: ['银'], amount: 20,
+      kind: 'CONSUMPTION', active: true, reversalOfId: null, consumingFrontendUserId: 'front-2',
+      consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB, allocations: [],
+      payables: [{ id: 'payable-settlement-only', status: 'HELD', amount: 20, sourceOwner: mockPrepaidAccountB, consumerOwner: mockPrepaidAccountB }],
+      originalPayables: [], sheetDate: '2026-08-07', createdAt: '2026-08-07T01:00:00.000Z'
+    },
+    {
+      id: 'consumption-reversal-1', memberId: 'member-1', phoneSnapshot: '13800000001',
+      sampleNumberSnapshot: 'YS-001', sampleCountSnapshot: 2, elementsSnapshot: ['金', '银'], amount: -100,
+      kind: 'REVERSAL', active: false, reversalOfId: 'consumption-1', consumingFrontendUserId: 'front-2',
+      consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB, allocations: [], payables: [],
+      originalPayables: [], sheetDate: '2026-08-08', createdAt: '2026-08-08T01:00:00.000Z'
+    }
+  ],
+  settlements: [
+    {
+      id: 'settlement-1', accountAId: 'front-1', accountBId: 'front-2', accountA: mockPrepaidAccountA,
+      accountB: mockPrepaidAccountB, aToBAmount: 181.82, bToAAmount: 40, netAmount: 141.82,
+      grossAmount: 221.82, status: 'AWAITING_RECEIPT', payerFrontendUserId: 'front-1',
+      receiverFrontendUserId: 'front-2', proofUrls: ['/uploads/prepaid-proof-demo.jpg'],
+      rejectionReason: null, createdByUser: mockPrepaidAccountA, paidByUser: mockPrepaidAccountA,
+      confirmedByUser: null, rejectedByUser: null, createdAt: '2026-08-05T01:00:00.000Z',
+      updatedAt: '2026-08-05T02:00:00.000Z', lines: [{ id: 'line-1', payableId: 'payable-1', amount: 181.82 }],
+      actions: [{ id: 'action-1', operation: 'SUBMIT_PAYMENT', reason: null, actorUser: mockPrepaidAccountA, createdAt: '2026-08-05T02:00:00.000Z' }]
+    },
+    {
+      id: 'settlement-member-only', accountAId: 'front-1', accountBId: 'front-2', accountA: mockPrepaidAccountA,
+      accountB: mockPrepaidAccountB, aToBAmount: 20, bToAAmount: 0, netAmount: 20, grossAmount: 20,
+      status: 'AWAITING_PAYMENT', payerFrontendUserId: 'front-1', receiverFrontendUserId: 'front-2', proofUrls: [],
+      rejectionReason: null, createdByUser: mockPrepaidAccountA, paidByUser: null, confirmedByUser: null,
+      rejectedByUser: null, createdAt: '2026-08-07T02:00:00.000Z', updatedAt: '2026-08-07T02:00:00.000Z',
+      lines: [{ id: 'line-member-only', payableId: 'payable-settlement-only', amount: 20 }], actions: []
+    }
+  ]
+}
+
+const mockEmployeeAttendance = {
+  employees: [
+    {
+      id: 'emp-1', frontendUserId: 'front-1', employeeNumber: 'YG001', name: '张三', status: 'ACTIVE', phone: '13800000001',
+      idCard: '410***********1234', bankCard: '622*********7890', address: '洛阳市***', emergencyContact: '张父***',
+      hireDate: '2026-01-01', terminationDate: null, baseSalary: 6000, attendanceBonus: 300, overtimeHourlyRate: 30,
+      restQuotaDays: 4, hasPhoto: true, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+    },
+    {
+      id: 'emp-2', frontendUserId: 'front-1', employeeNumber: 'YG002', name: '李四', status: 'ACTIVE', phone: '13800000002',
+      idCard: '410***********2345', bankCard: '622*********8901', address: '三门峡市***', emergencyContact: '李母***',
+      hireDate: '2026-02-01', terminationDate: null, baseSalary: 5500, attendanceBonus: 300, overtimeHourlyRate: 28,
+      restQuotaDays: 4, hasPhoto: false, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+    },
+    {
+      id: 'emp-3', frontendUserId: 'front-2', employeeNumber: 'YG001', name: '王五', status: 'INACTIVE', phone: '13800000003',
+      idCard: '410***********3456', bankCard: '622*********9012', address: '郑州市***', emergencyContact: '王父***',
+      hireDate: '2026-03-01', terminationDate: null, baseSalary: 5200, attendanceBonus: 200, overtimeHourlyRate: 26,
+      restQuotaDays: 4, hasPhoto: false, frontendUser: { account: 'yangshao002', username: '仰韶客户二', displayRemark: '' }
+    }
+  ],
+  sensitive: {
+    'emp-1': { idCard: '410000199001011234', bankCard: '6222021234567890', address: '洛阳市涧西区', emergencyContact: '张父 13800001001' },
+    'emp-2': { idCard: '410000199202022345', bankCard: '6222022345678901', address: '三门峡市湖滨区', emergencyContact: '李母 13800001002' },
+    'emp-3': { idCard: '410000199303033456', bankCard: '6222023456789012', address: '郑州市金水区', emergencyContact: '王父 13800001003' }
+  } as Record<string, { idCard: string; bankCard: string; address: string; emergencyContact: string }>,
+  schedules: {
+    weekly: [
+      { id: 'weekly-1', frontendUserId: 'front-1', employeeId: 'emp-1', weekday: 1, isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480 },
+      { id: 'weekly-2', frontendUserId: 'front-2', employeeId: 'emp-3', weekday: 1, isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480 }
+    ],
+    overrides: [
+      { id: 'override-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-09', isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '14:00', scheduledMinutes: 360, remark: '临时值班' }
+    ],
+    monthly: [
+      { id: 'month-1', frontendUserId: 'front-1', employeeId: 'emp-1', month: '2026-08', scheduledWorkDays: 22, restQuotaDays: 4 }
+    ]
+  },
+  attendance: [
+    { id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 510, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' } },
+    { id: 'attendance-2', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 470, lateMinutes: 10, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '王五' } }
+  ],
+  leaves: [
+    { id: 'leave-1', frontendUserId: 'front-1', employeeId: 'emp-2', leaveTypeId: 'leave-type-1', startDate: '2026-08-08', endDate: '2026-08-08', unit: 'HALF_DAY', countedDays: 0.5, reason: '个人事务', status: 'PENDING', reviewRemark: '', employee: { employeeNumber: 'YG002', name: '李四' }, leaveType: { id: 'leave-type-1', name: '事假' } }
+  ],
+  commissions: [
+    { id: 'commission-1', frontendUserId: 'front-1', employeeId: 'emp-1', commissionTypeId: 'commission-type-1', date: '2026-08-08', quantity: 8, unitPriceSnapshot: 12, amount: 96, remark: '当日送样', employee: { employeeNumber: 'YG001', name: '张三' }, commissionType: { id: 'commission-type-1', name: '送样提成' } }
+  ],
+  bonuses: [
+    { id: 'bonus-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', amount: 200, reason: '月度安全奖', employee: { employeeNumber: 'YG001', name: '张三' } }
+  ],
+  payroll: [
+    {
+      id: 'payroll-1', frontendUserId: 'front-1', month: '2026-08', status: 'DRAFT',
+      frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' },
+      items: [{ id: 'payroll-item-1', employeeId: 'emp-1', employeeNumberSnapshot: 'YG001', employeeNameSnapshot: '张三', payableAmount: 6596, issues: [], calculationSnapshot: { input: { baseSalary: 6000 }, result: { overtimePay: 0, commissionAmount: 96, bonusAmount: 200, leaveDeduction: 0, absenceDeduction: 0, payableAmount: 6596 } }, adjustments: [] }]
+    }
+  ],
+  audit: [] as AdminAttendanceAuditRow[]
+}
+
+function mockAdminUser() {
+  return currentAdminUser() || mockUser
+}
+
+function mockAuthorizedFrontendIds() {
+  const admin = mockAdminUser()
+  if (admin.role === 'ROOT_ADMIN') return mockRows.frontendUsers.map((row) => row.id)
+  const sub = mockRows.subAdmins.find((row) => row.id === admin.id || row.account === admin.account)
+  return (sub?.permissions || []).map((item) => item.id)
+}
+
+function mockAttendanceIds(config?: AdminRequestConfig) {
+  const permitted = mockAuthorizedFrontendIds()
+  const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
+  return requested.length ? requested.filter((id) => permitted.includes(id)) : permitted
+}
+
+function assertExclusiveAttendanceDateFilter(config?: AdminRequestConfig) {
+  if (config?.params?.month && (config.params.startDate || config.params.endDate)) throw new Error('月份和日期范围不能同时筛选')
+}
+
+function mockAttendanceEntityFilter<T extends Record<string, unknown>>(rows: T[], config?: AdminRequestConfig) {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  return rows.filter((row) => ids.includes(String(row.frontendUserId)) && (!employeeId || row.employeeId === employeeId))
+}
+
+function mockMonthlyScheduleFilter(config?: AdminRequestConfig) {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  const month = String(config?.params?.month || '')
+  return mockEmployeeAttendance.schedules.monthly.filter((row) => ids.includes(row.frontendUserId)
+    && (!employeeId || row.employeeId === employeeId)
+    && (!month || row.month === month))
+}
+
+function mockScheduleOverrideFilter(config?: AdminRequestConfig) {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  const month = String(config?.params?.month || '')
+  const startDate = String(config?.params?.startDate || '')
+  const endDate = String(config?.params?.endDate || '')
+  return mockEmployeeAttendance.schedules.overrides.filter((row) => ids.includes(row.frontendUserId)
+    && (!employeeId || row.employeeId === employeeId)
+    && (month ? row.date.startsWith(month) : (!startDate || row.date >= startDate) && (!endDate || row.date <= endDate)))
+}
+
+function isEmployeeAttendanceAdminPath(url: string) {
+  return url === '/admin/employee-attendance' || url.startsWith('/admin/employee-attendance/')
+}
+
+function isSharedPrepaidAdminPath(url: string) {
+  return url === '/admin/shared-prepaid' || url.startsWith('/admin/shared-prepaid/')
+}
+
+function mockSharedPrepaidIds(config?: AdminRequestConfig) {
+  const permitted = mockAuthorizedFrontendIds()
+  const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
+  if (requested.some((id) => !permitted.includes(id))) throw new Error('没有访问部分前端账号的权限')
+  return requested.length ? requested : permitted
+}
+
+function mockSharedPrepaidEffectiveAllocations(row: any) {
+  const sourceRow = row.kind === 'REVERSAL' && row.reversalOfId
+    ? mockSharedPrepaid.consumptions.find((candidate) => candidate.id === row.reversalOfId) ?? row
+    : row
+  return {
+    sourceConsumptionId: sourceRow.id,
+    allocations: sourceRow.allocations
+  }
+}
+
+function mockSharedPrepaidConsumptionParticipates(row: any, allowedIds: string[]) {
+  const { allocations } = mockSharedPrepaidEffectiveAllocations(row)
+  return allowedIds.includes(row.consumingFrontendUserId)
+    || allocations.some((allocation: any) => allowedIds.includes(allocation.sourceOwnerId))
+}
+
+function mockSharedPrepaidMemberParticipates(memberId: string, allowedIds: string[]) {
+  if (mockSharedPrepaid.recharges.some((row) => row.memberId === memberId && allowedIds.includes(row.ownerFrontendUserId))) {
+    return true
+  }
+  return mockSharedPrepaid.consumptions.some((consumption) => consumption.memberId === memberId && (
+    mockSharedPrepaidConsumptionParticipates(consumption, allowedIds)
+    || consumption.payables.some((payable) => mockSharedPrepaid.settlements.some((settlement) =>
+      settlement.lines.some((line) => line.payableId === payable.id)
+      && (allowedIds.includes(settlement.accountAId) || allowedIds.includes(settlement.accountBId))
+    ))
+  ))
+}
+
+function mockSharedPrepaidConsumptionSummary(row: any) {
+  const { allocations: effectiveAllocations, sourceConsumptionId } = mockSharedPrepaidEffectiveAllocations(row)
+  const sourceOwners = [...new Map(effectiveAllocations.map((allocation: any) => [
+    allocation.sourceOwnerId,
+    allocation.sourceOwner
+  ])).values()]
+  const {
+    allocations: _allocations,
+    payables: _payables,
+    originalPayables: _originalPayables,
+    sheetId: _sheetId,
+    sampleBlockId: _sampleBlockId,
+    sampleIndex: _sampleIndex,
+    ...summary
+  } = row
+  return {
+    ...summary,
+    allocationOrigin: sourceConsumptionId === row.id ? 'DIRECT' : 'REVERSAL_TARGET',
+    allocationSourceConsumptionId: sourceConsumptionId,
+    sourceOwners: sourceOwners.slice(0, 100),
+    sourceOwnersTruncated: sourceOwners.length > 100
+  }
+}
+
+function mockScopedSharedPrepaidMember(row: any, allowedIds: string[]) {
+  const scopedRecharges = mockSharedPrepaid.recharges
+    .filter((recharge) => recharge.memberId === row.id && allowedIds.includes(recharge.ownerFrontendUserId))
+  const activeRecharges = scopedRecharges.filter((recharge) => !recharge.reversedAt)
+  const scopedConsumptions = mockSharedPrepaid.consumptions.filter((consumption) => (
+    consumption.memberId === row.id && mockSharedPrepaidConsumptionParticipates(consumption, allowedIds)
+  ))
+  const activeConsumptions = scopedConsumptions.filter((consumption) => (
+    consumption.kind === 'CONSUMPTION' && consumption.active
+  ))
+  const consumedTotal = activeConsumptions.reduce((total, consumption) => {
+    if (allowedIds.includes(consumption.consumingFrontendUserId)) return total + consumption.amount
+    return total + consumption.allocations.reduce(
+      (subtotal, allocation) => allowedIds.includes(allocation.sourceOwnerId)
+        ? subtotal + allocation.allocatedAmount
+        : subtotal,
+      0
+    )
+  }, 0)
+  const ownerComposition = [...new Set(activeRecharges.map((recharge) => recharge.ownerFrontendUserId))]
+    .map((ownerFrontendUserId) => {
+      const ownerRows = activeRecharges.filter((recharge) => recharge.ownerFrontendUserId === ownerFrontendUserId)
+      const first = ownerRows[0]
+      return {
+        ownerFrontendUserId,
+        ownerAccount: first.ownerAccount,
+        ownerUsername: first.ownerUsername,
+        ownerDisplayName: first.ownerUsername || first.ownerAccount,
+        balance: ownerRows.reduce((total, recharge) => total + recharge.remainingAmount, 0)
+      }
+    })
+    .filter((owner) => owner.balance > 0)
+    .sort((left, right) => left.ownerFrontendUserId.localeCompare(right.ownerFrontendUserId))
+  const ledgerEntries = (row.ledgerEntries ?? [])
+    .filter((entry: any) => allowedIds.includes(entry.ownerFrontendUserId))
+  const historyLimit = 50
+  return {
+    ...row,
+    paidTotal: activeRecharges.reduce((total, recharge) => total + recharge.paidAmount, 0),
+    giftTotal: activeRecharges.reduce((total, recharge) => total + recharge.giftAmount, 0),
+    consumedTotal,
+    balance: activeRecharges.reduce((total, recharge) => total + recharge.remainingAmount, 0),
+    ownerComposition,
+    latestRechargeTime: activeRecharges.reduce<string | null>((latest, recharge) => (
+      !latest || recharge.createdAt > latest ? recharge.createdAt : latest
+    ), null),
+    latestConsumptionTime: activeConsumptions.reduce<string | null>((latest, consumption) => (
+      !latest || consumption.createdAt > latest ? consumption.createdAt : latest
+    ), null),
+    historyLimit,
+    historyTruncated: {
+      recharges: scopedRecharges.length > historyLimit,
+      consumptions: scopedConsumptions.length > historyLimit,
+      ledgerEntries: ledgerEntries.length > historyLimit
+    },
+    recharges: scopedRecharges.slice(0, historyLimit),
+    consumptions: scopedConsumptions.slice(0, historyLimit).map(mockSharedPrepaidConsumptionSummary),
+    ledgerEntries: ledgerEntries.slice(0, historyLimit)
+  }
+}
+
+function mockSharedPrepaidRows(resource: keyof typeof mockSharedPrepaid, config?: AdminRequestConfig) {
+  const allowedIds = mockSharedPrepaidIds(config)
+  const phone = String(config?.params?.phone || '').replace(/\D/g, '')
+  const status = String(config?.params?.status || '')
+  const startDate = String(config?.params?.startDate || '')
+  const endDate = String(config?.params?.endDate || '')
+  const rows = mockSharedPrepaid[resource].filter((row: any) => {
+    const participates = resource === 'recharges'
+      ? allowedIds.includes(row.ownerFrontendUserId)
+      : resource === 'members'
+        ? mockSharedPrepaidMemberParticipates(row.id, allowedIds)
+        : resource === 'consumptions'
+          ? mockSharedPrepaidConsumptionParticipates(row, allowedIds)
+          : allowedIds.includes(row.accountAId) || allowedIds.includes(row.accountBId)
+    const date = resource === 'recharges' ? row.rechargeDate : resource === 'consumptions' ? row.sheetDate : String(row.createdAt || '').slice(0, 10)
+    const rowStatus = resource === 'recharges' ? (row.reversedAt ? 'REVERSED' : 'ACTIVE') : resource === 'consumptions' ? (row.active ? 'ACTIVE' : 'REVERSED') : row.status
+    const sourceOwnerId = String(config?.params?.sourceOwnerId || '')
+    const counterpartyId = String(config?.params?.counterpartyFrontendUserId || '')
+    return participates
+      && (!phone || String(row.phone || row.phoneSnapshot || '').includes(phone))
+      && (!config?.params?.ownerFrontendUserId || row.ownerFrontendUserId === config.params.ownerFrontendUserId)
+      && (!config?.params?.consumingFrontendUserId || row.consumingFrontendUserId === config.params.consumingFrontendUserId)
+      && (resource !== 'consumptions' || !sourceOwnerId || mockSharedPrepaidEffectiveAllocations(row).allocations
+        .some((allocation: any) => allocation.sourceOwnerId === sourceOwnerId))
+      && (!counterpartyId || row.accountAId === counterpartyId || row.accountBId === counterpartyId)
+      && (!status || rowStatus === status)
+      && (resource !== 'recharges' || config?.params?.isOpeningBalance === undefined || row.isOpeningBalance === config.params.isOpeningBalance)
+      && (!startDate || !date || date >= startDate)
+      && (!endDate || !date || date <= endDate)
+  })
+  if (resource !== 'consumptions' || !config?.params?.payableStatus) return rows
+  return rows.filter((row: any) => [...(row.payables || []), ...(row.originalPayables || [])]
+    .some((payable: any) => payable.status === config.params.payableStatus))
+}
+
+function mockSharedPrepaidResponse(resource: keyof typeof mockSharedPrepaid, id: string | undefined, config?: AdminRequestConfig) {
+  const rows = mockSharedPrepaidRows(resource, config)
+  const allowedIds = mockSharedPrepaidIds(config)
+  if (id) {
+    const row = rows.find((item) => item.id === id)
+    if (!row) throw new Error('记录不存在或无权查看')
+    return resource === 'members' ? mockScopedSharedPrepaidMember(row, allowedIds) : row
+  }
+  const page = Math.max(1, Number(config?.params?.page) || 1)
+  const pageSize = Math.min(100, Math.max(1, Number(config?.params?.pageSize) || 20))
+  const start = (page - 1) * pageSize
+  const items = rows.slice(start, start + pageSize).map((row: any) => {
+    if (resource === 'members') {
+      const scoped = mockScopedSharedPrepaidMember(row, allowedIds)
+      const { recharges: _recharges, consumptions: _consumptions, ledgerEntries: _ledgerEntries,
+        historyLimit: _historyLimit, historyTruncated: _historyTruncated, ...summary } = scoped
+      return summary
+    }
+    if (resource === 'consumptions') {
+      return mockSharedPrepaidConsumptionSummary(row)
+    }
+    if (resource === 'settlements') {
+      const { proofUrls: _proofUrls, lines: _lines, actions: _actions, rejectionReason: _rejectionReason, ...summary } = row
+      return summary
+    }
+    if (resource === 'recharges') {
+      const { reversal: _reversal, ...summary } = row
+      return summary
+    }
+    return row
+  })
+  return { items, total: rows.length, page, pageSize }
+}
+
+function mockAttendanceFilter<T extends Record<string, unknown>>(rows: T[], config?: AdminRequestConfig, dateFields: [string, string?] = ['date']) {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  const month = String(config?.params?.month || '')
+  const startDate = String(config?.params?.startDate || '')
+  const endDate = String(config?.params?.endDate || '')
+  const status = String(config?.params?.status || '')
+  const [startField, endField = startField] = dateFields
+  return rows.filter((row) => {
+    const rowStart = String(row[startField] || '')
+    const rowEnd = String(row[endField] || rowStart)
+    return ids.includes(String(row.frontendUserId))
+      && (!employeeId || row.employeeId === employeeId)
+      && (!month || rowStart.slice(0, 7) === month || (endField !== startField && rowStart <= `${month}-31` && rowEnd >= `${month}-01`))
+      && (!startDate || rowEnd >= startDate)
+      && (!endDate || rowStart <= endDate)
+      && (!status || row.status === status)
+  })
 }
 
 const mockSheet = {
@@ -248,6 +703,7 @@ const mockSheet = {
         waterSample: 10,
         bottleWater: 50,
         bottleWaterSample: 55,
+        moisture: 2,
         crucible: 20,
         sampleWeight: 5,
         burnedCrucibleSample: 24.1
@@ -262,6 +718,7 @@ const mockSheet = {
         calcium: 1.15,
         magnesium: 1.11,
         titanium: 1.14,
+        bottleDensity: 1.9965,
         moisture: 2,
         burnLoss: 18
       }
@@ -316,15 +773,68 @@ function parseHistoryFields(value: unknown) {
 }
 
 const mockRequest = {
-  async get(url: string, config?: any) {
-    if (url === '/admin/auth/me') return mockUser
+  async get(url: string, config?: AdminRequestConfig) {
+    if (isEmployeeAttendanceAdminPath(url)) assertExclusiveAttendanceDateFilter(config)
+    const prepaidMatch = url.match(/^\/admin\/shared-prepaid\/(recharges|members|consumptions|settlements)(?:\/([^/]+))?$/)
+    if (prepaidMatch) {
+      return mockSharedPrepaidResponse(
+        prepaidMatch[1] as keyof typeof mockSharedPrepaid,
+        prepaidMatch[2] ? decodeURIComponent(prepaidMatch[2]) : undefined,
+        config
+      )
+    }
+    if (url === '/admin/auth/me') return mockAdminUser()
     if (url === '/admin/frontend-users/options') {
-      return mockRows.frontendUsers.map((row) => ({
+      const allowed = mockAuthorizedFrontendIds()
+      return mockRows.frontendUsers.filter((row) => allowed.includes(row.id)).map((row) => ({
         id: row.id,
         account: row.account,
         name: row.displayRemark || row.username || row.account,
         disabled: row.disabled
       }))
+    }
+    if (url === '/admin/employee-attendance/overview') {
+      const ids = mockAttendanceIds(config)
+      const month = String(config?.params?.month || '2026-08')
+      return {
+        month,
+        workforce: mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE').length,
+        attendanceRecords: mockEmployeeAttendance.attendance.filter((row) => ids.includes(row.frontendUserId) && row.date.startsWith(month)).length,
+        pendingLeave: mockEmployeeAttendance.leaves.filter((row) => ids.includes(row.frontendUserId) && row.status === 'PENDING' && row.startDate <= `${month}-31` && row.endDate >= `${month}-01`).length,
+        payrollRuns: mockEmployeeAttendance.payroll.filter((row) => ids.includes(row.frontendUserId) && row.month === month).length,
+        readonly: true
+      }
+    }
+    if (url === '/admin/employee-attendance/employees') {
+      const ids = mockAttendanceIds(config)
+      const employeeId = String(config?.params?.employeeId || '')
+      const status = String(config?.params?.status || '')
+      return mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && (!employeeId || row.id === employeeId) && (!status || row.status === status))
+    }
+    if (url === '/admin/employee-attendance/schedules') {
+      return {
+        weekly: mockAttendanceEntityFilter(mockEmployeeAttendance.schedules.weekly, config),
+        overrides: mockScheduleOverrideFilter(config),
+        monthly: mockMonthlyScheduleFilter(config)
+      }
+    }
+    if (url === '/admin/employee-attendance/attendance') return mockAttendanceFilter(mockEmployeeAttendance.attendance, config)
+    if (url === '/admin/employee-attendance/leaves') return mockAttendanceFilter(mockEmployeeAttendance.leaves, config, ['startDate', 'endDate'])
+    if (url === '/admin/employee-attendance/commissions') return mockAttendanceFilter(mockEmployeeAttendance.commissions, config)
+    if (url === '/admin/employee-attendance/bonuses') return mockAttendanceFilter(mockEmployeeAttendance.bonuses, config)
+    if (url === '/admin/employee-attendance/payroll') {
+      const ids = mockAttendanceIds(config)
+      const employeeId = String(config?.params?.employeeId || '')
+      const month = String(config?.params?.month || '')
+      const status = String(config?.params?.status || '')
+      return mockEmployeeAttendance.payroll.filter((row) => ids.includes(row.frontendUserId) && (!month || row.month === month) && (!status || row.status === status))
+        .map((row) => ({ ...row, items: row.items.filter((item) => !employeeId || item.employeeId === employeeId) }))
+        .filter((row) => !employeeId || row.items.length)
+    }
+    if (url === '/admin/employee-attendance/audit') {
+      const ids = mockAttendanceIds(config)
+      const month = String(config?.params?.month || '')
+      return mockEmployeeAttendance.audit.filter((row) => ids.includes(row.frontendUserId) && (!month || String(row.createdAt).slice(0, 7) === month))
     }
     if (url === '/admin/data-statistics/lab-sheets') {
       const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
@@ -381,13 +891,13 @@ const mockRequest = {
         rows: [
           {
             date: '2026-06-25',
-            sampleCount: 12,
+            sampleCount: 3,
             totalAmount: 1180,
             statusSummaries: [
               { status: '已结款', count: 0, amount: 0 },
               { status: '未结款', count: 1, amount: 80 },
               { status: '月结款', count: 1, amount: 100 },
-              { status: '预存款', count: 10, amount: 1000 }
+              { status: '预存款', count: 1, amount: 1000 }
             ]
           }
         ]
@@ -405,13 +915,9 @@ const mockRequest = {
       return { summaryRows: [{ id: '2026-06__front-1__李四', recordId: 'mrs-1', month: '2026-06', frontendUserId: 'front-1', name: '凯里化验室', customer: '李四', amount: 1280, sampleCount: 16, settlementStatus: '未结款', paidAmount: null, remark: '' }] }
     }
     if (url === '/admin/finance/monthly-customers') return mockRows.monthlyCustomers
-    if (url === '/admin/finance/prepaid-recharges') return mockRows.prepaidRecharges
     if (url === '/admin/finance/delete-requests') {
       const status = String(config?.params?.status || '')
       return status ? mockRows.deletionRequests.filter((row) => row.status === status) : mockRows.deletionRequests
-    }
-    if (url === '/admin/finance/prepaid-report') {
-      return { customerRows: mockRows.prepaidCustomers, dailyRows: mockRows.prepaidDaily }
     }
     if (url === '/admin/abnormal-records') return mockRows.abnormal
     if (url === '/admin/blacklist') return mockRows.blacklist
@@ -419,12 +925,29 @@ const mockRequest = {
     if (url === '/admin/accounts/sub-admins') return mockRows.subAdmins
     return {}
   },
-  async post(url: string, payload?: any) {
+  async post(url: string, payload?: any, config?: AdminRequestConfig) {
     if (url === '/admin/auth/login') {
-      if (payload?.account !== mockUser.account || payload?.password !== 'admin123456') throw new Error('账号或密码错误')
-      return { token: 'mock-admin-token', user: mockUser }
+      if (payload?.account === mockUser.account && payload?.password === 'admin123456') return { token: 'mock-admin-token', user: mockUser }
+      const sub = mockRows.subAdmins.find((row) => row.account === payload?.account && row.password === payload?.password)
+      if (sub) return { token: 'mock-sub-admin-token', user: { id: sub.id, account: sub.account, username: sub.username, role: 'SUB_ADMIN' } }
+      throw new Error('账号或密码错误')
     }
+    if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
     if (url === '/admin/accounts/invite-codes') return { code: `YS-${Date.now().toString().slice(-6)}` }
+    const revealEmployeeMatch = url.match(/^\/admin\/employee-attendance\/employees\/(.+)\/reveal$/)
+    if (revealEmployeeMatch) {
+      const admin = mockAdminUser()
+      const validPassword = admin.role === 'ROOT_ADMIN' ? 'admin123456' : 'sub123456'
+      if (payload?.password !== validPassword) throw new Error('当前后台账号密码错误')
+      const employee = mockEmployeeAttendance.employees.find((row) => row.id === revealEmployeeMatch[1] && mockAttendanceIds(config).includes(row.frontendUserId))
+      if (!employee) throw new Error('员工不存在或无权查看')
+      mockEmployeeAttendance.audit.unshift({
+        id: `audit-${Date.now()}`, frontendUserId: employee.frontendUserId, action: 'REVEAL', entityType: 'Employee', entityId: employee.id,
+        reason: '后台敏感信息二次验证查看', createdAt: new Date().toISOString(), actorUser: { account: admin.account, username: admin.username, role: admin.role }
+      })
+      return { ...employee, ...mockEmployeeAttendance.sensitive[employee.id] }
+    }
+    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     const approveDeletionMatch = url.match(/^\/admin\/finance\/delete-requests\/(.+)\/approve$/)
     if (approveDeletionMatch) {
       const row = mockRows.deletionRequests.find((item) => item.id === approveDeletionMatch[1])
@@ -448,7 +971,13 @@ const mockRequest = {
     }
     return { ok: true }
   },
+  async put(url: string) {
+    if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
+    return { ok: true }
+  },
   async patch(url: string, payload?: any) {
+    if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
+    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     if (url === '/admin/auth/profile') {
       mockUser.account = payload?.account || mockUser.account
       mockUser.username = payload?.username || mockUser.username
@@ -469,7 +998,9 @@ const mockRequest = {
     }
     return { ok: true }
   },
-  async delete() {
+  async delete(url: string) {
+    if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
+    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     return { ok: true }
   }
 } as AdminRequest
@@ -511,6 +1042,10 @@ export function logoutAdmin() {
 
 export function getFrontendOptions() {
   return request.get<any, FrontendOption[]>('/admin/frontend-users/options')
+}
+
+export function getAdminFrontendAccounts() {
+  return request.get<any, AdminFrontendAccount[]>('/admin/accounts/frontend-users')
 }
 
 export function buildFrontendIds(ids: string[]) {
@@ -562,4 +1097,89 @@ export function getAdminMedicineOutbounds(
       ...(endDate ? { endDate } : {})
     }
   })
+}
+
+function employeeAttendanceParams(query: AdminEmployeeAttendanceQuery) {
+  if (query.month && (query.startDate || query.endDate)) throw new Error('月份和日期范围不能同时筛选')
+  return {
+    frontendUserIds: buildFrontendIds(query.frontendUserIds),
+    ...(query.employeeId ? { employeeId: query.employeeId } : {}),
+    ...(query.month ? { month: query.month } : {}),
+    ...(query.startDate ? { startDate: query.startDate } : {}),
+    ...(query.endDate ? { endDate: query.endDate } : {}),
+    ...(query.status ? { status: query.status } : {})
+  }
+}
+
+function normalizeAdminAttendanceEmployee(row: AdminAttendanceEmployeeResponse): AdminAttendanceEmployee {
+  const { idCard, bankCard, address, emergencyContact, ...safe } = row
+  return {
+    ...safe,
+    idCardMasked: row.idCardMasked ?? idCard ?? '',
+    bankCardMasked: row.bankCardMasked ?? bankCard ?? '',
+    addressMasked: row.addressMasked ?? address ?? '',
+    emergencyContactMasked: row.emergencyContactMasked ?? emergencyContact ?? ''
+  }
+}
+
+export async function getAdminAttendanceOverview(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminAttendanceOverview>('/admin/employee-attendance/overview', { params: employeeAttendanceParams(query) })
+}
+
+export async function getAdminAttendanceEmployees(query: AdminEmployeeAttendanceQuery) {
+  return request.get<unknown, AdminAttendanceEmployeeResponse[]>('/admin/employee-attendance/employees', { params: employeeAttendanceParams(query) })
+    .then((rows) => rows.map(normalizeAdminAttendanceEmployee))
+}
+
+export async function getAdminAttendanceSchedules(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminAttendanceSchedules>('/admin/employee-attendance/schedules', { params: employeeAttendanceParams(query) })
+}
+
+export async function getAdminAttendanceRecords(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminAttendanceRecord[]>('/admin/employee-attendance/attendance', { params: employeeAttendanceParams(query) })
+}
+
+export async function getAdminAttendanceLeaves(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminLeaveRequest[]>('/admin/employee-attendance/leaves', { params: employeeAttendanceParams(query) })
+}
+
+export async function getAdminAttendanceCommissions(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminCommissionRecord[]>('/admin/employee-attendance/commissions', { params: employeeAttendanceParams(query) })
+}
+
+export async function getAdminAttendanceBonuses(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminBonusRecord[]>('/admin/employee-attendance/bonuses', { params: employeeAttendanceParams(query) })
+}
+
+export async function getAdminAttendancePayroll(query: AdminEmployeeAttendanceQuery) {
+  return request.get<any, AdminAttendancePayrollRun[]>('/admin/employee-attendance/payroll', { params: employeeAttendanceParams(query) })
+}
+
+export function getAdminAttendanceAudit(query: AdminAttendanceAuditQuery) {
+  return request.get<any, AdminAttendanceAuditRow[]>('/admin/employee-attendance/audit', {
+    params: { frontendUserIds: buildFrontendIds(query.frontendUserIds), ...(query.month ? { month: query.month } : {}) }
+  })
+}
+
+export function revealAdminAttendanceEmployee(employeeId: string, password: string, frontendUserIds: string[]) {
+  return request.post<AdminAttendanceRevealPayload, AdminRevealedAttendanceEmployeeResponse>(`/admin/employee-attendance/employees/${employeeId}/reveal`, { password }, {
+    params: { frontendUserIds: buildFrontendIds(frontendUserIds) },
+    preserveAdminSessionOnUnauthorized: true
+  }).then((row): AdminRevealedAttendanceEmployee => ({
+    ...normalizeAdminAttendanceEmployee({
+      ...row,
+      idCardMasked: maskAdminSensitive(row.idCard),
+      bankCardMasked: maskAdminSensitive(row.bankCard),
+      addressMasked: maskAdminSensitive(row.address),
+      emergencyContactMasked: maskAdminSensitive(row.emergencyContact)
+    }),
+    idCard: row.idCard,
+    bankCard: row.bankCard,
+    address: row.address,
+    emergencyContact: row.emergencyContact
+  }))
+}
+
+function maskAdminSensitive(value: string) {
+  return value ? `${value.slice(0, 3)}****${value.slice(-4)}` : ''
 }
