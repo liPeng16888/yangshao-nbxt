@@ -383,7 +383,6 @@ export async function mockRecordPrepaidConsumption(
   }
 
   return runIdempotent(idempotencyKey, ['CREATE_CONSUMPTION', identity, normalizedPayload], () => {
-    registerAccount(identity)
     const lots = recharges
       .filter((row) => row.memberId === member.id && !row.reversedAt && row.remainingCents > 0)
       .sort((left, right) => (
@@ -397,26 +396,64 @@ export async function mockRecordPrepaidConsumption(
       throw mockError(409, '会员预付余额不足', 'PREPAID_BALANCE_INSUFFICIENT')
     }
 
-    const createdAt = nextTimestamp()
-    const consumptionId = nextId()
-    const allocations: PrepaidAllocationRow[] = []
+    const allocationPlans: Array<{
+      lot: MockRecharge
+      allocatedCents: number
+      paidRatio: number
+      exactTransferAmount: number
+    }> = []
     let unallocated = amountCents
     for (const lot of lots) {
       if (!unallocated) break
       const allocatedCents = Math.min(lot.remainingCents, unallocated)
+      unallocated -= allocatedCents
+      const paidRatio = quantizeMockPositive(
+        lot.paidCents / lot.totalCents,
+        10,
+        '充值本金比例'
+      )
+      const exactTransferAmount = quantizeMockPositive(
+        fromCents(allocatedCents) * (lot.paidCents / lot.totalCents),
+        8,
+        '精确应转金额'
+      )
+      allocationPlans.push({ lot, allocatedCents, paidRatio, exactTransferAmount })
+    }
+
+    const exactBySource = new Map<string, number>()
+    for (const allocation of allocationPlans) {
+      if (allocation.lot.ownerFrontendUserId === identity.ownerFrontendUserId) continue
+      exactBySource.set(
+        allocation.lot.ownerFrontendUserId,
+        (exactBySource.get(allocation.lot.ownerFrontendUserId) ?? 0) + allocation.exactTransferAmount
+      )
+    }
+    const payablePlans = [...exactBySource].map(([sourceOwnerId, exact]) => {
+      const exactAmount = quantizeMockPositive(exact, 8, '精确应转合计')
+      return {
+        sourceOwnerId,
+        exactAmount,
+        amount: quantizeMockPositive(exactAmount, 1, '应转款金额')
+      }
+    })
+
+    registerAccount(identity)
+    const createdAt = nextTimestamp()
+    const consumptionId = nextId()
+    const allocations: PrepaidAllocationRow[] = []
+    for (const allocation of allocationPlans) {
+      const { lot, allocatedCents, paidRatio, exactTransferAmount } = allocation
       lot.remainingCents -= allocatedCents
       lot.remainingAmount = fromCents(lot.remainingCents)
       lot.updatedAt = createdAt
-      unallocated -= allocatedCents
-      const paidRatio = lot.paidCents / lot.totalCents
       allocations.push({
         id: nextId(),
         consumptionId,
         rechargeId: lot.id,
         sourceOwnerId: lot.ownerFrontendUserId,
         allocatedAmount: fromCents(allocatedCents),
-        paidRatio: round(paidRatio, 10),
-        exactTransferAmount: round(fromCents(allocatedCents) * paidRatio, 8),
+        paidRatio,
+        exactTransferAmount,
         createdAt,
         recharge: toRechargeLotRow(lot),
         sourceOwner: accountFor(lot.ownerFrontendUserId)
@@ -424,27 +461,19 @@ export async function mockRecordPrepaidConsumption(
     }
 
     const payableRows: PrepaidPayableRow[] = []
-    const exactBySource = new Map<string, number>()
-    for (const allocation of allocations) {
-      if (allocation.sourceOwnerId === identity.ownerFrontendUserId) continue
-      exactBySource.set(
-        allocation.sourceOwnerId,
-        (exactBySource.get(allocation.sourceOwnerId) ?? 0) + allocation.exactTransferAmount
-      )
-    }
-    for (const [sourceOwnerId, exact] of exactBySource) {
+    for (const plan of payablePlans) {
       const payable: PrepaidPayableRow = {
         id: nextId(),
         consumptionId,
-        sourceOwnerId,
+        sourceOwnerId: plan.sourceOwnerId,
         consumerOwnerId: identity.ownerFrontendUserId,
-        exactAmount: round(exact, 8),
-        amount: round(exact, 1),
+        exactAmount: plan.exactAmount,
+        amount: plan.amount,
         status: 'PENDING',
         reversalOfId: null,
         createdAt,
         updatedAt: createdAt,
-        sourceOwner: accountFor(sourceOwnerId),
+        sourceOwner: accountFor(plan.sourceOwnerId),
         consumerOwner: accountFor(identity.ownerFrontendUserId)
       }
       payables.push(payable)
@@ -1261,6 +1290,17 @@ function fromCents(value: number) {
 function round(value: number, digits: number) {
   const factor = 10 ** digits
   return Math.round((value + Number.EPSILON) * factor) / factor
+}
+
+function quantizeMockPositive(value: number, digits: number, label: string) {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw mockError(400, `${label}状态异常`, 'PREPAID_AMOUNT_STATE_INVALID')
+  }
+  const quantized = round(value, digits)
+  if (quantized === 0) {
+    throw mockError(400, `${label}精度低于可保存范围`, 'PREPAID_AMOUNT_UNREPRESENTABLE')
+  }
+  return quantized
 }
 
 function latestTime(rows: Array<{ createdAt: string }>) {

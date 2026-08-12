@@ -113,6 +113,81 @@ describe('shared prepaid focused mock', () => {
     ))).toBe(true)
   })
 
+  it('rejects an unrepresentable Mock paid ratio before mutating balances or history', async () => {
+    const recharge = await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 0.01,
+      giftAmount: 999999999999.98
+    }, 'mock-ratio-unrepresentable', ownerA)
+    const before = await mockGetPrepaidMemberDetail(recharge.memberId)
+
+    await expect(mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 0.01, sheetId: 'ratio-sheet', sampleBlockId: 'ratio-block',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'mock-ratio-consumption', ownerA)).rejects.toMatchObject({
+      response: { status: 400, data: { code: 'PREPAID_AMOUNT_UNREPRESENTABLE' } }
+    })
+
+    const after = await mockGetPrepaidMemberDetail(recharge.memberId)
+    expect(after).toMatchObject({ balance: before.balance, consumptions: [] })
+    expect(after.recharges[0]).toMatchObject({
+      remainingAmount: before.recharges[0]?.remainingAmount,
+      updatedAt: before.recharges[0]?.updatedAt
+    })
+  })
+
+  it('rejects an unrepresentable Mock exact transfer before mutation', async () => {
+    const recharge = await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 0.01,
+      giftAmount: 99999999.99
+    }, 'mock-exact-unrepresentable', ownerA)
+
+    await expect(mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 0.01, sheetId: 'exact-sheet', sampleBlockId: 'exact-block',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'mock-exact-consumption', ownerA)).rejects.toMatchObject({
+      response: { status: 400, data: { code: 'PREPAID_AMOUNT_UNREPRESENTABLE' } }
+    })
+
+    const after = await mockGetPrepaidMemberDetail(recharge.memberId)
+    expect(after.consumptions).toEqual([])
+    expect(after.recharges[0]?.remainingAmount).toBe(100000000)
+  })
+
+  it('rejects a zero-rounded Mock payable before mutation', async () => {
+    const recharge = await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 0.01,
+      giftAmount: 99999999.99
+    }, 'mock-payable-unrepresentable', ownerA)
+
+    await expect(mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 100, sheetId: 'payable-sheet', sampleBlockId: 'payable-block',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'mock-payable-consumption', ownerB)).rejects.toMatchObject({
+      response: { status: 400, data: { code: 'PREPAID_AMOUNT_UNREPRESENTABLE' } }
+    })
+
+    const after = await mockGetPrepaidMemberDetail(recharge.memberId)
+    expect(after.consumptions).toEqual([])
+    expect(after.recharges[0]?.remainingAmount).toBe(100000000)
+  })
+
+  it('keeps the exact representable Mock ratio and transfer boundaries', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 0.01,
+      giftAmount: 99999999.99
+    }, 'mock-boundary-representable', ownerA)
+
+    const consumption = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 100, sheetId: 'boundary-sheet', sampleBlockId: 'boundary-block',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'mock-boundary-consumption', ownerA)
+
+    expect(consumption.allocations).toEqual([
+      expect.objectContaining({ paidRatio: 0.0000000001, exactTransferAmount: 0.00000001 })
+    ])
+    expect(consumption.payables).toEqual([])
+  })
+
   it('fingerprints a Mock consumption only after strict phone normalization succeeds', async () => {
     await mockCreatePrepaidRecharge({
       phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 100, giftAmount: 0
