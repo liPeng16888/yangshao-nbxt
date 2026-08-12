@@ -312,6 +312,13 @@ const mockSharedPrepaid = {
       consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB, allocations: [],
       payables: [{ id: 'payable-settlement-only', status: 'HELD', amount: 20, sourceOwner: mockPrepaidAccountB, consumerOwner: mockPrepaidAccountB }],
       originalPayables: [], sheetDate: '2026-08-07', createdAt: '2026-08-07T01:00:00.000Z'
+    },
+    {
+      id: 'consumption-reversal-1', memberId: 'member-1', phoneSnapshot: '13800000001',
+      sampleNumberSnapshot: 'YS-001', sampleCountSnapshot: 2, elementsSnapshot: ['金', '银'], amount: -100,
+      kind: 'REVERSAL', active: false, reversalOfId: 'consumption-1', consumingFrontendUserId: 'front-2',
+      consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB, allocations: [], payables: [],
+      originalPayables: [], sheetDate: '2026-08-08', createdAt: '2026-08-08T01:00:00.000Z'
     }
   ],
   settlements: [
@@ -459,12 +466,20 @@ function mockSharedPrepaidIds(config?: AdminRequestConfig) {
   return requested.length ? requested : permitted
 }
 
-function mockSharedPrepaidConsumptionParticipates(row: any, allowedIds: string[]) {
+function mockSharedPrepaidEffectiveAllocations(row: any) {
   const sourceRow = row.kind === 'REVERSAL' && row.reversalOfId
     ? mockSharedPrepaid.consumptions.find((candidate) => candidate.id === row.reversalOfId) ?? row
     : row
+  return {
+    sourceConsumptionId: sourceRow.id,
+    allocations: sourceRow.allocations
+  }
+}
+
+function mockSharedPrepaidConsumptionParticipates(row: any, allowedIds: string[]) {
+  const { allocations } = mockSharedPrepaidEffectiveAllocations(row)
   return allowedIds.includes(row.consumingFrontendUserId)
-    || sourceRow.allocations.some((allocation: any) => allowedIds.includes(allocation.sourceOwnerId))
+    || allocations.some((allocation: any) => allowedIds.includes(allocation.sourceOwnerId))
 }
 
 function mockSharedPrepaidMemberParticipates(memberId: string, allowedIds: string[]) {
@@ -481,10 +496,8 @@ function mockSharedPrepaidMemberParticipates(memberId: string, allowedIds: strin
 }
 
 function mockSharedPrepaidConsumptionSummary(row: any) {
-  const sourceRow = row.kind === 'REVERSAL' && row.reversalOfId
-    ? mockSharedPrepaid.consumptions.find((candidate) => candidate.id === row.reversalOfId) ?? row
-    : row
-  const sourceOwners = [...new Map(sourceRow.allocations.map((allocation: any) => [
+  const { allocations: effectiveAllocations, sourceConsumptionId } = mockSharedPrepaidEffectiveAllocations(row)
+  const sourceOwners = [...new Map(effectiveAllocations.map((allocation: any) => [
     allocation.sourceOwnerId,
     allocation.sourceOwner
   ])).values()]
@@ -499,8 +512,8 @@ function mockSharedPrepaidConsumptionSummary(row: any) {
   } = row
   return {
     ...summary,
-    allocationOrigin: sourceRow.id === row.id ? 'DIRECT' : 'REVERSAL_TARGET',
-    allocationSourceConsumptionId: sourceRow.id,
+    allocationOrigin: sourceConsumptionId === row.id ? 'DIRECT' : 'REVERSAL_TARGET',
+    allocationSourceConsumptionId: sourceConsumptionId,
     sourceOwners: sourceOwners.slice(0, 100),
     sourceOwnersTruncated: sourceOwners.length > 100
   }
@@ -589,7 +602,8 @@ function mockSharedPrepaidRows(resource: keyof typeof mockSharedPrepaid, config?
       && (!phone || String(row.phone || row.phoneSnapshot || '').includes(phone))
       && (!config?.params?.ownerFrontendUserId || row.ownerFrontendUserId === config.params.ownerFrontendUserId)
       && (!config?.params?.consumingFrontendUserId || row.consumingFrontendUserId === config.params.consumingFrontendUserId)
-      && (!sourceOwnerId || row.allocations?.some((allocation: any) => allocation.sourceOwnerId === sourceOwnerId))
+      && (resource !== 'consumptions' || !sourceOwnerId || mockSharedPrepaidEffectiveAllocations(row).allocations
+        .some((allocation: any) => allocation.sourceOwnerId === sourceOwnerId))
       && (!counterpartyId || row.accountAId === counterpartyId || row.accountBId === counterpartyId)
       && (!status || rowStatus === status)
       && (resource !== 'recharges' || config?.params?.isOpeningBalance === undefined || row.isOpeningBalance === config.params.isOpeningBalance)

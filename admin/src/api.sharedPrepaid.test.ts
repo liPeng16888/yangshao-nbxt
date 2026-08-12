@@ -71,14 +71,14 @@ describe('admin shared prepaid mock contract', () => {
     })
 
     const sourceDetail = await getAdminSharedPrepaidDetail('members', 'member-1', ['front-1'])
-    expect(sourceDetail).toMatchObject({
-      consumedTotal: 10,
-      consumptions: [expect.objectContaining({
+    expect(sourceDetail).toMatchObject({ consumedTotal: 10 })
+    expect(sourceDetail.consumptions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
         id: 'consumption-1',
         sourceOwners: expect.any(Array),
         sourceOwnersTruncated: false
-      })]
-    })
+      })
+    ]))
     expect((sourceDetail.consumptions as Array<Record<string, unknown>>)[0]).not.toHaveProperty('allocations')
 
     const settlementDetail = await getAdminSharedPrepaidDetail('members', 'member-settlement-only', ['front-1'])
@@ -104,6 +104,25 @@ describe('admin shared prepaid mock contract', () => {
       actions: [expect.objectContaining({ operation: 'SUBMIT_PAYMENT' })]
     })
 
+  })
+
+  it('filters reversal rows by their effective original allocation sources', async () => {
+    await adminLogin({ account: 'sub001', password: 'sub123456' })
+
+    const withoutSourceFilter = await getAdminSharedPrepaidPage('consumptions', {
+      frontendUserIds: ['front-1'], page: 1, pageSize: 20
+    })
+    expect(withoutSourceFilter.items.map((item) => item.id)).toContain('consumption-reversal-1')
+
+    const matchingSource = await getAdminSharedPrepaidPage('consumptions', {
+      frontendUserIds: ['front-1'], sourceOwnerId: 'front-1', page: 1, pageSize: 20
+    })
+    expect(matchingSource.items.map((item) => item.id)).toContain('consumption-reversal-1')
+
+    const nonmatchingSource = await getAdminSharedPrepaidPage('consumptions', {
+      frontendUserIds: ['front-1'], sourceOwnerId: 'front-3', page: 1, pageSize: 20
+    })
+    expect(nonmatchingSource.items.map((item) => item.id)).not.toContain('consumption-reversal-1')
   })
 
   it.each(['post', 'put', 'patch', 'delete'] as const)(
