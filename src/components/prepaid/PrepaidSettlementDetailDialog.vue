@@ -262,6 +262,12 @@ const SettlementLineContent = defineComponent({
         h('span', `消费账号 ${prepaidAccountLabel(item.consumerOwner)}`),
         h('span', `精确应转值 ${item.exactAmount}`),
         h('span', `充值批次 ${item.consumption.rechargeBatches.map((batch) => batch.id).join('、') || '无信息'}`),
+        item.consumption.relationTruncated.allocations
+          ? h('span', {
+              class: 'relation-warning',
+              'data-testid': `settlement-line-allocations-truncated-${item.id}`
+            }, `充值分摊仅展示前 ${item.consumption.relationLimit} 条`)
+          : null,
         h('span', `应转创建时间 ${prepaidPreciseDateTime(item.createdAt)}`)
       ])
     }
@@ -442,6 +448,7 @@ function operationLabel(operation: PrepaidSettlementActionOperation) {
 .settlement-gross-lines h3, .settlement-audit h3, .settlement-payment-form h3 { margin: 12px 0 8px; }
 .settlement-line-card { margin-bottom: 8px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 10px; }
 .settlement-line-content, .audit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; }
+.relation-warning { grid-column: 1 / -1; color: #b45309; }
 .settlement-payment-form { display: grid; gap: 10px; padding: 14px; border: 1px solid #fed7aa; border-radius: 10px; }
 .settlement-payment-form label { display: grid; gap: 5px; }
 .settlement-payment-form input, .settlement-payment-form textarea { padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 6px; }

@@ -41,6 +41,7 @@ function payable(id: string, direction: 'A_TO_B' | 'B_TO_A', amount: number) {
         id: `consumption-${id}`, memberId: `member-${id}`, phoneSnapshot: '13800000000',
         sampleNumberSnapshot: `S-${id}`, sampleCountSnapshot: 3, elementsSnapshot: ['Au', 'Ag'],
         sheetDate: '2026-08-12', createdAt: '2026-08-12T03:04:05.000Z',
+        relationLimit: 100, relationTruncated: { allocations: false },
         rechargeBatches: [{ id: `recharge-${id}`, rechargeDate: '2026-08-01', isOpeningBalance: false }]
       }
     }
@@ -136,6 +137,17 @@ describe('PrepaidSettlementDetailDialog', () => {
       actualTransferredAt: '2026-08-12T16:30:00+08:00',
       proofUrls: ['/uploads/proof.png'], remark: '网银转账'
     }, expect.any(String))
+  })
+
+  it('shows when a detail line has more allocation history than the bounded projection', async () => {
+    const row = settlement()
+    row.lines[0]!.payable.consumption.relationTruncated.allocations = true
+
+    const wrapper = mountDialog(row)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="settlement-line-allocations-truncated-payable-1"]').text())
+      .toContain('充值分摊仅展示前 100 条')
   })
 
   it('lets only the receiving main confirm or reject with a required reason', async () => {

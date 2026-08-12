@@ -320,6 +320,50 @@ describe('shared prepaid focused mock', () => {
     expect(detail.lines[0].payable.consumption).not.toHaveProperty('sheetId')
   })
 
+  it('caps settlement allocation and association projections with per-relation metadata', async () => {
+    for (let index = 0; index < 101; index += 1) {
+      await mockCreatePrepaidRecharge({
+        phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1, giftAmount: 0
+      }, `bounded-recharge-${index}`, ownerA)
+    }
+    const consumption = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 101, sheetId: 'bounded-sheet', sampleBlockId: 'bounded-block',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'bounded-consumption', ownerB)
+    const payableId = consumption.payables[0]!.id
+
+    for (let index = 0; index < 101; index += 1) {
+      const settlement = await mockCreatePrepaidSettlement(
+        { payableIds: [payableId] }, `bounded-settlement-${index}`, ownerA
+      )
+      await mockSubmitPrepaidSettlementPayment(settlement.id, {
+        actualTransferredAt: '2026-08-12T16:00:00+08:00'
+      }, `bounded-submit-${index}`, ownerA)
+      await mockRejectPrepaidSettlement(
+        settlement.id, { reason: `未到账 ${index}` }, `bounded-reject-${index}`, ownerB
+      )
+    }
+
+    const page = await mockGetPrepaidSettlementPayables({ payableIds: [payableId] }, ownerA)
+    const detail = await mockGetPrepaidSettlement(
+      (page.items[0]?.settlementAssociations[0] as { settlementId: string }).settlementId,
+      ownerA
+    )
+
+    expect(page.items[0]).toMatchObject({
+      relationLimit: 100,
+      relationTruncated: { settlementAssociations: true },
+      consumption: { relationLimit: 100, relationTruncated: { allocations: true } }
+    })
+    expect(page.items[0]?.settlementAssociations).toHaveLength(100)
+    expect(page.items[0]?.consumption.rechargeBatches).toHaveLength(100)
+    expect(detail.lines[0]?.payable.consumption).toMatchObject({
+      relationLimit: 100,
+      relationTruncated: { allocations: true }
+    })
+    expect(detail.lines[0]?.payable.consumption.rechargeBatches).toHaveLength(100)
+  })
+
   it('makes released rejected payables eligible again and rejects self-counterparty filters', async () => {
     await mockCreatePrepaidRecharge({
       phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 100, giftAmount: 0

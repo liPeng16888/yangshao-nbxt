@@ -126,8 +126,12 @@ function settlementPayableFixture(
       elementsSnapshot: ['Au'],
       sheetDate: '2026-08-12',
       createdAt: '2026-08-12T03:04:05.000Z',
+      relationLimit: 100,
+      relationTruncated: { allocations: false },
       rechargeBatches: []
     },
+    relationLimit: 100,
+    relationTruncated: { settlementAssociations: false },
     settlementAssociations: []
   }
 }

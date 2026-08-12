@@ -40,8 +40,11 @@ function payable(id: string, direction: 'OUTGOING' | 'INCOMING', amount: number,
       sampleNumberSnapshot: `S-${id}`, sampleCountSnapshot: outgoing ? 3 : 2,
       elementsSnapshot: outgoing ? ['Au', 'Ag'] : ['Cu'], sheetDate: '2026-08-12',
       createdAt: '2026-08-12T03:04:05.000Z',
+      relationLimit: 100, relationTruncated: { allocations: false },
       rechargeBatches: [{ id: `recharge-${id}`, rechargeDate: '2026-08-01', isOpeningBalance: false }]
     },
+    relationLimit: 100,
+    relationTruncated: { settlementAssociations: false },
     settlementAssociations: status === 'PENDING' ? [] : [{
       id: `line-${id}`, settlementId: 'settlement-old', direction: 'A_TO_B', amount,
       releasedAt: null, createdAt: '2026-08-12T03:04:05.000Z',
@@ -150,6 +153,23 @@ describe('PrepaidSettlementsPage', () => {
     expect(wrapper.get('[data-testid="settlement-preview"]').text()).toContain('实际转账金额 ¥50.5')
     expect(wrapper.get('[data-testid="settlement-preview"]').text()).toContain('付款方 北京店（owner-a）')
     expect(wrapper.get('[data-testid="settlement-preview"]').text()).toContain('收款方 主账号 B（owner-b）')
+  })
+
+  it('shows explicit per-relation truncation notices for bounded payable projections', async () => {
+    const truncated = payable('payable-truncated', 'OUTGOING', 90.9)
+    truncated.consumption.relationTruncated.allocations = true
+    truncated.relationTruncated.settlementAssociations = true
+    apiMocks.getPrepaidSettlementPayables.mockResolvedValue({
+      items: [truncated], total: 1, page: 1, pageSize: 20
+    })
+
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="payable-allocations-truncated-payable-truncated"]').text())
+      .toContain('充值分摊仅展示前 100 条')
+    expect(wrapper.get('[data-testid="payable-associations-truncated-payable-truncated"]').text())
+      .toContain('历史结算关联仅展示前 100 条')
   })
 
   it('preserves selection and idempotency key on stale-line 409 while refreshing selected availability', async () => {

@@ -271,6 +271,10 @@ export interface PrepaidSettlementPayableConsumptionRow {
   elementsSnapshot: unknown
   sheetDate: string
   createdAt: string
+  relationLimit: number
+  relationTruncated: {
+    allocations: boolean
+  }
   rechargeBatches: PrepaidSettlementRechargeBatchRow[]
 }
 
@@ -279,6 +283,10 @@ export interface PrepaidSettlementPayableListRow extends PrepaidPayableRow {
   direction: PrepaidSettlementPayableDirection
   counterpartyFrontendUserId: string
   consumption: PrepaidSettlementPayableConsumptionRow
+  relationLimit: number
+  relationTruncated: {
+    settlementAssociations: boolean
+  }
   settlementAssociations: PrepaidSettlementAssociationRow[]
 }
 

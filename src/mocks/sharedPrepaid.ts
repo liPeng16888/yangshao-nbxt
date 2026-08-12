@@ -107,6 +107,7 @@ let clockTick = 0
 const MOCK_EPOCH = Date.parse('2026-08-12T08:00:00.000Z')
 const PREPAID_PHONE_INPUT_PATTERN = /^[0-9\t\n\v\f\r -]*$/
 const PREPAID_PHONE_SEPARATOR_PATTERN = /[\t\n\v\f\r -]/g
+const SETTLEMENT_RELATION_LIMIT = 100
 
 export function resetSharedPrepaidMock() {
   accounts.clear()
@@ -872,7 +873,7 @@ function settlementResult(row: MockSettlement): PrepaidSettlementRow {
 function toSettlementPayableRead(row: PrepaidPayableRow, ownerId: string): PrepaidSettlementPayableListRow {
   const consumption = consumptions.find((item) => item.id === row.consumptionId)
   if (!consumption) throw mockError(404, '消费记录不存在')
-  const settlementAssociations = settlements.flatMap((settlement) => settlement.lines
+  const allSettlementAssociations = settlements.flatMap((settlement) => settlement.lines
     .filter((line) => line.payableId === row.id)
     .map((line) => ({
       id: line.id,
@@ -884,11 +885,18 @@ function toSettlementPayableRead(row: PrepaidPayableRow, ownerId: string): Prepa
       status: settlement.status,
       settlementCreatedAt: settlement.createdAt
     })))
+    .sort(descendingCreatedAt)
+  const settlementAssociations = allSettlementAssociations.slice(0, SETTLEMENT_RELATION_LIMIT)
+  const allocationRows = consumption.allocations.slice(0, SETTLEMENT_RELATION_LIMIT + 1)
   return clone({
     ...row,
-    eligible: row.status === 'PENDING' && !settlementAssociations.some((association) => association.releasedAt === null),
+    eligible: row.status === 'PENDING' && !allSettlementAssociations.some((association) => association.releasedAt === null),
     direction: row.sourceOwnerId === ownerId ? 'OUTGOING' : 'INCOMING',
     counterpartyFrontendUserId: row.sourceOwnerId === ownerId ? row.consumerOwnerId : row.sourceOwnerId,
+    relationLimit: SETTLEMENT_RELATION_LIMIT,
+    relationTruncated: {
+      settlementAssociations: allSettlementAssociations.length > SETTLEMENT_RELATION_LIMIT
+    },
     consumption: {
       id: consumption.id,
       memberId: consumption.memberId,
@@ -898,8 +906,13 @@ function toSettlementPayableRead(row: PrepaidPayableRow, ownerId: string): Prepa
       elementsSnapshot: consumption.elementsSnapshot,
       sheetDate: consumption.sheetDate,
       createdAt: consumption.createdAt,
-      rechargeBatches: consumption.allocations
+      relationLimit: SETTLEMENT_RELATION_LIMIT,
+      relationTruncated: {
+        allocations: consumption.allocations.length > SETTLEMENT_RELATION_LIMIT
+      },
+      rechargeBatches: allocationRows
         .filter((allocation) => allocation.sourceOwnerId === row.sourceOwnerId)
+        .slice(0, SETTLEMENT_RELATION_LIMIT)
         .map((allocation) => ({
           id: allocation.recharge.id,
           rechargeDate: allocation.recharge.rechargeDate,

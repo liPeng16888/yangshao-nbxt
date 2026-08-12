@@ -41,6 +41,7 @@ function payableDatabaseRow() {
         recharge: { id: 'recharge-1', rechargeDate: '2026-08-01', isOpeningBalance: false }
       }]
     },
+    _count: { settlementLines: 1 },
     settlementLines: [{
       id: 'line-1', settlementId: 'settlement-1', direction: 'A_TO_B',
       amount: new Prisma.Decimal('90.9'), releasedAt: null, createdAt,
@@ -209,6 +210,7 @@ describe('SharedPrepaidQueryService settlement reads', () => {
     const row = {
       ...original,
       status: SharedPrepaidPayableStatus.PENDING,
+      _count: { settlementLines: 0 },
       settlementLines: original.settlementLines.map((line) => ({ ...line, releasedAt: createdAt }))
     }
     const findMany = vi.fn().mockResolvedValue([row])
@@ -227,6 +229,96 @@ describe('SharedPrepaidQueryService settlement reads', () => {
     expect(result.items[0]).toMatchObject({ eligible: true, settlementAssociations: [
       expect.objectContaining({ releasedAt: createdAt })
     ] })
+  })
+
+  it('caps each payable nested projection independently and reports truncation in list and detail reads', async () => {
+    const first = payableDatabaseRow()
+    first.id = 'payable-first'
+    first.consumption.id = 'consumption-first'
+    first.consumptionId = 'consumption-first'
+    first.consumption.allocations = Array.from({ length: 101 }, (_, index) => ({
+      id: `allocation-first-${String(index).padStart(3, '0')}`,
+      sourceOwnerId: 'front-1',
+      rechargeId: `recharge-first-${index}`,
+      recharge: {
+        id: `recharge-first-${index}`,
+        rechargeDate: '2026-08-01',
+        isOpeningBalance: false
+      }
+    }))
+    first.settlementLines = Array.from({ length: 101 }, (_, index) => ({
+      id: `line-first-${String(index).padStart(3, '0')}`,
+      settlementId: `settlement-first-${index}`,
+      direction: 'A_TO_B' as const,
+      amount: new Prisma.Decimal('0.1'),
+      releasedAt: null,
+      createdAt,
+      settlement: {
+        id: `settlement-first-${index}`,
+        status: SharedPrepaidSettlementStatus.AWAITING_PAYMENT,
+        createdAt
+      }
+    }))
+    first._count = { settlementLines: 0 }
+
+    const second = payableDatabaseRow()
+    second.id = 'payable-second'
+    second.consumption.id = 'consumption-second'
+    second.consumptionId = 'consumption-second'
+    second.consumption.allocations[0] = {
+      ...second.consumption.allocations[0]!,
+      id: 'allocation-second',
+      rechargeId: 'recharge-second',
+      recharge: { id: 'recharge-second', rechargeDate: '2026-08-02', isOpeningBalance: false }
+    }
+    second.settlementLines[0] = {
+      ...second.settlementLines[0]!,
+      id: 'line-second',
+      settlementId: 'settlement-second',
+      settlement: {
+        id: 'settlement-second', status: SharedPrepaidSettlementStatus.AWAITING_PAYMENT, createdAt
+      }
+    }
+
+    const payableFindMany = vi.fn().mockResolvedValue([first, second])
+    const detailRow = settlementDatabaseRow()
+    detailRow.lines[0]!.payable = first
+    const settlementFindFirst = vi.fn().mockResolvedValue(detailRow)
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidPayable: { findMany: payableFindMany, count: vi.fn().mockResolvedValue(2) },
+      sharedPrepaidSettlement: { findFirst: settlementFindFirst }
+    } as never)
+
+    const page = await service.listSettlementPayables(subA, {})
+    const detail = await service.getSettlementDetail(subA, 'settlement-1')
+
+    const payableSelect = payableFindMany.mock.calls[0]?.[0]?.select
+    expect(payableSelect.consumption.select.allocations.take).toBe(101)
+    expect(payableSelect.settlementLines.take).toBe(101)
+    expect(page.items[0]).toMatchObject({
+      relationLimit: 100,
+      relationTruncated: { settlementAssociations: true },
+      consumption: {
+        relationLimit: 100,
+        relationTruncated: { allocations: true }
+      }
+    })
+    expect(page.items[0]?.settlementAssociations).toHaveLength(100)
+    expect(page.items[0]?.consumption.rechargeBatches).toHaveLength(100)
+    expect(page.items[1]).toMatchObject({
+      relationTruncated: { settlementAssociations: false },
+      consumption: { relationTruncated: { allocations: false } }
+    })
+    expect(page.items[1]?.settlementAssociations).toHaveLength(1)
+    expect(page.items[1]?.consumption.rechargeBatches).toHaveLength(1)
+
+    const detailSelect = settlementFindFirst.mock.calls[0]?.[0]?.select
+    expect(detailSelect.lines.select.payable.select.consumption.select.allocations.take).toBe(101)
+    expect(detail.lines[0]?.payable.consumption).toMatchObject({
+      relationLimit: 100,
+      relationTruncated: { allocations: true }
+    })
+    expect(detail.lines[0]?.payable.consumption.rechargeBatches).toHaveLength(100)
   })
 
   it('returns an impossible query instead of broadening a self-counterparty filter', async () => {

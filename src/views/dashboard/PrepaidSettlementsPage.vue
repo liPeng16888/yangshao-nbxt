@@ -266,10 +266,22 @@ const GrossDirectionTable = defineComponent({
             h('span', `充值来源 ${accountLabel(row.sourceOwner)}`),
             h('span', `消费账号 ${accountLabel(row.consumerOwner)}`),
             h('span', `充值批次 ${row.consumption.rechargeBatches.map((batch) => batch.id).join('、') || '无信息'}`),
+            row.consumption.relationTruncated.allocations
+              ? h('span', {
+                  class: 'relation-warning',
+                  'data-testid': `payable-allocations-truncated-${row.id}`
+                }, `充值分摊仅展示前 ${row.consumption.relationLimit} 条`)
+              : null,
             h('span', `精确应转值 ${row.exactAmount}`),
             ...row.settlementAssociations.map((association) => h('span', { class: 'association' },
               `结算批次 ${association.settlementId} · ${settlementStatusLabel(association.status)}${association.releasedAt ? ' · 已释放' : ''}`
-            ))
+            )),
+            row.relationTruncated.settlementAssociations
+              ? h('span', {
+                  class: 'relation-warning',
+                  'data-testid': `payable-associations-truncated-${row.id}`
+                }, `历史结算关联仅展示前 ${row.relationLimit} 条`)
+              : null
           ])))
         : h('p', { class: 'muted' }, '该方向暂无明细')
     ])
@@ -454,6 +466,7 @@ function settlementStatusLabel(status: PrepaidSettlementStatus) {
 .gross-line--unavailable { background: #f8fafc; color: #64748b; }
 .gross-line__select { display: flex; gap: 8px; align-items: center; }
 .association { grid-column: 1 / -1; color: #7c3aed; }
+.relation-warning { grid-column: 1 / -1; color: #b45309; }
 .muted { color: #64748b; }
 .pagination-row { display: flex; justify-content: flex-end; margin-top: 14px; }
 .net-preview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; padding: 16px; border: 1px solid #fdba74; border-radius: 12px; background: #fff7ed; }

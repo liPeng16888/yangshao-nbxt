@@ -309,6 +309,8 @@ const adminConsumptionDetailSelect = {
   reversal: { select: { id: true } }
 } satisfies Prisma.SharedPrepaidConsumptionSelect
 
+const PUBLIC_SETTLEMENT_RELATION_LIMIT = 100
+
 const settlementConsumptionSelect = {
   id: true,
   memberId: true,
@@ -327,7 +329,8 @@ const settlementConsumptionSelect = {
         select: { id: true, rechargeDate: true, isOpeningBalance: true }
       }
     },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take: PUBLIC_SETTLEMENT_RELATION_LIMIT + 1
   }
 } satisfies Prisma.SharedPrepaidConsumptionSelect
 
@@ -349,6 +352,9 @@ const settlementPayableCoreSelect = {
 
 const settlementPayableListSelect = {
   ...settlementPayableCoreSelect,
+  _count: {
+    select: { settlementLines: { where: { releasedAt: null } } }
+  },
   settlementLines: {
     select: {
       id: true,
@@ -359,7 +365,8 @@ const settlementPayableListSelect = {
       createdAt: true,
       settlement: { select: { id: true, status: true, createdAt: true } }
     },
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: PUBLIC_SETTLEMENT_RELATION_LIMIT + 1
   }
 } satisfies Prisma.SharedPrepaidPayableSelect
 
@@ -1502,10 +1509,14 @@ export class SharedPrepaidQueryService {
     return {
       ...core,
       eligible: row.status === SharedPrepaidPayableStatus.PENDING &&
-        !row.settlementLines.some((line) => line.releasedAt === null),
+        row._count.settlementLines === 0,
       direction: row.sourceOwnerId === ownerId ? 'OUTGOING' as const : 'INCOMING' as const,
       counterpartyFrontendUserId: row.sourceOwnerId === ownerId ? row.consumerOwnerId : row.sourceOwnerId,
-      settlementAssociations: row.settlementLines.map((line) => ({
+      relationLimit: PUBLIC_SETTLEMENT_RELATION_LIMIT,
+      relationTruncated: {
+        settlementAssociations: row.settlementLines.length > PUBLIC_SETTLEMENT_RELATION_LIMIT
+      },
+      settlementAssociations: row.settlementLines.slice(0, PUBLIC_SETTLEMENT_RELATION_LIMIT).map((line) => ({
         id: line.id,
         settlementId: line.settlementId,
         direction: line.direction,
@@ -1541,8 +1552,13 @@ export class SharedPrepaidQueryService {
         elementsSnapshot: row.consumption.elementsSnapshot,
         sheetDate: row.consumption.sheetDate,
         createdAt: row.consumption.createdAt,
+        relationLimit: PUBLIC_SETTLEMENT_RELATION_LIMIT,
+        relationTruncated: {
+          allocations: row.consumption.allocations.length > PUBLIC_SETTLEMENT_RELATION_LIMIT
+        },
         rechargeBatches: row.consumption.allocations
           .filter((allocation) => allocation.sourceOwnerId === row.sourceOwnerId)
+          .slice(0, PUBLIC_SETTLEMENT_RELATION_LIMIT)
           .map((allocation) => allocation.recharge)
       }
     }
