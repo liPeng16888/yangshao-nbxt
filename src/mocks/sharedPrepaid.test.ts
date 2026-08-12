@@ -391,6 +391,30 @@ describe('shared prepaid focused mock', () => {
     expect(detail.lines[0]?.payable.consumption.rechargeBatches).toHaveLength(100)
   })
 
+  it('filters settlement recharge batches by source owner before applying the relation cap', async () => {
+    for (let index = 0; index < 101; index += 1) {
+      await mockCreatePrepaidRecharge({
+        phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1, giftAmount: 0
+      }, `partitioned-a-${index}`, ownerA)
+    }
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1, giftAmount: 0
+    }, 'partitioned-b', ownerB)
+    const consumption = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 102, sheetId: 'partitioned-sheet', sampleBlockId: 'partitioned-block',
+      sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'partitioned-consumption', ownerC)
+    const sourceBPayable = consumption.payables.find((payable) => payable.sourceOwnerId === ownerB.ownerFrontendUserId)
+    expect(sourceBPayable).toBeDefined()
+
+    const page = await mockGetPrepaidSettlementPayables({ payableIds: [sourceBPayable!.id] }, ownerB)
+
+    expect(page.items[0]?.consumption).toMatchObject({
+      relationTruncated: { allocations: false },
+      rechargeBatches: [expect.objectContaining({ rechargeDate: '2026-08-12' })]
+    })
+  })
+
   it('makes released rejected payables eligible again and rejects self-counterparty filters', async () => {
     await mockCreatePrepaidRecharge({
       phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 100, giftAmount: 0

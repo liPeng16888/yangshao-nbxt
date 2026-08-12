@@ -50,6 +50,30 @@ function payableDatabaseRow() {
   }
 }
 
+function settlementRechargeBatchRows(...payables: Array<{
+  consumptionId: string
+  sourceOwnerId: string
+  consumption: {
+    allocations: Array<{
+      id: string
+      sourceOwnerId: string
+      recharge: { id: string; rechargeDate: string; isOpeningBalance: boolean }
+    }>
+  }
+}>) {
+  return payables.flatMap((payable) => payable.consumption.allocations
+    .filter((allocation) => allocation.sourceOwnerId === payable.sourceOwnerId)
+    .slice(0, 101)
+    .map((allocation) => ({
+      consumptionId: payable.consumptionId,
+      sourceOwnerId: payable.sourceOwnerId,
+      allocationId: allocation.id,
+      rechargeId: allocation.recharge.id,
+      rechargeDate: allocation.recharge.rechargeDate,
+      isOpeningBalance: allocation.recharge.isOpeningBalance
+    })))
+}
+
 function settlementDatabaseRow() {
   return {
     id: 'settlement-1', accountAId: 'front-1', accountBId: 'front-2',
@@ -80,10 +104,12 @@ function settlementDatabaseRow() {
 
 describe('SharedPrepaidQueryService settlement reads', () => {
   it('scopes gross payable lines to the current owner and returns safe source context plus associations', async () => {
-    const findMany = vi.fn().mockResolvedValue([payableDatabaseRow()])
+    const row = payableDatabaseRow()
+    const findMany = vi.fn().mockResolvedValue([row])
     const count = vi.fn().mockResolvedValue(1)
     const service = new SharedPrepaidQueryService({
-      sharedPrepaidPayable: { findMany, count }
+      sharedPrepaidPayable: { findMany, count },
+      $queryRaw: vi.fn().mockResolvedValue(settlementRechargeBatchRows(row))
     } as never)
 
     const result = await (service as unknown as {
@@ -125,7 +151,8 @@ describe('SharedPrepaidQueryService settlement reads', () => {
     const count = vi.fn().mockResolvedValue(1)
     const findFirst = vi.fn().mockResolvedValue(row)
     const service = new SharedPrepaidQueryService({
-      sharedPrepaidSettlement: { findMany, count, findFirst }
+      sharedPrepaidSettlement: { findMany, count, findFirst },
+      $queryRaw: vi.fn().mockResolvedValue(settlementRechargeBatchRows(row.lines[0]!.payable))
     } as never)
     const api = service as unknown as {
       listSettlements: (user: CurrentUser, query: Record<string, unknown>) => Promise<any>
@@ -215,7 +242,8 @@ describe('SharedPrepaidQueryService settlement reads', () => {
     }
     const findMany = vi.fn().mockResolvedValue([row])
     const service = new SharedPrepaidQueryService({
-      sharedPrepaidPayable: { findMany, count: vi.fn().mockResolvedValue(1) }
+      sharedPrepaidPayable: { findMany, count: vi.fn().mockResolvedValue(1) },
+      $queryRaw: vi.fn().mockResolvedValue(settlementRechargeBatchRows(row))
     } as never)
 
     const result = await service.listSettlementPayables(subA, { eligibleOnly: true })
@@ -284,16 +312,18 @@ describe('SharedPrepaidQueryService settlement reads', () => {
     const detailRow = settlementDatabaseRow()
     detailRow.lines[0]!.payable = first
     const settlementFindFirst = vi.fn().mockResolvedValue(detailRow)
+    const allocationQuery = vi.fn().mockResolvedValue(settlementRechargeBatchRows(first, second))
     const service = new SharedPrepaidQueryService({
       sharedPrepaidPayable: { findMany: payableFindMany, count: vi.fn().mockResolvedValue(2) },
-      sharedPrepaidSettlement: { findFirst: settlementFindFirst }
+      sharedPrepaidSettlement: { findFirst: settlementFindFirst },
+      $queryRaw: allocationQuery
     } as never)
 
     const page = await service.listSettlementPayables(subA, {})
     const detail = await service.getSettlementDetail(subA, 'settlement-1')
 
     const payableSelect = payableFindMany.mock.calls[0]?.[0]?.select
-    expect(payableSelect.consumption.select.allocations.take).toBe(101)
+    expect(payableSelect.consumption.select.allocations).toBeUndefined()
     expect(payableSelect.settlementLines.take).toBe(101)
     expect(page.items[0]).toMatchObject({
       relationLimit: 100,
@@ -313,12 +343,74 @@ describe('SharedPrepaidQueryService settlement reads', () => {
     expect(page.items[1]?.consumption.rechargeBatches).toHaveLength(1)
 
     const detailSelect = settlementFindFirst.mock.calls[0]?.[0]?.select
-    expect(detailSelect.lines.select.payable.select.consumption.select.allocations.take).toBe(101)
+    expect(detailSelect.lines.select.payable.select.consumption.select.allocations).toBeUndefined()
+    expect(allocationQuery).toHaveBeenCalledTimes(2)
     expect(detail.lines[0]?.payable.consumption).toMatchObject({
       relationLimit: 100,
       relationTruncated: { allocations: true }
     })
     expect(detail.lines[0]?.payable.consumption.rechargeBatches).toHaveLength(100)
+  })
+
+  it('partitions recharge batches by consumption and source owner before applying the 101-row cap', async () => {
+    const accountAFirst101 = Array.from({ length: 101 }, (_, index) => ({
+      id: `allocation-a-${String(index).padStart(3, '0')}`,
+      sourceOwnerId: 'front-1',
+      rechargeId: `recharge-a-${index}`,
+      recharge: { id: `recharge-a-${index}`, rechargeDate: '2026-08-01', isOpeningBalance: false }
+    }))
+    const outgoing = payableDatabaseRow()
+    outgoing.id = 'payable-a'
+    outgoing.consumptionId = 'shared-consumption'
+    outgoing.consumption.id = 'shared-consumption'
+    outgoing.consumption.allocations = accountAFirst101
+    const incoming = payableDatabaseRow()
+    incoming.id = 'payable-b'
+    incoming.consumptionId = 'shared-consumption'
+    incoming.sourceOwnerId = 'front-2'
+    incoming.consumerOwnerId = 'front-1'
+    incoming.consumption = { ...outgoing.consumption, allocations: accountAFirst101 }
+    const allocationRows = [
+      ...Array.from({ length: 101 }, (_, index) => ({
+        consumptionId: 'shared-consumption', sourceOwnerId: 'front-1',
+        allocationId: `allocation-a-${String(index).padStart(3, '0')}`,
+        rechargeId: `recharge-a-${index}`, rechargeDate: '2026-08-01',
+        isOpeningBalance: false, allocationCreatedAt: createdAt
+      })),
+      {
+        consumptionId: 'shared-consumption', sourceOwnerId: 'front-2',
+        allocationId: 'allocation-b-000', rechargeId: 'recharge-b-0',
+        rechargeDate: '2026-08-02', isOpeningBalance: false, allocationCreatedAt: createdAt
+      }
+    ]
+    const allocationQuery = vi.fn().mockResolvedValue(allocationRows)
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidPayable: {
+        findMany: vi.fn().mockResolvedValue([outgoing, incoming]),
+        count: vi.fn().mockResolvedValue(2)
+      },
+      $queryRaw: allocationQuery
+    } as never)
+
+    const page = await service.listSettlementPayables(subA, {})
+
+    expect(page.items[0]?.consumption).toMatchObject({
+      relationTruncated: { allocations: true },
+      rechargeBatches: expect.arrayContaining([{ id: 'recharge-a-0', rechargeDate: '2026-08-01', isOpeningBalance: false }])
+    })
+    expect(page.items[0]?.consumption.rechargeBatches).toHaveLength(100)
+    expect(page.items[1]?.consumption).toMatchObject({
+      relationTruncated: { allocations: false },
+      rechargeBatches: [{ id: 'recharge-b-0', rechargeDate: '2026-08-02', isOpeningBalance: false }]
+    })
+    expect(allocationQuery).toHaveBeenCalledTimes(1)
+    const query = allocationQuery.mock.calls[0]?.[0] as { strings: string[]; values: unknown[] }
+    expect(query.strings.join('?')).toMatch(/ROW_NUMBER\(\) OVER \([\s\S]*PARTITION BY allocation\."consumptionId", allocation\."sourceOwnerId"/)
+    expect(query.values).toEqual([
+      'shared-consumption', 'front-1',
+      'shared-consumption', 'front-2',
+      101
+    ])
   })
 
   it('returns an impossible query instead of broadening a self-counterparty filter', async () => {

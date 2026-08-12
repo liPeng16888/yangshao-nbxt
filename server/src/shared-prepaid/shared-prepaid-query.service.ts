@@ -319,19 +319,7 @@ const settlementConsumptionSelect = {
   sampleCountSnapshot: true,
   elementsSnapshot: true,
   sheetDate: true,
-  createdAt: true,
-  allocations: {
-    select: {
-      id: true,
-      sourceOwnerId: true,
-      rechargeId: true,
-      recharge: {
-        select: { id: true, rechargeDate: true, isOpeningBalance: true }
-      }
-    },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    take: PUBLIC_SETTLEMENT_RELATION_LIMIT + 1
-  }
+  createdAt: true
 } satisfies Prisma.SharedPrepaidConsumptionSelect
 
 const settlementPayableCoreSelect = {
@@ -458,6 +446,20 @@ type SettlementSummaryDatabaseRow = Prisma.SharedPrepaidSettlementGetPayload<{
 type SettlementReadDatabaseRow = Prisma.SharedPrepaidSettlementGetPayload<{
   select: typeof settlementReadSelect
 }>
+type SettlementRechargeBatchDatabaseRow = {
+  consumptionId: string
+  sourceOwnerId: string
+  allocationId: string
+  rechargeId: string
+  rechargeDate: string
+  isOpeningBalance: boolean
+}
+type SettlementRechargeBatchPartition = Array<{
+  id: string
+  rechargeDate: string
+  isOpeningBalance: boolean
+}>
+type SettlementRechargeBatchPartitions = Map<string, SettlementRechargeBatchPartition>
 
 type ConsumptionListDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
   select: typeof consumptionListSelect
@@ -825,7 +827,10 @@ export class SharedPrepaidQueryService {
       select: settlementReadSelect
     })
     if (!row) throw new NotFoundException('结算单不存在')
-    return this.toSettlementReadRow(row)
+    const rechargeBatchPartitions = await this.settlementRechargeBatchPartitions(
+      row.lines.map((line) => line.payable)
+    )
+    return this.toSettlementReadRow(row, rechargeBatchPartitions)
   }
 
   async listSettlementPayables(user: CurrentUser, query: SharedPrepaidSettlementPayableQuery = {}) {
@@ -874,8 +879,9 @@ export class SharedPrepaidQueryService {
       }),
       this.prisma.sharedPrepaidPayable.count({ where })
     ])
+    const rechargeBatchPartitions = await this.settlementRechargeBatchPartitions(rows)
     return {
-      items: rows.map((row) => this.toSettlementPayableRow(row, ownerId)),
+      items: rows.map((row) => this.toSettlementPayableRow(row, ownerId, rechargeBatchPartitions)),
       total,
       page,
       pageSize
@@ -912,7 +918,10 @@ export class SharedPrepaidQueryService {
       select: settlementReadSelect
     })
     if (!row) throw new NotFoundException('结算单不存在')
-    return this.toSettlementReadRow(row)
+    const rechargeBatchPartitions = await this.settlementRechargeBatchPartitions(
+      row.lines.map((line) => line.payable)
+    )
+    return this.toSettlementReadRow(row, rechargeBatchPartitions)
   }
 
   async getMemberDetail(id: string, query: SharedPrepaidMemberDetailQuery = {}) {
@@ -1504,8 +1513,78 @@ export class SharedPrepaidQueryService {
     return where
   }
 
-  private toSettlementPayableRow(row: SettlementPayableDatabaseRow, ownerId: string) {
-    const core = this.toSettlementPayableCore(row)
+  private settlementRechargePartitionKey(consumptionId: string, sourceOwnerId: string) {
+    return `${consumptionId}\u0000${sourceOwnerId}`
+  }
+
+  private async settlementRechargeBatchPartitions(
+    payables: Array<Pick<SettlementPayableCoreDatabaseRow, 'consumptionId' | 'sourceOwnerId'>>
+  ): Promise<SettlementRechargeBatchPartitions> {
+    const requestedPairs = new Map<string, { consumptionId: string; sourceOwnerId: string }>()
+    for (const payable of payables) {
+      const key = this.settlementRechargePartitionKey(payable.consumptionId, payable.sourceOwnerId)
+      requestedPairs.set(key, {
+        consumptionId: payable.consumptionId,
+        sourceOwnerId: payable.sourceOwnerId
+      })
+    }
+    if (requestedPairs.size === 0) return new Map()
+
+    const rows = await this.prisma.$queryRaw<SettlementRechargeBatchDatabaseRow[]>(Prisma.sql`
+      WITH requested("consumptionId", "sourceOwnerId") AS (
+        VALUES ${Prisma.join([...requestedPairs.values()].map((pair) => Prisma.sql`
+          (${pair.consumptionId}, ${pair.sourceOwnerId})
+        `))}
+      ), ranked AS (
+        SELECT
+          allocation."consumptionId",
+          allocation."sourceOwnerId",
+          allocation."id" AS "allocationId",
+          recharge."id" AS "rechargeId",
+          recharge."rechargeDate",
+          recharge."isOpeningBalance",
+          ROW_NUMBER() OVER (
+            PARTITION BY allocation."consumptionId", allocation."sourceOwnerId"
+            ORDER BY allocation."createdAt" ASC, allocation."id" ASC
+          ) AS "relationPosition"
+        FROM "SharedPrepaidAllocation" AS allocation
+        INNER JOIN requested
+          ON requested."consumptionId" = allocation."consumptionId"
+         AND requested."sourceOwnerId" = allocation."sourceOwnerId"
+        INNER JOIN "SharedPrepaidRecharge" AS recharge
+          ON recharge."id" = allocation."rechargeId"
+      )
+      SELECT
+        "consumptionId",
+        "sourceOwnerId",
+        "allocationId",
+        "rechargeId",
+        "rechargeDate",
+        "isOpeningBalance"
+      FROM ranked
+      WHERE "relationPosition" <= ${PUBLIC_SETTLEMENT_RELATION_LIMIT + 1}
+      ORDER BY "consumptionId" ASC, "sourceOwnerId" ASC, "relationPosition" ASC
+    `)
+    const partitions: SettlementRechargeBatchPartitions = new Map()
+    for (const row of rows) {
+      const key = this.settlementRechargePartitionKey(row.consumptionId, row.sourceOwnerId)
+      const partition = partitions.get(key) ?? []
+      partition.push({
+        id: row.rechargeId,
+        rechargeDate: row.rechargeDate,
+        isOpeningBalance: row.isOpeningBalance
+      })
+      partitions.set(key, partition)
+    }
+    return partitions
+  }
+
+  private toSettlementPayableRow(
+    row: SettlementPayableDatabaseRow,
+    ownerId: string,
+    rechargeBatchPartitions: SettlementRechargeBatchPartitions
+  ) {
+    const core = this.toSettlementPayableCore(row, rechargeBatchPartitions)
     return {
       ...core,
       eligible: row.status === SharedPrepaidPayableStatus.PENDING &&
@@ -1529,7 +1608,13 @@ export class SharedPrepaidQueryService {
     }
   }
 
-  private toSettlementPayableCore(row: SettlementPayableCoreDatabaseRow) {
+  private toSettlementPayableCore(
+    row: SettlementPayableCoreDatabaseRow,
+    rechargeBatchPartitions: SettlementRechargeBatchPartitions
+  ) {
+    const rechargeBatches = rechargeBatchPartitions.get(
+      this.settlementRechargePartitionKey(row.consumptionId, row.sourceOwnerId)
+    ) ?? []
     return {
       id: row.id,
       consumptionId: row.consumptionId,
@@ -1554,12 +1639,9 @@ export class SharedPrepaidQueryService {
         createdAt: row.consumption.createdAt,
         relationLimit: PUBLIC_SETTLEMENT_RELATION_LIMIT,
         relationTruncated: {
-          allocations: row.consumption.allocations.length > PUBLIC_SETTLEMENT_RELATION_LIMIT
+          allocations: rechargeBatches.length > PUBLIC_SETTLEMENT_RELATION_LIMIT
         },
-        rechargeBatches: row.consumption.allocations
-          .filter((allocation) => allocation.sourceOwnerId === row.sourceOwnerId)
-          .slice(0, PUBLIC_SETTLEMENT_RELATION_LIMIT)
-          .map((allocation) => allocation.recharge)
+        rechargeBatches: rechargeBatches.slice(0, PUBLIC_SETTLEMENT_RELATION_LIMIT)
       }
     }
   }
@@ -1582,7 +1664,10 @@ export class SharedPrepaidQueryService {
     }
   }
 
-  private toSettlementReadRow(row: SettlementReadDatabaseRow) {
+  private toSettlementReadRow(
+    row: SettlementReadDatabaseRow,
+    rechargeBatchPartitions: SettlementRechargeBatchPartitions
+  ) {
     return {
       id: row.id,
       accountAId: row.accountAId,
@@ -1630,7 +1715,7 @@ export class SharedPrepaidQueryService {
         payableStatus: line.payable.status,
         releasedAt: line.releasedAt,
         createdAt: line.createdAt,
-        payable: this.toSettlementPayableCore(line.payable)
+        payable: this.toSettlementPayableCore(line.payable, rechargeBatchPartitions)
       })),
       actions: row.actions.map((action) => ({
         id: action.id,

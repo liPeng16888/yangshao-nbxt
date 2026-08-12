@@ -898,7 +898,9 @@ function toSettlementPayableRead(row: PrepaidPayableRow, ownerId: string): Prepa
     })))
     .sort(descendingCreatedAt)
   const settlementAssociations = allSettlementAssociations.slice(0, SETTLEMENT_RELATION_LIMIT)
-  const allocationRows = consumption.allocations.slice(0, SETTLEMENT_RELATION_LIMIT + 1)
+  const allocationRows = consumption.allocations
+    .filter((allocation) => allocation.sourceOwnerId === row.sourceOwnerId)
+    .slice(0, SETTLEMENT_RELATION_LIMIT + 1)
   return clone({
     ...row,
     eligible: row.status === 'PENDING' && !allSettlementAssociations.some((association) => association.releasedAt === null),
@@ -919,10 +921,9 @@ function toSettlementPayableRead(row: PrepaidPayableRow, ownerId: string): Prepa
       createdAt: consumption.createdAt,
       relationLimit: SETTLEMENT_RELATION_LIMIT,
       relationTruncated: {
-        allocations: consumption.allocations.length > SETTLEMENT_RELATION_LIMIT
+        allocations: allocationRows.length > SETTLEMENT_RELATION_LIMIT
       },
       rechargeBatches: allocationRows
-        .filter((allocation) => allocation.sourceOwnerId === row.sourceOwnerId)
         .slice(0, SETTLEMENT_RELATION_LIMIT)
         .map((allocation) => ({
           id: allocation.recharge.id,
