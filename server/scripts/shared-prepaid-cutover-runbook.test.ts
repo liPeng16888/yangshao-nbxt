@@ -51,8 +51,9 @@ describe('shared prepaid cutover runbook contract', () => {
       runbook.indexOf('First exercise Phase A')
     )
 
-    expect(phaseAList).toContain('5. `20260812035000_add_shared_prepaid_money_checks`')
+    expect(phaseAList).toContain('1. `20260811220000_add_shared_prepaid_permissions`')
+    expect(phaseAList).toContain('6. `20260812035000_add_shared_prepaid_money_checks`')
     expect(phaseAList).not.toContain('20260812040000_remove_legacy_prepaid')
-    expect(runbook).toContain('five expected shared migrations')
+    expect(runbook).toContain('six expected shared migrations')
   })
 })

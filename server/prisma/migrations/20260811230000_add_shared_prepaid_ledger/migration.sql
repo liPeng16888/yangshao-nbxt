@@ -10,12 +10,6 @@ CREATE TYPE "SharedPrepaidPayableStatus" AS ENUM ('PENDING', 'HELD', 'COMPLETED'
 -- CreateEnum
 CREATE TYPE "SharedPrepaidSettlementStatus" AS ENUM ('AWAITING_PAYMENT', 'AWAITING_RECEIPT', 'COMPLETED', 'REJECTED', 'CANCELLED');
 
--- Add the replacement permissions before migrating existing assignments.
-ALTER TYPE "FrontendMenuPermission" ADD VALUE 'PREPAID_RECHARGE';
-ALTER TYPE "FrontendMenuPermission" ADD VALUE 'PREPAID_CUSTOMERS';
-ALTER TYPE "FrontendMenuPermission" ADD VALUE 'PREPAID_CONSUMPTIONS';
-ALTER TYPE "FrontendMenuPermission" ADD VALUE 'PREPAID_SETTLEMENTS';
-
 INSERT INTO "FrontendSubAccountPermission" ("id", "subAccountId", "permission", "createdAt")
 SELECT md5("subAccountId" || ':PREPAID_RECHARGE')::uuid::text, "subAccountId", 'PREPAID_RECHARGE'::"FrontendMenuPermission", NOW()
 FROM "FrontendSubAccountPermission" WHERE "permission" = 'FINANCE_PREPAID_ADD'

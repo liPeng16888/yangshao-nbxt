@@ -2,7 +2,7 @@
 
 Date: 2026-08-12 (Asia/Shanghai)
 
-Status: the original five confirmed Important fixes, both independent-review correction rounds, rebuilt Phase A/B lineage, local tests, three builds, Prisma checks, and static release assertions are complete. The exact Phase A/B artifacts are ready for code review/merge. Phase B production deployment remains blocked on the runbook's real-environment gates. No database migration, backup, restore, deployment, browser acceptance, or real multi-account acceptance was performed.
+Status: the original five confirmed Important fixes, both independent-review correction rounds, the PostgreSQL enum transaction-boundary correction, rebuilt Phase A/B lineage, local tests, three builds, Prisma checks, static release assertions, production backup/restore verification, and disposable-database Phase A/B rehearsals are complete. The exact Phase A/B artifacts are ready for code review/merge. Production deployment remains blocked until a fresh maintenance-window backup and the production Phase A verifier gates pass. No production database migration, application deployment, browser acceptance, or real multi-account acceptance has been performed.
 
 ## Ordered commits
 
@@ -16,10 +16,11 @@ Status: the original five confirmed Important fixes, both independent-review cor
 8. `40cef368ce9fc4b85ea1c7b7a14974b4ffad410f` — `fix: require settlement direction participants`
 9. `5be11564bacd36dddcb5311824d62e22d63f501b` — `fix: mirror prepaid quantization in mock`
 10. `099dda59d3999d2b5ffffd27a96b0538ececd355` — `fix: cancel stale prepaid reads on auth change`
-11. **Phase A:** `1bf6efcffba9c10acefa9daadeedb5d9dfee829d` — `chore: assemble reviewed shared prepaid phase A`
-12. **Phase B:** `5a568e4cd49f1759ca39814eb4ae0470b5aedc7a` — `chore: add reviewed shared prepaid phase B cleanup`
+11. `d32e5be` — `fix: split prepaid permission enum migration`
+12. **Phase A:** `2b1a6b19eb658a52ceb92775053f43669191d70c` — `chore: assemble postgres-safe shared prepaid phase A`
+13. **Phase B:** `8de3594df38262a589a9f5b69580fc4b5e6d55de` — `chore: add reviewed shared prepaid phase B cleanup`
 
-The documentation-only descendant that updates this report and the cutover runbook does not alter either reviewed release tree. The prior final pair `ca5b32dcde9b725ec0db0320fb1d73287b9ad0dc` / `a86577a1d68c98c44a9d86a2e884ec27cb7a584b`, the former hardened pair `86b0b005b8c0657058740fc9f84c014d8c0777d4` / `6057d3b926e9ae770a6f926cbcf54076355a89a9`, and every earlier pair are superseded and must not be deployed.
+The documentation-only descendant that updates this report and the cutover runbook does not alter either reviewed release tree. The prior final pair `1bf6efcffba9c10acefa9daadeedb5d9dfee829d` / `5a568e4cd49f1759ca39814eb4ae0470b5aedc7a` and every earlier pair are superseded and must not be deployed.
 
 ## Confirmed fixes
 
@@ -62,44 +63,44 @@ The documentation-only descendant that updates this report and the cutover runbo
 
 ## Final release lineage
 
-This lineage supersedes Phase A `ca5b32dcde9b725ec0db0320fb1d73287b9ad0dc` and Phase B `a86577a1d68c98c44a9d86a2e884ec27cb7a584b`, as well as all earlier pairs.
+This lineage supersedes Phase A `1bf6efcffba9c10acefa9daadeedb5d9dfee829d` and Phase B `5a568e4cd49f1759ca39814eb4ae0470b5aedc7a`, as well as all earlier pairs.
 
-- Phase A commit: `1bf6efcffba9c10acefa9daadeedb5d9dfee829d`
-- Phase A parent: `099dda59d3999d2b5ffffd27a96b0538ececd355`
-- Phase A tree: `44032364d84c754276ce7b07e4ac1a32699be6c6`
-- Phase B commit: `5a568e4cd49f1759ca39814eb4ae0470b5aedc7a`
-- Phase B parent: `1bf6efcffba9c10acefa9daadeedb5d9dfee829d`
-- Phase B tree: `1fb0603b2c0271340d48f140c210c7907e2632a6`
+- Phase A commit: `2b1a6b19eb658a52ceb92775053f43669191d70c`
+- Phase A parent: `1bf6efcffba9c10acefa9daadeedb5d9dfee829d`
+- Phase A tree: `aef10e66ebec26055f284f3d8e23f53f5b11c2da`
+- Phase B commit: `8de3594df38262a589a9f5b69580fc4b5e6d55de`
+- Phase B parent: `2b1a6b19eb658a52ceb92775053f43669191d70c`
+- Phase B tree: `d876f1ea4d574a30fd6048f717b13435c68460f4`
 
-Phase A contains every feature and non-destructive constraint fix, retains `PrepaidRechargeRecord`, `PrepaidCustomerRemark`, `PrepaidUsageRemark` and their `User` relations, excludes the cleanup migration, and contains exactly the five reviewed non-destructive shared migrations through `20260812035000_add_shared_prepaid_money_checks`.
+Phase A contains every feature and non-destructive constraint fix, retains `PrepaidRechargeRecord`, `PrepaidCustomerRemark`, `PrepaidUsageRemark` and their `User` relations, excludes the cleanup migration, and contains exactly six reviewed non-destructive shared migrations through `20260812035000_add_shared_prepaid_money_checks`. `20260811220000_add_shared_prepaid_permissions` commits the four enum additions before `20260811230000_add_shared_prepaid_ledger` maps or inserts those values, satisfying PostgreSQL's new-enum-value transaction rule.
 
 Phase B is Phase A's direct child. Its complete commit manifest is exactly:
 
 - `A server/prisma/migrations/20260812040000_remove_legacy_prepaid/migration.sql`
 - `M server/prisma/schema.prisma`
 
-Phase B only removes the legacy schema models/relations and adds the cleanup migration. Static ancestry, exact parent/tree identifiers, Phase-A legacy presence, cleanup absence/presence, five-migration enumeration, exact two-path manifest, and whitespace diff checks passed. The cutover runbook records the same immutable identifiers and executable assertions.
+Phase B only removes the legacy schema models/relations and adds the cleanup migration. Static ancestry, exact parent/tree identifiers, Phase-A legacy presence, cleanup absence/presence, six-migration enumeration, exact two-path manifest, and whitespace diff checks passed. The cutover runbook records the same immutable identifiers and executable assertions.
 
 ## Verification
 
-Both exact release commits were exported independently and tested using the installed local dependency binaries. No migration command was run.
+Both exact release commits were exported independently and tested using the installed local dependency binaries. The production backup was restored into a disposable database, and both phases were rehearsed there; no migration command was run against the production database.
 
-### Phase A (`1bf6efcffba9c10acefa9daadeedb5d9dfee829d`)
+### Phase A (`2b1a6b19eb658a52ceb92775053f43669191d70c`)
 
 - Prisma Client generation: passed.
 - `prisma validate`: passed.
-- Full root discovery: 117 test files / 1114 tests passed.
-- Full server discovery: 39 test files / 519 tests passed.
+- Full root discovery: 117 test files / 1115 tests passed.
+- Full server discovery: 39 test files / 520 tests passed.
 - Customer Vue typecheck and Vite production build: passed.
 - Admin Vue typecheck and Vite production build: passed.
 - Nest production build: passed.
 
-### Phase B (`5a568e4cd49f1759ca39814eb4ae0470b5aedc7a`)
+### Phase B (`8de3594df38262a589a9f5b69580fc4b5e6d55de`)
 
 - Prisma Client generation: passed.
 - `prisma validate`: passed.
-- Full root discovery: 117 test files / 1114 tests passed.
-- Full server discovery: 39 test files / 519 tests passed.
+- Full root discovery: 117 test files / 1115 tests passed.
+- Full server discovery: 39 test files / 520 tests passed.
 - Customer Vue typecheck and Vite production build: passed.
 - Admin Vue typecheck and Vite production build: passed.
 - Nest production build: passed.
@@ -112,9 +113,10 @@ Known non-failing warnings remain: Sass legacy JS API, Element Plus checkbox dep
 
 ## Deferred environment gates and concerns
 
-- No database migration of any kind was executed.
-- Neither `psql` nor `pg_isready` is installed in this environment, so a real PostgreSQL insertion test for the directional `CHECK` remains deferred. The extracted-expression SQL semantic test and migration text contract passed locally; the real PostgreSQL insert matrix must run on the verified disposable restore before Phase B is authorized.
-- No PostgreSQL backup/checksum, disposable restore, migration status/deploy, cutover verifier, exact table/permission comparison, production service deployment, browser smoke test, or real two-account acceptance was performed or claimed.
-- Phase B must remain blocked until every immutable Phase-A gate in `docs/deployment/shared-prepaid-cutover.md` passes against a verified disposable restore and then against maintenance-mode production.
+- A complete production PostgreSQL/app/Nginx/environment backup was created at `/opt/yangshao-nbxt-backups/preflight-20260812-190311`; its database dump restored successfully into `ys_preflight_20260812_190311`, and the restored row counts exactly matched the captured production baseline.
+- The first disposable Phase-A attempt correctly exposed PostgreSQL error `55P04`: the old migration added enum values and used them in the same transaction. The split migration was added by TDD, both release artifacts were rebuilt, and the corrected Phase A then completed with 14 migrations, unchanged baseline counts, zero shared-prepaid rows, and the production service still active.
+- Phase B completed on the same disposable database with 15 migrations. All three legacy prepaid tables were removed, prepaid deletion requests were zero, all four shared-prepaid core tables remained empty, stable business-table counts matched, and the production service remained active.
+- No production database migration or production application deployment has been performed. A fresh maintenance-window backup and the production Phase A verifier/permission gates remain mandatory before production Phase B cleanup.
+- No browser smoke test or real two-account acceptance was performed or claimed.
 - The realtime transport remains intentionally process-local. A multi-instance deployment still requires a shared transport such as PostgreSQL LISTEN/NOTIFY or Redis pub/sub.
 - Local static verification found no unresolved code, test, build, Prisma, or release-lineage blocker.

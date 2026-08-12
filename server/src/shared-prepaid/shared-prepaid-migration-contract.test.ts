@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -10,6 +10,7 @@ const migrationSource = readFileSync(join(
   '../../prisma/migrations/20260812035000_add_shared_prepaid_money_checks/migration.sql'
 ), 'utf8')
 const migration = migrationSource.replace(/\s+/g, ' ')
+const migrationsDirectory = join(__dirname, '../../prisma/migrations')
 
 function settlementAmountCheckExpression() {
   const match = migrationSource.match(
@@ -20,6 +21,40 @@ function settlementAmountCheckExpression() {
 }
 
 describe('shared prepaid settlement migration contract', () => {
+  it('commits new prepaid permission enum values before a later migration writes them', () => {
+    const newlyCommittedValues = new Set<string>()
+    const prepaidPermissionValues = [
+      'PREPAID_RECHARGE',
+      'PREPAID_CUSTOMERS',
+      'PREPAID_CONSUMPTIONS',
+      'PREPAID_SETTLEMENTS'
+    ]
+
+    for (const migrationName of readdirSync(migrationsDirectory).sort()) {
+      const migrationPath = join(migrationsDirectory, migrationName, 'migration.sql')
+      if (!existsSync(migrationPath)) continue
+      const source = readFileSync(
+        migrationPath,
+        'utf8'
+      )
+      const additions = [...source.matchAll(
+        /ALTER TYPE "FrontendMenuPermission" ADD VALUE '([^']+)'/g
+      )].map((match) => match[1])
+
+      for (const value of prepaidPermissionValues) {
+        const writesValue = source.includes(`'${value}'::"FrontendMenuPermission"`)
+        if (writesValue) {
+          expect(
+            newlyCommittedValues.has(value),
+            `${migrationName} writes ${value} before a prior migration commits the enum value`
+          ).toBe(true)
+        }
+      }
+
+      for (const value of additions) newlyCommittedValues.add(value)
+    }
+  })
+
   it('binds payer and receiver to the gross direction and requires null participants at equality', () => {
     expect(migration).toContain(
       '("aToBAmount" > "bToAAmount" AND "payerFrontendUserId" IS NOT NULL AND "receiverFrontendUserId" IS NOT NULL AND "payerFrontendUserId" = "accountAId" AND "receiverFrontendUserId" = "accountBId")'
