@@ -88,7 +88,7 @@ function snapshotEntries(row: any) {
 }
 
 function snapshotLabel(key: string) {
-  return ({ paymentDate: '支付日期', item: '开支项目', amount: '金额', paymentMethod: '支付方式', screenshotUrls: '支付截图', remark: '备注', rechargeDate: '充值日期', customer: '客户名称', usableTimes: '可使用次数' } as Record<string, string>)[key] || key
+  return ({ paymentDate: '支付日期', item: '开支项目', amount: '金额', paymentMethod: '支付方式', screenshotUrls: '支付截图', remark: '备注' } as Record<string, string>)[key] || key
 }
 
 function snapshotValue(key: string, value: unknown) {

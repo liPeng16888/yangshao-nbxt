@@ -149,7 +149,7 @@ describe('SharedPrepaidQueryService settlement reads', () => {
       where: { id: 'settlement-1', OR: [{ accountAId: 'front-1' }, { accountBId: 'front-1' }] }
     }))
     expect(result.items[0]).toMatchObject({
-      id: 'settlement-1', aToBAmount: 90.9, bToAAmount: 40.4, netAmount: 50.5,
+      id: 'settlement-1', aToBAmount: 90.9, bToAAmount: 40.4, grossAmount: 131.3, netAmount: 50.5,
       status: 'AWAITING_RECEIPT', accountA, accountB, createdAt
     })
     expect(result.items[0]).not.toHaveProperty('proofUrls')
@@ -160,7 +160,7 @@ describe('SharedPrepaidQueryService settlement reads', () => {
     expect(listSelect).not.toHaveProperty('lines')
     expect(listSelect).not.toHaveProperty('actions')
     expect(detail).toMatchObject({
-      id: 'settlement-1', aToBAmount: 90.9, bToAAmount: 40.4, netAmount: 50.5,
+      id: 'settlement-1', aToBAmount: 90.9, bToAAmount: 40.4, grossAmount: 131.3, netAmount: 50.5,
       createdBy: accountA, paymentSubmittedBy: actorA,
       lines: [{ amount: 90.9, payable: { consumption: { phoneSnapshot: '13800000000' } } }],
       actions: [{ operation: 'SUBMIT_PAYMENT', actorUser: actorA, actorFrontendUser: accountA, createdAt }]

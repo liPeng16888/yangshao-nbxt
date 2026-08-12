@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import {
   Prisma,
   SharedPrepaidConsumptionKind,
+  SharedPrepaidLedgerKind,
   SharedPrepaidPayableStatus,
   SharedPrepaidSettlementStatus
 } from '@prisma/client'
@@ -21,6 +22,7 @@ export interface SharedPrepaidRechargeQuery extends SharedPrepaidListQuery {
   startDate?: string
   endDate?: string
   isOpeningBalance?: boolean | string
+  status?: 'ACTIVE' | 'REVERSED'
 }
 
 export interface SharedPrepaidConsumptionQuery extends SharedPrepaidListQuery {
@@ -49,7 +51,7 @@ export interface SharedPrepaidSettlementQuery extends SharedPrepaidListQuery {
   endDate?: string
 }
 
-interface AccountRow {
+export interface AccountRow {
   id: string
   account: string
   username: string
@@ -75,6 +77,13 @@ interface RechargeRow {
   ownerFrontendUser: AccountRow
   actorUser: AccountRow
   member?: { id: string; phone: string }
+  reversedByLedger?: {
+    id: string
+    actorUserId: string
+    reason: string | null
+    createdAt: Date
+    actorUser: AccountRow
+  } | null
 }
 
 interface ConsumptionRow {
@@ -137,8 +146,40 @@ const rechargeInclude = {
   member: { select: { id: true, phone: true } },
   ownerFrontendUser: { select: accountSelect },
   actorUser: { select: accountSelect },
-  reversedByLedger: true
+  reversedByLedger: {
+    select: {
+      id: true,
+      actorUserId: true,
+      reason: true,
+      createdAt: true,
+      actorUser: { select: accountSelect }
+    }
+  }
 } satisfies Prisma.SharedPrepaidRechargeInclude
+
+const adminMemberBaseSelect = {
+  id: true,
+  phone: true,
+  cachedBalance: true,
+  version: true,
+  createdAt: true,
+  updatedAt: true
+} satisfies Prisma.SharedPrepaidMemberSelect
+
+const adminLedgerEntrySelect = {
+  id: true,
+  memberId: true,
+  kind: true,
+  balanceDelta: true,
+  ownerFrontendUserId: true,
+  actorUserId: true,
+  referenceType: true,
+  referenceId: true,
+  reason: true,
+  createdAt: true,
+  ownerFrontendUser: { select: accountSelect },
+  actorUser: { select: accountSelect }
+} satisfies Prisma.SharedPrepaidLedgerEntrySelect
 
 const consumptionRechargeSelect = {
   id: true,
@@ -222,6 +263,11 @@ const consumptionListSelect = {
       }
     }
   }
+} satisfies Prisma.SharedPrepaidConsumptionSelect
+
+const adminConsumptionDetailSelect = {
+  ...consumptionListSelect,
+  reversal: { select: { id: true } }
 } satisfies Prisma.SharedPrepaidConsumptionSelect
 
 const settlementConsumptionSelect = {
@@ -370,6 +416,14 @@ type SettlementReadDatabaseRow = Prisma.SharedPrepaidSettlementGetPayload<{
 type ConsumptionListDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
   select: typeof consumptionListSelect
 }>
+type AdminConsumptionDetailDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
+  select: typeof adminConsumptionDetailSelect
+}>
+type AdminMemberBaseRow = Prisma.SharedPrepaidMemberGetPayload<{
+  select: typeof adminMemberBaseSelect
+}>
+
+const ADMIN_DETAIL_HISTORY_LIMIT = 50
 
 @Injectable()
 export class SharedPrepaidQueryService {
@@ -433,18 +487,7 @@ export class SharedPrepaidQueryService {
 
   async listRecharges(query: SharedPrepaidRechargeQuery = {}) {
     const { page, pageSize, skip } = this.pagination(query)
-    const phone = String(query.phone ?? '').replace(/\D/g, '')
-    const where: Prisma.SharedPrepaidRechargeWhereInput = {}
-    if (phone) where.member = { phone: { contains: phone } }
-    if (query.ownerFrontendUserId) where.ownerFrontendUserId = String(query.ownerFrontendUserId).trim()
-    if (query.startDate || query.endDate) {
-      where.rechargeDate = {
-        ...(query.startDate ? { gte: String(query.startDate).trim() } : {}),
-        ...(query.endDate ? { lte: String(query.endDate).trim() } : {})
-      }
-    }
-    const opening = this.optionalBoolean(query.isOpeningBalance)
-    if (opening !== undefined) where.isOpeningBalance = opening
+    const where = this.rechargeWhere(query)
 
     const [recharges, total] = await Promise.all([
       this.prisma.sharedPrepaidRecharge.findMany({
@@ -466,47 +509,7 @@ export class SharedPrepaidQueryService {
 
   async listConsumptions(query: SharedPrepaidConsumptionQuery = {}) {
     const { page, pageSize, skip } = this.pagination(query)
-    const phone = String(query.phone ?? '').replace(/\D/g, '')
-    const sourceOwnerId = String(query.sourceOwnerId ?? '').trim()
-    const consumingFrontendUserId = String(query.consumingFrontendUserId ?? '').trim()
-    const where: Prisma.SharedPrepaidConsumptionWhereInput = {}
-    const and: Prisma.SharedPrepaidConsumptionWhereInput[] = []
-    if (phone) where.member = { phone: { contains: phone } }
-    if (sourceOwnerId) {
-      and.push({
-        OR: [
-          { allocations: { some: { sourceOwnerId } } },
-          { reversalOf: { allocations: { some: { sourceOwnerId } } } }
-        ]
-      })
-    }
-    if (consumingFrontendUserId) where.consumingFrontendUserId = consumingFrontendUserId
-    if (query.startDate || query.endDate) {
-      where.sheetDate = {
-        ...(query.startDate ? { gte: String(query.startDate).trim() } : {}),
-        ...(query.endDate ? { lte: String(query.endDate).trim() } : {})
-      }
-    }
-    if (query.status === 'ACTIVE') {
-      where.kind = SharedPrepaidConsumptionKind.CONSUMPTION
-      where.active = true
-    } else if (query.status === 'REVERSED') {
-      and.push({
-        OR: [
-          { kind: SharedPrepaidConsumptionKind.REVERSAL },
-          { kind: SharedPrepaidConsumptionKind.CONSUMPTION, active: false }
-        ]
-      })
-    }
-    if (query.payableStatus) {
-      and.push({
-        OR: [
-          { payables: { some: { status: query.payableStatus } } },
-          { reversalOf: { payables: { some: { status: query.payableStatus } } } }
-        ]
-      })
-    }
-    if (and.length) where.AND = and
+    const where = this.consumptionWhere(query)
     const [rows, total] = await Promise.all([
       this.prisma.sharedPrepaidConsumption.findMany({
         where,
@@ -543,6 +546,210 @@ export class SharedPrepaidQueryService {
       sourceOwners: this.accountOptions(allocationSources.map((row) => row.sourceOwner)),
       consumingOwners: this.accountOptions(consumptionOwners.map((row) => row.consumingFrontendUser))
     }
+  }
+
+  async listAdminMembers(allowedFrontendUserIds: string[], query: SharedPrepaidListQuery = {}) {
+    const { page, pageSize, skip } = this.pagination(query)
+    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    const where: Prisma.SharedPrepaidMemberWhereInput = {
+      ...(phone ? { phone: { contains: phone } } : {}),
+      OR: this.adminMemberParticipation(allowedFrontendUserIds)
+    }
+    const [members, total] = await Promise.all([
+      this.prisma.sharedPrepaidMember.findMany({
+        where,
+        select: adminMemberBaseSelect,
+        orderBy: [{ phone: 'asc' }, { id: 'asc' }],
+        skip,
+        take: pageSize
+      }),
+      this.prisma.sharedPrepaidMember.count({ where })
+    ])
+
+    return {
+      items: await this.adminMemberSummaries(members, allowedFrontendUserIds),
+      total,
+      page,
+      pageSize
+    }
+  }
+
+  async listAdminRecharges(
+    allowedFrontendUserIds: string[],
+    query: SharedPrepaidRechargeQuery = {}
+  ) {
+    const { page, pageSize, skip } = this.pagination(query)
+    const where = this.rechargeWhere(query)
+    const requestedOwnerId = String(query.ownerFrontendUserId ?? '').trim()
+    where.ownerFrontendUserId = requestedOwnerId
+      ? (allowedFrontendUserIds.includes(requestedOwnerId) ? requestedOwnerId : { in: [] })
+      : { in: allowedFrontendUserIds }
+    const [rows, total] = await Promise.all([
+      this.prisma.sharedPrepaidRecharge.findMany({
+        where,
+        include: rechargeInclude,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: pageSize
+      }),
+      this.prisma.sharedPrepaidRecharge.count({ where })
+    ])
+    return {
+      items: rows.map((row) => this.toRechargeRow(row as RechargeRow)),
+      total,
+      page,
+      pageSize
+    }
+  }
+
+  async listAdminConsumptions(
+    allowedFrontendUserIds: string[],
+    query: SharedPrepaidConsumptionQuery = {}
+  ) {
+    const { page, pageSize, skip } = this.pagination(query)
+    const where = this.consumptionWhere(query, allowedFrontendUserIds)
+    const [rows, total] = await Promise.all([
+      this.prisma.sharedPrepaidConsumption.findMany({
+        where,
+        select: consumptionListSelect,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: pageSize
+      }),
+      this.prisma.sharedPrepaidConsumption.count({ where })
+    ])
+    return {
+      items: rows.map((row) => this.toConsumptionListRow(row)),
+      total,
+      page,
+      pageSize
+    }
+  }
+
+  async listAdminSettlements(
+    allowedFrontendUserIds: string[],
+    query: SharedPrepaidSettlementQuery = {}
+  ) {
+    const { page, pageSize, skip } = this.pagination(query)
+    const where = this.adminSettlementWhere(allowedFrontendUserIds, query)
+    const [rows, total] = await Promise.all([
+      this.prisma.sharedPrepaidSettlement.findMany({
+        where,
+        select: settlementSummarySelect,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: pageSize
+      }),
+      this.prisma.sharedPrepaidSettlement.count({ where })
+    ])
+    return {
+      items: rows.map((row) => this.toSettlementSummaryRow(row)),
+      total,
+      page,
+      pageSize
+    }
+  }
+
+  async getAdminRechargeDetail(allowedFrontendUserIds: string[], id: string) {
+    const row = await this.prisma.sharedPrepaidRecharge.findFirst({
+      where: { id, ownerFrontendUserId: { in: allowedFrontendUserIds } },
+      include: rechargeInclude
+    })
+    if (!row) throw new NotFoundException('充值记录不存在')
+    const recharge = row as RechargeRow
+    return {
+      ...this.toRechargeRow(recharge),
+      reversal: recharge.reversedByLedger ? {
+        id: recharge.reversedByLedger.id,
+        reason: recharge.reversedByLedger.reason,
+        actorUserId: recharge.reversedByLedger.actorUserId,
+        actorUser: recharge.reversedByLedger.actorUser,
+        createdAt: recharge.reversedByLedger.createdAt
+      } : null
+    }
+  }
+
+  async getAdminMemberDetail(allowedFrontendUserIds: string[], id: string) {
+    const member = await this.prisma.sharedPrepaidMember.findFirst({
+      where: { id, OR: this.adminMemberParticipation(allowedFrontendUserIds) },
+      select: adminMemberBaseSelect
+    })
+    if (!member) throw new NotFoundException('预存款会员不存在')
+
+    const [summaries, recharges, consumptions, ledgerEntries] = await Promise.all([
+      this.adminMemberSummaries([member], allowedFrontendUserIds),
+      this.prisma.sharedPrepaidRecharge.findMany({
+        where: { memberId: id, ownerFrontendUserId: { in: allowedFrontendUserIds } },
+        include: rechargeInclude,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: ADMIN_DETAIL_HISTORY_LIMIT + 1
+      }),
+      this.prisma.sharedPrepaidConsumption.findMany({
+        where: { memberId: id, OR: this.adminConsumptionParticipation(allowedFrontendUserIds) },
+        select: consumptionListSelect,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: ADMIN_DETAIL_HISTORY_LIMIT + 1
+      }),
+      this.prisma.sharedPrepaidLedgerEntry.findMany({
+        where: { memberId: id, ownerFrontendUserId: { in: allowedFrontendUserIds } },
+        select: adminLedgerEntrySelect,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: ADMIN_DETAIL_HISTORY_LIMIT + 1
+      })
+    ])
+    return {
+      ...summaries[0],
+      historyLimit: ADMIN_DETAIL_HISTORY_LIMIT,
+      historyTruncated: {
+        recharges: recharges.length > ADMIN_DETAIL_HISTORY_LIMIT,
+        consumptions: consumptions.length > ADMIN_DETAIL_HISTORY_LIMIT,
+        ledgerEntries: ledgerEntries.length > ADMIN_DETAIL_HISTORY_LIMIT
+      },
+      recharges: recharges.slice(0, ADMIN_DETAIL_HISTORY_LIMIT).map((row) => this.toRechargeRow(row as RechargeRow)),
+      consumptions: consumptions.slice(0, ADMIN_DETAIL_HISTORY_LIMIT).map((row) => this.toConsumptionListRow(row)),
+      ledgerEntries: ledgerEntries.slice(0, ADMIN_DETAIL_HISTORY_LIMIT).map((row) => this.decimalToNumberDeep(row))
+    }
+  }
+
+  async getAdminConsumptionDetail(allowedFrontendUserIds: string[], id: string) {
+    const row = await this.prisma.sharedPrepaidConsumption.findFirst({
+      where: { id, OR: this.adminConsumptionParticipation(allowedFrontendUserIds) },
+      select: adminConsumptionDetailSelect
+    })
+    if (!row) throw new NotFoundException('消费记录不存在')
+    const reversalReferenceId = row.kind === SharedPrepaidConsumptionKind.REVERSAL
+      ? row.id
+      : row.reversal?.id
+    const reversalAudit = reversalReferenceId
+      ? await this.prisma.sharedPrepaidLedgerEntry.findFirst({
+          where: {
+            kind: SharedPrepaidLedgerKind.CONSUMPTION_REVERSAL,
+            referenceType: 'SharedPrepaidConsumption',
+            referenceId: reversalReferenceId
+          },
+          select: adminLedgerEntrySelect
+        })
+      : null
+    return {
+      ...(this.toConsumptionListRow(row as AdminConsumptionDetailDatabaseRow) as Record<string, unknown>),
+      reversalReason: reversalAudit?.reason ?? null,
+      reversalAudit: reversalAudit ? this.decimalToNumberDeep(reversalAudit) : null
+    }
+  }
+
+  async getAdminSettlementDetail(allowedFrontendUserIds: string[], id: string) {
+    const row = await this.prisma.sharedPrepaidSettlement.findFirst({
+      where: {
+        id,
+        OR: [
+          { accountAId: { in: allowedFrontendUserIds } },
+          { accountBId: { in: allowedFrontendUserIds } }
+        ]
+      },
+      select: settlementReadSelect
+    })
+    if (!row) throw new NotFoundException('结算单不存在')
+    return this.toSettlementReadRow(row)
   }
 
   async listSettlementPayables(user: CurrentUser, query: SharedPrepaidSettlementPayableQuery = {}) {
@@ -796,6 +1003,199 @@ export class SharedPrepaidQueryService {
     })
   }
 
+  private rechargeWhere(query: SharedPrepaidRechargeQuery) {
+    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    const where: Prisma.SharedPrepaidRechargeWhereInput = {}
+    if (phone) where.member = { phone: { contains: phone } }
+    if (query.ownerFrontendUserId) where.ownerFrontendUserId = String(query.ownerFrontendUserId).trim()
+    if (query.startDate || query.endDate) {
+      where.rechargeDate = {
+        ...(query.startDate ? { gte: String(query.startDate).trim() } : {}),
+        ...(query.endDate ? { lte: String(query.endDate).trim() } : {})
+      }
+    }
+    const opening = this.optionalBoolean(query.isOpeningBalance)
+    if (opening !== undefined) where.isOpeningBalance = opening
+    if (query.status === 'ACTIVE') where.reversedAt = null
+    if (query.status === 'REVERSED') where.reversedAt = { not: null }
+    return where
+  }
+
+  private consumptionWhere(
+    query: SharedPrepaidConsumptionQuery,
+    allowedFrontendUserIds?: string[]
+  ) {
+    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    const sourceOwnerId = String(query.sourceOwnerId ?? '').trim()
+    const consumingFrontendUserId = String(query.consumingFrontendUserId ?? '').trim()
+    const where: Prisma.SharedPrepaidConsumptionWhereInput = {}
+    const and: Prisma.SharedPrepaidConsumptionWhereInput[] = []
+    if (phone) where.member = { phone: { contains: phone } }
+    if (allowedFrontendUserIds) {
+      and.push({ OR: this.adminConsumptionParticipation(allowedFrontendUserIds) })
+    }
+    if (sourceOwnerId) {
+      and.push({
+        OR: [
+          { allocations: { some: { sourceOwnerId } } },
+          { reversalOf: { allocations: { some: { sourceOwnerId } } } }
+        ]
+      })
+    }
+    if (consumingFrontendUserId) where.consumingFrontendUserId = consumingFrontendUserId
+    if (query.startDate || query.endDate) {
+      where.sheetDate = {
+        ...(query.startDate ? { gte: String(query.startDate).trim() } : {}),
+        ...(query.endDate ? { lte: String(query.endDate).trim() } : {})
+      }
+    }
+    if (query.status === 'ACTIVE') {
+      where.kind = SharedPrepaidConsumptionKind.CONSUMPTION
+      where.active = true
+    } else if (query.status === 'REVERSED') {
+      and.push({
+        OR: [
+          { kind: SharedPrepaidConsumptionKind.REVERSAL },
+          { kind: SharedPrepaidConsumptionKind.CONSUMPTION, active: false }
+        ]
+      })
+    }
+    if (query.payableStatus) {
+      and.push({
+        OR: [
+          { payables: { some: { status: query.payableStatus } } },
+          { reversalOf: { payables: { some: { status: query.payableStatus } } } }
+        ]
+      })
+    }
+    if (and.length) where.AND = and
+    return where
+  }
+
+  private adminConsumptionParticipation(allowedFrontendUserIds: string[]) {
+    return [
+      { consumingFrontendUserId: { in: allowedFrontendUserIds } },
+      { allocations: { some: { sourceOwnerId: { in: allowedFrontendUserIds } } } },
+      { reversalOf: { allocations: { some: { sourceOwnerId: { in: allowedFrontendUserIds } } } } }
+    ] satisfies Prisma.SharedPrepaidConsumptionWhereInput[]
+  }
+
+  private adminMemberParticipation(allowedFrontendUserIds: string[]) {
+    return [
+      { recharges: { some: { ownerFrontendUserId: { in: allowedFrontendUserIds } } } },
+      { consumptions: { some: { OR: this.adminConsumptionParticipation(allowedFrontendUserIds) } } }
+    ] satisfies Prisma.SharedPrepaidMemberWhereInput[]
+  }
+
+  private adminSettlementWhere(
+    allowedFrontendUserIds: string[],
+    query: SharedPrepaidSettlementQuery
+  ) {
+    const counterpartyId = String(query.counterpartyFrontendUserId ?? '').trim()
+    const where: Prisma.SharedPrepaidSettlementWhereInput = {
+      OR: [
+        { accountAId: { in: allowedFrontendUserIds } },
+        { accountBId: { in: allowedFrontendUserIds } }
+      ]
+    }
+    if (counterpartyId) {
+      where.AND = [{ OR: [{ accountAId: counterpartyId }, { accountBId: counterpartyId }] }]
+    }
+    if (query.status) where.status = query.status
+    if (query.startDate || query.endDate) {
+      where.createdAt = {
+        ...(query.startDate ? { gte: this.beijingDateBoundary(query.startDate, false) } : {}),
+        ...(query.endDate ? { lte: this.beijingDateBoundary(query.endDate, true) } : {})
+      }
+    }
+    return where
+  }
+
+  private async adminMemberSummaries(
+    members: AdminMemberBaseRow[],
+    allowedFrontendUserIds: string[]
+  ) {
+    if (!members.length) return []
+    const memberIds = members.map((member) => member.id)
+    const [rechargeGroups, consumptionGroups] = await Promise.all([
+      this.prisma.sharedPrepaidRecharge.groupBy({
+        by: ['memberId', 'ownerFrontendUserId'],
+        where: {
+          memberId: { in: memberIds },
+          ownerFrontendUserId: { in: allowedFrontendUserIds },
+          reversedAt: null
+        },
+        _sum: { paidAmount: true, giftAmount: true, remainingAmount: true },
+        _max: { createdAt: true }
+      }),
+      this.prisma.sharedPrepaidConsumption.groupBy({
+        by: ['memberId'],
+        where: {
+          memberId: { in: memberIds },
+          kind: SharedPrepaidConsumptionKind.CONSUMPTION,
+          active: true,
+          OR: this.adminConsumptionParticipation(allowedFrontendUserIds)
+        },
+        _sum: { amount: true },
+        _max: { createdAt: true }
+      })
+    ])
+    const ownerIds = [...new Set(rechargeGroups.map((group) => group.ownerFrontendUserId))]
+    const owners = ownerIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: ownerIds } }, select: accountSelect })
+      : []
+    const ownerById = new Map(owners.map((owner) => [owner.id, owner]))
+    const consumptionByMember = new Map(consumptionGroups.map((group) => [group.memberId, group]))
+
+    return members.map((member) => {
+      const memberRecharges = rechargeGroups.filter((group) => group.memberId === member.id)
+      const consumption = consumptionByMember.get(member.id)
+      const paidTotal = memberRecharges.reduce(
+        (sum, group) => sum.add(group._sum.paidAmount ?? 0),
+        new Prisma.Decimal(0)
+      )
+      const giftTotal = memberRecharges.reduce(
+        (sum, group) => sum.add(group._sum.giftAmount ?? 0),
+        new Prisma.Decimal(0)
+      )
+      const balance = memberRecharges.reduce(
+        (sum, group) => sum.add(group._sum.remainingAmount ?? 0),
+        new Prisma.Decimal(0)
+      )
+      const latestRechargeTime = memberRecharges.reduce<Date | null>((latest, group) => {
+        const candidate = group._max.createdAt
+        return candidate && (!latest || candidate > latest) ? candidate : latest
+      }, null)
+      return {
+        id: member.id,
+        phone: member.phone,
+        paidTotal: paidTotal.toNumber(),
+        giftTotal: giftTotal.toNumber(),
+        consumedTotal: consumption?._sum.amount?.toNumber() ?? 0,
+        balance: balance.toNumber(),
+        version: member.version,
+        ownerComposition: memberRecharges
+          .filter((group) => group._sum.remainingAmount?.greaterThan(0))
+          .map((group) => {
+            const owner = ownerById.get(group.ownerFrontendUserId)
+            const display = owner?.displayRemark || owner?.username || owner?.account || group.ownerFrontendUserId
+            return {
+              ownerFrontendUserId: group.ownerFrontendUserId,
+              ownerAccount: owner?.account || group.ownerFrontendUserId,
+              ownerUsername: owner?.username || owner?.account || group.ownerFrontendUserId,
+              ownerDisplayName: display,
+              balance: group._sum.remainingAmount?.toNumber() ?? 0
+            }
+          })
+          .sort((left, right) => left.ownerFrontendUserId.localeCompare(right.ownerFrontendUserId)),
+        latestRechargeTime,
+        latestConsumptionTime: consumption?._max.createdAt ?? null,
+        createdAt: member.createdAt,
+        updatedAt: member.updatedAt
+      }
+    })
+  }
+
   private accountOptions(accounts: AccountRow[]) {
     const options = new Map<string, { id: string; account: string; label: string }>()
     for (const account of accounts) {
@@ -887,6 +1287,7 @@ export class SharedPrepaidQueryService {
       accountBId: row.accountBId,
       aToBAmount: row.aToBAmount.toNumber(),
       bToAAmount: row.bToAAmount.toNumber(),
+      grossAmount: row.aToBAmount.add(row.bToAAmount).toNumber(),
       netAmount: row.netAmount.toNumber(),
       payerFrontendUserId: row.payerFrontendUserId,
       receiverFrontendUserId: row.receiverFrontendUserId,
@@ -904,6 +1305,7 @@ export class SharedPrepaidQueryService {
       accountBId: row.accountBId,
       aToBAmount: row.aToBAmount.toNumber(),
       bToAAmount: row.bToAAmount.toNumber(),
+      grossAmount: row.aToBAmount.add(row.bToAAmount).toNumber(),
       netAmount: row.netAmount.toNumber(),
       payerFrontendUserId: row.payerFrontendUserId,
       receiverFrontendUserId: row.receiverFrontendUserId,

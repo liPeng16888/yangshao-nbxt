@@ -1,4 +1,4 @@
-import { ForbiddenException, RequestMethod } from '@nestjs/common'
+import { ForbiddenException, NotFoundException, RequestMethod } from '@nestjs/common'
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { Prisma, SharedPrepaidConsumptionKind, SharedPrepaidPayableStatus, UserRole } from '@prisma/client'
@@ -313,5 +313,155 @@ describe('SharedPrepaidQueryService consumption list', () => {
       sourceOwners: [{ id: 'front-1', account: 'owner-a', label: '北京店（owner-a）' }],
       consumingOwners: [{ id: 'front-2', account: 'owner-b', label: '主账号 B（owner-b）' }]
     })
+  })
+})
+
+describe('SharedPrepaidQueryService admin reads', () => {
+  it('keeps member totals and histories inside the allowed account relationships', async () => {
+    const createdAt = new Date('2026-08-12T03:04:05.000Z')
+    const rechargeGroupBy = vi.fn().mockResolvedValue([{
+      memberId: 'member-1', ownerFrontendUserId: 'front-1',
+      _sum: { paidAmount: new Prisma.Decimal(100), giftAmount: new Prisma.Decimal(10), remainingAmount: new Prisma.Decimal(80) },
+      _max: { createdAt }
+    }])
+    const consumptionGroupBy = vi.fn().mockResolvedValue([{
+      memberId: 'member-1', _sum: { amount: new Prisma.Decimal(30) }, _max: { createdAt }
+    }])
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidMember: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'member-1', phone: '13800000000', cachedBalance: new Prisma.Decimal(999),
+          version: 1, createdAt, updatedAt: createdAt
+        }]),
+        count: vi.fn().mockResolvedValue(1)
+      },
+      sharedPrepaidRecharge: { groupBy: rechargeGroupBy },
+      sharedPrepaidConsumption: { groupBy: consumptionGroupBy },
+      user: { findMany: vi.fn().mockResolvedValue([{ id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: null }]) }
+    } as never)
+
+    const result = await service.listAdminMembers(['front-1'])
+
+    expect(rechargeGroupBy).toHaveBeenCalledWith(expect.objectContaining({
+      where: { memberId: { in: ['member-1'] }, ownerFrontendUserId: { in: ['front-1'] }, reversedAt: null }
+    }))
+    expect(consumptionGroupBy).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        memberId: { in: ['member-1'] },
+        OR: expect.any(Array)
+      })
+    }))
+    expect(result.items[0]).toMatchObject({ paidTotal: 100, giftTotal: 10, consumedTotal: 30, balance: 80 })
+  })
+
+  it('applies the allowed account scope inside every paged collection query', async () => {
+    const memberFindMany = vi.fn().mockResolvedValue([])
+    const rechargeFindMany = vi.fn().mockResolvedValue([])
+    const consumptionFindMany = vi.fn().mockResolvedValue([])
+    const settlementFindMany = vi.fn().mockResolvedValue([])
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidMember: { findMany: memberFindMany, count: vi.fn().mockResolvedValue(0) },
+      sharedPrepaidRecharge: { findMany: rechargeFindMany, count: vi.fn().mockResolvedValue(0) },
+      sharedPrepaidConsumption: { findMany: consumptionFindMany, count: vi.fn().mockResolvedValue(0) },
+      sharedPrepaidSettlement: { findMany: settlementFindMany, count: vi.fn().mockResolvedValue(0) }
+    } as never)
+    const allowedIds = ['front-1']
+
+    await service.listAdminMembers(allowedIds, { phone: '138', page: 2, pageSize: 10 })
+    await service.listAdminRecharges(allowedIds, {
+      phone: '138', startDate: '2026-08-01', endDate: '2026-08-31', isOpeningBalance: false,
+      status: 'REVERSED'
+    })
+    await service.listAdminConsumptions(allowedIds, {
+      sourceOwnerId: 'front-2', status: 'REVERSED', payableStatus: 'COMPLETED'
+    })
+    await service.listAdminSettlements(allowedIds, {
+      counterpartyFrontendUserId: 'front-2', status: 'REJECTED',
+      startDate: '2026-08-01', endDate: '2026-08-31'
+    })
+
+    const participation = [
+      { recharges: { some: { ownerFrontendUserId: { in: allowedIds } } } },
+      { consumptions: { some: { OR: [
+        { consumingFrontendUserId: { in: allowedIds } },
+        { allocations: { some: { sourceOwnerId: { in: allowedIds } } } },
+        { reversalOf: { allocations: { some: { sourceOwnerId: { in: allowedIds } } } } }
+      ] } } }
+    ]
+    expect(memberFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { phone: { contains: '138' }, OR: participation },
+      skip: 10,
+      take: 10
+    }))
+    expect(rechargeFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        member: { phone: { contains: '138' } },
+        ownerFrontendUserId: { in: allowedIds },
+        rechargeDate: { gte: '2026-08-01', lte: '2026-08-31' },
+        isOpeningBalance: false,
+        reversedAt: { not: null }
+      }
+    }))
+    expect(consumptionFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          { OR: [
+            { consumingFrontendUserId: { in: allowedIds } },
+            { allocations: { some: { sourceOwnerId: { in: allowedIds } } } },
+            { reversalOf: { allocations: { some: { sourceOwnerId: { in: allowedIds } } } } }
+          ] },
+          { OR: [
+            { allocations: { some: { sourceOwnerId: 'front-2' } } },
+            { reversalOf: { allocations: { some: { sourceOwnerId: 'front-2' } } } }
+          ] }
+        ])
+      })
+    }))
+    expect(settlementFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        OR: [{ accountAId: { in: allowedIds } }, { accountBId: { in: allowedIds } }],
+        AND: [{ OR: [{ accountAId: 'front-2' }, { accountBId: 'front-2' }] }],
+        status: 'REJECTED',
+        createdAt: {
+          gte: new Date('2026-08-01T00:00:00.000+08:00'),
+          lte: new Date('2026-08-31T23:59:59.999+08:00')
+        }
+      }
+    }))
+  })
+
+  it('returns not found for every detail outside the allowed account relationships', async () => {
+    const rechargeFindFirst = vi.fn().mockResolvedValue(null)
+    const memberFindFirst = vi.fn().mockResolvedValue(null)
+    const consumptionFindFirst = vi.fn().mockResolvedValue(null)
+    const settlementFindFirst = vi.fn().mockResolvedValue(null)
+    const service = new SharedPrepaidQueryService({
+      sharedPrepaidRecharge: { findFirst: rechargeFindFirst },
+      sharedPrepaidMember: { findFirst: memberFindFirst },
+      sharedPrepaidConsumption: { findFirst: consumptionFindFirst },
+      sharedPrepaidSettlement: { findFirst: settlementFindFirst }
+    } as never)
+    const allowedIds = ['front-1']
+
+    await expect(service.getAdminRechargeDetail(allowedIds, 'recharge-2')).rejects.toBeInstanceOf(NotFoundException)
+    await expect(service.getAdminMemberDetail(allowedIds, 'member-2')).rejects.toBeInstanceOf(NotFoundException)
+    await expect(service.getAdminConsumptionDetail(allowedIds, 'consumption-2')).rejects.toBeInstanceOf(NotFoundException)
+    await expect(service.getAdminSettlementDetail(allowedIds, 'settlement-2')).rejects.toBeInstanceOf(NotFoundException)
+
+    expect(rechargeFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'recharge-2', ownerFrontendUserId: { in: allowedIds } }
+    }))
+    expect(memberFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'member-2', OR: expect.any(Array) }
+    }))
+    expect(consumptionFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'consumption-2', OR: expect.any(Array) }
+    }))
+    expect(settlementFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: 'settlement-2',
+        OR: [{ accountAId: { in: allowedIds } }, { accountBId: { in: allowedIds } }]
+      }
+    }))
   })
 })
