@@ -463,6 +463,113 @@ describe('shared prepaid realtime refresh', () => {
     ])
   })
 
+  it('reuses the prepared key after a possibly committed lost response for every money mutation', async () => {
+    const transportErrors = [
+      new Error('Network Error'),
+      Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }),
+      Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }),
+      { response: { status: 503 } },
+      { response: { status: 500 } },
+      new Error('Network Error'),
+      { response: { status: 502 } },
+      Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })
+    ]
+    const store = useSharedPrepaidStore()
+    store.setRechargeDraft({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 1000,
+      giftAmount: 100, isOpeningBalance: false, remark: 'lost response'
+    })
+    store.setSettlementSelection(['payable-1'])
+    store.setSettlementPaymentDraftFor('settlement-pay', {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00', remark: 'lost response'
+    })
+
+    const cases = [
+      {
+        slot: 'createRecharge', mock: apiMocks.createPrepaidRecharge,
+        invoke: () => store.createRecharge(), result: { id: 'recharge-1' }
+      },
+      {
+        slot: 'reverseRecharge:recharge-1', mock: apiMocks.reversePrepaidRecharge,
+        invoke: () => store.reverseRecharge('recharge-1', '误充值'), result: { id: 'recharge-1' }
+      },
+      {
+        slot: 'reverseConsumption:consumption-1', mock: apiMocks.reversePrepaidConsumption,
+        invoke: () => store.reverseConsumption('consumption-1', '误扣款'), result: { id: 'reversal-1' }
+      },
+      {
+        slot: 'createSettlement', mock: apiMocks.createPrepaidSettlement,
+        invoke: () => store.createSettlement(['payable-1']), result: settlementRowFixture('settlement-create')
+      },
+      {
+        slot: 'submitPayment:settlement-pay', mock: apiMocks.submitPrepaidSettlementPayment,
+        invoke: () => store.submitSettlementPayment('settlement-pay'), result: settlementRowFixture('settlement-pay')
+      },
+      {
+        slot: 'confirmSettlement:settlement-confirm', mock: apiMocks.confirmPrepaidSettlement,
+        invoke: () => store.confirmSettlement('settlement-confirm'), result: settlementRowFixture('settlement-confirm')
+      },
+      {
+        slot: 'rejectSettlement:settlement-reject', mock: apiMocks.rejectPrepaidSettlement,
+        invoke: () => store.rejectSettlement('settlement-reject', '未到账'), result: settlementRowFixture('settlement-reject')
+      },
+      {
+        slot: 'cancelSettlement:settlement-cancel', mock: apiMocks.cancelPrepaidSettlement,
+        invoke: () => store.cancelSettlement('settlement-cancel'), result: settlementRowFixture('settlement-cancel')
+      }
+    ] as const
+
+    let preparedKeySequence = 0
+    vi.spyOn(crypto, 'randomUUID').mockImplementation(() => (
+      `00000000-0000-4000-8000-${String(++preparedKeySequence).padStart(12, '0')}` as ReturnType<typeof crypto.randomUUID>
+    ))
+    for (const [index, testCase] of cases.entries()) {
+      testCase.mock.mockRejectedValueOnce(transportErrors[index]).mockResolvedValueOnce(testCase.result)
+
+      await expect(testCase.invoke()).rejects.toBe(transportErrors[index])
+      const preparedKey = store.pendingIdempotencyKeys[testCase.slot]
+      expect(preparedKey).toMatch(/^00000000-0000-4000-8000-/)
+
+      await testCase.invoke()
+      const keyArgumentIndex = testCase.mock === apiMocks.confirmPrepaidSettlement ||
+        testCase.mock === apiMocks.cancelPrepaidSettlement ? 1 : 2
+      if (testCase.mock === apiMocks.createPrepaidRecharge || testCase.mock === apiMocks.createPrepaidSettlement) {
+        expect(testCase.mock.mock.calls.slice(-2).map((call) => call[1])).toEqual([preparedKey, preparedKey])
+      } else {
+        expect(testCase.mock.mock.calls.slice(-2).map((call) => call[keyArgumentIndex])).toEqual([preparedKey, preparedKey])
+      }
+      expect(store.pendingIdempotencyKeys[testCase.slot]).toBeUndefined()
+    }
+  })
+
+  it('uses a canonical payload fingerprint so key ordering cannot rotate a lost-response key', async () => {
+    const lostResponse = new Error('socket closed after commit')
+    apiMocks.createPrepaidRecharge
+      .mockRejectedValueOnce(lostResponse)
+      .mockResolvedValueOnce({ id: 'recharge-1' })
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000041')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000042')
+    const store = useSharedPrepaidStore()
+    const first = {
+      phone: '138 0000-0000', rechargeDate: '2026-08-12', paidAmount: '1000.0',
+      giftAmount: 100, isOpeningBalance: false, remark: '  同一笔充值  '
+    }
+    const equivalent = {
+      remark: '同一笔充值', isOpeningBalance: false, giftAmount: '100.00',
+      paidAmount: 1000, rechargeDate: '2026-08-12', phone: '13800000000'
+    }
+
+    await expect(store.createRecharge(first)).rejects.toBe(lostResponse)
+    await store.createRecharge(equivalent)
+
+    expect(apiMocks.createPrepaidRecharge.mock.calls.map((call) => call[1])).toEqual([
+      '00000000-0000-4000-8000-000000000041',
+      '00000000-0000-4000-8000-000000000041'
+    ])
+    expect(crypto.randomUUID).toHaveBeenCalledTimes(1)
+  })
+
   it('loads independently paginated settlement reads and refreshes only selected payable availability', async () => {
     const first = {
       items: [

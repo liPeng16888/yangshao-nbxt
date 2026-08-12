@@ -69,6 +69,41 @@ const emptyRechargeDraft = (): CreatePrepaidRechargePayload => ({
   remark: ''
 })
 
+function canonicalJson(value: unknown): string {
+  const normalize = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(normalize)
+    if (item && typeof item === 'object') {
+      return Object.fromEntries(
+        Object.entries(item as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, child]) => [key, normalize(child)])
+      )
+    }
+    return item
+  }
+  return JSON.stringify(normalize(value))
+}
+
+function canonicalMoney(value: string | number) {
+  const raw = String(value).trim()
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(raw)
+  if (!match || (!match[2] && !match[3])) return raw
+  const whole = (match[2] || '0').replace(/^0+(?=\d)/, '')
+  const fraction = (match[3] || '').replace(/0+$/, '')
+  const unsigned = fraction ? `${whole}.${fraction}` : whole
+  return match[1] === '-' && unsigned !== '0' ? `-${unsigned}` : unsigned
+}
+
+function canonicalPhone(value: string) {
+  const trimmed = value.trim()
+  return /^[\d\s-]+$/.test(trimmed) ? trimmed.replace(/[\s-]/g, '') : trimmed
+}
+
+function canonicalDateTime(value: string) {
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value.trim() : parsed.toISOString()
+}
+
 export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const authStore = useAuthStore()
   const loadingCounts = reactive<Record<SharedPrepaidPage, number>>({
@@ -388,13 +423,11 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
       return result
     } catch (error) {
       if (mutationInvocationVersions.get(mutation) === invocationVersion) {
-        if (isConflict(error)) {
-          pendingIdempotencyKeys[mutation] = key
-          pendingMutationFingerprints.set(mutation, requestFingerprint)
-        } else {
-          delete pendingIdempotencyKeys[mutation]
-          pendingMutationFingerprints.delete(mutation)
-        }
+        // Any failed response may have been committed before the connection was lost.
+        // Keeping the prepared request identity is safe for definitive 4xx failures too;
+        // only confirmed success or a canonical payload change rotates it.
+        pendingIdempotencyKeys[mutation] = key
+        pendingMutationFingerprints.set(mutation, requestFingerprint)
       }
       throw error
     } finally {
@@ -417,21 +450,28 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
         rechargeDraft.value = emptyRechargeDraft()
         setPageDirty('recharges', false)
       }
-    }, JSON.stringify(requestPayload))
+    }, canonicalJson({
+      phone: canonicalPhone(requestPayload.phone),
+      rechargeDate: requestPayload.rechargeDate.trim(),
+      paidAmount: canonicalMoney(requestPayload.paidAmount),
+      giftAmount: canonicalMoney(requestPayload.giftAmount),
+      isOpeningBalance: requestPayload.isOpeningBalance === true,
+      remark: requestPayload.remark?.trim() || null
+    }))
   }
 
   async function reverseRecharge(id: string, reason: string, idempotencyKey?: string) {
     const payload: PrepaidReasonPayload = { reason }
     return mutate('recharges', `reverseRecharge:${id}`, idempotencyKey, (key) => (
       prepaidApi.reversePrepaidRecharge(id, payload, key)
-    ), undefined, JSON.stringify(payload))
+    ), undefined, canonicalJson({ reason: reason.trim() }))
   }
 
   async function reverseConsumption(id: string, reason: string, idempotencyKey?: string) {
     const payload: PrepaidReasonPayload = { reason }
     return mutate('consumptions', `reverseConsumption:${id}`, idempotencyKey, (key) => (
       prepaidApi.reversePrepaidConsumption(id, payload, key)
-    ), undefined, JSON.stringify(payload))
+    ), undefined, canonicalJson({ reason: reason.trim() }))
   }
 
   async function previewSettlement(ids: string[] = settlementSelection.value) {
@@ -452,7 +492,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
       if (isLatestInvocation) {
         setSettlementSelection([])
       }
-    }, JSON.stringify([...payableIds].sort()))
+    }, canonicalJson([...payableIds].sort()))
   }
 
   async function submitSettlementPayment(
@@ -471,7 +511,11 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
       if (isLatestInvocation) {
         clearSettlementPaymentDraft(id)
       }
-    }, JSON.stringify(requestPayload))
+    }, canonicalJson({
+      actualTransferredAt: canonicalDateTime(requestPayload.actualTransferredAt),
+      proofUrls: (requestPayload.proofUrls ?? []).map((url) => url.trim()),
+      remark: requestPayload.remark?.trim() || null
+    }))
   }
 
   function confirmSettlement(id: string, idempotencyKey?: string) {
@@ -735,10 +779,6 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     disconnectRealtime
   }
 })
-
-function isConflict(error: unknown) {
-  return (error as { response?: { status?: unknown } } | null)?.response?.status === 409
-}
 
 function isPaymentDraftDirty(draft: PrepaidSettlementPaymentPayload) {
   return Boolean(draft.actualTransferredAt?.trim() || draft.proofUrls?.length || draft.remark?.trim())
