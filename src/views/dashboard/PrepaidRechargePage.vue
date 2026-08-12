@@ -124,6 +124,15 @@
           <el-button data-testid="recharge-filter-submit" type="primary" :loading="store.loadingByPage.recharges" @click="applyFilters">查询</el-button>
         </div>
       </div>
+      <el-alert
+        v-if="filterError"
+        data-testid="recharge-filter-error"
+        class="prepaid-error"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="filterError"
+      />
       <el-alert v-if="store.errorsByPage.recharges" class="prepaid-error" type="error" :closable="false" show-icon :title="store.errorsByPage.recharges">
         <template #default><el-button link type="primary" @click="loadHistory">重试</el-button></template>
       </el-alert>
@@ -206,6 +215,7 @@ const auth = useAuthStore()
 const formRef = ref<FormInstance>()
 const saving = ref(false)
 const mutationError = ref('')
+const filterError = ref('')
 const lastResult = ref<PrepaidRechargeMutationResult | null>(null)
 const initialDate = todayInBeijing()
 const form = reactive<RechargeForm>({
@@ -233,7 +243,7 @@ const ownerLabel = computed(() => isMainAccount.value
   : `主账号 ID ${currentOwnerId.value}`)
 const actorLabel = computed(() => prepaidAccountLabel({ username: auth.user?.username, account: auth.user?.account || auth.user?.id }))
 const hasUnsavedInput = computed(() => Boolean(
-  form.phone.trim() || form.paidAmount.trim() || form.giftAmount.trim() || form.remark.trim() ||
+  form.phone || form.paidAmount.trim() || form.giftAmount.trim() || form.remark.trim() ||
   form.isOpeningBalance || form.rechargeDate !== initialDate
 ))
 
@@ -328,8 +338,16 @@ function rechargeQuery(page = 1): PrepaidRechargeQuery {
 }
 
 async function loadHistory(page = 1) {
+  let query: PrepaidRechargeQuery
   try {
-    await store.loadRecharges(rechargeQuery(page))
+    query = rechargeQuery(page)
+    filterError.value = ''
+  } catch (error) {
+    filterError.value = prepaidErrorMessage(error, '会员手机号格式错误')
+    return
+  }
+  try {
+    await store.loadRecharges(query)
   } catch {
     // Store keeps the persistent error for the inline retry state.
   }

@@ -42,6 +42,15 @@
       <el-alert v-if="realtime.hasPendingRefresh.value" class="consumption-alert" type="warning" :closable="false" show-icon title="共享消费明细已变化">
         <template #default><el-button link type="primary" @click="realtime.retryRefresh">立即刷新</el-button></template>
       </el-alert>
+      <el-alert
+        v-if="filterError"
+        data-testid="consumption-filter-error"
+        class="consumption-alert"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="filterError"
+      />
       <el-alert v-if="mutationError" data-testid="consumption-mutation-error" class="consumption-alert" type="error" :closable="false" show-icon :title="mutationError" />
       <el-alert v-if="store.errorsByPage.consumptions" class="consumption-alert" type="error" :closable="false" show-icon :title="store.errorsByPage.consumptions">
         <template #default><el-button link type="primary" @click="loadPageData(store.consumptionsPage.page)">重试</el-button></template>
@@ -178,6 +187,7 @@ const pageSize = 20
 const store = useSharedPrepaidStore()
 const auth = useAuthStore()
 const mutationError = ref('')
+const filterError = ref('')
 const filters = reactive<{
   phone: string
   sourceOwnerId: string
@@ -213,8 +223,16 @@ function consumptionQuery(page = 1): PrepaidConsumptionQuery {
 }
 
 async function loadConsumptions(page = 1) {
+  let query: PrepaidConsumptionQuery
   try {
-    await store.loadConsumptions(consumptionQuery(page))
+    query = consumptionQuery(page)
+    filterError.value = ''
+  } catch (error) {
+    filterError.value = prepaidErrorMessage(error, '会员手机号格式错误')
+    return
+  }
+  try {
+    await store.loadConsumptions(query)
   } catch {
     // Store exposes the persistent error and retains the exact active filters.
   }

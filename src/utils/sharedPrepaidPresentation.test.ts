@@ -27,7 +27,28 @@ describe('shared prepaid presentation helpers', () => {
   it('never turns letters or punctuation into a valid phone by stripping them', () => {
     expect(() => prepaidNormalizePhone('138abc00000000')).toThrow('会员手机号必须为中国大陆 11 位手机号')
     expect(() => prepaidNormalizePhone('138.0000.0000')).toThrow('会员手机号必须为中国大陆 11 位手机号')
-    expect(prepaidNormalizePhoneSearch('138abc')).toBe('138abc')
+    expect(() => prepaidNormalizePhoneSearch('138abc')).toThrow('会员手机号必须为中国大陆 11 位手机号')
+  })
+
+  it.each([
+    '\u00a013800000000',
+    '138\u200300000000',
+    '13800000000\u00a0'
+  ])('rejects Unicode whitespace at every phone position without pre-trimming %j', (value) => {
+    expect(() => prepaidNormalizePhone(value)).toThrow('会员手机号必须为中国大陆 11 位手机号')
+  })
+
+  it.each(['\u00a0138', '1\u20038', '138\u00a0'])(
+    'rejects Unicode whitespace in phone filters without pre-trimming %j',
+    (value) => {
+      expect(() => prepaidNormalizePhoneSearch(value))
+        .toThrow('会员手机号必须为中国大陆 11 位手机号')
+    }
+  )
+
+  it('accepts only the explicitly approved ASCII separators', () => {
+    expect(prepaidNormalizePhone('138\t0000\r\n\v\f0000')).toBe('13800000000')
+    expect(prepaidNormalizePhoneSearch(' 138-00\t')).toBe('13800')
   })
 
   it('classifies conflicts and extracts safe actionable server errors', () => {

@@ -86,6 +86,7 @@ import { computed, ref, watch } from 'vue'
 import type { PrepaidMemberPickerResult } from '@/types/labSheet'
 import type { PrepaidLabMemberLookupRow } from '@/types/sharedPrepaid'
 import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
+import { prepaidNormalizePhone } from '@/utils/sharedPrepaidPresentation'
 
 const props = withDefaults(defineProps<{
   visible: boolean
@@ -194,8 +195,11 @@ function resetDraft() {
 }
 
 function normalizePhone(value: unknown) {
-  const normalized = String(value ?? '').replace(/\D/g, '')
-  return /^1[3-9]\d{9}$/.test(normalized) ? normalized : ''
+  try {
+    return prepaidNormalizePhone(value)
+  } catch {
+    return ''
+  }
 }
 
 function normalizeInitialAmount(value: number | null | undefined) {

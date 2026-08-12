@@ -31,9 +31,10 @@ export function prepaidNormalizePhone(value: unknown) {
 
 export function prepaidNormalizePhoneSearch(value: unknown) {
   const input = String(value ?? '')
-  if (!PREPAID_PHONE_INPUT_PATTERN.test(input)) return input.trim()
+  if (!PREPAID_PHONE_INPUT_PATTERN.test(input)) throw new Error(INVALID_PHONE_MESSAGE)
   const phone = input.replace(PREPAID_PHONE_SEPARATOR_PATTERN, '')
-  return /^\d{0,11}$/.test(phone) ? phone : input.trim()
+  if (!/^\d{0,11}$/.test(phone)) throw new Error(INVALID_PHONE_MESSAGE)
+  return phone
 }
 
 export function prepaidIsValidPhone(value: unknown) {

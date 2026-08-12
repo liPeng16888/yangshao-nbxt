@@ -82,6 +82,21 @@ describe('PrepaidMemberPickerDialog', () => {
     ]])
   })
 
+  it.each([
+    '\u00a013800000000',
+    '138\u200300000000',
+    '13800000000\u00a0'
+  ])('rejects Unicode whitespace without stripping it into a lookup phone %j', async (phone) => {
+    const wrapper = mountDialog()
+
+    await wrapper.get('[data-testid="prepaid-member-phone"]').setValue(phone)
+    await wrapper.get('[data-testid="prepaid-member-search"]').trigger('click')
+    await nextTick()
+
+    expect(storeMocks.lookupLabMember).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请输入11位会员手机号')
+  })
+
   it('disables confirmation when the exact two-decimal deduction exceeds the advisory balance', async () => {
     storeMocks.lookupLabMember.mockResolvedValue({ id: 'member-1', phone: '13800000000', currentBalance: 20 })
     const wrapper = mountDialog({ initialPhone: '13800000000', initialAmount: 20.01 })

@@ -370,8 +370,19 @@ export async function mockRecordPrepaidConsumption(
   const amountCents = moneyToCents(payload.amount, '消费金额', true)
   const member = members.find((row) => row.phone === phone)
   if (!member) throw mockError(404, '预存款会员不存在')
+  const normalizedPayload = {
+    phone,
+    amountCents,
+    sheetId: payload.sheetId,
+    sampleBlockId: payload.sampleBlockId,
+    sampleIndex: payload.sampleIndex,
+    sampleNumberSnapshot: payload.sampleNumberSnapshot ?? null,
+    sampleCountSnapshot: payload.sampleCountSnapshot ?? 1,
+    elementsSnapshot: payload.elementsSnapshot ?? {},
+    sheetDate: payload.sheetDate
+  }
 
-  return runIdempotent(idempotencyKey, ['CREATE_CONSUMPTION', identity, payload, phone, amountCents], () => {
+  return runIdempotent(idempotencyKey, ['CREATE_CONSUMPTION', identity, normalizedPayload], () => {
     registerAccount(identity)
     const lots = recharges
       .filter((row) => row.memberId === member.id && !row.reversedAt && row.remainingCents > 0)

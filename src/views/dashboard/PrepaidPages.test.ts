@@ -228,6 +228,37 @@ describe('PrepaidRechargePage', () => {
     expect(sub.wrapper.findAll('[data-testid^="reverse-recharge-"]')).toHaveLength(0)
   })
 
+  it.each([
+    '\u00a013800000000',
+    '138\u200300000000',
+    '13800000000\u00a0'
+  ])('rejects Unicode phone whitespace in the recharge form %j', async (phone) => {
+    const { wrapper } = mountPage(PrepaidRechargePage)
+    await flushPromises()
+    await input(wrapper, 'recharge-phone').setValue(phone)
+    await input(wrapper, 'recharge-paid').setValue('100')
+    await input(wrapper, 'recharge-gift').setValue('0')
+    await wrapper.get('[data-testid="recharge-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createPrepaidRecharge).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请输入 11 位中国大陆手机号')
+  })
+
+  it('rejects Unicode whitespace in a recharge phone filter without sending a request', async () => {
+    const { wrapper } = mountPage(PrepaidRechargePage)
+    await flushPromises()
+    expect(api.getPrepaidRecharges).toHaveBeenCalledTimes(1)
+
+    await input(wrapper, 'recharge-filter-phone').setValue('\u00a0138')
+    await wrapper.get('[data-testid="recharge-filter-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.getPrepaidRecharges).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="recharge-filter-error"]').text())
+      .toContain('会员手机号必须为中国大陆 11 位手机号')
+  })
+
   it('sends normalized paginated date, phone, owner, and opening filters', async () => {
     const { wrapper } = mountPage(PrepaidRechargePage)
     await flushPromises()
@@ -381,6 +412,20 @@ describe('PrepaidCustomersPage', () => {
     await flushPromises()
     expect(api.getPrepaidMembers).toHaveBeenLastCalledWith({ page: 3, pageSize: 20, phone: '13800000000' })
   })
+
+  it('rejects Unicode whitespace in a customer phone filter without sending a request', async () => {
+    const { wrapper } = mountPage(PrepaidCustomersPage)
+    await flushPromises()
+    expect(api.getPrepaidMembers).toHaveBeenCalledTimes(1)
+
+    await input(wrapper, 'member-filter-phone').setValue('1\u20038')
+    await wrapper.get('[data-testid="member-filter-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.getPrepaidMembers).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="member-filter-error"]').text())
+      .toContain('会员手机号必须为中国大陆 11 位手机号')
+  })
 })
 
 describe('PrepaidConsumptionsPage', () => {
@@ -441,6 +486,20 @@ describe('PrepaidConsumptionsPage', () => {
     expect(wrapper.text()).toContain('充值来源账号筛选')
     expect(wrapper.text()).toContain('消费账号筛选')
     expect(wrapper.findAll('[data-testid^="reverse-consumption-"]')).toHaveLength(0)
+  })
+
+  it('rejects Unicode whitespace in a consumption phone filter without sending a request', async () => {
+    const { wrapper } = mountPage(PrepaidConsumptionsPage)
+    await flushPromises()
+    expect(api.getPrepaidConsumptions).toHaveBeenCalledTimes(1)
+
+    await input(wrapper, 'consumption-filter-phone').setValue('138\u00a0')
+    await input(wrapper, 'consumption-filter-submit').trigger('click')
+    await flushPromises()
+
+    expect(api.getPrepaidConsumptions).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="consumption-filter-error"]').text())
+      .toContain('会员手机号必须为中国大陆 11 位手机号')
   })
 
   it('renders reversal identity with the original allocation and payable audit projection', async () => {

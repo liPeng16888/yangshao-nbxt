@@ -74,6 +74,16 @@ describe('shared prepaid focused mock', () => {
     await expect(mockLookupPrepaidMember('138abc00000000')).rejects.toThrow('会员手机号格式错误')
     await expect(mockLookupPrepaidMember('138.0000.0000')).rejects.toThrow('会员手机号格式错误')
     await expect(mockGetPrepaidMembers({ phone: '138abc' })).rejects.toThrow('会员手机号格式错误')
+    for (const phone of [
+      '\u00a013800000000',
+      '138\u200300000000',
+      '13800000000\u00a0'
+    ]) {
+      await expect(mockLookupPrepaidMember(phone)).rejects.toThrow('会员手机号格式错误')
+    }
+    for (const phone of ['\u00a0138', '1\u20038', '138\u00a0']) {
+      await expect(mockGetPrepaidMembers({ phone })).rejects.toThrow('会员手机号格式错误')
+    }
   })
 
   it('allocates FIFO and creates 90.9 payable only for the cross-owner paid share', async () => {
@@ -101,6 +111,23 @@ describe('shared prepaid focused mock', () => {
     expect(detail.consumptions.flatMap((row) => row.allocations).every((allocation) => (
       allocation.recharge.remainingAmount === 950
     ))).toBe(true)
+  })
+
+  it('fingerprints a Mock consumption only after strict phone normalization succeeds', async () => {
+    await mockCreatePrepaidRecharge({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 100, giftAmount: 0
+    }, 'normalized-fingerprint-lot', ownerA)
+    const first = await mockRecordPrepaidConsumption({
+      phone: '138 0000-0000', amount: 10, sheetId: 'normalized-sheet',
+      sampleBlockId: 'normalized-block', sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'normalized-consumption-key', ownerA)
+
+    const retry = await mockRecordPrepaidConsumption({
+      phone: '13800000000', amount: 10, sheetId: 'normalized-sheet',
+      sampleBlockId: 'normalized-block', sampleIndex: 0, sheetDate: '2026-08-12'
+    }, 'normalized-consumption-key', ownerA)
+
+    expect(retry).toEqual(first)
   })
 
   it('filters and paginates global consumption rows independently from customer detail permission', async () => {

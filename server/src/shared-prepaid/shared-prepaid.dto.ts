@@ -23,6 +23,7 @@ import {
 } from 'class-validator'
 
 import type { CreateRechargePayload } from './shared-prepaid-ledger.service'
+import { normalizePrepaidPhone, normalizePrepaidPhoneSearch } from './shared-prepaid-money'
 
 const BUSINESS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 export const SHARED_PREPAID_ZONED_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i
@@ -48,6 +49,28 @@ function IsMoneyScalar(validationOptions?: ValidationOptions): PropertyDecorator
     validator: {
       validate: (value: unknown) => typeof value === 'string' || typeof value === 'number',
       defaultMessage: () => '金额必须为数字或数字文本'
+    }
+  }, validationOptions)
+}
+
+function IsSharedPrepaidPhone(
+  search: boolean,
+  validationOptions?: ValidationOptions
+): PropertyDecorator {
+  return ValidateBy({
+    name: search ? 'isSharedPrepaidPhoneSearch' : 'isSharedPrepaidPhone',
+    validator: {
+      validate: (value: unknown) => {
+        if (typeof value !== 'string') return false
+        try {
+          if (search) normalizePrepaidPhoneSearch(value)
+          else normalizePrepaidPhone(value)
+          return true
+        } catch {
+          return false
+        }
+      },
+      defaultMessage: () => '会员手机号必须为中国大陆 11 位手机号'
     }
   }, validationOptions)
 }
@@ -138,9 +161,9 @@ export class SharedPrepaidIdempotencyHeadersDto {
 }
 
 export class CreateSharedPrepaidRechargeDto implements CreateRechargePayload {
-  @Transform(({ value }) => trim(value))
   @IsString({ message: '会员手机号必须为文本' })
   @IsNotEmpty({ message: '请填写会员手机号' })
+  @IsSharedPrepaidPhone(false)
   phone!: string
 
   @Transform(({ value }) => trim(value))
@@ -189,9 +212,9 @@ export class SharedPrepaidMemberQueryDto {
   @Max(100, { message: '每页最多 100 条' })
   pageSize?: number
 
-  @Transform(({ value }) => trim(value))
   @IsOptional()
   @IsString({ message: '手机号筛选必须为文本' })
+  @IsSharedPrepaidPhone(true)
   phone?: string
 }
 

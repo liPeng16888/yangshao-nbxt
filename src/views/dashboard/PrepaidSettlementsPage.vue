@@ -34,6 +34,13 @@
       :title="mutationError"
     />
     <el-alert
+      v-if="payableFilterError"
+      data-testid="settlement-payable-filter-error"
+      type="error"
+      :closable="false"
+      :title="payableFilterError"
+    />
+    <el-alert
       v-if="store.errorsByPage.settlements"
       type="error"
       :closable="false"
@@ -162,6 +169,7 @@ import type {
   PrepaidPayableStatus,
   PrepaidSettlementPayableDirection,
   PrepaidSettlementPayableListRow,
+  PrepaidSettlementPayableQuery,
   PrepaidSettlementQuery,
   PrepaidSettlementStatus
 } from '@/types/sharedPrepaid'
@@ -170,6 +178,7 @@ import {
   prepaidErrorMessage,
   prepaidFormatElements,
   prepaidIsConflict,
+  prepaidNormalizePhoneSearch,
   prepaidPreciseDateTime
 } from '@/utils/sharedPrepaidPresentation'
 
@@ -180,6 +189,7 @@ const settlementPageSize = 20
 const store = useSharedPrepaidStore()
 const auth = useAuthStore()
 const mutationError = ref('')
+const payableFilterError = ref('')
 const detailOpen = ref(false)
 const activeCounterpartyId = ref('')
 const payableFilters = reactive<{
@@ -291,10 +301,11 @@ const GrossDirectionTable = defineComponent({
 onMounted(() => void loadPageData())
 
 function payableQuery(page = 1) {
+  const phone = prepaidNormalizePhoneSearch(payableFilters.phone)
   return {
     page,
     pageSize: payablePageSize,
-    ...(payableFilters.phone.trim() ? { phone: payableFilters.phone.trim() } : {}),
+    ...(phone ? { phone } : {}),
     ...(payableFilters.direction ? { direction: payableFilters.direction } : {}),
     ...(payableFilters.status ? { status: payableFilters.status } : {}),
     ...(payableFilters.startDate ? { startDate: payableFilters.startDate } : {}),
@@ -313,7 +324,15 @@ function settlementQuery(page = 1): PrepaidSettlementQuery {
 }
 
 async function loadPayables(page = 1) {
-  try { await store.loadSettlementPayables(payableQuery(page)) } catch { /* persistent store error */ }
+  let query: PrepaidSettlementPayableQuery
+  try {
+    query = payableQuery(page)
+    payableFilterError.value = ''
+  } catch (error) {
+    payableFilterError.value = prepaidErrorMessage(error, '会员手机号格式错误')
+    return
+  }
+  try { await store.loadSettlementPayables(query) } catch { /* persistent store error */ }
 }
 
 async function loadSettlements(page = 1) {

@@ -573,6 +573,24 @@ describe('shared prepaid realtime refresh', () => {
     expect(crypto.randomUUID).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    '\u00a013800000000',
+    '138\u200300000000',
+    '13800000000\u00a0'
+  ])('validates a phone before preparing its mutation fingerprint or key %j', async (phone) => {
+    const randomUUID = vi.spyOn(crypto, 'randomUUID')
+    const store = useSharedPrepaidStore()
+
+    await expect(store.createRecharge({
+      phone, rechargeDate: '2026-08-12', paidAmount: 1000,
+      giftAmount: 100, isOpeningBalance: false, remark: ''
+    })).rejects.toThrow('会员手机号必须为中国大陆 11 位手机号')
+
+    expect(apiMocks.createPrepaidRecharge).not.toHaveBeenCalled()
+    expect(randomUUID).not.toHaveBeenCalled()
+    expect(store.pendingIdempotencyKeys.createRecharge).toBeUndefined()
+  })
+
   it('scopes every retained mutation identity and in-flight promise to the authenticated account', async () => {
     const store = useSharedPrepaidStore()
     const auth = useAuthStore()

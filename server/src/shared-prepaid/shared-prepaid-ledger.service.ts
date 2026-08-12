@@ -1044,7 +1044,7 @@ export class SharedPrepaidLedgerService {
       amount = new Prisma.Decimal(amount).toFixed(2)
     } catch { /* keep the raw value for a stable conflict fingerprint */ }
     const rawPhone = String(inputs.prepaidMemberPhone ?? '')
-    let phone = rawPhone.trim()
+    let phone = rawPhone
     try {
       phone = normalizePrepaidPhone(rawPhone)
     } catch { /* keep invalid input distinct instead of stripping it into a valid identity */ }

@@ -693,6 +693,17 @@ describe('shared prepaid runtime DTOs', () => {
     expect(recharges).not.toHaveProperty('ignored')
   })
 
+  it.each([
+    '\u00a013800000000',
+    '138\u200300000000',
+    '13800000000\u00a0'
+  ])('rejects Unicode phone whitespace in DTOs without pre-trimming %j', async (phone) => {
+    await expect(transform(rechargePayload({ phone }), CreateSharedPrepaidRechargeDto))
+      .rejects.toBeInstanceOf(BadRequestException)
+    await expect(transform({ phone }, SharedPrepaidMemberQueryDto, 'query'))
+      .rejects.toBeInstanceOf(BadRequestException)
+  })
+
   it('transforms and whitelists the global consumption filters', async () => {
     const consumptions = await transform({
       page: '2',
@@ -860,6 +871,9 @@ describe('SharedPrepaidLedgerService', () => {
 
   it.each([
     ['phone', { phone: '12800000000' }],
+    ['leading NBSP phone', { phone: '\u00a013800000000' }],
+    ['middle em-space phone', { phone: '138\u200300000000' }],
+    ['trailing NBSP phone', { phone: '13800000000\u00a0' }],
     ['recharge date', { rechargeDate: '' }],
     ['calendar date', { rechargeDate: '2026-02-30' }],
     ['required paid amount', { paidAmount: undefined }],
@@ -870,6 +884,29 @@ describe('SharedPrepaidLedgerService', () => {
     await expect(service.createRecharge(mainUser, rechargePayload(overrides), 'idem-invalid'))
       .rejects.toBeInstanceOf(BadRequestException)
     expect(prisma.recharges).toHaveLength(0)
+  })
+
+  it('keeps invalid old phone input exact in the idempotency fingerprint instead of Unicode-trimming it', async () => {
+    await service.createRecharge(mainUser, rechargePayload(), 'raw-old-phone-lot')
+    const memberId = prisma.members[0]!.id
+    const base = consumptionInput({
+      idempotencyKey: 'raw-old-phone-fingerprint',
+      oldInputs: {
+        paymentStatus: '预存款', prepaidMemberId: memberId,
+        prepaidMemberPhone: '\u00a013800000000', price: 10
+      },
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId
+      }
+    })
+
+    await service.syncSampleConsumption(prisma as never, base)
+
+    await expect(service.syncSampleConsumption(prisma as never, {
+      ...base,
+      oldInputs: { ...base.oldInputs, prepaidMemberPhone: '13800000000' }
+    })).rejects.toBeInstanceOf(ConflictException)
   })
 
   it('accepts the exact Decimal(14,2) recharge maximum but rejects paid-plus-gift one cent over it', async () => {

@@ -16,6 +16,15 @@
       <el-alert v-if="realtime.hasPendingRefresh.value" class="customer-alert" type="warning" :closable="false" show-icon title="共享客户数据已更新">
         <template #default><el-button link type="primary" @click="realtime.retryRefresh">立即刷新</el-button></template>
       </el-alert>
+      <el-alert
+        v-if="filterError"
+        data-testid="member-filter-error"
+        class="customer-alert"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="filterError"
+      />
       <el-alert v-if="store.errorsByPage.members" class="customer-alert" type="error" :closable="false" show-icon :title="store.errorsByPage.members">
         <template #default><el-button link type="primary" @click="loadMembers(store.membersPage.page)">重试</el-button></template>
       </el-alert>
@@ -146,6 +155,7 @@ import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import type { PrepaidConsumptionRow, PrepaidLedgerKind } from '@/types/sharedPrepaid'
 import {
   prepaidAccountLabel,
+  prepaidErrorMessage,
   prepaidFormatElements,
   prepaidMoney,
   prepaidNormalizePhoneSearch,
@@ -157,6 +167,7 @@ defineOptions({ name: 'PrepaidCustomersPage' })
 const pageSize = 20
 const store = useSharedPrepaidStore()
 const phoneFilter = ref('')
+const filterError = ref('')
 
 const realtime = useSharedPrepaidRealtimeRegistration('members', {
   isDirty: () => false,
@@ -169,7 +180,14 @@ const realtime = useSharedPrepaidRealtimeRegistration('members', {
 onMounted(() => void loadMembers())
 
 async function loadMembers(page = 1) {
-  const phone = prepaidNormalizePhoneSearch(phoneFilter.value)
+  let phone: string
+  try {
+    phone = prepaidNormalizePhoneSearch(phoneFilter.value)
+    filterError.value = ''
+  } catch (error) {
+    filterError.value = prepaidErrorMessage(error, '会员手机号格式错误')
+    return
+  }
   try {
     await store.loadMembers({
       page,

@@ -172,6 +172,20 @@ describe('PrepaidSettlementsPage', () => {
       .toContain('历史结算关联仅展示前 100 条')
   })
 
+  it('rejects Unicode whitespace in the payable phone filter without sending a request', async () => {
+    const { wrapper } = mountPage()
+    await flushPromises()
+    expect(apiMocks.getPrepaidSettlementPayables).toHaveBeenCalledTimes(1)
+
+    await wrapper.get('[aria-label="会员手机号筛选"]').setValue('\u00a0138')
+    await wrapper.find('form.filters').trigger('submit')
+    await flushPromises()
+
+    expect(apiMocks.getPrepaidSettlementPayables).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="settlement-payable-filter-error"]').text())
+      .toContain('会员手机号必须为中国大陆 11 位手机号')
+  })
+
   it('preserves selection and idempotency key on stale-line 409 while refreshing selected availability', async () => {
     const conflict = { response: { status: 409, data: { message: '部分应转款已被占用' } } }
     apiMocks.createPrepaidSettlement.mockRejectedValueOnce(conflict)

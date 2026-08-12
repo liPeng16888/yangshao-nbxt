@@ -10,6 +10,7 @@ import {
   PREPAID_SETTLEMENT_MONEY_MAX,
   exactTransfer,
   normalizePrepaidPhone,
+  normalizePrepaidPhoneSearch,
   roundPayable
 } from './shared-prepaid-money'
 import type { PrepaidLot } from './shared-prepaid.types'
@@ -32,7 +33,8 @@ function lot(overrides: Partial<PrepaidLot> = {}): PrepaidLot {
 describe('normalizePrepaidPhone', () => {
   it('removes separators from a valid mainland China mobile number', () => {
     expect(normalizePrepaidPhone('138-0000 0000')).toBe('13800000000')
-    expect(normalizePrepaidPhone('138\t0000\r\n0000')).toBe('13800000000')
+    expect(normalizePrepaidPhone('138\t0000\r\n\v\f0000')).toBe('13800000000')
+    expect(normalizePrepaidPhoneSearch(' 138-00\t')).toBe('13800')
   })
 
   it.each([
@@ -45,6 +47,22 @@ describe('normalizePrepaidPhone', () => {
   ])('rejects invalid or unapproved phone characters in %s instead of stripping them', (value) => {
     expect(() => normalizePrepaidPhone(value)).toThrow('会员手机号必须为中国大陆 11 位手机号')
   })
+
+  it.each([
+    '\u00a013800000000',
+    '138\u200300000000',
+    '13800000000\u00a0'
+  ])('rejects Unicode whitespace at every position without pre-trimming %j', (value) => {
+    expect(() => normalizePrepaidPhone(value)).toThrow('会员手机号必须为中国大陆 11 位手机号')
+  })
+
+  it.each(['\u00a0138', '1\u20038', '138\u00a0'])(
+    'rejects Unicode whitespace in phone search input without pre-trimming %j',
+    (value) => {
+      expect(() => normalizePrepaidPhoneSearch(value))
+        .toThrow('会员手机号必须为中国大陆 11 位手机号')
+    }
+  )
 })
 
 describe('prepaid money rules', () => {

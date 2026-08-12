@@ -34,6 +34,7 @@ import type {
   PrepaidSettlementRow,
   PrepaidSettlementSummaryRow
 } from '@/types/sharedPrepaid'
+import { prepaidNormalizePhone } from '@/utils/sharedPrepaidPresentation'
 
 export interface SharedPrepaidRealtimeRegistration {
   isDirty: () => boolean
@@ -92,11 +93,6 @@ function canonicalMoney(value: string | number) {
   const fraction = (match[3] || '').replace(/0+$/, '')
   const unsigned = fraction ? `${whole}.${fraction}` : whole
   return match[1] === '-' && unsigned !== '0' ? `-${unsigned}` : unsigned
-}
-
-function canonicalPhone(value: string) {
-  const trimmed = value.trim()
-  return /^[\d\s-]+$/.test(trimmed) ? trimmed.replace(/[\s-]/g, '') : trimmed
 }
 
 function canonicalDateTime(value: string) {
@@ -536,7 +532,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     payload: CreatePrepaidRechargePayload = rechargeDraft.value,
     idempotencyKey?: string
   ) {
-    const requestPayload = { ...payload }
+    const requestPayload = { ...payload, phone: prepaidNormalizePhone(payload.phone) }
     return mutate('recharges', 'createRecharge', idempotencyKey, (key) => (
       prepaidApi.createPrepaidRecharge(requestPayload, key)
     ), (_result, isLatestInvocation) => {
@@ -545,7 +541,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
         setPageDirty('recharges', false)
       }
     }, canonicalJson({
-      phone: canonicalPhone(requestPayload.phone),
+      phone: requestPayload.phone,
       rechargeDate: requestPayload.rechargeDate.trim(),
       paidAmount: canonicalMoney(requestPayload.paidAmount),
       giftAmount: canonicalMoney(requestPayload.giftAmount),
