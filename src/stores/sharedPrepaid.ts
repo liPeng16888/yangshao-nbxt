@@ -103,6 +103,7 @@ function canonicalDateTime(value: string) {
 export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const authStore = useAuthStore()
   let mutationSessionVersion = 0
+  let readSessionEpoch = 0
   const loadingCounts = reactive<Record<SharedPrepaidPage, number>>({
     recharges: 0,
     members: 0,
@@ -191,16 +192,50 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     }
   }
 
-  async function runPage<T>(page: SharedPrepaidPage, action: () => Promise<T>): Promise<T> {
+  function clearAccountDerivedState() {
+    membersPage.value = emptyPage()
+    rechargesPage.value = emptyPage()
+    selectedMember.value = null
+    consumptionsPage.value = emptyPage()
+    consumptionFilterOptions.value = { sourceOwners: [], consumingOwners: [] }
+    consumptions.value = []
+    payables.value = []
+    settlementPayablesPage.value = emptyPage()
+    settlementPreview.value = null
+    settlements.value = []
+    settlementsPage.value = emptyPage()
+    selectedSettlement.value = null
+    rechargeDraft.value = emptyRechargeDraft()
+    settlementSelection.value = []
+    for (const id of Object.keys(selectedSettlementPayablesById)) {
+      delete selectedSettlementPayablesById[id]
+    }
+    for (const id of Object.keys(settlementPaymentDrafts)) delete settlementPaymentDrafts[id]
+    settlementDirtyState.selection = false
+    settlementDirtyState.payment = false
+    settlementDirtyState.manual = false
+    for (const page of Object.keys(dirtyByPage) as SharedPrepaidPage[]) dirtyByPage[page] = false
+  }
+
+  async function runPage<T>(
+    page: SharedPrepaidPage,
+    action: () => Promise<T>,
+    apply?: (result: T) => void
+  ): Promise<T> {
+    const sessionEpoch = readSessionEpoch
     loadingCounts[page] += 1
     errorsByPage[page] = ''
     try {
-      return await action()
+      const result = await action()
+      if (readSessionEpoch === sessionEpoch) apply?.(result)
+      return result
     } catch (error) {
-      errorsByPage[page] = error instanceof Error ? error.message : '操作失败'
+      if (readSessionEpoch === sessionEpoch) {
+        errorsByPage[page] = error instanceof Error ? error.message : '操作失败'
+      }
       throw error
     } finally {
-      loadingCounts[page] -= 1
+      if (readSessionEpoch === sessionEpoch) loadingCounts[page] -= 1
     }
   }
 
@@ -210,21 +245,22 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     action: () => Promise<T>,
     apply: (result: T) => void
   ): Promise<T> {
+    const sessionEpoch = readSessionEpoch
     const generation = (loadGenerations.get(resource) ?? 0) + 1
     loadGenerations.set(resource, generation)
     loadingCounts[page] += 1
     errorsByPage[page] = ''
     try {
       const result = await action()
-      if (loadGenerations.get(resource) === generation) apply(result)
+      if (readSessionEpoch === sessionEpoch && loadGenerations.get(resource) === generation) apply(result)
       return result
     } catch (error) {
-      if (loadGenerations.get(resource) === generation) {
+      if (readSessionEpoch === sessionEpoch && loadGenerations.get(resource) === generation) {
         errorsByPage[page] = error instanceof Error ? error.message : '操作失败'
       }
       throw error
     } finally {
-      loadingCounts[page] -= 1
+      if (readSessionEpoch === sessionEpoch) loadingCounts[page] -= 1
     }
   }
 
@@ -385,30 +421,30 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     if (!ids.length) return
     const chunks: string[][] = []
     for (let index = 0; index < ids.length; index += 100) chunks.push(ids.slice(index, index + 100))
-    const results = await runPage('settlements', () => Promise.all(chunks.map((payableIds) => (
+    return runPage('settlements', () => Promise.all(chunks.map((payableIds) => (
       prepaidApi.getPrepaidSettlementPayables({
         page: 1,
         pageSize: payableIds.length,
         payableIds
       })
-    ))))
-    const updates = new Map(results.flatMap((result) => result.items).map((row) => [row.id, row]))
-    const selectedIds = new Set(ids)
-    settlementPayablesPage.value = {
-      ...settlementPayablesPage.value,
-      items: settlementPayablesPage.value.items.map((row) => (
-        selectedIds.has(row.id) ? updates.get(row.id) ?? { ...row, eligible: false } : row
-      ))
-    }
-    for (const id of ids) {
-      const update = updates.get(id)
-      if (update) selectedSettlementPayablesById[id] = update
-      else if (selectedSettlementPayablesById[id]) {
-        selectedSettlementPayablesById[id] = { ...selectedSettlementPayablesById[id], eligible: false }
+    ))), (results) => {
+      const updates = new Map(results.flatMap((result) => result.items).map((row) => [row.id, row]))
+      const selectedIds = new Set(ids)
+      settlementPayablesPage.value = {
+        ...settlementPayablesPage.value,
+        items: settlementPayablesPage.value.items.map((row) => (
+          selectedIds.has(row.id) ? updates.get(row.id) ?? { ...row, eligible: false } : row
+        ))
       }
-    }
-    settlementPreview.value = null
-    return results
+      for (const id of ids) {
+        const update = updates.get(id)
+        if (update) selectedSettlementPayablesById[id] = update
+        else if (selectedSettlementPayablesById[id]) {
+          selectedSettlementPayablesById[id] = { ...selectedSettlementPayablesById[id], eligible: false }
+        }
+      }
+      settlementPreview.value = null
+    })
   }
 
   async function loadSettlements(query: PrepaidSettlementQuery = {}) {
@@ -486,7 +522,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
         }
         throw error
       }).finally(() => {
-        loadingCounts[page] -= 1
+        if (currentMutationScope() === mutationScope) loadingCounts[page] -= 1
       })
     })
     const queueTail = execution.then(() => undefined, () => undefined)
@@ -658,6 +694,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   }
 
   async function refreshModule(module: SharedPrepaidRealtimeModule): Promise<void> {
+    const sessionEpoch = readSessionEpoch
     const registration = registrations.get(module)
     if (!registration) return
     if (registration.isDirty()) {
@@ -673,6 +710,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     try {
       // Coalesce synchronous bursts and re-check draft state immediately before starting I/O.
       await Promise.resolve()
+      if (readSessionEpoch !== sessionEpoch) return
       if (registrations.get(module) !== registration) return
       if (registration.isDirty()) {
         markRefreshPrompt(module)
@@ -680,12 +718,13 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
       }
       try {
         await registration.refresh()
-        clearRefreshPrompt(module)
+        if (readSessionEpoch === sessionEpoch) clearRefreshPrompt(module)
       } catch {
         // The invalidation remains pending and the page can call acknowledgeAndRefresh to retry.
-        markRefreshPrompt(module, true)
+        if (readSessionEpoch === sessionEpoch) markRefreshPrompt(module, true)
       }
     } finally {
+      if (readSessionEpoch !== sessionEpoch) return
       refreshing.delete(module)
       if (trailingRefresh.delete(module)) void refreshModule(module)
     }
@@ -791,7 +830,14 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     authSessionSignature,
     () => {
       mutationSessionVersion += 1
+      readSessionEpoch += 1
+      loadGenerations.clear()
+      for (const page of Object.keys(loadingCounts) as SharedPrepaidPage[]) {
+        loadingCounts[page] = 0
+        errorsByPage[page] = ''
+      }
       clearPreparedMutationIdentities()
+      clearAccountDerivedState()
       disconnectRealtime()
       realtimeAuthTerminal.value = false
       if (canUseRealtime()) void connectRealtime()

@@ -335,6 +335,36 @@ describe('shared prepaid realtime refresh', () => {
     expect(store.refreshPromptModules).not.toContain('consumptions')
   })
 
+  it('does not surface a delayed account-A realtime refresh failure to account B', async () => {
+    const accountARefresh = deferred<void>()
+    const refresh = vi.fn()
+      .mockReturnValueOnce(accountARefresh.promise)
+      .mockResolvedValueOnce(undefined)
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+    store.registerModule('members', { isDirty: () => false, refresh })
+    const event = {
+      type: 'change' as const, module: 'members' as const, entityId: 'member-1', operation: 'update' as const,
+      changedById: 'front-2', updatedAt: '2026-08-12T08:00:00.000Z'
+    }
+
+    const delayed = store.handleRealtimeEvent(event)
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+    auth.token = 'account-b-token'
+    auth.user = {
+      id: 'account-b', account: 'account-b', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+    await store.handleRealtimeEvent(event)
+    expect(refresh).toHaveBeenCalledTimes(2)
+
+    accountARefresh.reject(new Error('account A realtime failed'))
+    await delayed
+
+    expect(store.refreshPromptModules).toEqual([])
+  })
+
   it.each(['recharges', 'settlements'] as const)(
     'keeps a dirty %s draft and exposes a visible refresh prompt',
     async (module) => {
@@ -729,6 +759,36 @@ describe('shared prepaid realtime refresh', () => {
     }
   })
 
+  it('does not let an old-account mutation completion decrement the new account loading state', async () => {
+    const accountARequest = deferred<PrepaidSettlementRow>()
+    const accountBRequest = deferred<PrepaidSettlementRow>()
+    apiMocks.confirmPrepaidSettlement
+      .mockReturnValueOnce(accountARequest.promise)
+      .mockReturnValueOnce(accountBRequest.promise)
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+
+    const oldMutation = store.confirmSettlement('shared-settlement')
+    await vi.waitFor(() => expect(apiMocks.confirmPrepaidSettlement).toHaveBeenCalledTimes(1))
+    auth.token = 'account-b-token'
+    auth.user = {
+      id: 'account-b', account: 'account-b', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+    const newMutation = store.confirmSettlement('shared-settlement')
+    await vi.waitFor(() => expect(apiMocks.confirmPrepaidSettlement).toHaveBeenCalledTimes(2))
+    expect(store.loadingByPage.settlements).toBe(true)
+
+    accountARequest.resolve(settlementRowFixture('account-a-result'))
+    await oldMutation
+    expect(store.loadingByPage.settlements).toBe(true)
+
+    accountBRequest.resolve(settlementRowFixture('account-b-result'))
+    await newMutation
+    expect(store.loadingByPage.settlements).toBe(false)
+  })
+
   it('loads independently paginated settlement reads and refreshes only selected payable availability', async () => {
     const first = {
       items: [
@@ -1009,6 +1069,166 @@ describe('shared prepaid realtime refresh', () => {
     await oldRequest
 
     expect(store.rechargesPage).toMatchObject({ items: [{ id: 'new' }], page: 2 })
+  })
+
+  it('does not apply a delayed account-A page after account B logs in', async () => {
+    const accountARead = deferred<PrepaidPage<PrepaidRechargeRow>>()
+    apiMocks.getPrepaidRecharges.mockReturnValueOnce(accountARead.promise)
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+
+    const delayed = store.loadRecharges({ phone: '13800000000' })
+    auth.token = 'account-b-token'
+    auth.user = {
+      id: 'account-b', account: 'account-b', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+
+    accountARead.resolve(rechargePageFixture('account-a-recharge', 1))
+    await delayed
+
+    expect(store.rechargesPage).toEqual({ items: [], total: 0, page: 1, pageSize: 20 })
+  })
+
+  it('does not expose a delayed account-A read error or loading state to account B', async () => {
+    const accountARead = deferred<PrepaidPage<PrepaidRechargeRow>>()
+    apiMocks.getPrepaidRecharges.mockReturnValueOnce(accountARead.promise)
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+
+    const delayed = store.loadRecharges()
+    expect(store.loadingByPage.recharges).toBe(true)
+    auth.token = 'account-b-token'
+    auth.user = {
+      id: 'account-b', account: 'account-b', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+    expect(store.loadingByPage.recharges).toBe(false)
+
+    const staleFailure = expect(delayed).rejects.toThrow('account A read failed')
+    accountARead.reject(new Error('account A read failed'))
+    await staleFailure
+
+    expect(store.errorsByPage.recharges).toBe('')
+    expect(store.loadingByPage.recharges).toBe(false)
+  })
+
+  it('clears every account-derived page, detail, preview, selection, and draft on auth change', () => {
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+    const selectedPayable = settlementPayableFixture('account-a-payable', 'OUTGOING')
+
+    store.membersPage = { items: [{ id: 'account-a-member' }] as never, total: 1, page: 2, pageSize: 20 }
+    store.rechargesPage = rechargePageFixture('account-a-recharge', 2)
+    store.selectedMember = { id: 'account-a-member' } as never
+    store.consumptionsPage = { items: [{ id: 'account-a-consumption' }] as never, total: 1, page: 2, pageSize: 20 }
+    store.consumptionFilterOptions = {
+      sourceOwners: [{ id: 'account-a', account: 'a', label: 'A' }], consumingOwners: []
+    }
+    store.consumptions = [{ id: 'account-a-consumption' }] as never
+    store.payables = [{ id: 'account-a-payable' }] as never
+    store.settlementPayablesPage = { items: [selectedPayable], total: 1, page: 2, pageSize: 20 }
+    store.settlements = [settlementRowFixture('account-a-settlement')]
+    store.settlementsPage = {
+      items: [settlementRowFixture('account-a-settlement')] as never, total: 1, page: 2, pageSize: 20
+    }
+    store.selectedSettlement = settlementRowFixture('account-a-settlement') as never
+    store.setRechargeDraft({
+      phone: '13800000000', rechargeDate: '2026-08-12', paidAmount: 100,
+      giftAmount: 0, isOpeningBalance: false, remark: '账号 A 充值草稿'
+    })
+    store.setSettlementSelection([selectedPayable.id])
+    store.settlementPreview = {
+      accountAId: 'front-1', accountBId: 'front-2', aToBAmount: 50, bToAAmount: 0,
+      netAmount: 50, payerFrontendUserId: 'front-1', receiverFrontendUserId: 'front-2', lines: []
+    }
+    store.setSettlementPaymentDraftFor('account-a-settlement', {
+      actualTransferredAt: '2026-08-12T16:00:00+08:00', remark: '账号 A 付款草稿'
+    })
+
+    auth.token = 'account-b-token'
+    auth.user = {
+      id: 'account-b', account: 'account-b', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+
+    expect(store.membersPage.items).toEqual([])
+    expect(store.rechargesPage.items).toEqual([])
+    expect(store.selectedMember).toBeNull()
+    expect(store.consumptionsPage.items).toEqual([])
+    expect(store.consumptionFilterOptions).toEqual({ sourceOwners: [], consumingOwners: [] })
+    expect(store.consumptions).toEqual([])
+    expect(store.payables).toEqual([])
+    expect(store.settlementPayablesPage.items).toEqual([])
+    expect(store.settlements).toEqual([])
+    expect(store.settlementsPage.items).toEqual([])
+    expect(store.selectedSettlement).toBeNull()
+    expect(store.settlementPreview).toBeNull()
+    expect(store.settlementSelection).toEqual([])
+    expect(store.selectedSettlementPayableRows).toEqual([])
+    expect(store.rechargeDraft).toEqual({
+      phone: '', rechargeDate: '', paidAmount: '', giftAmount: '', isOpeningBalance: false, remark: ''
+    })
+    expect(store.getSettlementPaymentDraft('account-a-settlement')).toEqual({ actualTransferredAt: '' })
+    expect(store.dirtyByPage).toEqual({ recharges: false, members: false, consumptions: false, settlements: false })
+  })
+
+  it('does not apply an account-A settlement preview after account B logs in', async () => {
+    const accountAPreview = deferred<never>()
+    apiMocks.previewPrepaidSettlement.mockReturnValueOnce(accountAPreview.promise)
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+    store.setSettlementSelection(['account-a-payable'])
+
+    const delayed = store.previewSettlement()
+    auth.token = 'account-b-token'
+    auth.user = {
+      id: 'account-b', account: 'account-b', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+    accountAPreview.resolve({
+      accountAId: 'front-1', accountBId: 'front-2', aToBAmount: 50, bToAAmount: 0,
+      netAmount: 50, payerFrontendUserId: 'front-1', receiverFrontendUserId: 'front-2', lines: []
+    } as never)
+    await delayed
+
+    expect(store.settlementPreview).toBeNull()
+    expect(store.settlementSelection).toEqual([])
+  })
+
+  it('does not let an account-A selected-payable refresh overwrite the same ID for account B', async () => {
+    const accountARow = settlementPayableFixture('shared-payable', 'OUTGOING')
+    const staleAccountARow = settlementPayableFixture('shared-payable', 'OUTGOING', false)
+    const accountBRow = settlementPayableFixture('shared-payable', 'INCOMING', true)
+    const accountARefresh = deferred<PrepaidPage<PrepaidSettlementPayableListRow>>()
+    apiMocks.getPrepaidSettlementPayables
+      .mockResolvedValueOnce({ items: [accountARow], total: 1, page: 1, pageSize: 20 })
+      .mockReturnValueOnce(accountARefresh.promise)
+      .mockResolvedValueOnce({ items: [accountBRow], total: 1, page: 1, pageSize: 20 })
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+
+    await store.loadSettlementPayables()
+    store.setSettlementSelection(['shared-payable'])
+    const delayed = store.refreshSelectedSettlementPayables(['shared-payable'])
+    auth.token = 'account-b-token'
+    auth.user = {
+      id: 'account-b', account: 'account-b', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+    await store.loadSettlementPayables()
+    store.setSettlementSelection(['shared-payable'])
+
+    accountARefresh.resolve({ items: [staleAccountARow], total: 1, page: 1, pageSize: 1 })
+    await delayed
+
+    expect(store.settlementPayablesPage.items).toEqual([accountBRow])
+    expect(store.selectedSettlementPayableRows).toEqual([accountBRow])
   })
 
   it('ignores an older recharge error after a newer request succeeds', async () => {
