@@ -105,6 +105,8 @@ let sequence = 1
 let clockTick = 0
 
 const MOCK_EPOCH = Date.parse('2026-08-12T08:00:00.000Z')
+const PREPAID_PHONE_INPUT_PATTERN = /^[0-9\t\n\v\f\r -]*$/
+const PREPAID_PHONE_SEPARATOR_PATTERN = /[\t\n\v\f\r -]/g
 
 export function resetSharedPrepaidMock() {
   accounts.clear()
@@ -120,15 +122,25 @@ export function resetSharedPrepaidMock() {
 }
 
 export function normalizeSharedPrepaidPhone(value: unknown) {
-  const phone = String(value ?? '').replace(/\D/g, '')
+  const input = String(value ?? '')
+  if (!PREPAID_PHONE_INPUT_PATTERN.test(input)) throw mockError(400, '会员手机号格式错误')
+  const phone = input.replace(PREPAID_PHONE_SEPARATOR_PATTERN, '')
   if (!/^1[3-9]\d{9}$/.test(phone)) throw mockError(400, '会员手机号格式错误')
+  return phone
+}
+
+function normalizeSharedPrepaidPhoneSearch(value: unknown) {
+  const input = String(value ?? '')
+  if (!PREPAID_PHONE_INPUT_PATTERN.test(input)) throw mockError(400, '会员手机号格式错误')
+  const phone = input.replace(PREPAID_PHONE_SEPARATOR_PATTERN, '')
+  if (phone && !/^\d{1,11}$/.test(phone)) throw mockError(400, '会员手机号格式错误')
   return phone
 }
 
 export async function mockGetPrepaidMembers(
   query: PrepaidMemberQuery = {}
 ): Promise<PrepaidPage<PrepaidMemberRow>> {
-  const phone = String(query.phone ?? '').replace(/\D/g, '')
+  const phone = normalizeSharedPrepaidPhoneSearch(query.phone)
   const rows = members
     .filter((member) => !phone || member.phone.includes(phone))
     .sort((left, right) => left.phone.localeCompare(right.phone))
@@ -192,7 +204,7 @@ export async function mockGetPrepaidMemberDetail(
 export async function mockGetPrepaidRecharges(
   query: PrepaidRechargeQuery = {}
 ): Promise<PrepaidPage<PrepaidRechargeRow>> {
-  const phone = String(query.phone ?? '').replace(/\D/g, '')
+  const phone = normalizeSharedPrepaidPhoneSearch(query.phone)
   const rows = recharges
     .filter((row) => (
       (!phone || row.phone.includes(phone)) &&
@@ -209,7 +221,7 @@ export async function mockGetPrepaidRecharges(
 export async function mockGetPrepaidConsumptions(
   query: PrepaidConsumptionQuery = {}
 ): Promise<PrepaidPage<PrepaidConsumptionListRow>> {
-  const phone = String(query.phone ?? '').replace(/\D/g, '')
+  const phone = normalizeSharedPrepaidPhoneSearch(query.phone)
   const rows = consumptions
     .filter((row) => (
       (!phone || row.phoneSnapshot.includes(phone)) &&
@@ -591,7 +603,7 @@ export async function mockGetPrepaidSettlementPayables(
   const ownerId = identity.ownerFrontendUserId
   if (query.counterpartyFrontendUserId === ownerId) return paginate([], query.page, query.pageSize)
   const ids = query.payableIds?.length ? new Set(query.payableIds) : null
-  const phone = String(query.phone ?? '').replace(/\D/g, '')
+  const phone = normalizeSharedPrepaidPhoneSearch(query.phone)
   const rows = payables
     .filter((row) => row.sourceOwnerId === ownerId || row.consumerOwnerId === ownerId)
     .filter((row) => !ids || ids.has(row.id))

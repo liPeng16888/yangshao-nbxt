@@ -168,7 +168,7 @@ import {
   prepaidIsConflict,
   prepaidIsMessageBoxDismissed,
   prepaidMoney,
-  prepaidNormalizePhone,
+  prepaidNormalizePhoneSearch,
   prepaidPreciseDateTime
 } from '@/utils/sharedPrepaidPresentation'
 
@@ -198,10 +198,11 @@ onMounted(() => void loadPageData())
 
 function consumptionQuery(page = 1): PrepaidConsumptionQuery {
   const [startDate, endDate] = filters.dateRange
+  const phone = prepaidNormalizePhoneSearch(filters.phone)
   return {
     page,
     pageSize,
-    ...(prepaidNormalizePhone(filters.phone) ? { phone: prepaidNormalizePhone(filters.phone) } : {}),
+    ...(phone ? { phone } : {}),
     ...(filters.sourceOwnerId.trim() ? { sourceOwnerId: filters.sourceOwnerId.trim() } : {}),
     ...(filters.consumingFrontendUserId.trim() ? { consumingFrontendUserId: filters.consumingFrontendUserId.trim() } : {}),
     ...(startDate ? { startDate } : {}),

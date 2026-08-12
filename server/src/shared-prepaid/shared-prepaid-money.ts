@@ -9,6 +9,8 @@ import type {
 } from './shared-prepaid.types'
 
 const INVALID_PHONE_MESSAGE = '会员手机号必须为中国大陆 11 位手机号'
+const PREPAID_PHONE_INPUT_PATTERN = /^[0-9\t\n\v\f\r -]*$/
+const PREPAID_PHONE_SEPARATOR_PATTERN = /[\t\n\v\f\r -]/g
 
 export const PREPAID_MONEY_MAX = new Prisma.Decimal('999999999999.99')
 export const PREPAID_SETTLEMENT_MONEY_MAX = new Prisma.Decimal('9999999999999.9')
@@ -84,8 +86,18 @@ export function assertPrepaidExactMoney(value: Prisma.Decimal, label: string): P
 }
 
 export function normalizePrepaidPhone(value: unknown): string {
-  const phone = String(value ?? '').replace(/\D/g, '')
+  const input = String(value ?? '')
+  if (!PREPAID_PHONE_INPUT_PATTERN.test(input)) throw new Error(INVALID_PHONE_MESSAGE)
+  const phone = input.replace(PREPAID_PHONE_SEPARATOR_PATTERN, '')
   if (!/^1[3-9]\d{9}$/.test(phone)) throw new Error(INVALID_PHONE_MESSAGE)
+  return phone
+}
+
+export function normalizePrepaidPhoneSearch(value: unknown): string {
+  const input = String(value ?? '')
+  if (!PREPAID_PHONE_INPUT_PATTERN.test(input)) throw new Error(INVALID_PHONE_MESSAGE)
+  const phone = input.replace(PREPAID_PHONE_SEPARATOR_PATTERN, '')
+  if (phone && !/^\d{1,11}$/.test(phone)) throw new Error(INVALID_PHONE_MESSAGE)
   return phone
 }
 

@@ -32,10 +32,18 @@ function lot(overrides: Partial<PrepaidLot> = {}): PrepaidLot {
 describe('normalizePrepaidPhone', () => {
   it('removes separators from a valid mainland China mobile number', () => {
     expect(normalizePrepaidPhone('138-0000 0000')).toBe('13800000000')
+    expect(normalizePrepaidPhone('138\t0000\r\n0000')).toBe('13800000000')
   })
 
-  it('rejects a number that is not a mainland China 11-digit mobile number', () => {
-    expect(() => normalizePrepaidPhone('1380000000')).toThrow('会员手机号必须为中国大陆 11 位手机号')
+  it.each([
+    '1380000000',
+    '138abc00000000',
+    '138(0000)0000',
+    '138.0000.0000',
+    '+86 13800000000',
+    '138_0000_0000'
+  ])('rejects invalid or unapproved phone characters in %s instead of stripping them', (value) => {
+    expect(() => normalizePrepaidPhone(value)).toThrow('会员手机号必须为中国大陆 11 位手机号')
   })
 })
 

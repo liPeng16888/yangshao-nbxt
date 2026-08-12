@@ -148,7 +148,7 @@ import {
   prepaidAccountLabel,
   prepaidFormatElements,
   prepaidMoney,
-  prepaidNormalizePhone,
+  prepaidNormalizePhoneSearch,
   prepaidPreciseDateTime
 } from '@/utils/sharedPrepaidPresentation'
 
@@ -169,11 +169,12 @@ const realtime = useSharedPrepaidRealtimeRegistration('members', {
 onMounted(() => void loadMembers())
 
 async function loadMembers(page = 1) {
+  const phone = prepaidNormalizePhoneSearch(phoneFilter.value)
   try {
     await store.loadMembers({
       page,
       pageSize,
-      ...(prepaidNormalizePhone(phoneFilter.value) ? { phone: prepaidNormalizePhone(phoneFilter.value) } : {})
+      ...(phone ? { phone } : {})
     })
   } catch {
     // Store exposes the persistent error and loading state to the page.

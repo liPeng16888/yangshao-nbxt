@@ -1,4 +1,7 @@
 const BEIJING_UTC_OFFSET_MS = 8 * 60 * 60 * 1000
+const INVALID_PHONE_MESSAGE = '会员手机号必须为中国大陆 11 位手机号'
+const PREPAID_PHONE_INPUT_PATTERN = /^[0-9\t\n\v\f\r -]*$/
+const PREPAID_PHONE_SEPARATOR_PATTERN = /[\t\n\v\f\r -]/g
 
 export interface PrepaidAccountPresentation {
   account?: string | null
@@ -19,7 +22,27 @@ export function prepaidMoney(value: unknown) {
 }
 
 export function prepaidNormalizePhone(value: unknown) {
-  return String(value ?? '').replace(/\D/g, '')
+  const input = String(value ?? '')
+  if (!PREPAID_PHONE_INPUT_PATTERN.test(input)) throw new Error(INVALID_PHONE_MESSAGE)
+  const phone = input.replace(PREPAID_PHONE_SEPARATOR_PATTERN, '')
+  if (!/^1[3-9]\d{9}$/.test(phone)) throw new Error(INVALID_PHONE_MESSAGE)
+  return phone
+}
+
+export function prepaidNormalizePhoneSearch(value: unknown) {
+  const input = String(value ?? '')
+  if (!PREPAID_PHONE_INPUT_PATTERN.test(input)) return input.trim()
+  const phone = input.replace(PREPAID_PHONE_SEPARATOR_PATTERN, '')
+  return /^\d{0,11}$/.test(phone) ? phone : input.trim()
+}
+
+export function prepaidIsValidPhone(value: unknown) {
+  try {
+    prepaidNormalizePhone(value)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function prepaidFormatElements(value: unknown) {

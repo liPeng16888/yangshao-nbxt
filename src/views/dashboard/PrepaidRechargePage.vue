@@ -181,9 +181,11 @@ import {
   prepaidAccountLabel,
   prepaidErrorMessage,
   prepaidIsConflict,
+  prepaidIsValidPhone,
   prepaidIsMessageBoxDismissed,
   prepaidMoney,
   prepaidNormalizePhone,
+  prepaidNormalizePhoneSearch,
   prepaidPreciseDateTime
 } from '@/utils/sharedPrepaidPresentation'
 
@@ -231,14 +233,14 @@ const ownerLabel = computed(() => isMainAccount.value
   : `主账号 ID ${currentOwnerId.value}`)
 const actorLabel = computed(() => prepaidAccountLabel({ username: auth.user?.username, account: auth.user?.account || auth.user?.id }))
 const hasUnsavedInput = computed(() => Boolean(
-  prepaidNormalizePhone(form.phone) || form.paidAmount.trim() || form.giftAmount.trim() || form.remark.trim() ||
+  form.phone.trim() || form.paidAmount.trim() || form.giftAmount.trim() || form.remark.trim() ||
   form.isOpeningBalance || form.rechargeDate !== initialDate
 ))
 
 const rules: FormRules<RechargeForm> = {
   phone: [
     { required: true, message: '请输入会员手机号', trigger: 'change' },
-    { validator: (_rule, value, callback) => /^1[3-9]\d{9}$/.test(prepaidNormalizePhone(value)) ? callback() : callback(new Error('请输入 11 位中国大陆手机号')), trigger: 'change' }
+    { validator: (_rule, value, callback) => prepaidIsValidPhone(value) ? callback() : callback(new Error('请输入 11 位中国大陆手机号')), trigger: 'change' }
   ],
   paidAmount: [
     { required: true, message: '请输入充值金额', trigger: 'change' },
@@ -269,7 +271,7 @@ onMounted(() => void loadHistory())
 async function submitRecharge() {
   mutationError.value = ''
   lastResult.value = null
-  if (!/^1[3-9]\d{9}$/.test(prepaidNormalizePhone(form.phone))) {
+  if (!prepaidIsValidPhone(form.phone)) {
     mutationError.value = '请输入 11 位中国大陆手机号'
     await formRef.value?.validateField('phone').catch(() => undefined)
     return
@@ -313,10 +315,11 @@ function resetForm() {
 
 function rechargeQuery(page = 1): PrepaidRechargeQuery {
   const [startDate, endDate] = filters.dateRange
+  const phone = prepaidNormalizePhoneSearch(filters.phone)
   return {
     page,
     pageSize,
-    ...(prepaidNormalizePhone(filters.phone) ? { phone: prepaidNormalizePhone(filters.phone) } : {}),
+    ...(phone ? { phone } : {}),
     ...(filters.ownerFrontendUserId.trim() ? { ownerFrontendUserId: filters.ownerFrontendUserId.trim() } : {}),
     ...(startDate ? { startDate } : {}),
     ...(endDate ? { endDate } : {}),

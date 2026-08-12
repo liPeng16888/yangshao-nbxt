@@ -138,6 +138,17 @@ describe('SharedPrepaidQueryService public member reads', () => {
       .rejects.toBeInstanceOf(BadRequestException)
     expect(findUnique).not.toHaveBeenCalled()
   })
+
+  it('rejects letters and punctuation in phone filters instead of silently stripping them', async () => {
+    const findMany = vi.fn()
+    const service = new SharedPrepaidQueryService({ sharedPrepaidMember: { findMany } } as never)
+
+    await expect(service.listMembers({ phone: '138abc00000000' }))
+      .rejects.toBeInstanceOf(BadRequestException)
+    await expect(service.listMembers({ phone: '138.0000.0000' }))
+      .rejects.toBeInstanceOf(BadRequestException)
+    expect(findMany).not.toHaveBeenCalled()
+  })
 })
 
 describe('SharedPrepaidQueryService consumption list', () => {

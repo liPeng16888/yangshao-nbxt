@@ -7,6 +7,7 @@ import {
   prepaidIsConflict,
   prepaidMoney,
   prepaidNormalizePhone,
+  prepaidNormalizePhoneSearch,
   prepaidPreciseDateTime
 } from './sharedPrepaidPresentation'
 
@@ -18,8 +19,15 @@ describe('shared prepaid presentation helpers', () => {
       .toBe('主账号 A（owner-a）')
     expect(prepaidMoney('90.9')).toBe('90.90')
     expect(prepaidNormalizePhone('138 0000-0000')).toBe('13800000000')
+    expect(prepaidNormalizePhoneSearch('138-00')).toBe('13800')
     expect(prepaidFormatElements([{ name: '金', value: 1.2 }, '银'])).toBe('金: 1.2、银')
     expect(prepaidPreciseDateTime('2026-08-12T03:04:05.000Z')).toBe('2026-08-12 11:04:05')
+  })
+
+  it('never turns letters or punctuation into a valid phone by stripping them', () => {
+    expect(() => prepaidNormalizePhone('138abc00000000')).toThrow('会员手机号必须为中国大陆 11 位手机号')
+    expect(() => prepaidNormalizePhone('138.0000.0000')).toThrow('会员手机号必须为中国大陆 11 位手机号')
+    expect(prepaidNormalizePhoneSearch('138abc')).toBe('138abc')
   })
 
   it('classifies conflicts and extracts safe actionable server errors', () => {

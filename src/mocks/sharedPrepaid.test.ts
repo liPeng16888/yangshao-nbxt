@@ -71,6 +71,9 @@ describe('shared prepaid focused mock', () => {
   it('uses the same mainland-phone normalization boundary as the server', async () => {
     await expect(mockLookupPrepaidMember('+86 13800000000')).rejects.toThrow('会员手机号格式错误')
     await expect(mockLookupPrepaidMember('12800000000')).rejects.toThrow('会员手机号格式错误')
+    await expect(mockLookupPrepaidMember('138abc00000000')).rejects.toThrow('会员手机号格式错误')
+    await expect(mockLookupPrepaidMember('138.0000.0000')).rejects.toThrow('会员手机号格式错误')
+    await expect(mockGetPrepaidMembers({ phone: '138abc' })).rejects.toThrow('会员手机号格式错误')
   })
 
   it('allocates FIFO and creates 90.9 payable only for the cross-owner paid share', async () => {

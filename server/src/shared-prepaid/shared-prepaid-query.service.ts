@@ -9,7 +9,7 @@ import {
 
 import { PrismaService } from '../prisma/prisma.service'
 import type { CurrentUser } from '../auth/current-user'
-import { normalizePrepaidPhone } from './shared-prepaid-money'
+import { normalizePrepaidPhone, normalizePrepaidPhoneSearch } from './shared-prepaid-money'
 
 export interface SharedPrepaidListQuery {
   page?: number | string
@@ -530,7 +530,7 @@ export class SharedPrepaidQueryService {
 
   async listMembers(query: SharedPrepaidListQuery = {}) {
     const { page, pageSize, skip } = this.pagination(query)
-    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    const phone = this.phoneSearch(query.phone)
     const where: Prisma.SharedPrepaidMemberWhereInput = phone ? { phone: { contains: phone } } : {}
     const [members, total] = await Promise.all([
       this.prisma.sharedPrepaidMember.findMany({
@@ -616,7 +616,7 @@ export class SharedPrepaidQueryService {
 
   async listAdminMembers(allowedFrontendUserIds: string[], query: SharedPrepaidListQuery = {}) {
     const { page, pageSize, skip } = this.pagination(query)
-    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    const phone = this.phoneSearch(query.phone)
     const where: Prisma.SharedPrepaidMemberWhereInput = {
       ...(phone ? { phone: { contains: phone } } : {}),
       OR: this.adminMemberParticipation(allowedFrontendUserIds)
@@ -845,7 +845,7 @@ export class SharedPrepaidQueryService {
       where.status = SharedPrepaidPayableStatus.PENDING
       where.settlementLines = { none: { releasedAt: null } }
     }
-    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    const phone = this.phoneSearch(query.phone)
     if (phone || query.startDate || query.endDate) {
       where.consumption = {
         ...(phone ? { phoneSnapshot: { contains: phone } } : {}),
@@ -1108,8 +1108,16 @@ export class SharedPrepaidQueryService {
     })
   }
 
+  private phoneSearch(value: unknown) {
+    try {
+      return normalizePrepaidPhoneSearch(value)
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '会员手机号格式错误')
+    }
+  }
+
   private rechargeWhere(query: SharedPrepaidRechargeQuery) {
-    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    const phone = this.phoneSearch(query.phone)
     const where: Prisma.SharedPrepaidRechargeWhereInput = {}
     if (phone) where.member = { phone: { contains: phone } }
     if (query.ownerFrontendUserId) where.ownerFrontendUserId = String(query.ownerFrontendUserId).trim()
@@ -1130,7 +1138,7 @@ export class SharedPrepaidQueryService {
     query: SharedPrepaidConsumptionQuery,
     allowedFrontendUserIds?: string[]
   ) {
-    const phone = String(query.phone ?? '').replace(/\D/g, '')
+    const phone = this.phoneSearch(query.phone)
     const sourceOwnerId = String(query.sourceOwnerId ?? '').trim()
     const consumingFrontendUserId = String(query.consumingFrontendUserId ?? '').trim()
     const where: Prisma.SharedPrepaidConsumptionWhereInput = {}
