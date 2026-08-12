@@ -20,6 +20,13 @@ export BASELINE_COUNTS_RESTORE="$BACKUP_DIR/baseline-counts-restore-$CUTOVER_ID.
 export BASELINE_COUNTS_AFTER="$BACKUP_DIR/baseline-counts-after-$CUTOVER_ID.tsv"
 export LEGACY_COUNTS_BEFORE="$BACKUP_DIR/legacy-counts-before-$CUTOVER_ID.tsv"
 export LEGACY_COUNTS_RESTORE="$BACKUP_DIR/legacy-counts-restore-$CUTOVER_ID.tsv"
+export PERMISSIONS_EXPECTED="$BACKUP_DIR/prepaid-permissions-expected-$CUTOVER_ID.csv"
+export PERMISSIONS_RESTORE_PHASE_A="$BACKUP_DIR/prepaid-permissions-restore-phase-a-$CUTOVER_ID.csv"
+export PERMISSIONS_SOURCE_PHASE_A="$BACKUP_DIR/prepaid-permissions-source-phase-a-$CUTOVER_ID.csv"
+export PERMISSIONS_AFTER="$BACKUP_DIR/prepaid-permissions-after-$CUTOVER_ID.csv"
+export PERMISSION_ISSUES_RESTORE_PHASE_A="$BACKUP_DIR/prepaid-permission-issues-restore-phase-a-$CUTOVER_ID.txt"
+export PERMISSION_ISSUES_SOURCE_PHASE_A="$BACKUP_DIR/prepaid-permission-issues-source-phase-a-$CUTOVER_ID.txt"
+export PERMISSION_ISSUES_AFTER="$BACKUP_DIR/prepaid-permission-issues-after-$CUTOVER_ID.txt"
 export VERIFY_BEFORE="$BACKUP_DIR/shared-prepaid-verify-before-$CUTOVER_ID.json"
 export VERIFY_AFTER="$BACKUP_DIR/shared-prepaid-verify-after-$CUTOVER_ID.json"
 export VERIFY_RESTORE_PHASE_A="$BACKUP_DIR/shared-prepaid-verify-restore-phase-a-$CUTOVER_ID.json"
@@ -31,14 +38,13 @@ export PHASE_B_REVISION='<approved immutable phase-B revision>'
 
 Use a directory owned by the deployment user with mode `0700`; backup and verifier files may contain business identifiers and counts. Check free space before starting. The examples assume the repository is already deployed at the intended revision and `pnpm install --frozen-lockfile` has completed.
 
-The baseline-count query used at every pre/post-cutover and rollback checkpoint contains only tables guaranteed to exist before Phase A. In particular, it intentionally excludes `LabSampleSaveRequest` and every shared-prepaid table created by Phase A:
+The baseline-count query used at every pre/post-cutover and rollback checkpoint contains only tables guaranteed to exist before Phase A and whose row counts Phase A does not change. It intentionally excludes `FrontendSubAccountPermission`, which Phase A transforms, as well as `LabSampleSaveRequest` and every shared-prepaid table created by Phase A:
 
 ```sql
 SELECT table_name, row_count
 FROM (
   VALUES
     ('User', (SELECT COUNT(*)::bigint FROM "User")),
-    ('FrontendSubAccountPermission', (SELECT COUNT(*)::bigint FROM "FrontendSubAccountPermission")),
     ('AccessGuardGroup', (SELECT COUNT(*)::bigint FROM "AccessGuardGroup")),
     ('AccessGuardGroupFeature', (SELECT COUNT(*)::bigint FROM "AccessGuardGroupFeature")),
     ('Customer', (SELECT COUNT(*)::bigint FROM "Customer")),
@@ -94,7 +100,62 @@ FROM (
 ORDER BY table_name;
 ```
 
-Use both files unchanged at every applicable checkpoint and remove them after the cutover. The shared verifier is a Phase-A schema check and must never be used as a substitute for these baseline queries on a restored pre-Phase-A database.
+Use both files unchanged at every applicable checkpoint. The shared verifier is a Phase-A schema check and must never be used as a substitute for these baseline queries on a restored pre-Phase-A database.
+
+Save the next query as `/tmp/yangshao-permission-expected.sql`. It derives the complete expected post-Phase-A permission set from the pre-Phase-A assignments, preserving every unaffected permission. Per `20260811230000_add_shared_prepaid_ledger`, `FINANCE_PREPAID_ADD` maps to `PREPAID_RECHARGE`, while `FINANCE_PREPAID_CUSTOMERS` maps to both `PREPAID_CUSTOMERS` and `PREPAID_CONSUMPTIONS`. No retired permission maps to `PREPAID_SETTLEMENTS`, so that new permission must have no migration-created row.
+
+```sql
+SELECT "subAccountId", permission
+FROM (
+  SELECT "subAccountId", "permission"::text AS permission
+  FROM "FrontendSubAccountPermission"
+  WHERE "permission"::text NOT IN ('FINANCE_PREPAID_ADD', 'FINANCE_PREPAID_CUSTOMERS')
+  UNION ALL
+  SELECT "subAccountId", 'PREPAID_RECHARGE'::text AS permission
+  FROM "FrontendSubAccountPermission"
+  WHERE "permission"::text = 'FINANCE_PREPAID_ADD'
+  UNION ALL
+  SELECT "subAccountId", 'PREPAID_CUSTOMERS'::text AS permission
+  FROM "FrontendSubAccountPermission"
+  WHERE "permission"::text = 'FINANCE_PREPAID_CUSTOMERS'
+  UNION ALL
+  SELECT "subAccountId", 'PREPAID_CONSUMPTIONS'::text AS permission
+  FROM "FrontendSubAccountPermission"
+  WHERE "permission"::text = 'FINANCE_PREPAID_CUSTOMERS'
+) expected
+ORDER BY "subAccountId", permission;
+```
+
+Save this post-Phase-A query as `/tmp/yangshao-permission-actual.sql`:
+
+```sql
+SELECT "subAccountId", "permission"::text AS permission
+FROM "FrontendSubAccountPermission"
+ORDER BY "subAccountId", permission;
+```
+
+Save this violation-only query as `/tmp/yangshao-permission-issues.sql`. With `psql -At`, a healthy result is an empty file:
+
+```sql
+SELECT issue
+FROM (
+  SELECT 'retired:' || "subAccountId" || ':' || "permission"::text AS issue
+  FROM "FrontendSubAccountPermission"
+  WHERE "permission"::text IN ('FINANCE_PREPAID_ADD', 'FINANCE_PREPAID_CUSTOMERS')
+  UNION ALL
+  SELECT 'unexpected-settlement:' || "subAccountId" AS issue
+  FROM "FrontendSubAccountPermission"
+  WHERE "permission"::text = 'PREPAID_SETTLEMENTS'
+  UNION ALL
+  SELECT 'duplicate:' || "subAccountId" || ':' || "permission"::text AS issue
+  FROM "FrontendSubAccountPermission"
+  GROUP BY "subAccountId", "permission"
+  HAVING COUNT(*) > 1
+) violations
+ORDER BY issue;
+```
+
+All five protected SQL files and their outputs may contain business identifiers. Keep them under the same restricted handling as the backup and remove the temporary SQL files only after the cutover closes.
 
 ## Cutover procedure
 
@@ -120,7 +181,14 @@ psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-legacy-
 test -s "$LEGACY_COUNTS_BEFORE"
 ```
 
-Gate: stop if any ordinary table is missing or the saved count file is empty.
+Derive and preserve the exact expected post-Phase-A prepaid permission mapping while the retired permissions still exist:
+
+```bash
+psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-permission-expected.sql > "$PERMISSIONS_EXPECTED"
+test -s "$PERMISSIONS_EXPECTED"
+```
+
+Gate: stop if any invariant ordinary table is missing or any saved baseline/expected file is empty. Do not compare the transform-sensitive permission table's total row count to the ordinary baseline.
 
 ### 3. Create a timestamped PostgreSQL backup
 
@@ -176,9 +244,13 @@ First exercise Phase A on the restored temporary database. Run every command fro
 (cd "$PHASE_A_DIR" && DATABASE_URL="$RESTORE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status)
 (cd "$PHASE_A_DIR" && DATABASE_URL="$RESTORE_DATABASE_URL" pnpm --filter yangshao-server prepaid:verify-cutover > "$VERIFY_RESTORE_PHASE_A")
 test -s "$VERIFY_RESTORE_PHASE_A"
+psql "$RESTORE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-permission-actual.sql > "$PERMISSIONS_RESTORE_PHASE_A"
+diff -u "$PERMISSIONS_EXPECTED" "$PERMISSIONS_RESTORE_PHASE_A"
+psql "$RESTORE_DATABASE_URL" -v ON_ERROR_STOP=1 -X -At -f /tmp/yangshao-permission-issues.sql > "$PERMISSION_ISSUES_RESTORE_PHASE_A"
+test ! -s "$PERMISSION_ISSUES_RESTORE_PHASE_A"
 ```
 
-Before deploy, `prisma migrate status` must list the four expected shared migrations above as pending and must not know about `20260812040000_remove_legacy_prepaid`; stop on any unexpected pending migration. After deploy, status must report the Phase-A schema up to date. The restored-database verifier must exit 0 with `"ok": true`, both settlement subtable presence fields true, and an empty `failures` array.
+Before deploy, `prisma migrate status` must list the four expected shared migrations above as pending and must not know about `20260812040000_remove_legacy_prepaid`; stop on any unexpected pending migration. After deploy, status must report the Phase-A schema up to date. The restored-database verifier must exit 0 with `"ok": true`, both settlement subtable presence fields true, and an empty `failures` array. The permission diff must be empty and the issues file must remain empty, proving unaffected permissions were preserved, exact per-subaccount mapping, no retired values, no unexpected settlement grant, and no duplicate subaccount-permission pair.
 
 Only after that restored-Phase-A gate passes, apply the same immutable Phase-A revision to production:
 
@@ -186,9 +258,13 @@ Only after that restored-Phase-A gate passes, apply the same immutable Phase-A r
 (cd "$PHASE_A_DIR" && DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status)
 (cd "$PHASE_A_DIR" && DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate deploy)
 (cd "$PHASE_A_DIR" && DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server exec prisma migrate status)
+psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-permission-actual.sql > "$PERMISSIONS_SOURCE_PHASE_A"
+diff -u "$PERMISSIONS_EXPECTED" "$PERMISSIONS_SOURCE_PHASE_A"
+psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X -At -f /tmp/yangshao-permission-issues.sql > "$PERMISSION_ISSUES_SOURCE_PHASE_A"
+test ! -s "$PERMISSION_ISSUES_SOURCE_PHASE_A"
 ```
 
-Gate: production's pre-deploy status lists only the same expected pending Phase-A migrations; post-deploy status is up to date; the cleanup migration is absent from the artifact and therefore cannot be applied. Preserve both status outputs.
+Gate: production's pre-deploy status lists only the same expected pending Phase-A migrations; post-deploy status is up to date; the cleanup migration is absent from the artifact and therefore cannot be applied. The production permission snapshot must exactly match the precomputed expected mapping, and its issues file must be empty. Preserve both status outputs and the clean Phase-A permission snapshot for Step 8.
 
 ### 6. Run the verifier before cleanup
 
@@ -222,9 +298,13 @@ DATABASE_URL="$SOURCE_DATABASE_URL" pnpm --filter yangshao-server prepaid:verify
 test -s "$VERIFY_AFTER"
 psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-baseline-counts.sql > "$BASELINE_COUNTS_AFTER"
 diff -u "$BASELINE_COUNTS_BEFORE" "$BASELINE_COUNTS_AFTER"
+psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X --csv -f /tmp/yangshao-permission-actual.sql > "$PERMISSIONS_AFTER"
+diff -u "$PERMISSIONS_SOURCE_PHASE_A" "$PERMISSIONS_AFTER"
+psql "$SOURCE_DATABASE_URL" -v ON_ERROR_STOP=1 -X -At -f /tmp/yangshao-permission-issues.sql > "$PERMISSION_ISSUES_AFTER"
+test ! -s "$PERMISSION_ISSUES_AFTER"
 ```
 
-Gate: verifier exit 0; JSON `ok` is true; the three legacy table entries report `exists: false`; legacy deletion-request count is zero; and the exact ordinary-count diff is empty. Old `LabSheet.parameters`, `SampleBlock.inputs`, `SampleBlock.results`, and `SampleBlock.parameterSnapshot` JSON remain untouched. Historical `paymentStatus='预存款'` input values are display/history only and never create balances.
+Gate: verifier exit 0; JSON `ok` is true; the three legacy table entries report `exists: false`; legacy deletion-request count is zero; the exact invariant ordinary-count diff is empty; the permission diff against the post-Phase-A snapshot is empty; and the permission issues file is empty. Never compare the permission table's transformed post-Phase-A count to a pre-Phase-A ordinary count. Old `LabSheet.parameters`, `SampleBlock.inputs`, `SampleBlock.results`, and `SampleBlock.parameterSnapshot` JSON remain untouched. Historical `paymentStatus='预存款'` input values are display/history only and never create balances.
 
 ### 9. Start services and enter opening balances
 
@@ -272,7 +352,7 @@ If any migration, verifier, count comparison, service startup, opening-balance r
 4. Restore exactly that verified backup into a newly created empty replacement production database, or use the provider's atomic database replacement workflow. Do not overlay the dump onto the partially migrated database.
 5. Point one isolated API check process at the restored replacement database through the approved secret/config mechanism. Run `SELECT 1`, save the baseline and legacy counts again, and require exact diffs against `$BASELINE_COUNTS_BEFORE` and `$LEGACY_COUNTS_BEFORE`.
 6. Do **not** run the shared verifier on this exact pre-Phase-A restore: missing new shared tables are expected, so it must execution-fail. For an exact rollback, deploy/start the pre-cutover application revision that matches the restored migration history.
-7. Verify customer login, ordinary lab read/write, finance, and legacy prepaid read paths before reopening traffic. If the incident owner instead authorizes a renewed Phase-A attempt, reapply the same approved immutable Phase-A artifact with `prisma migrate status`, `prisma migrate deploy`, and post-deploy status exactly as in Step 5; only then may the shared verifier run.
+7. Verify customer login, ordinary lab read/write, finance, and legacy prepaid read paths before reopening traffic. If the incident owner instead authorizes a renewed Phase-A attempt, reapply the same approved immutable Phase-A artifact with `prisma migrate status`, `prisma migrate deploy`, post-deploy status, exact expected permission diff, and empty permission-issues check exactly as in Step 5; only then may the shared verifier run.
 8. Keep prepaid writes in maintenance mode until the incident owner explicitly approves reopening. Opening balances or test transactions created after the backup are intentionally discarded by rollback and must not be recreated until the cutover is rescheduled.
 
 Record the rollback database identifier and backup checksum, but never print or store database URLs, passwords, JWT secrets, encryption keys, dumps, or backup files in the repository.
