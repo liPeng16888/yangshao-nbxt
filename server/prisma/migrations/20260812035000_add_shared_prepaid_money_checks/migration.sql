@@ -62,13 +62,9 @@ ALTER TABLE "SharedPrepaidSettlement"
     AND "netAmount" >= 0 AND "netAmount" <= 9999999999999.9
     AND "netAmount" = ABS("aToBAmount" - "bToAAmount")
     AND (
-      ("netAmount" = 0 AND "payerFrontendUserId" IS NULL AND "receiverFrontendUserId" IS NULL)
-      OR (
-        "netAmount" > 0
-        AND "payerFrontendUserId" IS NOT NULL
-        AND "receiverFrontendUserId" IS NOT NULL
-        AND "payerFrontendUserId" <> "receiverFrontendUserId"
-      )
+      ("aToBAmount" > "bToAAmount" AND "payerFrontendUserId" = "accountAId" AND "receiverFrontendUserId" = "accountBId")
+      OR ("bToAAmount" > "aToBAmount" AND "payerFrontendUserId" = "accountBId" AND "receiverFrontendUserId" = "accountAId")
+      OR ("aToBAmount" = "bToAAmount" AND "payerFrontendUserId" IS NULL AND "receiverFrontendUserId" IS NULL)
     )
   ) NOT VALID;
 

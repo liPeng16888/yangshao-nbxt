@@ -455,6 +455,30 @@ describe('SharedPrepaidSettlementService', () => {
     expect(prisma.settlements).toHaveLength(0)
   })
 
+  it('derives payer and receiver from all three gross-direction boundaries', async () => {
+    await expect(service.previewSettlement(mainA, ['a-to-b-100', 'b-to-a-60']))
+      .resolves.toMatchObject({
+        aToBAmount: 100, bToAAmount: 60, netAmount: 40,
+        payerFrontendUserId: 'A', receiverFrontendUserId: 'B'
+      })
+
+    prisma.payables[1]!.amount = new Prisma.Decimal(140)
+    prisma.payables[1]!.exactAmount = new Prisma.Decimal(140)
+    await expect(service.previewSettlement(mainA, ['a-to-b-100', 'b-to-a-60']))
+      .resolves.toMatchObject({
+        aToBAmount: 100, bToAAmount: 140, netAmount: 40,
+        payerFrontendUserId: 'B', receiverFrontendUserId: 'A'
+      })
+
+    prisma.payables[1]!.amount = new Prisma.Decimal(100)
+    prisma.payables[1]!.exactAmount = new Prisma.Decimal(100)
+    await expect(service.previewSettlement(mainA, ['a-to-b-100', 'b-to-a-60']))
+      .resolves.toMatchObject({
+        aToBAmount: 100, bToAAmount: 100, netAmount: 0,
+        payerFrontendUserId: null, receiverFrontendUserId: null
+      })
+  })
+
   it('accepts the exact Decimal(14,1) settlement maximum and rejects an aggregate one tenth over it', async () => {
     const exactIds = Array.from({ length: 10 }, (_, index) => `exact-max-${index}`)
     exactIds.forEach((id) => prisma.addPayable(id, 'A', 'B', '999999999999.9'))
