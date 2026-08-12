@@ -19,7 +19,9 @@ import { PrismaService } from '../prisma/prisma.service'
 import {
   allocatePrepaidLots,
   assertNonnegativePrepaidMoney,
+  assertPositivePrepaidExactMoney,
   assertPositivePrepaidMoney,
+  assertPositivePrepaidSettlementMoney,
   assertPrepaidMoney,
   normalizePrepaidPhone
 } from './shared-prepaid-money'
@@ -710,8 +712,8 @@ export class SharedPrepaidLedgerService {
           rechargeId: row.rechargeId,
           sourceOwnerId: row.sourceOwnerId,
           allocatedAmount: row.allocatedAmount,
-          paidRatio: row.paidRatio.toDecimalPlaces(10, Prisma.Decimal.ROUND_HALF_UP),
-          exactTransferAmount: row.exactTransferAmount.toDecimalPlaces(8, Prisma.Decimal.ROUND_HALF_UP)
+          paidRatio: row.paidRatio,
+          exactTransferAmount: row.exactTransferAmount
         }))
       })
     }
@@ -721,7 +723,7 @@ export class SharedPrepaidLedgerService {
           consumptionId: consumption.id,
           sourceOwnerId: row.sourceOwnerId,
           consumerOwnerId: row.consumerOwnerId,
-          exactAmount: row.exactAmount.toDecimalPlaces(8, Prisma.Decimal.ROUND_HALF_UP),
+          exactAmount: row.exactAmount,
           amount: row.amount
         }))
       })
@@ -894,6 +896,10 @@ export class SharedPrepaidLedgerService {
         '冲正后充值批次剩余金额'
       )
       if (restoredRemaining.greaterThan(allocation.recharge.totalAmount)) throw this.balanceVersionConflict()
+    }
+    for (const payable of active.payables) {
+      assertPositivePrepaidExactMoney(payable.exactAmount, '精确应转金额')
+      assertPositivePrepaidSettlementMoney(payable.amount, '应转款金额')
     }
     const balanceAfter = assertNonnegativePrepaidMoney(
       member.cachedBalance.add(active.amount),

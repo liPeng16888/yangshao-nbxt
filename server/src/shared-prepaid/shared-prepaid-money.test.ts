@@ -76,6 +76,59 @@ describe('prepaid money rules', () => {
 })
 
 describe('allocatePrepaidLots', () => {
+  it('rejects positive economics that Decimal allocation columns would round to zero', () => {
+    let caught: unknown
+
+    try {
+      allocatePrepaidLots({
+        consumingFrontendUserId: 'B',
+        amount: decimal('0.01'),
+        lots: [lot({
+          paidAmount: decimal('0.01'),
+          giftAmount: decimal('999999999999.98'),
+          remainingAmount: decimal('0.01')
+        })]
+      })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(BadRequestException)
+    expect((caught as BadRequestException).getResponse()).toMatchObject({
+      code: 'PREPAID_AMOUNT_UNREPRESENTABLE'
+    })
+  })
+
+  it('accepts the exact minimum positive Decimal allocation boundaries', () => {
+    const result = allocatePrepaidLots({
+      consumingFrontendUserId: 'A',
+      amount: decimal('100'),
+      lots: [lot({
+        paidAmount: decimal('0.01'),
+        giftAmount: decimal('99999999.99'),
+        remainingAmount: decimal('100')
+      })]
+    })
+
+    expect(result.allocations[0]).toMatchObject({
+      paidRatio: decimal('0.0000000001'),
+      exactTransferAmount: decimal('0.00000001')
+    })
+    expect(result.payables).toEqual([])
+  })
+
+  it('rejects a positive cross-owner exact transfer that rounds to a zero payable', () => {
+    expect(() => allocatePrepaidLots({
+      consumingFrontendUserId: 'B',
+      amount: decimal('0.01'),
+      lots: [lot({
+        paidAmount: decimal('0.01'),
+        giftAmount: decimal('0.99'),
+        remainingAmount: decimal('0.01')
+      })]
+    })).toThrow(BadRequestException)
+  })
+
   it('accepts an exact-max consumption/allocation and rejects one cent over', () => {
     const exact = allocatePrepaidLots({
       consumingFrontendUserId: 'B',
@@ -183,7 +236,7 @@ describe('allocatePrepaidLots', () => {
     expect(result.allocations.at(-1)?.allocatedAmount).toEqual(decimal(5))
   })
 
-  it('groups exact transfers from multiple lots of one owner before rounding', () => {
+  it('groups the persisted eight-decimal transfers from multiple lots before payable rounding', () => {
     const result = allocatePrepaidLots({
       consumingFrontendUserId: 'B',
       amount: decimal('0.4'),
@@ -197,7 +250,7 @@ describe('allocatePrepaidLots', () => {
     expect(result.payables[0]).toEqual({
       sourceOwnerId: 'A',
       consumerOwnerId: 'B',
-      exactAmount: decimal('0.13333333333333333333'),
+      exactAmount: decimal('0.13333334'),
       amount: decimal('0.1')
     })
   })

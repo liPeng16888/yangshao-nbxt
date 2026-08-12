@@ -1431,6 +1431,33 @@ describe('SharedPrepaidLedgerService', () => {
     })
   })
 
+  it('rejects an unrepresentable cross-owner allocation before any consumption write', async () => {
+    await service.createRecharge(mainUser, rechargePayload({
+      paidAmount: '0.01',
+      giftAmount: '999999999999.98'
+    }), 'unrepresentable-lot')
+    const memberId = prisma.members[0].id
+
+    await expect(service.syncSampleConsumption(prisma as never, consumptionInput({
+      consumingFrontendUserId: 'front-2',
+      actorUserId: 'front-2',
+      nextInputs: {
+        ...consumptionInput().nextInputs as object,
+        prepaidMemberId: memberId,
+        price: '0.01'
+      },
+      idempotencyKey: 'unrepresentable-consumption'
+    }))).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PREPAID_AMOUNT_UNREPRESENTABLE' })
+    })
+
+    expect(prisma.consumptions).toEqual([])
+    expect(prisma.allocations).toEqual([])
+    expect(prisma.payables).toEqual([])
+    expect(prisma.members[0].cachedBalance.equals(new Prisma.Decimal('999999999999.99'))).toBe(true)
+    expect(prisma.recharges[0].remainingAmount.equals(new Prisma.Decimal('999999999999.99'))).toBe(true)
+  })
+
   it('rejects an insufficient deduction without partial lot, member, consumption, or payable writes', async () => {
     const recharge = await service.createRecharge(mainUser, rechargePayload({ paidAmount: 50, giftAmount: 0 }), 'lot-small')
     const memberId = prisma.members[0].id

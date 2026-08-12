@@ -40,7 +40,7 @@ ALTER TABLE "SharedPrepaidAllocation"
   CHECK (
     "allocatedAmount" > 0 AND "allocatedAmount" <= 999999999999.99
     AND "paidRatio" > 0 AND "paidRatio" <= 1
-    AND "exactTransferAmount" >= 0
+    AND "exactTransferAmount" > 0
     AND "exactTransferAmount" <= 999999999999.99999999
   ) NOT VALID;
 
@@ -48,8 +48,8 @@ ALTER TABLE "SharedPrepaidPayable"
   ADD CONSTRAINT "SharedPrepaidPayable_amount_invariants"
   CHECK (
     "sourceOwnerId" <> "consumerOwnerId"
-    AND "exactAmount" >= 0 AND "exactAmount" <= 999999999999.99999999
-    AND "amount" >= 0 AND "amount" <= 9999999999999.9
+    AND "exactAmount" > 0 AND "exactAmount" <= 999999999999.99999999
+    AND "amount" > 0 AND "amount" <= 9999999999999.9
   ) NOT VALID;
 
 ALTER TABLE "SharedPrepaidSettlement"
@@ -76,7 +76,7 @@ ALTER TABLE "SharedPrepaidSettlementLine"
   ADD CONSTRAINT "SharedPrepaidSettlementLine_amount_invariants"
   CHECK (
     "direction" IN ('A_TO_B', 'B_TO_A')
-    AND "amount" >= 0 AND "amount" <= 9999999999999.9
+    AND "amount" > 0 AND "amount" <= 9999999999999.9
   ) NOT VALID;
 
 ALTER TABLE "SharedPrepaidMember"

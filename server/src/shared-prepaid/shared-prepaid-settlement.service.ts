@@ -22,8 +22,8 @@ import {
 } from './shared-prepaid.dto'
 import {
   assertNonnegativePrepaidSettlementMoney,
+  assertPositivePrepaidExactMoney,
   assertPositivePrepaidSettlementMoney,
-  assertPrepaidExactMoney
 } from './shared-prepaid-money'
 import { SharedPrepaidRealtimeService } from './shared-prepaid-realtime.service'
 
@@ -405,7 +405,7 @@ export class SharedPrepaidSettlementService {
     const accountAId = user.dataOwnerId
     const counterparties = new Set<string>()
     for (const payable of payables) {
-      assertPrepaidExactMoney(payable.exactAmount, '精确应转金额')
+      assertPositivePrepaidExactMoney(payable.exactAmount, '精确应转金额')
       assertPositivePrepaidSettlementMoney(payable.amount, '应转款金额')
       if (payable.sourceOwnerId === payable.consumerOwnerId) {
         throw new BadRequestException('结算明细必须是跨主账号应转款')

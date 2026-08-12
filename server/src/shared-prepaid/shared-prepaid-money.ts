@@ -30,6 +30,13 @@ function amountStateInvalid(label: string): BadRequestException {
   })
 }
 
+function amountUnrepresentable(label: string): BadRequestException {
+  return new BadRequestException({
+    code: 'PREPAID_AMOUNT_UNREPRESENTABLE',
+    message: `${label}精度低于可保存范围`
+  })
+}
+
 export function assertPrepaidMoney(value: Prisma.Decimal, label: string): Prisma.Decimal {
   if (!value.isFinite() || value.abs().greaterThan(PREPAID_MONEY_MAX)) throw amountOutOfRange(label)
   return value
@@ -83,6 +90,40 @@ export function assertPrepaidExactMoney(value: Prisma.Decimal, label: string): P
     throw amountOutOfRange(label)
   }
   return value
+}
+
+export function assertPositivePrepaidExactMoney(
+  value: Prisma.Decimal,
+  label: string
+): Prisma.Decimal {
+  assertPrepaidExactMoney(value, label)
+  if (value.lessThanOrEqualTo(0)) throw amountStateInvalid(label)
+  return value
+}
+
+function quantizePositive(
+  value: Prisma.Decimal,
+  decimalPlaces: number,
+  label: string
+): Prisma.Decimal {
+  const quantized = value.toDecimalPlaces(decimalPlaces, Prisma.Decimal.ROUND_HALF_UP)
+  if (value.greaterThan(0) && quantized.isZero()) throw amountUnrepresentable(label)
+  return quantized
+}
+
+export function quantizePrepaidPaidRatio(value: Prisma.Decimal): Prisma.Decimal {
+  if (!value.isFinite() || value.lessThanOrEqualTo(0) || value.greaterThan(1)) {
+    throw amountStateInvalid('充值本金比例')
+  }
+  return quantizePositive(value, 10, '充值本金比例')
+}
+
+export function quantizePrepaidExactMoney(
+  value: Prisma.Decimal,
+  label: string
+): Prisma.Decimal {
+  assertPositivePrepaidExactMoney(value, label)
+  return quantizePositive(value, 8, label)
 }
 
 export function normalizePrepaidPhone(value: unknown): string {
@@ -163,10 +204,14 @@ export function allocatePrepaidLots(input: AllocationInput): AllocationResult {
     if (lot.remainingAmount.lessThanOrEqualTo(0)) continue
 
     const allocatedAmount = Prisma.Decimal.min(lot.remainingAmount, amountToAllocate)
-    const paidRatio = lot.paidAmount.div(lot.paidAmount.add(lot.giftAmount))
-    const exactTransferAmount = exactTransfer(allocatedAmount, lot.paidAmount, lot.giftAmount)
+    const paidRatio = quantizePrepaidPaidRatio(
+      lot.paidAmount.div(lot.paidAmount.add(lot.giftAmount))
+    )
+    const exactTransferAmount = quantizePrepaidExactMoney(
+      exactTransfer(allocatedAmount, lot.paidAmount, lot.giftAmount),
+      '精确应转金额'
+    )
     assertPositivePrepaidMoney(allocatedAmount, '预存款分摊金额')
-    assertPrepaidExactMoney(exactTransferAmount, '精确应转金额')
 
     allocations.push({
       rechargeId: lot.id,
@@ -180,7 +225,7 @@ export function allocatePrepaidLots(input: AllocationInput): AllocationResult {
       const ownerTransfer = transfersByOwner.get(lot.ownerFrontendUserId) ?? new Prisma.Decimal(0)
       transfersByOwner.set(
         lot.ownerFrontendUserId,
-        assertPrepaidExactMoney(ownerTransfer.add(exactTransferAmount), '精确应转合计')
+        assertPositivePrepaidExactMoney(ownerTransfer.add(exactTransferAmount), '精确应转合计')
       )
     }
 
@@ -188,12 +233,13 @@ export function allocatePrepaidLots(input: AllocationInput): AllocationResult {
   }
 
   const payables = [...transfersByOwner].map(([sourceOwnerId, exactAmount]) => {
-    const amount = roundPayable(exactAmount)
-    assertNonnegativePrepaidSettlementMoney(amount, '应转款金额')
+    const persistedExactAmount = quantizePrepaidExactMoney(exactAmount, '精确应转合计')
+    const amount = quantizePositive(persistedExactAmount, 1, '应转款金额')
+    assertPositivePrepaidSettlementMoney(amount, '应转款金额')
     return {
       sourceOwnerId,
       consumerOwnerId: input.consumingFrontendUserId,
-      exactAmount,
+      exactAmount: persistedExactAmount,
       amount
     }
   })
