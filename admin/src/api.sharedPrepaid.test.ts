@@ -24,6 +24,7 @@ describe('admin shared prepaid mock contract', () => {
       frontendUserIds: ['front-1', 'front-2'], page: 1, pageSize: 20
     })
     expect(rootPage.items.length).toBeGreaterThan(1)
+    expect(rootPage.items.every((item) => !('reversal' in item))).toBe(true)
 
     await adminLogin({ account: 'sub001', password: 'sub123456' })
     const subPage = await getAdminSharedPrepaidPage('recharges', {
@@ -36,7 +37,31 @@ describe('admin shared prepaid mock contract', () => {
     })).rejects.toThrow('没有访问部分前端账号的权限')
   })
 
-  it('returns audit detail through GET while rejecting every admin prepaid mutation method', async () => {
+  it('mirrors member participation through consumption and settlement without leaking list histories', async () => {
+    await adminLogin({ account: 'sub001', password: 'sub123456' })
+
+    const page = await getAdminSharedPrepaidPage('members', {
+      frontendUserIds: ['front-1'], page: 1, pageSize: 20
+    })
+    expect(page.items.map((item) => item.id)).toEqual(expect.arrayContaining([
+      'member-1', 'member-consumer-only', 'member-settlement-only'
+    ]))
+    for (const item of page.items) {
+      expect(item).not.toHaveProperty('recharges')
+      expect(item).not.toHaveProperty('consumptions')
+      expect(item).not.toHaveProperty('ledgerEntries')
+      expect(item).not.toHaveProperty('historyTruncated')
+    }
+
+    const detail = await getAdminSharedPrepaidDetail('members', 'member-consumer-only', ['front-1'])
+    expect(detail).toMatchObject({
+      id: 'member-consumer-only',
+      consumptions: [expect.objectContaining({ id: 'consumption-consumer-only' })],
+      historyTruncated: expect.any(Object)
+    })
+  })
+
+  it('returns audit detail through GET', async () => {
     const detail = await getAdminSharedPrepaidDetail('settlements', 'settlement-1', ['front-1'])
     expect(detail).toMatchObject({
       id: 'settlement-1',
@@ -44,8 +69,13 @@ describe('admin shared prepaid mock contract', () => {
       actions: [expect.objectContaining({ operation: 'SUBMIT_PAYMENT' })]
     })
 
-    for (const method of ['post', 'patch', 'delete'] as const) {
-      await expect(request[method]('/admin/shared-prepaid/recharges')).rejects.toThrow('后台共享预存款只读')
-    }
   })
+
+  it.each(['post', 'put', 'patch', 'delete'] as const)(
+    'rejects the %s mutation method independently',
+    async (method) => {
+      await expect(request[method]('/admin/shared-prepaid/recharges'))
+        .rejects.toThrow('后台共享预存款只读')
+    }
+  )
 })

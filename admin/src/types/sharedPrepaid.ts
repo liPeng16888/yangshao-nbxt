@@ -90,20 +90,7 @@ export interface AdminSharedPrepaidConsumptionRow {
   reversalOfId?: string | null
   consumingFrontendUser: AdminSharedPrepaidAccount
   actorUser: AdminSharedPrepaidAccount
-  allocations: Array<{
-    id?: string
-    sourceOwner: AdminSharedPrepaidAccount
-    allocatedAmount?: number
-    recharge?: { id: string; rechargeDate: string }
-  }>
-  payables: Array<{
-    id?: string
-    status: AdminSharedPrepaidStatus
-    amount: number
-    sourceOwner?: AdminSharedPrepaidAccount
-    consumerOwner?: AdminSharedPrepaidAccount
-  }>
-  originalPayables?: AdminSharedPrepaidConsumptionRow['payables']
+  sourceOwners: AdminSharedPrepaidAccount[]
   sheetDate: string
   createdAt: string
 }

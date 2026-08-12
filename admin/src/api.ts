@@ -40,6 +40,7 @@ export type AdminProfilePayload = {
 type AdminRequest = {
   get<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
   post<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
+  put<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
   patch<T = any, R = any>(url: string, payload?: T, config?: AdminRequestConfig): Promise<R>
   delete<T = any, R = any>(url: string, config?: AdminRequestConfig): Promise<R>
 }
@@ -267,7 +268,8 @@ const mockSharedPrepaid = {
       latestRechargeTime: '2026-08-01T01:00:00.000Z', latestConsumptionTime: '2026-08-04T01:00:00.000Z',
       recharges: [{ id: 'recharge-1', paidAmount: 1000, giftAmount: 100, remainingAmount: 900 }],
       consumptions: [{ id: 'consumption-1', amount: 200, sampleNumberSnapshot: 'YS-001' }],
-      ledgerEntries: [{ id: 'ledger-1', kind: 'RECHARGE', balanceDelta: 1100 }], historyTruncated: false
+      ledgerEntries: [{ id: 'ledger-1', kind: 'RECHARGE', balanceDelta: 1100 }],
+      historyTruncated: { recharges: false, consumptions: false, ledgerEntries: false }
     },
     {
       id: 'member-2', phone: '13800000002', paidTotal: 500, giftTotal: 50, consumedTotal: 0,
@@ -275,7 +277,21 @@ const mockSharedPrepaid = {
       latestRechargeTime: '2026-08-02T01:00:00.000Z', latestConsumptionTime: null,
       recharges: [{ id: 'recharge-2', paidAmount: 500, giftAmount: 50, remainingAmount: 0 }],
       consumptions: [], ledgerEntries: [{ id: 'ledger-reversal-2', kind: 'RECHARGE_REVERSAL', balanceDelta: -550 }],
-      historyTruncated: false
+      historyTruncated: { recharges: false, consumptions: false, ledgerEntries: false }
+    },
+    {
+      id: 'member-consumer-only', phone: '13800000003', paidTotal: 0, giftTotal: 0, consumedTotal: 30,
+      balance: 0, ownerComposition: [], latestRechargeTime: null,
+      latestConsumptionTime: '2026-08-06T01:00:00.000Z', recharges: [],
+      consumptions: [{ id: 'consumption-consumer-only', amount: 30, sampleNumberSnapshot: 'YS-002' }],
+      ledgerEntries: [], historyTruncated: { recharges: false, consumptions: false, ledgerEntries: false }
+    },
+    {
+      id: 'member-settlement-only', phone: '13800000004', paidTotal: 0, giftTotal: 0, consumedTotal: 20,
+      balance: 0, ownerComposition: [], latestRechargeTime: null,
+      latestConsumptionTime: '2026-08-07T01:00:00.000Z', recharges: [],
+      consumptions: [{ id: 'consumption-settlement-only', amount: 20, sampleNumberSnapshot: 'YS-003' }],
+      ledgerEntries: [], historyTruncated: { recharges: false, consumptions: false, ledgerEntries: false }
     }
   ],
   consumptions: [
@@ -287,6 +303,21 @@ const mockSharedPrepaid = {
       allocations: [{ id: 'allocation-1', sourceOwnerId: 'front-1', sourceOwner: mockPrepaidAccountA, allocatedAmount: 200, recharge: { id: 'recharge-1', rechargeDate: '2026-08-01' } }],
       payables: [{ id: 'payable-1', status: 'PENDING', amount: 181.82, sourceOwner: mockPrepaidAccountA, consumerOwner: mockPrepaidAccountB }],
       originalPayables: [], sheetDate: '2026-08-04', createdAt: '2026-08-04T01:00:00.000Z'
+    },
+    {
+      id: 'consumption-consumer-only', memberId: 'member-consumer-only', phoneSnapshot: '13800000003',
+      sampleNumberSnapshot: 'YS-002', sampleCountSnapshot: 1, elementsSnapshot: ['金'], amount: 30,
+      kind: 'CONSUMPTION', active: true, reversalOfId: null, consumingFrontendUserId: 'front-1',
+      consumingFrontendUser: mockPrepaidAccountA, actorUser: mockPrepaidAccountA, allocations: [], payables: [],
+      originalPayables: [], sheetDate: '2026-08-06', createdAt: '2026-08-06T01:00:00.000Z'
+    },
+    {
+      id: 'consumption-settlement-only', memberId: 'member-settlement-only', phoneSnapshot: '13800000004',
+      sampleNumberSnapshot: 'YS-003', sampleCountSnapshot: 1, elementsSnapshot: ['银'], amount: 20,
+      kind: 'CONSUMPTION', active: true, reversalOfId: null, consumingFrontendUserId: 'front-2',
+      consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB, allocations: [],
+      payables: [{ id: 'payable-settlement-only', status: 'HELD', amount: 20, sourceOwner: mockPrepaidAccountB, consumerOwner: mockPrepaidAccountB }],
+      originalPayables: [], sheetDate: '2026-08-07', createdAt: '2026-08-07T01:00:00.000Z'
     }
   ],
   settlements: [
@@ -299,6 +330,14 @@ const mockSharedPrepaid = {
       confirmedByUser: null, rejectedByUser: null, createdAt: '2026-08-05T01:00:00.000Z',
       updatedAt: '2026-08-05T02:00:00.000Z', lines: [{ id: 'line-1', payableId: 'payable-1', amount: 181.82 }],
       actions: [{ id: 'action-1', operation: 'SUBMIT_PAYMENT', reason: null, actorUser: mockPrepaidAccountA, createdAt: '2026-08-05T02:00:00.000Z' }]
+    },
+    {
+      id: 'settlement-member-only', accountAId: 'front-1', accountBId: 'front-2', accountA: mockPrepaidAccountA,
+      accountB: mockPrepaidAccountB, aToBAmount: 20, bToAAmount: 0, netAmount: 20, grossAmount: 20,
+      status: 'AWAITING_PAYMENT', payerFrontendUserId: 'front-1', receiverFrontendUserId: 'front-2', proofUrls: [],
+      rejectionReason: null, createdByUser: mockPrepaidAccountA, paidByUser: null, confirmedByUser: null,
+      rejectedByUser: null, createdAt: '2026-08-07T02:00:00.000Z', updatedAt: '2026-08-07T02:00:00.000Z',
+      lines: [{ id: 'line-member-only', payableId: 'payable-settlement-only', amount: 20 }], actions: []
     }
   ]
 }
@@ -436,7 +475,15 @@ function mockSharedPrepaidRows(resource: keyof typeof mockSharedPrepaid, config?
     const participates = resource === 'recharges'
       ? allowedIds.includes(row.ownerFrontendUserId)
       : resource === 'members'
-        ? row.ownerComposition.some((owner: any) => allowedIds.includes(owner.ownerFrontendUserId))
+        ? mockSharedPrepaid.recharges.some((recharge) => recharge.memberId === row.id && allowedIds.includes(recharge.ownerFrontendUserId))
+          || mockSharedPrepaid.consumptions.some((consumption) => consumption.memberId === row.id && (
+            allowedIds.includes(consumption.consumingFrontendUserId)
+            || consumption.allocations.some((allocation) => allowedIds.includes(allocation.sourceOwnerId))
+            || consumption.payables.some((payable) => mockSharedPrepaid.settlements.some((settlement) =>
+              settlement.lines.some((line) => line.payableId === payable.id)
+              && (allowedIds.includes(settlement.accountAId) || allowedIds.includes(settlement.accountBId))
+            ))
+          ))
         : resource === 'consumptions'
           ? allowedIds.includes(row.consumingFrontendUserId) || row.allocations.some((allocation: any) => allowedIds.includes(allocation.sourceOwnerId))
           : allowedIds.includes(row.accountAId) || allowedIds.includes(row.accountBId)
@@ -471,9 +518,24 @@ function mockSharedPrepaidResponse(resource: keyof typeof mockSharedPrepaid, id:
   const pageSize = Math.min(100, Math.max(1, Number(config?.params?.pageSize) || 20))
   const start = (page - 1) * pageSize
   const items = rows.slice(start, start + pageSize).map((row: any) => {
-    if (resource !== 'settlements') return row
-    const { proofUrls: _proofUrls, lines: _lines, actions: _actions, rejectionReason: _rejectionReason, ...summary } = row
-    return summary
+    if (resource === 'members') {
+      const { recharges: _recharges, consumptions: _consumptions, ledgerEntries: _ledgerEntries,
+        historyTruncated: _historyTruncated, ...summary } = row
+      return summary
+    }
+    if (resource === 'consumptions') {
+      const { allocations, payables: _payables, originalPayables: _originalPayables, ...summary } = row
+      return { ...summary, sourceOwners: allocations.map((allocation: any) => allocation.sourceOwner) }
+    }
+    if (resource === 'settlements') {
+      const { proofUrls: _proofUrls, lines: _lines, actions: _actions, rejectionReason: _rejectionReason, ...summary } = row
+      return summary
+    }
+    if (resource === 'recharges') {
+      const { reversal: _reversal, ...summary } = row
+      return summary
+    }
+    return row
   })
   return { items, total: rows.length, page, pageSize }
 }
@@ -798,6 +860,10 @@ const mockRequest = {
       }
       return row || { ok: true }
     }
+    return { ok: true }
+  },
+  async put(url: string) {
+    if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
     return { ok: true }
   },
   async patch(url: string, payload?: any) {

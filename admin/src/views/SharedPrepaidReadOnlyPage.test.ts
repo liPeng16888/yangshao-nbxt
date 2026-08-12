@@ -117,8 +117,8 @@ const rowsByResource: Record<string, Array<Record<string, unknown>>> = {
     id: 'consumption-1', phoneSnapshot: '13800000000', sampleNumberSnapshot: 'A-001', sampleCountSnapshot: 2,
     elementsSnapshot: ['Au', 'Ag'], amount: 30, kind: 'CONSUMPTION', active: true,
     consumingFrontendUser: { id: 'front-2', account: 'owner-b', username: '主账号 B', displayRemark: null },
-    allocations: [{ sourceOwner: { id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: null } }],
-    payables: [{ status: 'PENDING', amount: 27.3 }], sheetDate: '2026-08-02', createdAt: '2026-08-02T01:00:00Z'
+    sourceOwners: [{ id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: null }],
+    sheetDate: '2026-08-02', createdAt: '2026-08-02T01:00:00Z'
   }],
   settlements: [{
     id: 'settlement-1', accountA: { id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: null },
@@ -177,9 +177,12 @@ describe('SharedPrepaidReadOnlyPage', () => {
 
     expect(wrapper.find('[data-testid="shared-prepaid-export"]').exists()).toBe(true)
     expect(wrapper.find('.pagination-stub').exists()).toBe(true)
-    expect(wrapper.findAll('button').map((button) => button.text())).not.toEqual(
-      expect.arrayContaining(['新增', '编辑', '删除', '冲正', '提交已支付', '确认到账', '期初余额', '充值', '调整'])
-    )
+    const buttonTexts = wrapper.findAll('button').map((button) => button.text().trim())
+    const forbiddenLabels = [
+      '新增', '编辑', '删除', '充值', '期初余额', '冲正', '调整',
+      '提交', '确认', '驳回', '拒绝', '取消', '付款', '支付', '上传凭证'
+    ]
+    expect(forbiddenLabels.filter((label) => buttonTexts.some((text) => text.includes(label)))).toEqual([])
 
     await wrapper.get('[data-testid="shared-prepaid-detail-recharge-1"]').trigger('click')
     await flushPromises()
@@ -200,6 +203,13 @@ describe('SharedPrepaidReadOnlyPage', () => {
       'recharges',
       expect.objectContaining({ status: 'REVERSED' })
     )
+  })
+
+  it('renders source owners from the minimized consumption summary', async () => {
+    const wrapper = mountPage('consumptions')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('主账号 A（owner-a）')
   })
 
   it('previews settlement proof and preserves audit status, reason and actions in detail', async () => {

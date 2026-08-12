@@ -265,8 +265,57 @@ const consumptionListSelect = {
   }
 } satisfies Prisma.SharedPrepaidConsumptionSelect
 
+const ADMIN_CONSUMPTION_RELATION_LIMIT = 100
+
+const adminConsumptionSummarySelect = {
+  id: true,
+  memberId: true,
+  consumingFrontendUserId: true,
+  actorUserId: true,
+  kind: true,
+  amount: true,
+  sheetId: true,
+  sampleBlockId: true,
+  sampleIndex: true,
+  sampleNumberSnapshot: true,
+  sampleCountSnapshot: true,
+  elementsSnapshot: true,
+  phoneSnapshot: true,
+  sheetDate: true,
+  active: true,
+  reversalOfId: true,
+  createdAt: true,
+  consumingFrontendUser: { select: accountSelect },
+  actorUser: { select: accountSelect }
+} satisfies Prisma.SharedPrepaidConsumptionSelect
+
 const adminConsumptionDetailSelect = {
-  ...consumptionListSelect,
+  ...adminConsumptionSummarySelect,
+  allocations: {
+    select: consumptionAllocationSelect,
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take: ADMIN_CONSUMPTION_RELATION_LIMIT + 1
+  },
+  payables: {
+    select: consumptionPayableSelect,
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take: ADMIN_CONSUMPTION_RELATION_LIMIT + 1
+  },
+  reversalOf: {
+    select: {
+      id: true,
+      allocations: {
+        select: consumptionAllocationSelect,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: ADMIN_CONSUMPTION_RELATION_LIMIT + 1
+      },
+      payables: {
+        select: consumptionPayableSelect,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: ADMIN_CONSUMPTION_RELATION_LIMIT + 1
+      }
+    }
+  },
   reversal: { select: { id: true } }
 } satisfies Prisma.SharedPrepaidConsumptionSelect
 
@@ -418,6 +467,9 @@ type ConsumptionListDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
 }>
 type AdminConsumptionDetailDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
   select: typeof adminConsumptionDetailSelect
+}>
+type AdminConsumptionSummaryDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
+  select: typeof adminConsumptionSummarySelect
 }>
 type AdminMemberBaseRow = Prisma.SharedPrepaidMemberGetPayload<{
   select: typeof adminMemberBaseSelect
@@ -611,7 +663,7 @@ export class SharedPrepaidQueryService {
     const [rows, total] = await Promise.all([
       this.prisma.sharedPrepaidConsumption.findMany({
         where,
-        select: consumptionListSelect,
+        select: adminConsumptionSummarySelect,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: pageSize
@@ -619,7 +671,7 @@ export class SharedPrepaidQueryService {
       this.prisma.sharedPrepaidConsumption.count({ where })
     ])
     return {
-      items: rows.map((row) => this.toConsumptionListRow(row)),
+      items: await this.adminConsumptionSummaries(rows),
       total,
       page,
       pageSize
@@ -686,7 +738,7 @@ export class SharedPrepaidQueryService {
       }),
       this.prisma.sharedPrepaidConsumption.findMany({
         where: { memberId: id, OR: this.adminConsumptionParticipation(allowedFrontendUserIds) },
-        select: consumptionListSelect,
+        select: adminConsumptionSummarySelect,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: ADMIN_DETAIL_HISTORY_LIMIT + 1
       }),
@@ -697,6 +749,9 @@ export class SharedPrepaidQueryService {
         take: ADMIN_DETAIL_HISTORY_LIMIT + 1
       })
     ])
+    const consumptionSummaries = await this.adminConsumptionSummaries(
+      consumptions.slice(0, ADMIN_DETAIL_HISTORY_LIMIT)
+    )
     return {
       ...summaries[0],
       historyLimit: ADMIN_DETAIL_HISTORY_LIMIT,
@@ -706,7 +761,7 @@ export class SharedPrepaidQueryService {
         ledgerEntries: ledgerEntries.length > ADMIN_DETAIL_HISTORY_LIMIT
       },
       recharges: recharges.slice(0, ADMIN_DETAIL_HISTORY_LIMIT).map((row) => this.toRechargeRow(row as RechargeRow)),
-      consumptions: consumptions.slice(0, ADMIN_DETAIL_HISTORY_LIMIT).map((row) => this.toConsumptionListRow(row)),
+      consumptions: consumptionSummaries,
       ledgerEntries: ledgerEntries.slice(0, ADMIN_DETAIL_HISTORY_LIMIT).map((row) => this.decimalToNumberDeep(row))
     }
   }
@@ -731,7 +786,7 @@ export class SharedPrepaidQueryService {
         })
       : null
     return {
-      ...(this.toConsumptionListRow(row as AdminConsumptionDetailDatabaseRow) as Record<string, unknown>),
+      ...this.toAdminConsumptionDetailRow(row),
       reversalReason: reversalAudit?.reason ?? null,
       reversalAudit: reversalAudit ? this.decimalToNumberDeep(reversalAudit) : null
     }
@@ -1083,7 +1138,27 @@ export class SharedPrepaidQueryService {
   private adminMemberParticipation(allowedFrontendUserIds: string[]) {
     return [
       { recharges: { some: { ownerFrontendUserId: { in: allowedFrontendUserIds } } } },
-      { consumptions: { some: { OR: this.adminConsumptionParticipation(allowedFrontendUserIds) } } }
+      { consumptions: { some: { OR: this.adminConsumptionParticipation(allowedFrontendUserIds) } } },
+      {
+        consumptions: {
+          some: {
+            payables: {
+              some: {
+                settlementLines: {
+                  some: {
+                    settlement: {
+                      OR: [
+                        { accountAId: { in: allowedFrontendUserIds } },
+                        { accountBId: { in: allowedFrontendUserIds } }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     ] satisfies Prisma.SharedPrepaidMemberWhereInput[]
   }
 
@@ -1111,13 +1186,95 @@ export class SharedPrepaidQueryService {
     return where
   }
 
+  private async adminConsumptionSummaries(rows: AdminConsumptionSummaryDatabaseRow[]) {
+    if (!rows.length) return []
+    const sourceConsumptionIds = [...new Set(rows.map((row) => (
+      row.kind === SharedPrepaidConsumptionKind.REVERSAL && row.reversalOfId
+        ? row.reversalOfId
+        : row.id
+    )))]
+    const sources = await this.prisma.sharedPrepaidAllocation.findMany({
+      where: { consumptionId: { in: sourceConsumptionIds } },
+      distinct: ['consumptionId', 'sourceOwnerId'],
+      take: sourceConsumptionIds.length * ADMIN_CONSUMPTION_RELATION_LIMIT,
+      select: {
+        consumptionId: true,
+        sourceOwnerId: true,
+        sourceOwner: { select: accountSelect }
+      },
+      orderBy: [{ consumptionId: 'asc' }, { sourceOwnerId: 'asc' }]
+    })
+    const sourcesByConsumption = new Map<string, AccountRow[]>()
+    for (const source of sources) {
+      const current = sourcesByConsumption.get(source.consumptionId) ?? []
+      current.push(source.sourceOwner)
+      sourcesByConsumption.set(source.consumptionId, current)
+    }
+    return rows.map((row) => {
+      const sourceConsumptionId = row.kind === SharedPrepaidConsumptionKind.REVERSAL && row.reversalOfId
+        ? row.reversalOfId
+        : row.id
+      return this.decimalToNumberDeep({
+        id: row.id,
+        memberId: row.memberId,
+        consumingFrontendUserId: row.consumingFrontendUserId,
+        actorUserId: row.actorUserId,
+        kind: row.kind,
+        amount: row.amount,
+        sheetId: row.sheetId,
+        sampleBlockId: row.sampleBlockId,
+        sampleIndex: row.sampleIndex,
+        sampleNumberSnapshot: row.sampleNumberSnapshot,
+        sampleCountSnapshot: row.sampleCountSnapshot,
+        elementsSnapshot: row.elementsSnapshot,
+        phoneSnapshot: row.phoneSnapshot,
+        sheetDate: row.sheetDate,
+        active: row.active,
+        reversalOfId: row.reversalOfId,
+        createdAt: row.createdAt,
+        consumingFrontendUser: row.consumingFrontendUser,
+        actorUser: row.actorUser,
+        allocationOrigin: sourceConsumptionId === row.id ? 'DIRECT' : 'REVERSAL_TARGET',
+        allocationSourceConsumptionId: sourceConsumptionId,
+        sourceOwners: sourcesByConsumption.get(sourceConsumptionId) ?? []
+      })
+    })
+  }
+
+  private toAdminConsumptionDetailRow(row: AdminConsumptionDetailDatabaseRow) {
+    const directAllocations = row.allocations
+    const directPayables = row.payables
+    const originalAllocations = row.reversalOf?.allocations ?? []
+    const originalPayables = row.reversalOf?.payables ?? []
+    const boundedRow = {
+      ...row,
+      allocations: directAllocations.slice(0, ADMIN_CONSUMPTION_RELATION_LIMIT),
+      payables: directPayables.slice(0, ADMIN_CONSUMPTION_RELATION_LIMIT),
+      reversalOf: row.reversalOf ? {
+        ...row.reversalOf,
+        allocations: originalAllocations.slice(0, ADMIN_CONSUMPTION_RELATION_LIMIT),
+        payables: originalPayables.slice(0, ADMIN_CONSUMPTION_RELATION_LIMIT)
+      } : null
+    }
+    return {
+      ...(this.toConsumptionListRow(boundedRow as unknown as ConsumptionListDatabaseRow) as Record<string, unknown>),
+      relationLimit: ADMIN_CONSUMPTION_RELATION_LIMIT,
+      relationTruncated: {
+        allocations: directAllocations.length > ADMIN_CONSUMPTION_RELATION_LIMIT,
+        payables: directPayables.length > ADMIN_CONSUMPTION_RELATION_LIMIT,
+        originalAllocations: originalAllocations.length > ADMIN_CONSUMPTION_RELATION_LIMIT,
+        originalPayables: originalPayables.length > ADMIN_CONSUMPTION_RELATION_LIMIT
+      }
+    }
+  }
+
   private async adminMemberSummaries(
     members: AdminMemberBaseRow[],
     allowedFrontendUserIds: string[]
   ) {
     if (!members.length) return []
     const memberIds = members.map((member) => member.id)
-    const [rechargeGroups, consumptionGroups] = await Promise.all([
+    const [rechargeGroups, consumptions] = await Promise.all([
       this.prisma.sharedPrepaidRecharge.groupBy({
         by: ['memberId', 'ownerFrontendUserId'],
         where: {
@@ -1128,16 +1285,24 @@ export class SharedPrepaidQueryService {
         _sum: { paidAmount: true, giftAmount: true, remainingAmount: true },
         _max: { createdAt: true }
       }),
-      this.prisma.sharedPrepaidConsumption.groupBy({
-        by: ['memberId'],
+      this.prisma.sharedPrepaidConsumption.findMany({
         where: {
           memberId: { in: memberIds },
           kind: SharedPrepaidConsumptionKind.CONSUMPTION,
           active: true,
           OR: this.adminConsumptionParticipation(allowedFrontendUserIds)
         },
-        _sum: { amount: true },
-        _max: { createdAt: true }
+        select: {
+          id: true,
+          memberId: true,
+          consumingFrontendUserId: true,
+          amount: true,
+          createdAt: true,
+          allocations: {
+            where: { sourceOwnerId: { in: allowedFrontendUserIds } },
+            select: { sourceOwnerId: true, allocatedAmount: true }
+          }
+        }
       })
     ])
     const ownerIds = [...new Set(rechargeGroups.map((group) => group.ownerFrontendUserId))]
@@ -1145,7 +1310,24 @@ export class SharedPrepaidQueryService {
       ? await this.prisma.user.findMany({ where: { id: { in: ownerIds } }, select: accountSelect })
       : []
     const ownerById = new Map(owners.map((owner) => [owner.id, owner]))
-    const consumptionByMember = new Map(consumptionGroups.map((group) => [group.memberId, group]))
+    const consumptionByMember = new Map<string, { amount: Prisma.Decimal; latest: Date | null }>()
+    for (const consumption of consumptions) {
+      const scopedAmount = allowedFrontendUserIds.includes(consumption.consumingFrontendUserId)
+        ? consumption.amount
+        : consumption.allocations.reduce(
+            (sum, allocation) => allowedFrontendUserIds.includes(allocation.sourceOwnerId)
+              ? sum.add(allocation.allocatedAmount)
+              : sum,
+            new Prisma.Decimal(0)
+          )
+      const current = consumptionByMember.get(consumption.memberId) ?? {
+        amount: new Prisma.Decimal(0),
+        latest: null
+      }
+      current.amount = current.amount.add(scopedAmount)
+      if (!current.latest || consumption.createdAt > current.latest) current.latest = consumption.createdAt
+      consumptionByMember.set(consumption.memberId, current)
+    }
 
     return members.map((member) => {
       const memberRecharges = rechargeGroups.filter((group) => group.memberId === member.id)
@@ -1171,7 +1353,7 @@ export class SharedPrepaidQueryService {
         phone: member.phone,
         paidTotal: paidTotal.toNumber(),
         giftTotal: giftTotal.toNumber(),
-        consumedTotal: consumption?._sum.amount?.toNumber() ?? 0,
+        consumedTotal: consumption?.amount.toNumber() ?? 0,
         balance: balance.toNumber(),
         version: member.version,
         ownerComposition: memberRecharges
@@ -1189,7 +1371,7 @@ export class SharedPrepaidQueryService {
           })
           .sort((left, right) => left.ownerFrontendUserId.localeCompare(right.ownerFrontendUserId)),
         latestRechargeTime,
-        latestConsumptionTime: consumption?._max.createdAt ?? null,
+        latestConsumptionTime: consumption?.latest ?? null,
         createdAt: member.createdAt,
         updatedAt: member.updatedAt
       }
