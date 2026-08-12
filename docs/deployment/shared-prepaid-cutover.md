@@ -32,10 +32,10 @@ export VERIFY_AFTER="$BACKUP_DIR/shared-prepaid-verify-after-$CUTOVER_ID.json"
 export VERIFY_RESTORE_PHASE_A="$BACKUP_DIR/shared-prepaid-verify-restore-phase-a-$CUTOVER_ID.json"
 export PHASE_A_DIR='<immutable phase-A release directory>'
 export PHASE_B_DIR='<immutable phase-B release directory>'
-export PHASE_A_REVISION='1bf6efcffba9c10acefa9daadeedb5d9dfee829d'
-export PHASE_B_REVISION='5a568e4cd49f1759ca39814eb4ae0470b5aedc7a'
-export PHASE_A_TREE='44032364d84c754276ce7b07e4ac1a32699be6c6'
-export PHASE_B_TREE='1fb0603b2c0271340d48f140c210c7907e2632a6'
+export PHASE_A_REVISION='2b1a6b19eb658a52ceb92775053f43669191d70c'
+export PHASE_B_REVISION='8de3594df38262a589a9f5b69580fc4b5e6d55de'
+export PHASE_A_TREE='aef10e66ebec26055f284f3d8e23f53f5b11c2da'
+export PHASE_B_TREE='d876f1ea4d574a30fd6048f717b13435c68460f4'
 ```
 
 Use a directory owned by the deployment user with mode `0700`; backup and verifier files may contain business identifiers and counts. Check free space before starting. The examples assume the repository is already deployed at the intended revision and `pnpm install --frozen-lockfile` has completed.
@@ -222,7 +222,7 @@ Gate: restore, `SELECT 1`, the exact baseline-count diff, and the exact legacy-c
 
 ### 5. Apply the immutable non-destructive Phase-A artifact
 
-The reviewed release lineage is fixed to the full commit and tree identifiers declared above. It supersedes the prior final `ca5b32dcde9b725ec0db0320fb1d73287b9ad0dc` / `a86577a1d68c98c44a9d86a2e884ec27cb7a584b` pair and all earlier pairs. Phase A's parent is `099dda59d3999d2b5ffffd27a96b0538ececd355`; Phase B's direct parent is Phase A. These commits were created as new descendants without rewriting the earlier history. Verify the release system's signature/checksum and, when the artifacts retain Git metadata, run:
+The reviewed release lineage is fixed to the full commit and tree identifiers declared above. It supersedes the prior final `1bf6efcffba9c10acefa9daadeedb5d9dfee829d` / `5a568e4cd49f1759ca39814eb4ae0470b5aedc7a` pair and all earlier pairs. Phase A's parent is the superseded Phase A revision `1bf6efcffba9c10acefa9daadeedb5d9dfee829d`; Phase B's direct parent is the new Phase A. The new Phase A adds only the transaction-boundary correction that commits prepaid permission enum values before any later migration uses them. These commits were created as new descendants without rewriting the earlier history. Verify the release system's signature/checksum and, when the artifacts retain Git metadata, run:
 
 ```bash
 test "$(git -C "$PHASE_A_DIR" rev-parse HEAD)" = "$PHASE_A_REVISION"
@@ -245,11 +245,12 @@ The final comparison is intentionally exact: Phase B changes only the cleanup mi
 
 The expected Phase-A shared migrations, in order, are exactly:
 
-1. `20260811230000_add_shared_prepaid_ledger`
-2. `20260812010000_add_shared_prepaid_idempotency_snapshots`
-3. `20260812020000_add_lab_sample_save_requests`
-4. `20260812030000_add_shared_prepaid_settlement_actions`
-5. `20260812035000_add_shared_prepaid_money_checks`
+1. `20260811220000_add_shared_prepaid_permissions`
+2. `20260811230000_add_shared_prepaid_ledger`
+3. `20260812010000_add_shared_prepaid_idempotency_snapshots`
+4. `20260812020000_add_lab_sample_save_requests`
+5. `20260812030000_add_shared_prepaid_settlement_actions`
+6. `20260812035000_add_shared_prepaid_money_checks`
 
 First exercise Phase A on the restored temporary database. Run every command from the immutable Phase-A directory:
 
@@ -265,7 +266,7 @@ psql "$RESTORE_DATABASE_URL" -v ON_ERROR_STOP=1 -X -At -f /tmp/yangshao-permissi
 test ! -s "$PERMISSION_ISSUES_RESTORE_PHASE_A"
 ```
 
-Before deploy, `prisma migrate status` must list the five expected shared migrations above as pending and must not know about `20260812040000_remove_legacy_prepaid`; stop on any unexpected pending migration. After deploy, status must report the Phase-A schema up to date. The restored-database verifier must exit 0 with `"ok": true`, both settlement subtable presence fields true, and an empty `failures` array. The permission diff must be empty and the issues file must remain empty, proving unaffected permissions were preserved, exact per-subaccount mapping, no retired values, no unexpected settlement grant, and no duplicate subaccount-permission pair.
+Before deploy, `prisma migrate status` must list the six expected shared migrations above as pending and must not know about `20260812040000_remove_legacy_prepaid`; stop on any unexpected pending migration. After deploy, status must report the Phase-A schema up to date. The restored-database verifier must exit 0 with `"ok": true`, both settlement subtable presence fields true, and an empty `failures` array. The permission diff must be empty and the issues file must remain empty, proving unaffected permissions were preserved, exact per-subaccount mapping, no retired values, no unexpected settlement grant, and no duplicate subaccount-permission pair.
 
 Only after that restored-Phase-A gate passes, apply the same immutable Phase-A revision to production:
 
