@@ -22,7 +22,7 @@ export class UploadsController {
 
   @Post('images')
   @Roles(UserRole.FRONTEND_USER, UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
-  @FrontendPermission('DATA_MAIN', 'LAB_REPORT_IMAGE_TEMPLATE', 'BLACKLIST', 'PREPAID_SETTLEMENTS')
+  @FrontendPermission('DATA_MAIN', 'LAB_REPORT_IMAGE_TEMPLATE', 'BLACKLIST')
   @UseInterceptors(FilesInterceptor('images', UPLOAD_IMAGE_MAX_COUNT, {
     storage: memoryStorage(),
     limits: { files: UPLOAD_IMAGE_MAX_COUNT, fileSize: UPLOAD_IMAGE_MAX_BYTES },

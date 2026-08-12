@@ -216,11 +216,9 @@ const previewOffset = computed(() => moneyTenths(Math.min(
   toTenths(store.settlementPreview?.aToBAmount),
   toTenths(store.settlementPreview?.bToAAmount)
 )))
-const selectedPayableRows = computed(() => {
-  const rowsById = new Map(store.settlementPayablesPage.items.map((row) => [row.id, row]))
-  return store.settlementSelection.map((id) => rowsById.get(id))
-})
-const hasUnavailableSelection = computed(() => selectedPayableRows.value.some((row) => !row?.eligible))
+const hasUnavailableSelection = computed(() => (
+  store.selectedSettlementPayableRows.some((row) => !row?.eligible)
+))
 const canCreatePreview = computed(() => Boolean(
   store.settlementPreview && store.settlementSelection.length && !hasUnavailableSelection.value && isMainAccount.value && (
     isZeroPreview.value || store.settlementPreview.payerFrontendUserId === ownerId.value
@@ -332,7 +330,7 @@ async function togglePayable(row: PrepaidSettlementPayableListRow, checked: bool
   }
   store.setSettlementSelection(ids)
   if (!ids.length) return
-  if (selectedPayableRows.value.some((selectedRow) => !selectedRow?.eligible)) {
+  if (store.selectedSettlementPayableRows.some((selectedRow) => !selectedRow?.eligible)) {
     mutationError.value = '已选明细中有不再可结算的项目，请先取消勾选后重新预览。'
     return
   }
@@ -393,7 +391,8 @@ async function handleSettlementChanged(id: string) {
 
 function accountForId(id: string | null) {
   if (!id) return '无'
-  for (const row of store.settlementPayablesPage.items) {
+  for (const row of [...store.settlementPayablesPage.items, ...store.selectedSettlementPayableRows]) {
+    if (!row) continue
     if (row.sourceOwner.id === id) return accountLabel(row.sourceOwner)
     if (row.consumerOwner.id === id) return accountLabel(row.consumerOwner)
   }

@@ -117,6 +117,10 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   const selectedSettlement = ref<PrepaidSettlementDetailRow | null>(null)
   const rechargeDraft = ref<CreatePrepaidRechargePayload>(emptyRechargeDraft())
   const settlementSelection = ref<string[]>([])
+  const selectedSettlementPayablesById = reactive<Record<string, PrepaidSettlementPayableListRow>>({})
+  const selectedSettlementPayableRows = computed(() => (
+    settlementSelection.value.map((id) => selectedSettlementPayablesById[id])
+  ))
   const settlementPaymentDrafts = reactive<Record<string, PrepaidSettlementPaymentPayload>>({})
   const realtimeConnected = ref(false)
   const realtimeAuthTerminal = ref(false)
@@ -188,10 +192,24 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   }
 
   function setSettlementSelection(ids: string[]) {
+    const selectedIds = new Set(ids)
+    for (const row of settlementPayablesPage.value.items) {
+      if (selectedIds.has(row.id)) selectedSettlementPayablesById[row.id] = row
+    }
+    for (const id of Object.keys(selectedSettlementPayablesById)) {
+      if (!selectedIds.has(id)) delete selectedSettlementPayablesById[id]
+    }
     settlementSelection.value = [...ids]
     settlementPreview.value = null
     settlementDirtyState.selection = ids.length > 0
     syncSettlementDirty()
+  }
+
+  function mergeSelectedSettlementPayables(rows: PrepaidSettlementPayableListRow[]) {
+    const selectedIds = new Set(settlementSelection.value)
+    for (const row of rows) {
+      if (selectedIds.has(row.id)) selectedSettlementPayablesById[row.id] = row
+    }
   }
 
   function getSettlementPaymentDraft(id: string): PrepaidSettlementPaymentPayload {
@@ -264,6 +282,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
       prepaidApi.getPrepaidSettlementPayables(query)
     ), (result) => {
       settlementPayablesPage.value = result
+      mergeSelectedSettlementPayables(result.items)
     })
   }
 
@@ -279,9 +298,19 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
       })
     ))))
     const updates = new Map(results.flatMap((result) => result.items).map((row) => [row.id, row]))
+    const selectedIds = new Set(ids)
     settlementPayablesPage.value = {
       ...settlementPayablesPage.value,
-      items: settlementPayablesPage.value.items.map((row) => updates.get(row.id) ?? row)
+      items: settlementPayablesPage.value.items.map((row) => (
+        selectedIds.has(row.id) ? updates.get(row.id) ?? { ...row, eligible: false } : row
+      ))
+    }
+    for (const id of ids) {
+      const update = updates.get(id)
+      if (update) selectedSettlementPayablesById[id] = update
+      else if (selectedSettlementPayablesById[id]) {
+        selectedSettlementPayablesById[id] = { ...selectedSettlementPayablesById[id], eligible: false }
+      }
     }
     settlementPreview.value = null
     return results
@@ -421,10 +450,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     ), (row, isLatestInvocation) => {
       upsertSettlement(row)
       if (isLatestInvocation) {
-        settlementSelection.value = []
-        settlementPreview.value = null
-        settlementDirtyState.selection = false
-        syncSettlementDirty()
+        setSettlementSelection([])
       }
     }, JSON.stringify([...payableIds].sort()))
   }
@@ -669,6 +695,7 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     selectedSettlement,
     rechargeDraft,
     settlementSelection,
+    selectedSettlementPayableRows,
     settlementPaymentDrafts,
     realtimeConnected,
     realtimeAuthTerminal,

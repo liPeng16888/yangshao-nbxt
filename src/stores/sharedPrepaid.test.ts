@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useAuthStore } from './auth'
 import { useSharedPrepaidStore } from './sharedPrepaid'
-import type { PrepaidPage, PrepaidRechargeRow, PrepaidSettlementRow } from '@/types/sharedPrepaid'
+import type {
+  PrepaidPage,
+  PrepaidRechargeRow,
+  PrepaidSettlementPayableListRow,
+  PrepaidSettlementRow
+} from '@/types/sharedPrepaid'
 
 const apiMocks = vi.hoisted(() => ({
   createSharedPrepaidStreamTicket: vi.fn(),
@@ -86,6 +91,45 @@ function settlementRowFixture(id: string): PrepaidSettlementRow {
     createdAt: '2026-08-12T08:00:00.000Z',
     updatedAt: '2026-08-12T08:00:00.000Z',
     lines: []
+  }
+}
+
+function settlementPayableFixture(
+  id: string,
+  direction: 'OUTGOING' | 'INCOMING',
+  eligible = true
+): PrepaidSettlementPayableListRow {
+  const accountA = { id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: '北京店' }
+  const accountB = { id: 'front-2', account: 'owner-b', username: '主账号 B', displayRemark: null }
+  const outgoing = direction === 'OUTGOING'
+  return {
+    id,
+    consumptionId: `consumption-${id}`,
+    sourceOwnerId: outgoing ? 'front-1' : 'front-2',
+    consumerOwnerId: outgoing ? 'front-2' : 'front-1',
+    exactAmount: 50,
+    amount: 50,
+    status: eligible ? 'PENDING' : 'HELD',
+    reversalOfId: null,
+    eligible,
+    direction,
+    counterpartyFrontendUserId: 'front-2',
+    createdAt: '2026-08-12T03:04:05.000Z',
+    updatedAt: '2026-08-12T03:04:05.000Z',
+    sourceOwner: outgoing ? accountA : accountB,
+    consumerOwner: outgoing ? accountB : accountA,
+    consumption: {
+      id: `consumption-${id}`,
+      memberId: `member-${id}`,
+      phoneSnapshot: '13800000000',
+      sampleNumberSnapshot: `S-${id}`,
+      sampleCountSnapshot: 1,
+      elementsSnapshot: ['Au'],
+      sheetDate: '2026-08-12',
+      createdAt: '2026-08-12T03:04:05.000Z',
+      rechargeBatches: []
+    },
+    settlementAssociations: []
   }
 }
 
@@ -461,6 +505,39 @@ describe('shared prepaid realtime refresh', () => {
     })
     expect(store.settlementsPage.items[0]).toMatchObject({ id: 'settlement-1' })
     expect(store.selectedSettlement).toMatchObject({ id: 'settlement-1' })
+  })
+
+  it('keeps selected payable rows across pages and refreshes off-page availability by ID', async () => {
+    const pageOne = settlementPayableFixture('payable-page-1', 'OUTGOING')
+    const pageTwo = settlementPayableFixture('payable-page-2', 'INCOMING')
+    const pageOneHeld = settlementPayableFixture('payable-page-1', 'OUTGOING', false)
+    apiMocks.getPrepaidSettlementPayables
+      .mockResolvedValueOnce({ items: [pageOne], total: 21, page: 1, pageSize: 20 })
+      .mockResolvedValueOnce({ items: [pageTwo], total: 21, page: 2, pageSize: 20 })
+      .mockResolvedValueOnce({ items: [pageOneHeld, pageTwo], total: 2, page: 1, pageSize: 2 })
+    const store = useSharedPrepaidStore()
+
+    await store.loadSettlementPayables({ page: 1, pageSize: 20 })
+    store.setSettlementSelection(['payable-page-1'])
+    await store.loadSettlementPayables({ page: 2, pageSize: 20 })
+    store.setSettlementSelection(['payable-page-1', 'payable-page-2'])
+
+    expect(store.selectedSettlementPayableRows.map((row) => row?.id)).toEqual([
+      'payable-page-1', 'payable-page-2'
+    ])
+
+    await store.refreshSelectedSettlementPayables(['payable-page-1', 'payable-page-2'])
+
+    expect(store.selectedSettlementPayableRows.map((row) => ({ id: row?.id, eligible: row?.eligible }))).toEqual([
+      { id: 'payable-page-1', eligible: false },
+      { id: 'payable-page-2', eligible: true }
+    ])
+    expect(store.settlementPayablesPage.items).toEqual([pageTwo])
+
+    store.setSettlementSelection(['payable-page-2'])
+    expect(store.selectedSettlementPayableRows.map((row) => row?.id)).toEqual(['payable-page-2'])
+    store.setSettlementSelection([])
+    expect(store.selectedSettlementPayableRows).toEqual([])
   })
 
   it('allows an explicit action key and preserves a recharge form on conflict', async () => {

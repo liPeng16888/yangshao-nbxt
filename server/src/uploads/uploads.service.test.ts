@@ -1,11 +1,16 @@
-import { BadRequestException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException } from '@nestjs/common'
 import { INTERCEPTORS_METADATA } from '@nestjs/common/constants'
 import { ConfigService } from '@nestjs/config'
+import { Reflector } from '@nestjs/core'
+import { UserRole, type FrontendMenuPermission } from '@prisma/client'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { CurrentUser } from '../auth/current-user'
+import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
+import { RolesGuard } from '../auth/roles.guard'
 import { UploadsController } from './uploads.controller'
 import { type UploadedImageFile, UploadsService } from './uploads.service'
 import * as uploadModule from './uploads.service'
@@ -43,6 +48,38 @@ async function setup(options: { failDatabase?: boolean } = {}) {
   }
   const config = new ConfigService({ UPLOAD_DIR: root })
   return { root, rows, service: new UploadsService({ uploadedFile } as never, config) }
+}
+
+function frontendUser(role: UserRole, permissions: FrontendMenuPermission[] = []): CurrentUser {
+  const isMain = role === UserRole.FRONTEND_USER
+  return {
+    id: isMain ? 'front-1' : 'sub-1',
+    account: isMain ? 'owner-a' : 'sub-a',
+    username: isMain ? '主账号' : '子账号',
+    role,
+    dataOwnerId: 'front-1',
+    permissionVersion: 1,
+    permissions,
+    requiresAccessGuardPassword: true,
+    isFrontendMainAccount: isMain,
+    isFrontendSubAccount: !isMain
+  }
+}
+
+async function authorizedUpload(
+  controller: UploadsController,
+  user: CurrentUser,
+  files: UploadedImageFile[]
+) {
+  const reflector = new Reflector()
+  const context = {
+    getHandler: () => UploadsController.prototype.uploadImages,
+    getClass: () => UploadsController,
+    switchToHttp: () => ({ getRequest: () => ({ user }) })
+  }
+  new RolesGuard(reflector).canActivate(context as never)
+  new FrontendPermissionGuard(reflector).canActivate(context as never)
+  return controller.uploadImages(files)
 }
 
 describe('UploadsService raster image hardening', () => {
@@ -135,5 +172,38 @@ describe('UploadsService raster image hardening', () => {
     expect(setHeader).toHaveBeenCalledWith('X-Content-Type-Options', 'nosniff')
     expect(setHeader).toHaveBeenCalledWith('Content-Security-Policy', "default-src 'none'; sandbox")
     expect(setHeader).toHaveBeenCalledWith('Cross-Origin-Resource-Policy', 'same-origin')
+  })
+})
+
+describe('UploadsController frontend authority', () => {
+  it('denies a PREPAID_SETTLEMENTS-only subaccount before any file or database row is persisted', async () => {
+    const { root, rows, service } = await setup()
+    const controller = new UploadsController(service)
+    const settlementOnlySub = frontendUser(UserRole.FRONTEND_SUB_USER, ['PREPAID_SETTLEMENTS'])
+
+    await expect(authorizedUpload(controller, settlementOnlySub, [image(PNG, 'image/png', 'proof.png')]))
+      .rejects.toBeInstanceOf(ForbiddenException)
+
+    expect(rows).toHaveLength(0)
+    expect(await readdir(root)).toEqual([])
+  })
+
+  it('keeps main-account proof uploads and existing generic leaf-permission uploads working', async () => {
+    const mainSetup = await setup()
+    const genericSetup = await setup()
+
+    await expect(authorizedUpload(
+      new UploadsController(mainSetup.service),
+      frontendUser(UserRole.FRONTEND_USER),
+      [image(PNG, 'image/png', 'proof.png')]
+    )).resolves.toEqual([expect.stringMatching(/^\/uploads\//)])
+    await expect(authorizedUpload(
+      new UploadsController(genericSetup.service),
+      frontendUser(UserRole.FRONTEND_SUB_USER, ['DATA_MAIN']),
+      [image(JPEG, 'image/jpeg', 'lab.jpg')]
+    )).resolves.toEqual([expect.stringMatching(/^\/uploads\//)])
+
+    expect(mainSetup.rows).toHaveLength(1)
+    expect(genericSetup.rows).toHaveLength(1)
   })
 })

@@ -189,6 +189,62 @@ describe('PrepaidSettlementsPage', () => {
     expect(wrapper.find('[data-testid="settlement-create"]').exists()).toBe(true)
   })
 
+  it('preserves multi-page selection and blocks an off-page row invalidated by a 409 until it is unchecked', async () => {
+    const pageOne = payable('payable-page-1', 'OUTGOING', 90.9)
+    const pageTwo = payable('payable-page-2', 'INCOMING', 40.4)
+    const pageOneHeld = payable('payable-page-1', 'OUTGOING', 90.9, 'HELD', false)
+    const conflict = { response: { status: 409, data: { message: '部分应转款已被占用' } } }
+    let conflicted = false
+    apiMocks.getPrepaidSettlementPayables.mockImplementation((query: {
+      page?: number
+      payableIds?: string[]
+    } = {}) => {
+      if (query.payableIds) {
+        return Promise.resolve({ items: [pageOneHeld, pageTwo], total: 2, page: 1, pageSize: 2 })
+      }
+      if (query.page === 2) {
+        return Promise.resolve({ items: [pageTwo], total: 21, page: 2, pageSize: 20 })
+      }
+      return Promise.resolve({ items: [conflicted ? pageOneHeld : pageOne], total: 21, page: 1, pageSize: 20 })
+    })
+    apiMocks.createPrepaidSettlement.mockImplementation(() => {
+      conflicted = true
+      return Promise.reject(conflict)
+    })
+    const { wrapper, store } = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="payable-select-payable-page-1"]').setValue(true)
+    await flushPromises()
+    await store.loadSettlementPayables({ page: 2, pageSize: 20 })
+    await flushPromises()
+    await wrapper.get('[data-testid="payable-select-payable-page-2"]').setValue(true)
+    await flushPromises()
+
+    expect(store.settlementSelection).toEqual(['payable-page-1', 'payable-page-2'])
+    await wrapper.get('[data-testid="settlement-create"]').trigger('click')
+    await flushPromises()
+
+    expect(store.selectedSettlementPayableRows.map((row) => ({ id: row?.id, eligible: row?.eligible }))).toEqual([
+      { id: 'payable-page-1', eligible: false },
+      { id: 'payable-page-2', eligible: true }
+    ])
+    expect(wrapper.find('[data-testid="settlement-create"]').exists()).toBe(false)
+    expect((wrapper.get('[data-testid="payable-select-payable-page-2"]').element as HTMLInputElement).checked).toBe(true)
+
+    await store.loadSettlementPayables({ page: 1, pageSize: 20 })
+    await flushPromises()
+    const invalidOffPage = wrapper.get('[data-testid="payable-select-payable-page-1"]')
+    expect((invalidOffPage.element as HTMLInputElement).checked).toBe(true)
+    expect((invalidOffPage.element as HTMLInputElement).disabled).toBe(false)
+    await invalidOffPage.setValue(false)
+    await flushPromises()
+
+    expect(store.settlementSelection).toEqual(['payable-page-2'])
+    expect(apiMocks.previewPrepaidSettlement).toHaveBeenLastCalledWith({ payableIds: ['payable-page-2'] })
+    expect(wrapper.find('[data-testid="settlement-create"]').exists()).toBe(true)
+  })
+
   it('shows zero-net reconciliation language and gives subaccounts the same data as a view-only page', async () => {
     apiMocks.previewPrepaidSettlement.mockResolvedValue({
       accountAId: 'front-1', accountBId: 'front-2', aToBAmount: 40.4, bToAAmount: 40.4,
