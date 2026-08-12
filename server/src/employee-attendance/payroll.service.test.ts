@@ -516,6 +516,7 @@ describe('PayrollService frontend payroll', () => {
 
   it('classifies current scheduled employees once using live leave and attendance derivation', async () => {
     const { service, prisma } = serviceFixture()
+    vi.spyOn(service as any, 'today').mockReturnValue('2026-08-11')
     prisma.employee.count = vi.fn().mockResolvedValue(3)
     prisma.employeeAttendanceRecord.findMany
       .mockResolvedValueOnce([{
@@ -544,6 +545,7 @@ describe('PayrollService frontend payroll', () => {
     ['hourly', EmployeeLeaveUnit.HOUR, decimal(1)]
   ])('classifies any positive approved %s leave coverage as leave exactly once', async (_label, unit, hours) => {
     const { service, prisma } = serviceFixture()
+    vi.spyOn(service as any, 'today').mockReturnValue('2026-08-11')
     prisma.employee.count = vi.fn().mockResolvedValue(1)
     prisma.employeeAttendanceRecord.findMany
       .mockResolvedValueOnce([{
