@@ -32,8 +32,10 @@ export VERIFY_AFTER="$BACKUP_DIR/shared-prepaid-verify-after-$CUTOVER_ID.json"
 export VERIFY_RESTORE_PHASE_A="$BACKUP_DIR/shared-prepaid-verify-restore-phase-a-$CUTOVER_ID.json"
 export PHASE_A_DIR='<immutable phase-A release directory>'
 export PHASE_B_DIR='<immutable phase-B release directory>'
-export PHASE_A_REVISION='<approved immutable phase-A revision>'
-export PHASE_B_REVISION='<approved immutable phase-B revision>'
+export PHASE_A_REVISION='0e35d886769697f13e3dc71c5c124dffa28a27de'
+export PHASE_B_REVISION='5c6ccd082044668630f84aa5134341a0cedb7329'
+export PHASE_A_TREE='ce41a3236e0015a836a23dae55ec426cd62fd95c'
+export PHASE_B_TREE='c92e5ea54120c9bc0cee1825167d0828b897835b'
 ```
 
 Use a directory owned by the deployment user with mode `0700`; backup and verifier files may contain business identifiers and counts. Check free space before starting. The examples assume the repository is already deployed at the intended revision and `pnpm install --frozen-lockfile` has completed.
@@ -220,14 +222,26 @@ Gate: restore, `SELECT 1`, the exact baseline-count diff, and the exact legacy-c
 
 ### 5. Apply the immutable non-destructive Phase-A artifact
 
-Use two immutable artifacts/revisions from one reviewed lineage. Phase A must physically exclude the cleanup migration directory. Phase B must be its approved descendant and add the cleanup migration at the final timestamp. Record both revision identifiers in the change record and verify the release system's signature/checksum; if the artifacts retain Git metadata, also run:
+The reviewed release lineage is fixed to the full commit and tree identifiers declared above. Phase A's parent is `c4b31779b4b19721d35090ee563ba827e550d7fc`; Phase B's direct parent is Phase A. These commits were created as new descendants without rewriting the earlier history. Verify the release system's signature/checksum and, when the artifacts retain Git metadata, run:
 
 ```bash
 test "$(git -C "$PHASE_A_DIR" rev-parse HEAD)" = "$PHASE_A_REVISION"
 test "$(git -C "$PHASE_B_DIR" rev-parse HEAD)" = "$PHASE_B_REVISION"
+test "$(git -C "$PHASE_A_DIR" rev-parse 'HEAD^{tree}')" = "$PHASE_A_TREE"
+test "$(git -C "$PHASE_B_DIR" rev-parse 'HEAD^{tree}')" = "$PHASE_B_TREE"
+git -C "$PHASE_B_DIR" merge-base --is-ancestor "$PHASE_A_REVISION" "$PHASE_B_REVISION"
+test "$(git -C "$PHASE_B_DIR" rev-parse "$PHASE_B_REVISION^")" = "$PHASE_A_REVISION"
 test ! -e "$PHASE_A_DIR/server/prisma/migrations/20260812040000_remove_legacy_prepaid"
 test -f "$PHASE_B_DIR/server/prisma/migrations/20260812040000_remove_legacy_prepaid/migration.sql"
+grep -q '^model PrepaidRechargeRecord {' "$PHASE_A_DIR/server/prisma/schema.prisma"
+grep -q '^model PrepaidCustomerRemark {' "$PHASE_A_DIR/server/prisma/schema.prisma"
+grep -q '^model PrepaidUsageRemark {' "$PHASE_A_DIR/server/prisma/schema.prisma"
+test "$(git -C "$PHASE_B_DIR" diff-tree --no-commit-id --name-status -r "$PHASE_B_REVISION" | tr '\t' ' ')" = "$(printf '%s\n' \
+  'A server/prisma/migrations/20260812040000_remove_legacy_prepaid/migration.sql' \
+  'M server/prisma/schema.prisma')"
 ```
+
+The final comparison is intentionally exact: Phase B changes only the cleanup migration and Prisma schema. Any third path means the Phase-B artifact is not the approved cleanup commit.
 
 The expected Phase-A shared migrations, in order, are exactly:
 
