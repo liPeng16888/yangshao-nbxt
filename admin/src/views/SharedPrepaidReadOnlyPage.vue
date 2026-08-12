@@ -124,7 +124,7 @@
           <el-table-column label="检测元素" min-width="180"><template #default="{ row }">{{ formatElements(row.elementsSnapshot) }}</template></el-table-column>
           <el-table-column label="消费金额" width="115"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
           <el-table-column label="消费账号" min-width="180"><template #default="{ row }">{{ accountLabel(row.consumingFrontendUser) }}</template></el-table-column>
-          <el-table-column label="资金来源" min-width="220"><template #default="{ row }">{{ sourceOwnerLabels(row.sourceOwners) }}</template></el-table-column>
+          <el-table-column label="资金来源" min-width="220"><template #default="{ row }">{{ sourceOwnerLabels(row.sourceOwners, row.sourceOwnersTruncated) }}</template></el-table-column>
           <el-table-column label="状态" width="105"><template #default="{ row }">{{ consumptionStatus(row) }}</template></el-table-column>
         </template>
 
@@ -432,9 +432,10 @@ function compositionLabel(value: unknown) {
   }).join('；')
 }
 
-function sourceOwnerLabels(value: unknown) {
+function sourceOwnerLabels(value: unknown, truncated: unknown) {
   if (!Array.isArray(value) || !value.length) return '无信息'
-  return [...new Set(value.map((item) => accountLabel(item as AdminSharedPrepaidAccount)))].join('、')
+  const labels = [...new Set(value.map((item) => accountLabel(item as AdminSharedPrepaidAccount)))].join('、')
+  return truncated ? `${labels}（仅显示前100个来源账号）` : labels
 }
 
 function consumptionStatus(row: Record<string, unknown>) {

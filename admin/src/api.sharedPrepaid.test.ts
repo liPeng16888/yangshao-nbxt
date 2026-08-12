@@ -37,15 +37,25 @@ describe('admin shared prepaid mock contract', () => {
     })).rejects.toThrow('没有访问部分前端账号的权限')
   })
 
-  it('mirrors member participation through consumption and settlement without leaking list histories', async () => {
+  it('dynamically scopes member totals and detail histories for every participation path', async () => {
     await adminLogin({ account: 'sub001', password: 'sub123456' })
 
     const page = await getAdminSharedPrepaidPage('members', {
       frontendUserIds: ['front-1'], page: 1, pageSize: 20
     })
-    expect(page.items.map((item) => item.id)).toEqual(expect.arrayContaining([
+    const byId = new Map(page.items.map((item) => [item.id, item as Record<string, any>]))
+    expect([...byId.keys()]).toEqual(expect.arrayContaining([
       'member-1', 'member-consumer-only', 'member-settlement-only'
     ]))
+    // member-1 is source-only for this admin: only its 10 allocation is scoped in.
+    expect(byId.get('member-1')).toMatchObject({ consumedTotal: 10 })
+    // The consumer owns this row, so its full amount is counted.
+    expect(byId.get('member-consumer-only')).toMatchObject({ consumedTotal: 30 })
+    // Settlement participation grants visibility, not consumption ownership.
+    expect(byId.get('member-settlement-only')).toMatchObject({
+      consumedTotal: 0,
+      latestConsumptionTime: null
+    })
     for (const item of page.items) {
       expect(item).not.toHaveProperty('recharges')
       expect(item).not.toHaveProperty('consumptions')
@@ -53,12 +63,37 @@ describe('admin shared prepaid mock contract', () => {
       expect(item).not.toHaveProperty('historyTruncated')
     }
 
-    const detail = await getAdminSharedPrepaidDetail('members', 'member-consumer-only', ['front-1'])
-    expect(detail).toMatchObject({
+    const consumerDetail = await getAdminSharedPrepaidDetail('members', 'member-consumer-only', ['front-1'])
+    expect(consumerDetail).toMatchObject({
       id: 'member-consumer-only',
       consumptions: [expect.objectContaining({ id: 'consumption-consumer-only' })],
       historyTruncated: expect.any(Object)
     })
+
+    const sourceDetail = await getAdminSharedPrepaidDetail('members', 'member-1', ['front-1'])
+    expect(sourceDetail).toMatchObject({
+      consumedTotal: 10,
+      consumptions: [expect.objectContaining({
+        id: 'consumption-1',
+        sourceOwners: expect.any(Array),
+        sourceOwnersTruncated: false
+      })]
+    })
+    expect((sourceDetail.consumptions as Array<Record<string, unknown>>)[0]).not.toHaveProperty('allocations')
+
+    const settlementDetail = await getAdminSharedPrepaidDetail('members', 'member-settlement-only', ['front-1'])
+    expect(settlementDetail).toMatchObject({
+      consumedTotal: 0,
+      latestConsumptionTime: null,
+      consumptions: []
+    })
+
+    window.localStorage.clear()
+    const rootPage = await getAdminSharedPrepaidPage('members', {
+      frontendUserIds: ['front-1', 'front-2'], page: 1, pageSize: 20
+    })
+    // front-2 is the consumer, so the mixed 10/90 allocations still count the full 100 exactly once.
+    expect(rootPage.items.find((item) => item.id === 'member-1')).toMatchObject({ consumedTotal: 100 })
   })
 
   it('returns audit detail through GET', async () => {

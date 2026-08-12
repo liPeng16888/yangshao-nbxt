@@ -118,6 +118,7 @@ const rowsByResource: Record<string, Array<Record<string, unknown>>> = {
     elementsSnapshot: ['Au', 'Ag'], amount: 30, kind: 'CONSUMPTION', active: true,
     consumingFrontendUser: { id: 'front-2', account: 'owner-b', username: '主账号 B', displayRemark: null },
     sourceOwners: [{ id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: null }],
+    sourceOwnersTruncated: true,
     sheetDate: '2026-08-02', createdAt: '2026-08-02T01:00:00Z'
   }],
   settlements: [{
@@ -210,6 +211,7 @@ describe('SharedPrepaidReadOnlyPage', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('主账号 A（owner-a）')
+    expect(wrapper.text()).toContain('仅显示前100个来源账号')
   })
 
   it('previews settlement proof and preserves audit status, reason and actions in detail', async () => {

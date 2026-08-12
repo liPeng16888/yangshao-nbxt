@@ -317,32 +317,22 @@ describe('SharedPrepaidQueryService consumption list', () => {
 })
 
 describe('SharedPrepaidQueryService admin reads', () => {
-  it('counts a consumer-owned row once but only allowed allocations for source-only participation', async () => {
+  it('aggregates scoped consumption totals in SQL without loading qualifying rows into memory', async () => {
     const createdAt = new Date('2026-08-12T03:04:05.000Z')
     const rechargeGroupBy = vi.fn().mockResolvedValue([{
       memberId: 'member-1', ownerFrontendUserId: 'front-1',
       _sum: { paidAmount: new Prisma.Decimal(100), giftAmount: new Prisma.Decimal(10), remainingAmount: new Prisma.Decimal(80) },
       _max: { createdAt }
     }])
-    const consumptionFindMany = vi.fn().mockResolvedValue([
-      {
-        id: 'consumer-owned', memberId: 'member-1', consumingFrontendUserId: 'front-1',
-        amount: new Prisma.Decimal(100), createdAt,
-        allocations: [
-          { sourceOwnerId: 'front-1', allocatedAmount: new Prisma.Decimal(10) },
-          { sourceOwnerId: 'front-2', allocatedAmount: new Prisma.Decimal(90) }
-        ]
-      },
-      {
-        id: 'source-only', memberId: 'member-1', consumingFrontendUserId: 'front-2',
-        amount: new Prisma.Decimal(100), createdAt,
-        allocations: [
-          { sourceOwnerId: 'front-1', allocatedAmount: new Prisma.Decimal(10) },
-          { sourceOwnerId: 'front-2', allocatedAmount: new Prisma.Decimal(90) }
-        ]
-      }
-    ])
+    const consumptionFindMany = vi.fn().mockResolvedValue([])
+    const aggregateQuery = vi.fn().mockResolvedValue([{
+      memberId: 'member-1',
+      // Hand-derived: allowed consumer contributes 100 once; source-only row contributes its allowed allocation 10.
+      consumedTotal: new Prisma.Decimal(110),
+      latestConsumptionTime: createdAt
+    }])
     const service = new SharedPrepaidQueryService({
+      $queryRaw: aggregateQuery,
       sharedPrepaidMember: {
         findMany: vi.fn().mockResolvedValue([{
           id: 'member-1', phone: '13800000000', cachedBalance: new Prisma.Decimal(999),
@@ -353,9 +343,7 @@ describe('SharedPrepaidQueryService admin reads', () => {
       sharedPrepaidRecharge: { groupBy: rechargeGroupBy },
       sharedPrepaidConsumption: {
         findMany: consumptionFindMany,
-        groupBy: vi.fn().mockResolvedValue([{
-          memberId: 'member-1', _sum: { amount: new Prisma.Decimal(200) }, _max: { createdAt }
-        }])
+        groupBy: vi.fn().mockResolvedValue([])
       },
       user: { findMany: vi.fn().mockResolvedValue([{ id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: null }]) }
     } as never)
@@ -365,38 +353,56 @@ describe('SharedPrepaidQueryService admin reads', () => {
     expect(rechargeGroupBy).toHaveBeenCalledWith(expect.objectContaining({
       where: { memberId: { in: ['member-1'] }, ownerFrontendUserId: { in: ['front-1'] }, reversedAt: null }
     }))
-    expect(consumptionFindMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({
-        memberId: { in: ['member-1'] },
-        OR: expect.any(Array)
-      }),
-      select: expect.objectContaining({
-        consumingFrontendUserId: true,
-        allocations: expect.objectContaining({
-          where: { sourceOwnerId: { in: ['front-1'] } },
-          select: { sourceOwnerId: true, allocatedAmount: true }
-        })
-      })
-    }))
+    expect(consumptionFindMany).not.toHaveBeenCalled()
+    expect(aggregateQuery).toHaveBeenCalledOnce()
+    const aggregateStatement = aggregateQuery.mock.calls[0]?.[0] as Prisma.Sql
+    const aggregateSql = aggregateStatement.strings.join(' ')
+    expect(aggregateSql).toContain('CASE')
+    expect(aggregateSql).toContain('c."consumingFrontendUserId"')
+    expect(aggregateSql).toContain('SUM(a."allocatedAmount") FILTER')
+    expect(aggregateSql).toMatch(/GROUP BY\s+c\."id"/)
+    expect(aggregateSql).toContain('GROUP BY "memberId"')
+    expect(aggregateStatement.values).toEqual(expect.arrayContaining(['front-1', 'member-1']))
     expect(result.items[0]).toMatchObject({ paidTotal: 100, giftTotal: 10, consumedTotal: 110, balance: 80 })
   })
 
-  it('returns a minimized consumption collection and batches only source identities', async () => {
+  it('caps source identities per consumption without starving later collection rows', async () => {
     const createdAt = new Date('2026-08-12T03:04:05.000Z')
     const sourceOwner = { id: 'front-1', account: 'owner-a', username: '主账号 A', displayRemark: null }
     const consumer = { id: 'front-2', account: 'owner-b', username: '主账号 B', displayRemark: null }
-    const consumptionFindMany = vi.fn().mockResolvedValue([{
-      id: 'consumption-1', memberId: 'member-1', consumingFrontendUserId: 'front-2', actorUserId: 'front-2',
-      kind: SharedPrepaidConsumptionKind.CONSUMPTION, amount: new Prisma.Decimal(100), sheetId: 'sheet-1',
-      sampleBlockId: 'block-1', sampleIndex: 0, sampleNumberSnapshot: 'A-001', sampleCountSnapshot: 2,
-      elementsSnapshot: ['Au'], phoneSnapshot: '13800000000', sheetDate: '2026-08-12', active: true,
-      reversalOfId: null, createdAt, consumingFrontendUser: consumer, actorUser: consumer,
-      allocations: [{ sourceOwner, recharge: { id: 'secret-batch' } }], payables: [{ id: 'secret-payable' }]
-    }])
-    const allocationFindMany = vi.fn().mockResolvedValue([{
-      consumptionId: 'consumption-1', sourceOwnerId: 'front-1', sourceOwner
-    }])
+    const consumptionFindMany = vi.fn().mockResolvedValue([
+      {
+        id: 'consumption-1', memberId: 'member-1', consumingFrontendUserId: 'front-2', actorUserId: 'front-2',
+        kind: SharedPrepaidConsumptionKind.CONSUMPTION, amount: new Prisma.Decimal(100),
+        sampleNumberSnapshot: 'A-001', sampleCountSnapshot: 2, elementsSnapshot: ['Au'],
+        phoneSnapshot: '13800000000', sheetDate: '2026-08-12', active: true,
+        reversalOfId: null, createdAt, consumingFrontendUser: consumer, actorUser: consumer
+      },
+      {
+        id: 'consumption-2', memberId: 'member-2', consumingFrontendUserId: 'front-2', actorUserId: 'front-2',
+        kind: SharedPrepaidConsumptionKind.CONSUMPTION, amount: new Prisma.Decimal(50),
+        sampleNumberSnapshot: 'A-002', sampleCountSnapshot: 1, elementsSnapshot: ['Ag'],
+        phoneSnapshot: '13900000000', sheetDate: '2026-08-12', active: true,
+        reversalOfId: null, createdAt, consumingFrontendUser: consumer, actorUser: consumer
+      }
+    ])
+    const rawSources = [
+      ...Array.from({ length: 101 }, (_, index) => ({
+        consumptionId: 'consumption-1', sourceOwnerId: `source-${String(index).padStart(3, '0')}`,
+        id: `source-${String(index).padStart(3, '0')}`,
+        account: `owner-${index}`, username: `来源 ${index}`, displayRemark: null
+      })),
+      { consumptionId: 'consumption-2', sourceOwnerId: sourceOwner.id, id: sourceOwner.id, account: sourceOwner.account,
+        username: sourceOwner.username, displayRemark: sourceOwner.displayRemark }
+    ]
+    const sourceQuery = vi.fn().mockResolvedValue(rawSources)
+    const allocationFindMany = vi.fn().mockResolvedValue(rawSources.map((row) => ({
+      consumptionId: row.consumptionId,
+      sourceOwnerId: row.sourceOwnerId,
+      sourceOwner: { id: row.sourceOwnerId, account: row.account, username: row.username, displayRemark: row.displayRemark }
+    })))
     const service = new SharedPrepaidQueryService({
+      $queryRaw: sourceQuery,
       sharedPrepaidConsumption: { findMany: consumptionFindMany, count: vi.fn().mockResolvedValue(1) },
       sharedPrepaidAllocation: { findMany: allocationFindMany }
     } as never)
@@ -407,12 +413,23 @@ describe('SharedPrepaidQueryService admin reads', () => {
     expect(collectionSelect).not.toHaveProperty('allocations')
     expect(collectionSelect).not.toHaveProperty('payables')
     expect(collectionSelect).not.toHaveProperty('reversalOf')
-    expect(allocationFindMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { consumptionId: { in: ['consumption-1'] } },
-      distinct: ['consumptionId', 'sourceOwnerId'],
-      take: 100
-    }))
-    expect(result.items[0]).toMatchObject({ id: 'consumption-1', sourceOwners: [sourceOwner] })
+    expect(collectionSelect).not.toHaveProperty('sheetId')
+    expect(collectionSelect).not.toHaveProperty('sampleBlockId')
+    expect(collectionSelect).not.toHaveProperty('sampleIndex')
+    expect(allocationFindMany).not.toHaveBeenCalled()
+    expect(sourceQuery).toHaveBeenCalledOnce()
+    const sourceStatement = sourceQuery.mock.calls[0]?.[0] as Prisma.Sql
+    const sourceSql = sourceStatement.strings.join(' ')
+    expect(sourceSql).toContain('ROW_NUMBER() OVER')
+    expect(sourceSql).toContain('PARTITION BY "consumptionId"')
+    expect(sourceStatement.values).toEqual(expect.arrayContaining(['consumption-1', 'consumption-2', 101]))
+    expect(result.items[0]).toMatchObject({
+      id: 'consumption-1', sourceOwnersTruncated: true
+    })
+    expect((result.items[0] as Record<string, unknown>).sourceOwners).toHaveLength(100)
+    expect(result.items[1]).toMatchObject({
+      id: 'consumption-2', sourceOwners: [sourceOwner], sourceOwnersTruncated: false
+    })
     expect(result.items[0]).not.toHaveProperty('allocations')
     expect(result.items[0]).not.toHaveProperty('payables')
     expect(result.items[0]).not.toHaveProperty('originalPayables')

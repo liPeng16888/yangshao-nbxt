@@ -274,9 +274,6 @@ const adminConsumptionSummarySelect = {
   actorUserId: true,
   kind: true,
   amount: true,
-  sheetId: true,
-  sampleBlockId: true,
-  sampleIndex: true,
   sampleNumberSnapshot: true,
   sampleCountSnapshot: true,
   elementsSnapshot: true,
@@ -291,6 +288,9 @@ const adminConsumptionSummarySelect = {
 
 const adminConsumptionDetailSelect = {
   ...adminConsumptionSummarySelect,
+  sheetId: true,
+  sampleBlockId: true,
+  sampleIndex: true,
   allocations: {
     select: consumptionAllocationSelect,
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -471,6 +471,15 @@ type AdminConsumptionDetailDatabaseRow = Prisma.SharedPrepaidConsumptionGetPaylo
 type AdminConsumptionSummaryDatabaseRow = Prisma.SharedPrepaidConsumptionGetPayload<{
   select: typeof adminConsumptionSummarySelect
 }>
+type AdminConsumptionSourceRow = AccountRow & {
+  consumptionId: string
+  sourceOwnerId: string
+}
+type AdminConsumptionAggregateRow = {
+  memberId: string
+  consumedTotal: Prisma.Decimal
+  latestConsumptionTime: Date | null
+}
 type AdminMemberBaseRow = Prisma.SharedPrepaidMemberGetPayload<{
   select: typeof adminMemberBaseSelect
 }>
@@ -1193,21 +1202,45 @@ export class SharedPrepaidQueryService {
         ? row.reversalOfId
         : row.id
     )))]
-    const sources = await this.prisma.sharedPrepaidAllocation.findMany({
-      where: { consumptionId: { in: sourceConsumptionIds } },
-      distinct: ['consumptionId', 'sourceOwnerId'],
-      take: sourceConsumptionIds.length * ADMIN_CONSUMPTION_RELATION_LIMIT,
-      select: {
-        consumptionId: true,
-        sourceOwnerId: true,
-        sourceOwner: { select: accountSelect }
-      },
-      orderBy: [{ consumptionId: 'asc' }, { sourceOwnerId: 'asc' }]
-    })
+    const sources = await this.prisma.$queryRaw<AdminConsumptionSourceRow[]>(Prisma.sql`
+      WITH "distinctSources" AS (
+        SELECT DISTINCT
+          a."consumptionId",
+          a."sourceOwnerId"
+        FROM "SharedPrepaidAllocation" a
+        WHERE a."consumptionId" IN (${Prisma.join(sourceConsumptionIds)})
+      ),
+      "rankedSources" AS (
+        SELECT
+          "consumptionId",
+          "sourceOwnerId",
+          ROW_NUMBER() OVER (
+            PARTITION BY "consumptionId"
+            ORDER BY "sourceOwnerId"
+          ) AS "sourceRank"
+        FROM "distinctSources"
+      )
+      SELECT
+        ranked."consumptionId",
+        ranked."sourceOwnerId",
+        owner."id",
+        owner."account",
+        owner."username",
+        owner."displayRemark"
+      FROM "rankedSources" ranked
+      INNER JOIN "User" owner ON owner."id" = ranked."sourceOwnerId"
+      WHERE ranked."sourceRank" <= ${ADMIN_CONSUMPTION_RELATION_LIMIT + 1}
+      ORDER BY ranked."consumptionId" ASC, ranked."sourceOwnerId" ASC
+    `)
     const sourcesByConsumption = new Map<string, AccountRow[]>()
     for (const source of sources) {
       const current = sourcesByConsumption.get(source.consumptionId) ?? []
-      current.push(source.sourceOwner)
+      current.push({
+        id: source.id,
+        account: source.account,
+        username: source.username,
+        displayRemark: source.displayRemark
+      })
       sourcesByConsumption.set(source.consumptionId, current)
     }
     return rows.map((row) => {
@@ -1221,9 +1254,6 @@ export class SharedPrepaidQueryService {
         actorUserId: row.actorUserId,
         kind: row.kind,
         amount: row.amount,
-        sheetId: row.sheetId,
-        sampleBlockId: row.sampleBlockId,
-        sampleIndex: row.sampleIndex,
         sampleNumberSnapshot: row.sampleNumberSnapshot,
         sampleCountSnapshot: row.sampleCountSnapshot,
         elementsSnapshot: row.elementsSnapshot,
@@ -1236,7 +1266,10 @@ export class SharedPrepaidQueryService {
         actorUser: row.actorUser,
         allocationOrigin: sourceConsumptionId === row.id ? 'DIRECT' : 'REVERSAL_TARGET',
         allocationSourceConsumptionId: sourceConsumptionId,
-        sourceOwners: sourcesByConsumption.get(sourceConsumptionId) ?? []
+        sourceOwners: (sourcesByConsumption.get(sourceConsumptionId) ?? [])
+          .slice(0, ADMIN_CONSUMPTION_RELATION_LIMIT),
+        sourceOwnersTruncated: (sourcesByConsumption.get(sourceConsumptionId)?.length ?? 0) >
+          ADMIN_CONSUMPTION_RELATION_LIMIT
       })
     })
   }
@@ -1274,7 +1307,7 @@ export class SharedPrepaidQueryService {
   ) {
     if (!members.length) return []
     const memberIds = members.map((member) => member.id)
-    const [rechargeGroups, consumptions] = await Promise.all([
+    const [rechargeGroups, consumptionGroups] = await Promise.all([
       this.prisma.sharedPrepaidRecharge.groupBy({
         by: ['memberId', 'ownerFrontendUserId'],
         where: {
@@ -1285,49 +1318,53 @@ export class SharedPrepaidQueryService {
         _sum: { paidAmount: true, giftAmount: true, remainingAmount: true },
         _max: { createdAt: true }
       }),
-      this.prisma.sharedPrepaidConsumption.findMany({
-        where: {
-          memberId: { in: memberIds },
-          kind: SharedPrepaidConsumptionKind.CONSUMPTION,
-          active: true,
-          OR: this.adminConsumptionParticipation(allowedFrontendUserIds)
-        },
-        select: {
-          id: true,
-          memberId: true,
-          consumingFrontendUserId: true,
-          amount: true,
-          createdAt: true,
-          allocations: {
-            where: { sourceOwnerId: { in: allowedFrontendUserIds } },
-            select: { sourceOwnerId: true, allocatedAmount: true }
-          }
-        }
-      })
+      this.prisma.$queryRaw<AdminConsumptionAggregateRow[]>(Prisma.sql`
+        WITH "scopedConsumptions" AS (
+          SELECT
+            c."id",
+            c."memberId",
+            c."createdAt",
+            CASE
+              WHEN c."consumingFrontendUserId" IN (${Prisma.join(allowedFrontendUserIds)})
+                THEN c."amount"
+              ELSE COALESCE(
+                SUM(a."allocatedAmount") FILTER (
+                  WHERE a."sourceOwnerId" IN (${Prisma.join(allowedFrontendUserIds)})
+                ),
+                0
+              )
+            END AS "scopedAmount"
+          FROM "SharedPrepaidConsumption" c
+          LEFT JOIN "SharedPrepaidAllocation" a ON a."consumptionId" = c."id"
+          WHERE c."memberId" IN (${Prisma.join(memberIds)})
+            AND c."kind" = CAST(${SharedPrepaidConsumptionKind.CONSUMPTION} AS "SharedPrepaidConsumptionKind")
+            AND c."active" = TRUE
+          GROUP BY
+            c."id",
+            c."memberId",
+            c."createdAt",
+            c."consumingFrontendUserId",
+            c."amount"
+          HAVING
+            c."consumingFrontendUserId" IN (${Prisma.join(allowedFrontendUserIds)})
+            OR COUNT(a."id") FILTER (
+              WHERE a."sourceOwnerId" IN (${Prisma.join(allowedFrontendUserIds)})
+            ) > 0
+        )
+        SELECT
+          "memberId",
+          SUM("scopedAmount") AS "consumedTotal",
+          MAX("createdAt") AS "latestConsumptionTime"
+        FROM "scopedConsumptions"
+        GROUP BY "memberId"
+      `)
     ])
     const ownerIds = [...new Set(rechargeGroups.map((group) => group.ownerFrontendUserId))]
     const owners = ownerIds.length
       ? await this.prisma.user.findMany({ where: { id: { in: ownerIds } }, select: accountSelect })
       : []
     const ownerById = new Map(owners.map((owner) => [owner.id, owner]))
-    const consumptionByMember = new Map<string, { amount: Prisma.Decimal; latest: Date | null }>()
-    for (const consumption of consumptions) {
-      const scopedAmount = allowedFrontendUserIds.includes(consumption.consumingFrontendUserId)
-        ? consumption.amount
-        : consumption.allocations.reduce(
-            (sum, allocation) => allowedFrontendUserIds.includes(allocation.sourceOwnerId)
-              ? sum.add(allocation.allocatedAmount)
-              : sum,
-            new Prisma.Decimal(0)
-          )
-      const current = consumptionByMember.get(consumption.memberId) ?? {
-        amount: new Prisma.Decimal(0),
-        latest: null
-      }
-      current.amount = current.amount.add(scopedAmount)
-      if (!current.latest || consumption.createdAt > current.latest) current.latest = consumption.createdAt
-      consumptionByMember.set(consumption.memberId, current)
-    }
+    const consumptionByMember = new Map(consumptionGroups.map((group) => [group.memberId, group]))
 
     return members.map((member) => {
       const memberRecharges = rechargeGroups.filter((group) => group.memberId === member.id)
@@ -1353,7 +1390,7 @@ export class SharedPrepaidQueryService {
         phone: member.phone,
         paidTotal: paidTotal.toNumber(),
         giftTotal: giftTotal.toNumber(),
-        consumedTotal: consumption?.amount.toNumber() ?? 0,
+        consumedTotal: new Prisma.Decimal(consumption?.consumedTotal ?? 0).toNumber(),
         balance: balance.toNumber(),
         version: member.version,
         ownerComposition: memberRecharges
@@ -1371,7 +1408,7 @@ export class SharedPrepaidQueryService {
           })
           .sort((left, right) => left.ownerFrontendUserId.localeCompare(right.ownerFrontendUserId)),
         latestRechargeTime,
-        latestConsumptionTime: consumption?.latest ?? null,
+        latestConsumptionTime: consumption?.latestConsumptionTime ?? null,
         createdAt: member.createdAt,
         updatedAt: member.updatedAt
       }

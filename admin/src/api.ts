@@ -259,48 +259,42 @@ const mockSharedPrepaid = {
         id: 'ledger-reversal-2', reason: '重复导入', actorUserId: 'front-2', actorUser: mockPrepaidAccountB,
         createdAt: '2026-08-03T02:00:00.000Z'
       }
+    },
+    {
+      id: 'recharge-mixed-b', memberId: 'member-1', phone: '13800000001', ownerFrontendUserId: 'front-2',
+      ownerAccount: 'yangshao002', ownerUsername: '仰韶客户二', actorUserId: 'front-2',
+      actorAccount: 'yangshao002', actorUsername: '仰韶客户二', rechargeDate: '2026-08-01',
+      paidAmount: 90, giftAmount: 0, totalAmount: 90, remainingAmount: 0,
+      isOpeningBalance: false, remark: '混合来源', reversedAt: null, reversedByLedgerId: null,
+      createdAt: '2026-08-01T01:30:00.000Z', updatedAt: '2026-08-01T01:30:00.000Z'
     }
   ],
   members: [
     {
-      id: 'member-1', phone: '13800000001', paidTotal: 1000, giftTotal: 100, consumedTotal: 200,
-      balance: 900, ownerComposition: [{ ownerFrontendUserId: 'front-1', ownerAccount: 'kaili001', ownerDisplayName: '凯里化验室', balance: 900 }],
-      latestRechargeTime: '2026-08-01T01:00:00.000Z', latestConsumptionTime: '2026-08-04T01:00:00.000Z',
-      recharges: [{ id: 'recharge-1', paidAmount: 1000, giftAmount: 100, remainingAmount: 900 }],
-      consumptions: [{ id: 'consumption-1', amount: 200, sampleNumberSnapshot: 'YS-001' }],
-      ledgerEntries: [{ id: 'ledger-1', kind: 'RECHARGE', balanceDelta: 1100 }],
-      historyTruncated: { recharges: false, consumptions: false, ledgerEntries: false }
+      id: 'member-1', phone: '13800000001',
+      ledgerEntries: [{ id: 'ledger-1', kind: 'RECHARGE', balanceDelta: 1100, ownerFrontendUserId: 'front-1' }],
     },
     {
-      id: 'member-2', phone: '13800000002', paidTotal: 500, giftTotal: 50, consumedTotal: 0,
-      balance: 0, ownerComposition: [{ ownerFrontendUserId: 'front-2', ownerAccount: 'yangshao002', ownerDisplayName: '仰韶客户二', balance: 0 }],
-      latestRechargeTime: '2026-08-02T01:00:00.000Z', latestConsumptionTime: null,
-      recharges: [{ id: 'recharge-2', paidAmount: 500, giftAmount: 50, remainingAmount: 0 }],
-      consumptions: [], ledgerEntries: [{ id: 'ledger-reversal-2', kind: 'RECHARGE_REVERSAL', balanceDelta: -550 }],
-      historyTruncated: { recharges: false, consumptions: false, ledgerEntries: false }
+      id: 'member-2', phone: '13800000002',
+      ledgerEntries: [{ id: 'ledger-reversal-2', kind: 'RECHARGE_REVERSAL', balanceDelta: -550, ownerFrontendUserId: 'front-2' }]
     },
     {
-      id: 'member-consumer-only', phone: '13800000003', paidTotal: 0, giftTotal: 0, consumedTotal: 30,
-      balance: 0, ownerComposition: [], latestRechargeTime: null,
-      latestConsumptionTime: '2026-08-06T01:00:00.000Z', recharges: [],
-      consumptions: [{ id: 'consumption-consumer-only', amount: 30, sampleNumberSnapshot: 'YS-002' }],
-      ledgerEntries: [], historyTruncated: { recharges: false, consumptions: false, ledgerEntries: false }
+      id: 'member-consumer-only', phone: '13800000003', ledgerEntries: []
     },
     {
-      id: 'member-settlement-only', phone: '13800000004', paidTotal: 0, giftTotal: 0, consumedTotal: 20,
-      balance: 0, ownerComposition: [], latestRechargeTime: null,
-      latestConsumptionTime: '2026-08-07T01:00:00.000Z', recharges: [],
-      consumptions: [{ id: 'consumption-settlement-only', amount: 20, sampleNumberSnapshot: 'YS-003' }],
-      ledgerEntries: [], historyTruncated: { recharges: false, consumptions: false, ledgerEntries: false }
+      id: 'member-settlement-only', phone: '13800000004', ledgerEntries: []
     }
   ],
   consumptions: [
     {
       id: 'consumption-1', memberId: 'member-1', phoneSnapshot: '13800000001',
-      sampleNumberSnapshot: 'YS-001', sampleCountSnapshot: 2, elementsSnapshot: ['金', '银'], amount: 200,
+      sampleNumberSnapshot: 'YS-001', sampleCountSnapshot: 2, elementsSnapshot: ['金', '银'], amount: 100,
       kind: 'CONSUMPTION', active: true, reversalOfId: null, consumingFrontendUserId: 'front-2',
       consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB,
-      allocations: [{ id: 'allocation-1', sourceOwnerId: 'front-1', sourceOwner: mockPrepaidAccountA, allocatedAmount: 200, recharge: { id: 'recharge-1', rechargeDate: '2026-08-01' } }],
+      allocations: [
+        { id: 'allocation-1', sourceOwnerId: 'front-1', sourceOwner: mockPrepaidAccountA, allocatedAmount: 10, recharge: { id: 'recharge-1', rechargeDate: '2026-08-01' } },
+        { id: 'allocation-2', sourceOwnerId: 'front-2', sourceOwner: mockPrepaidAccountB, allocatedAmount: 90, recharge: { id: 'recharge-mixed-b', rechargeDate: '2026-08-01' } }
+      ],
       payables: [{ id: 'payable-1', status: 'PENDING', amount: 181.82, sourceOwner: mockPrepaidAccountA, consumerOwner: mockPrepaidAccountB }],
       originalPayables: [], sheetDate: '2026-08-04', createdAt: '2026-08-04T01:00:00.000Z'
     },
@@ -465,6 +459,114 @@ function mockSharedPrepaidIds(config?: AdminRequestConfig) {
   return requested.length ? requested : permitted
 }
 
+function mockSharedPrepaidConsumptionParticipates(row: any, allowedIds: string[]) {
+  const sourceRow = row.kind === 'REVERSAL' && row.reversalOfId
+    ? mockSharedPrepaid.consumptions.find((candidate) => candidate.id === row.reversalOfId) ?? row
+    : row
+  return allowedIds.includes(row.consumingFrontendUserId)
+    || sourceRow.allocations.some((allocation: any) => allowedIds.includes(allocation.sourceOwnerId))
+}
+
+function mockSharedPrepaidMemberParticipates(memberId: string, allowedIds: string[]) {
+  if (mockSharedPrepaid.recharges.some((row) => row.memberId === memberId && allowedIds.includes(row.ownerFrontendUserId))) {
+    return true
+  }
+  return mockSharedPrepaid.consumptions.some((consumption) => consumption.memberId === memberId && (
+    mockSharedPrepaidConsumptionParticipates(consumption, allowedIds)
+    || consumption.payables.some((payable) => mockSharedPrepaid.settlements.some((settlement) =>
+      settlement.lines.some((line) => line.payableId === payable.id)
+      && (allowedIds.includes(settlement.accountAId) || allowedIds.includes(settlement.accountBId))
+    ))
+  ))
+}
+
+function mockSharedPrepaidConsumptionSummary(row: any) {
+  const sourceRow = row.kind === 'REVERSAL' && row.reversalOfId
+    ? mockSharedPrepaid.consumptions.find((candidate) => candidate.id === row.reversalOfId) ?? row
+    : row
+  const sourceOwners = [...new Map(sourceRow.allocations.map((allocation: any) => [
+    allocation.sourceOwnerId,
+    allocation.sourceOwner
+  ])).values()]
+  const {
+    allocations: _allocations,
+    payables: _payables,
+    originalPayables: _originalPayables,
+    sheetId: _sheetId,
+    sampleBlockId: _sampleBlockId,
+    sampleIndex: _sampleIndex,
+    ...summary
+  } = row
+  return {
+    ...summary,
+    allocationOrigin: sourceRow.id === row.id ? 'DIRECT' : 'REVERSAL_TARGET',
+    allocationSourceConsumptionId: sourceRow.id,
+    sourceOwners: sourceOwners.slice(0, 100),
+    sourceOwnersTruncated: sourceOwners.length > 100
+  }
+}
+
+function mockScopedSharedPrepaidMember(row: any, allowedIds: string[]) {
+  const scopedRecharges = mockSharedPrepaid.recharges
+    .filter((recharge) => recharge.memberId === row.id && allowedIds.includes(recharge.ownerFrontendUserId))
+  const activeRecharges = scopedRecharges.filter((recharge) => !recharge.reversedAt)
+  const scopedConsumptions = mockSharedPrepaid.consumptions.filter((consumption) => (
+    consumption.memberId === row.id && mockSharedPrepaidConsumptionParticipates(consumption, allowedIds)
+  ))
+  const activeConsumptions = scopedConsumptions.filter((consumption) => (
+    consumption.kind === 'CONSUMPTION' && consumption.active
+  ))
+  const consumedTotal = activeConsumptions.reduce((total, consumption) => {
+    if (allowedIds.includes(consumption.consumingFrontendUserId)) return total + consumption.amount
+    return total + consumption.allocations.reduce(
+      (subtotal, allocation) => allowedIds.includes(allocation.sourceOwnerId)
+        ? subtotal + allocation.allocatedAmount
+        : subtotal,
+      0
+    )
+  }, 0)
+  const ownerComposition = [...new Set(activeRecharges.map((recharge) => recharge.ownerFrontendUserId))]
+    .map((ownerFrontendUserId) => {
+      const ownerRows = activeRecharges.filter((recharge) => recharge.ownerFrontendUserId === ownerFrontendUserId)
+      const first = ownerRows[0]
+      return {
+        ownerFrontendUserId,
+        ownerAccount: first.ownerAccount,
+        ownerUsername: first.ownerUsername,
+        ownerDisplayName: first.ownerUsername || first.ownerAccount,
+        balance: ownerRows.reduce((total, recharge) => total + recharge.remainingAmount, 0)
+      }
+    })
+    .filter((owner) => owner.balance > 0)
+    .sort((left, right) => left.ownerFrontendUserId.localeCompare(right.ownerFrontendUserId))
+  const ledgerEntries = (row.ledgerEntries ?? [])
+    .filter((entry: any) => allowedIds.includes(entry.ownerFrontendUserId))
+  const historyLimit = 50
+  return {
+    ...row,
+    paidTotal: activeRecharges.reduce((total, recharge) => total + recharge.paidAmount, 0),
+    giftTotal: activeRecharges.reduce((total, recharge) => total + recharge.giftAmount, 0),
+    consumedTotal,
+    balance: activeRecharges.reduce((total, recharge) => total + recharge.remainingAmount, 0),
+    ownerComposition,
+    latestRechargeTime: activeRecharges.reduce<string | null>((latest, recharge) => (
+      !latest || recharge.createdAt > latest ? recharge.createdAt : latest
+    ), null),
+    latestConsumptionTime: activeConsumptions.reduce<string | null>((latest, consumption) => (
+      !latest || consumption.createdAt > latest ? consumption.createdAt : latest
+    ), null),
+    historyLimit,
+    historyTruncated: {
+      recharges: scopedRecharges.length > historyLimit,
+      consumptions: scopedConsumptions.length > historyLimit,
+      ledgerEntries: ledgerEntries.length > historyLimit
+    },
+    recharges: scopedRecharges.slice(0, historyLimit),
+    consumptions: scopedConsumptions.slice(0, historyLimit).map(mockSharedPrepaidConsumptionSummary),
+    ledgerEntries: ledgerEntries.slice(0, historyLimit)
+  }
+}
+
 function mockSharedPrepaidRows(resource: keyof typeof mockSharedPrepaid, config?: AdminRequestConfig) {
   const allowedIds = mockSharedPrepaidIds(config)
   const phone = String(config?.params?.phone || '').replace(/\D/g, '')
@@ -475,17 +577,9 @@ function mockSharedPrepaidRows(resource: keyof typeof mockSharedPrepaid, config?
     const participates = resource === 'recharges'
       ? allowedIds.includes(row.ownerFrontendUserId)
       : resource === 'members'
-        ? mockSharedPrepaid.recharges.some((recharge) => recharge.memberId === row.id && allowedIds.includes(recharge.ownerFrontendUserId))
-          || mockSharedPrepaid.consumptions.some((consumption) => consumption.memberId === row.id && (
-            allowedIds.includes(consumption.consumingFrontendUserId)
-            || consumption.allocations.some((allocation) => allowedIds.includes(allocation.sourceOwnerId))
-            || consumption.payables.some((payable) => mockSharedPrepaid.settlements.some((settlement) =>
-              settlement.lines.some((line) => line.payableId === payable.id)
-              && (allowedIds.includes(settlement.accountAId) || allowedIds.includes(settlement.accountBId))
-            ))
-          ))
+        ? mockSharedPrepaidMemberParticipates(row.id, allowedIds)
         : resource === 'consumptions'
-          ? allowedIds.includes(row.consumingFrontendUserId) || row.allocations.some((allocation: any) => allowedIds.includes(allocation.sourceOwnerId))
+          ? mockSharedPrepaidConsumptionParticipates(row, allowedIds)
           : allowedIds.includes(row.accountAId) || allowedIds.includes(row.accountBId)
     const date = resource === 'recharges' ? row.rechargeDate : resource === 'consumptions' ? row.sheetDate : String(row.createdAt || '').slice(0, 10)
     const rowStatus = resource === 'recharges' ? (row.reversedAt ? 'REVERSED' : 'ACTIVE') : resource === 'consumptions' ? (row.active ? 'ACTIVE' : 'REVERSED') : row.status
@@ -509,23 +603,24 @@ function mockSharedPrepaidRows(resource: keyof typeof mockSharedPrepaid, config?
 
 function mockSharedPrepaidResponse(resource: keyof typeof mockSharedPrepaid, id: string | undefined, config?: AdminRequestConfig) {
   const rows = mockSharedPrepaidRows(resource, config)
+  const allowedIds = mockSharedPrepaidIds(config)
   if (id) {
     const row = rows.find((item) => item.id === id)
     if (!row) throw new Error('记录不存在或无权查看')
-    return row
+    return resource === 'members' ? mockScopedSharedPrepaidMember(row, allowedIds) : row
   }
   const page = Math.max(1, Number(config?.params?.page) || 1)
   const pageSize = Math.min(100, Math.max(1, Number(config?.params?.pageSize) || 20))
   const start = (page - 1) * pageSize
   const items = rows.slice(start, start + pageSize).map((row: any) => {
     if (resource === 'members') {
+      const scoped = mockScopedSharedPrepaidMember(row, allowedIds)
       const { recharges: _recharges, consumptions: _consumptions, ledgerEntries: _ledgerEntries,
-        historyTruncated: _historyTruncated, ...summary } = row
+        historyLimit: _historyLimit, historyTruncated: _historyTruncated, ...summary } = scoped
       return summary
     }
     if (resource === 'consumptions') {
-      const { allocations, payables: _payables, originalPayables: _originalPayables, ...summary } = row
-      return { ...summary, sourceOwners: allocations.map((allocation: any) => allocation.sourceOwner) }
+      return mockSharedPrepaidConsumptionSummary(row)
     }
     if (resource === 'settlements') {
       const { proofUrls: _proofUrls, lines: _lines, actions: _actions, rejectionReason: _rejectionReason, ...summary } = row

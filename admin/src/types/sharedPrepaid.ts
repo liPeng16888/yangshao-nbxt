@@ -91,6 +91,7 @@ export interface AdminSharedPrepaidConsumptionRow {
   consumingFrontendUser: AdminSharedPrepaidAccount
   actorUser: AdminSharedPrepaidAccount
   sourceOwners: AdminSharedPrepaidAccount[]
+  sourceOwnersTruncated: boolean
   sheetDate: string
   createdAt: string
 }
