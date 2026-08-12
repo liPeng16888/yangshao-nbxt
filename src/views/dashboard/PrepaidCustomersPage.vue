@@ -99,7 +99,7 @@
             v-if="store.selectedMember.historyPagination.recharges.hasMore"
             data-testid="member-more-recharges"
             :loading="store.loadingByPage.members"
-            @click="store.loadMoreMemberHistory('recharges')"
+            @click="loadMoreHistory('recharges')"
           >加载更多充值历史</el-button>
         </div>
 
@@ -121,7 +121,7 @@
             v-if="store.selectedMember.historyPagination.consumptions.hasMore"
             data-testid="member-more-consumptions"
             :loading="store.loadingByPage.members"
-            @click="store.loadMoreMemberHistory('consumptions')"
+            @click="loadMoreHistory('consumptions')"
           >加载更多消费历史</el-button>
         </div>
 
@@ -139,7 +139,7 @@
             v-if="store.selectedMember.historyPagination.ledgerEntries.hasMore"
             data-testid="member-more-ledger"
             :loading="store.loadingByPage.members"
-            @click="store.loadMoreMemberHistory('ledgerEntries')"
+            @click="loadMoreHistory('ledgerEntries')"
           >加载更多账本历史</el-button>
         </div>
       </div>
@@ -151,7 +151,7 @@
 import { onMounted, ref } from 'vue'
 
 import { useSharedPrepaidRealtimeRegistration } from '@/composables/useSharedPrepaidRealtime'
-import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
+import { isSharedPrepaidReadCancelled, useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import type { PrepaidConsumptionRow, PrepaidLedgerKind } from '@/types/sharedPrepaid'
 import {
   prepaidAccountLabel,
@@ -208,6 +208,15 @@ async function openDetail(id: string) {
     await store.loadMemberDetail(id)
   } catch {
     // Detail failure is surfaced through the member page error state.
+  }
+}
+
+async function loadMoreHistory(collection: 'recharges' | 'consumptions' | 'ledgerEntries') {
+  try {
+    await store.loadMoreMemberHistory(collection)
+  } catch (error) {
+    if (isSharedPrepaidReadCancelled(error)) return
+    throw error
   }
 }
 

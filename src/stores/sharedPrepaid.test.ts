@@ -3,7 +3,11 @@ import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useAuthStore } from './auth'
-import { useSharedPrepaidStore } from './sharedPrepaid'
+import {
+  SharedPrepaidReadCancelledError,
+  isSharedPrepaidReadCancelled,
+  useSharedPrepaidStore
+} from './sharedPrepaid'
 import type {
   PrepaidPage,
   PrepaidRechargeRow,
@@ -17,6 +21,7 @@ const apiMocks = vi.hoisted(() => ({
   isSharedPrepaidTerminalAuthError: vi.fn(),
   getPrepaidMembers: vi.fn(),
   lookupPrepaidMember: vi.fn(),
+  lookupLabPrepaidMember: vi.fn(),
   getPrepaidMemberDetail: vi.fn(),
   getPrepaidRecharges: vi.fn(),
   getPrepaidConsumptions: vi.fn(),
@@ -60,6 +65,19 @@ function deferred<T>() {
     reject = rejectPromise
   })
   return { promise, resolve, reject }
+}
+
+async function expectReadCancelled<T>(promise: Promise<T>, staleError?: unknown) {
+  let thrown: unknown
+  try {
+    await promise
+  } catch (error) {
+    thrown = error
+  }
+  expect(thrown).toBeInstanceOf(SharedPrepaidReadCancelledError)
+  expect(isSharedPrepaidReadCancelled(thrown)).toBe(true)
+  expect((thrown as SharedPrepaidReadCancelledError).code).toBe('SHARED_PREPAID_READ_CANCELLED')
+  if (staleError !== undefined) expect(thrown).not.toBe(staleError)
 }
 
 function settlementRowFixture(id: string): PrepaidSettlementRow {
@@ -200,7 +218,8 @@ describe('shared prepaid realtime refresh', () => {
     apiMocks.isSharedPrepaidTerminalAuthError.mockReset()
     apiMocks.isSharedPrepaidTerminalAuthError.mockReturnValue(false)
     for (const name of [
-      'getPrepaidMembers', 'lookupPrepaidMember', 'getPrepaidMemberDetail', 'getPrepaidRecharges',
+      'getPrepaidMembers', 'lookupPrepaidMember', 'lookupLabPrepaidMember',
+      'getPrepaidMemberDetail', 'getPrepaidRecharges',
       'getPrepaidConsumptions',
       'getPrepaidConsumptionFilterOptions',
       'getPrepaidSettlementPayables', 'getPrepaidSettlements', 'getPrepaidSettlement',
@@ -1085,8 +1104,9 @@ describe('shared prepaid realtime refresh', () => {
       requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
     }
 
+    const cancelled = expectReadCancelled(delayed)
     accountARead.resolve(rechargePageFixture('account-a-recharge', 1))
-    await delayed
+    await cancelled
 
     expect(store.rechargesPage).toEqual({ items: [], total: 0, page: 1, pageSize: 20 })
   })
@@ -1107,12 +1127,52 @@ describe('shared prepaid realtime refresh', () => {
     }
     expect(store.loadingByPage.recharges).toBe(false)
 
-    const staleFailure = expect(delayed).rejects.toThrow('account A read failed')
-    accountARead.reject(new Error('account A read failed'))
+    const accountAError = new Error('account A read failed')
+    const staleFailure = expectReadCancelled(delayed, accountAError)
+    accountARead.reject(accountAError)
     await staleFailure
 
     expect(store.errorsByPage.recharges).toBe('')
     expect(store.loadingByPage.recharges).toBe(false)
+  })
+
+  it('cancels a pure lookup payload when its authenticated account changes', async () => {
+    const accountALookup = deferred<{ id: string; phone: string; currentBalance: number } | null>()
+    apiMocks.lookupLabPrepaidMember.mockReturnValueOnce(accountALookup.promise)
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+
+    const delayed = store.lookupLabMember('13800000000')
+    auth.token = 'account-b-token'
+    auth.user = {
+      id: 'account-b', account: 'account-b', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+
+    const cancelled = expectReadCancelled(delayed)
+    accountALookup.resolve({ id: 'account-a-member', phone: '13800000000', currentBalance: 100 })
+    await cancelled
+  })
+
+  it('replaces a pure lookup error with cancellation when its authenticated account changes', async () => {
+    const accountALookup = deferred<{ id: string; phone: string; currentBalance: number } | null>()
+    apiMocks.lookupLabPrepaidMember.mockReturnValueOnce(accountALookup.promise)
+    const store = useSharedPrepaidStore()
+    const auth = useAuthStore()
+
+    const delayed = store.lookupLabMember('13800000000')
+    auth.token = 'account-b-token'
+    auth.user = {
+      id: 'account-b', account: 'account-b', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
+      requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+
+    const accountAError = new Error('account A lookup failed')
+    const cancelled = expectReadCancelled(delayed, accountAError)
+    accountALookup.reject(accountAError)
+    await cancelled
   })
 
   it('clears every account-derived page, detail, preview, selection, and draft on auth change', () => {
@@ -1190,11 +1250,12 @@ describe('shared prepaid realtime refresh', () => {
       dataOwnerId: 'account-b', permissions: [], permissionVersion: 2,
       requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
     }
+    const cancelled = expectReadCancelled(delayed)
     accountAPreview.resolve({
       accountAId: 'front-1', accountBId: 'front-2', aToBAmount: 50, bToAAmount: 0,
       netAmount: 50, payerFrontendUserId: 'front-1', receiverFrontendUserId: 'front-2', lines: []
     } as never)
-    await delayed
+    await cancelled
 
     expect(store.settlementPreview).toBeNull()
     expect(store.settlementSelection).toEqual([])
@@ -1224,8 +1285,9 @@ describe('shared prepaid realtime refresh', () => {
     await store.loadSettlementPayables()
     store.setSettlementSelection(['shared-payable'])
 
+    const cancelled = expectReadCancelled(delayed)
     accountARefresh.resolve({ items: [staleAccountARow], total: 1, page: 1, pageSize: 1 })
-    await delayed
+    await cancelled
 
     expect(store.settlementPayablesPage.items).toEqual([accountBRow])
     expect(store.selectedSettlementPayableRows).toEqual([accountBRow])

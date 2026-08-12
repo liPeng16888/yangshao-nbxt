@@ -11,6 +11,7 @@ import {
 } from '@/api/sharedPrepaid'
 import * as prepaidApi from '@/api/sharedPrepaid'
 import { useAuthStore } from '@/stores/auth'
+import type { AuthUser } from '@/types/auth'
 import type {
   CreatePrepaidRechargePayload,
   PrepaidConsumptionQuery,
@@ -49,6 +50,25 @@ const PREPAID_PERMISSIONS = new Set([
   'PREPAID_SETTLEMENTS'
 ])
 
+export const SHARED_PREPAID_READ_CANCELLED = 'SHARED_PREPAID_READ_CANCELLED' as const
+
+export class SharedPrepaidReadCancelledError extends Error {
+  readonly code = SHARED_PREPAID_READ_CANCELLED
+
+  constructor() {
+    super('Shared prepaid read cancelled because the authenticated session changed')
+    this.name = 'SharedPrepaidReadCancelledError'
+  }
+}
+
+export function isSharedPrepaidReadCancelled(error: unknown): error is SharedPrepaidReadCancelledError {
+  if (error instanceof SharedPrepaidReadCancelledError) return true
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { code?: unknown; name?: unknown }
+  return candidate.code === SHARED_PREPAID_READ_CANCELLED &&
+    candidate.name === 'SharedPrepaidReadCancelledError'
+}
+
 type SharedPrepaidPage = SharedPrepaidRealtimeModule
 type SharedPrepaidMutation =
   | 'createRecharge'
@@ -83,6 +103,17 @@ function canonicalJson(value: unknown): string {
     return item
   }
   return JSON.stringify(normalize(value))
+}
+
+export function sharedPrepaidAuthSessionSignature(token: string, user: AuthUser | null): string {
+  return canonicalJson({
+    token,
+    actorUserId: user?.id ?? '',
+    dataOwnerId: user?.dataOwnerId ?? user?.id ?? '',
+    permissionVersion: user?.permissionVersion ?? '',
+    role: user?.role ?? '',
+    permissions: [...(user?.permissions ?? [])].sort()
+  })
 }
 
 function canonicalMoney(value: string | number) {
@@ -168,17 +199,9 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
   let connectingEpoch: number | null = null
 
   const hasRefreshPrompt = computed(() => refreshPromptModules.value.length > 0)
-  const authSessionSignature = computed(() => {
-    const user = authStore.user
-    return canonicalJson({
-      token: authStore.token,
-      actorUserId: user?.id ?? '',
-      dataOwnerId: user?.dataOwnerId ?? user?.id ?? '',
-      permissionVersion: user?.permissionVersion ?? '',
-      role: user?.role ?? '',
-      permissions: [...(user?.permissions ?? [])].sort()
-    })
-  })
+  const authSessionSignature = computed(() => (
+    sharedPrepaidAuthSessionSignature(authStore.token, authStore.user)
+  ))
 
   function currentMutationScope() {
     return `${mutationSessionVersion}\u0000${authSessionSignature.value}`
@@ -227,12 +250,13 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     errorsByPage[page] = ''
     try {
       const result = await action()
-      if (readSessionEpoch === sessionEpoch) apply?.(result)
+      if (readSessionEpoch !== sessionEpoch) throw new SharedPrepaidReadCancelledError()
+      apply?.(result)
       return result
     } catch (error) {
-      if (readSessionEpoch === sessionEpoch) {
-        errorsByPage[page] = error instanceof Error ? error.message : '操作失败'
-      }
+      if (readSessionEpoch !== sessionEpoch) throw new SharedPrepaidReadCancelledError()
+      if (isSharedPrepaidReadCancelled(error)) throw error
+      errorsByPage[page] = error instanceof Error ? error.message : '操作失败'
       throw error
     } finally {
       if (readSessionEpoch === sessionEpoch) loadingCounts[page] -= 1
@@ -252,10 +276,13 @@ export const useSharedPrepaidStore = defineStore('sharedPrepaid', () => {
     errorsByPage[page] = ''
     try {
       const result = await action()
-      if (readSessionEpoch === sessionEpoch && loadGenerations.get(resource) === generation) apply(result)
+      if (readSessionEpoch !== sessionEpoch) throw new SharedPrepaidReadCancelledError()
+      if (loadGenerations.get(resource) === generation) apply(result)
       return result
     } catch (error) {
-      if (readSessionEpoch === sessionEpoch && loadGenerations.get(resource) === generation) {
+      if (readSessionEpoch !== sessionEpoch) throw new SharedPrepaidReadCancelledError()
+      if (isSharedPrepaidReadCancelled(error)) throw error
+      if (loadGenerations.get(resource) === generation) {
         errorsByPage[page] = error instanceof Error ? error.message : '操作失败'
       }
       throw error

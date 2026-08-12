@@ -163,7 +163,7 @@ import { computed, defineComponent, h, onMounted, reactive, ref } from 'vue'
 import PrepaidSettlementDetailDialog from '@/components/prepaid/PrepaidSettlementDetailDialog.vue'
 import { useSharedPrepaidRealtimeRegistration } from '@/composables/useSharedPrepaidRealtime'
 import { useAuthStore } from '@/stores/auth'
-import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
+import { isSharedPrepaidReadCancelled, useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import type {
   PrepaidAccountRow,
   PrepaidPayableStatus,
@@ -368,6 +368,7 @@ async function togglePayable(row: PrepaidSettlementPayableListRow, checked: bool
   try {
     await store.previewSettlement(ids)
   } catch (error) {
+    if (isSharedPrepaidReadCancelled(error)) return
     mutationError.value = prepaidErrorMessage(error, '无法预览所选结算明细')
   }
 }
@@ -408,6 +409,7 @@ async function openDetail(id: string) {
     await store.loadSettlementDetail(id)
     detailOpen.value = true
   } catch (error) {
+    if (isSharedPrepaidReadCancelled(error)) return
     mutationError.value = prepaidErrorMessage(error, '读取结算单失败')
   }
 }

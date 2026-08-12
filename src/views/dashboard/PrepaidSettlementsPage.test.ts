@@ -59,6 +59,16 @@ const rows = [
   payable('payable-held', 'OUTGOING', 10, 'HELD', false)
 ]
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function settlementSummary() {
   return {
     id: 'settlement-1', accountAId: 'front-1', accountBId: 'front-2',
@@ -88,6 +98,16 @@ function setUser(pinia: ReturnType<typeof createPinia>, role: 'FRONTEND_USER' | 
     dataOwnerId: 'front-1', permissions: ['PREPAID_SETTLEMENTS'], permissionVersion: 1,
     requiresAccessGuardPassword: true,
     isFrontendMainAccount: role === 'FRONTEND_USER', isFrontendSubAccount: role === 'FRONTEND_SUB_USER'
+  }
+}
+
+function switchToAccountB(pinia: ReturnType<typeof createPinia>) {
+  const auth = useAuthStore(pinia)
+  auth.token = 'account-b-token'
+  auth.user = {
+    id: 'front-b', account: 'owner-b', username: '账号 B', role: 'FRONTEND_USER',
+    dataOwnerId: 'front-b', permissions: ['PREPAID_SETTLEMENTS'], permissionVersion: 2,
+    requiresAccessGuardPassword: true, isFrontendMainAccount: true, isFrontendSubAccount: false
   }
 }
 
@@ -350,5 +370,56 @@ describe('PrepaidSettlementsPage', () => {
     expect((wrapper.get('[data-testid="settlement-transfer-time"]').element as HTMLInputElement).value)
       .toBe('2026-08-12T16:30:00+08:00')
     expect(wrapper.get('[data-testid="settlement-refresh-prompt"]').text()).toContain('已保留当前勾选和输入')
+  })
+
+  it('silently ignores an account-A preview rejection after account B logs in', async () => {
+    const accountAPreview = deferred<never>()
+    apiMocks.previewPrepaidSettlement.mockReturnValueOnce(accountAPreview.promise)
+    const { wrapper, pinia, store } = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="payable-select-payable-out"]').setValue(true)
+    expect(apiMocks.previewPrepaidSettlement).toHaveBeenCalledOnce()
+    switchToAccountB(pinia)
+    const accountAError = new Error('account A preview failed')
+    accountAPreview.reject(accountAError)
+    await flushPromises()
+
+    expect(store.settlementPreview).toBeNull()
+    expect(store.settlementSelection).toEqual([])
+    expect(wrapper.find('[data-testid="settlement-mutation-error"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain(accountAError.message)
+  })
+
+  it('keeps an ordinary same-session preview failure visible', async () => {
+    apiMocks.previewPrepaidSettlement.mockRejectedValueOnce(new Error('preview unavailable'))
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="payable-select-payable-out"]').setValue(true)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="settlement-mutation-error"]').text()).toContain('preview unavailable')
+  })
+
+  it('silently ignores an account-A detail rejection after account B logs in', async () => {
+    const accountADetail = deferred<never>()
+    apiMocks.getPrepaidSettlements.mockResolvedValueOnce({
+      items: [settlementSummary()], total: 1, page: 1, pageSize: 20
+    })
+    apiMocks.getPrepaidSettlement.mockReturnValueOnce(accountADetail.promise)
+    const { wrapper, pinia, store } = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="settlement-detail-settlement-1"]').trigger('click')
+    expect(apiMocks.getPrepaidSettlement).toHaveBeenCalledWith('settlement-1')
+    switchToAccountB(pinia)
+    const accountAError = new Error('account A detail failed')
+    accountADetail.reject(accountAError)
+    await flushPromises()
+
+    expect(store.selectedSettlement).toBeNull()
+    expect(wrapper.find('[data-testid="settlement-mutation-error"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain(accountAError.message)
   })
 })

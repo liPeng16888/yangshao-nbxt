@@ -85,7 +85,12 @@
 import { computed, ref, watch } from 'vue'
 import type { PrepaidMemberPickerResult } from '@/types/labSheet'
 import type { PrepaidLabMemberLookupRow } from '@/types/sharedPrepaid'
-import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
+import { useAuthStore } from '@/stores/auth'
+import {
+  isSharedPrepaidReadCancelled,
+  sharedPrepaidAuthSessionSignature,
+  useSharedPrepaidStore
+} from '@/stores/sharedPrepaid'
 import { prepaidNormalizePhone } from '@/utils/sharedPrepaidPresentation'
 
 const props = withDefaults(defineProps<{
@@ -102,6 +107,7 @@ const emit = defineEmits<{
   confirm: [result: PrepaidMemberPickerResult]
 }>()
 
+const authStore = useAuthStore()
 const store = useSharedPrepaidStore()
 const phone = ref('')
 const amount = ref<number | null>(null)
@@ -109,6 +115,9 @@ const selectedMember = ref<PrepaidLabMemberLookupRow | null>(null)
 const searching = ref(false)
 const errorMessage = ref('')
 let lookupGeneration = 0
+const authSessionSignature = computed(() => (
+  sharedPrepaidAuthSessionSignature(authStore.token, authStore.user)
+))
 
 const amountInCents = computed(() => {
   if (typeof amount.value !== 'number' || !Number.isFinite(amount.value) || amount.value <= 0) return null
@@ -151,6 +160,11 @@ watch(phone, () => {
   }
 }, { flush: 'sync' })
 
+watch(authSessionSignature, () => {
+  lookupGeneration += 1
+  resetDraft()
+}, { flush: 'sync' })
+
 async function lookupExactPhone() {
   const normalized = normalizePhone(phone.value)
   if (!normalized) {
@@ -168,7 +182,7 @@ async function lookupExactPhone() {
     selectedMember.value = member
     if (!member) errorMessage.value = '未找到该预存款会员'
   } catch (error) {
-    if (generation !== lookupGeneration || !props.visible) return
+    if (isSharedPrepaidReadCancelled(error) || generation !== lookupGeneration || !props.visible) return
     selectedMember.value = null
     errorMessage.value = readErrorMessage(error)
   } finally {
