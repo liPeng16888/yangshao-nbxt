@@ -7,6 +7,7 @@ export interface ApplicationMenuActions {
 
 export interface ApplicationMenuItem {
   label?: string
+  role?: 'editMenu'
   type?: 'separator'
   accelerator?: string
   click?: () => void
@@ -33,6 +34,9 @@ export function createApplicationMenuTemplate(
           click: actions.quit,
         },
       ],
+    },
+    {
+      role: 'editMenu',
     },
     {
       label: '页面',

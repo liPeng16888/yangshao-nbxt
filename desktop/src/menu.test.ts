@@ -3,6 +3,22 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApplicationMenuTemplate } from './menu'
 
 describe('desktop application menu', () => {
+  it('keeps the native edit commands available for focused text fields', () => {
+    const noop = () => undefined
+    const template = createApplicationMenuTemplate('仰韶化验内部系统', 'darwin', {
+      reload: noop,
+      forceReload: noop,
+      about: noop,
+      quit: noop,
+    })
+
+    expect(
+      template.some(
+        (item) => (item as { role?: string }).role === 'editMenu',
+      ),
+    ).toBe(true)
+  })
+
   it('provides reload, hard reload, about and quit actions', () => {
     const actions = {
       reload: vi.fn(),
@@ -17,10 +33,11 @@ describe('desktop application menu', () => {
     )
 
     const applicationItems = template[0]?.submenu ?? []
-    const pageItems = template[1]?.submenu ?? []
+    const pageItems = template[2]?.submenu ?? []
 
     expect(template.map((item) => item.label)).toEqual([
       '仰韶化验内部系统',
+      undefined,
       '页面',
     ])
     expect(applicationItems.map((item) => item.label ?? item.type)).toEqual([
