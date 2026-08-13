@@ -204,7 +204,15 @@ describe('frontend preference owner sync store', () => {
   it.each([
     ['plain Error', () => new Error('interceptor bug')],
     ['TypeError', () => new TypeError('serialization bug')],
-    ['non-network Axios error without a response', () => new AxiosError('bad request setup', 'ERR_BAD_REQUEST')]
+    ['non-network Axios error without a response', () => new AxiosError('bad request setup', 'ERR_BAD_REQUEST')],
+    [
+      'coded Axios option error containing timeout text',
+      () => new AxiosError('error trying to parse config.timeout to int', 'ERR_BAD_OPTION_VALUE')
+    ],
+    [
+      'coded Axios request error containing network text',
+      () => new AxiosError('Network Error', 'ERR_BAD_REQUEST')
+    ]
   ])('does not queue %s as an offline edit', async (_label, makeError) => {
     const store = useFrontendPreferencesStore()
     api.saveFrontendPreference.mockRejectedValueOnce(makeError())
@@ -220,7 +228,9 @@ describe('frontend preference owner sync store', () => {
   it.each([
     ['network', () => new AxiosError('Network Error', 'ERR_NETWORK')],
     ['aborted timeout', () => new AxiosError('timeout of 15000ms exceeded', 'ECONNABORTED')],
-    ['timed out', () => new AxiosError('timeout', 'ETIMEDOUT')]
+    ['timed out', () => new AxiosError('timeout', 'ETIMEDOUT')],
+    ['code-less browser Network Error', () => new AxiosError('Network Error')],
+    ['code-less browser timeout', () => new AxiosError('timeout of 15000ms exceeded')]
   ])('queues a confirmed Axios %s failure', async (_label, makeError) => {
     const store = useFrontendPreferencesStore()
     api.saveFrontendPreference.mockRejectedValueOnce(makeError())

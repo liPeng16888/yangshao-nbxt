@@ -74,13 +74,10 @@ export function isPreferenceConflict(error: unknown): error is {
 function isTransportError(error: unknown): boolean {
   if (!axios.isAxiosError(error) || error.response) return false
   const code = error.code?.toUpperCase() ?? ''
-  if (['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET'].includes(code)) return true
-  const message = error.message.toLowerCase()
-  return message === 'network error' ||
-    message.includes('timeout') ||
-    message.includes('timed out') ||
-    message.includes('failed to fetch') ||
-    message.includes('load failed')
+  if (code) return ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(code)
+  const message = error.message.trim()
+  return message.toLowerCase() === 'network error' ||
+    /^timeout(?: of \d+(?:\.\d+)?ms)?(?: exceeded)?$/i.test(message)
 }
 
 export const useFrontendPreferencesStore = defineStore('frontendPreferences', () => {
