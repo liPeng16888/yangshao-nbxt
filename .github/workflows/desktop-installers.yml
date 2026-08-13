@@ -110,10 +110,11 @@ jobs:
         run: |
           $prefix = if ('${{ matrix.target }}' -eq 'internal') { 'Yangshao-Internal-System' } else { 'Yangshao-Backend-System' }
           $installer = "desktop/release/${{ matrix.target }}/$prefix-1.0.1-win-x64.exe"
-          $asar = "desktop/release/${{ matrix.target }}/win-unpacked/resources/app.asar"
+          $asarRelative = "desktop/release/${{ matrix.target }}/win-unpacked/resources/app.asar"
           if (-not (Test-Path -LiteralPath $installer)) { throw "Missing installer: $installer" }
           if ((Get-Item -LiteralPath $installer).Length -le 0) { throw "Empty installer: $installer" }
-          if (-not (Test-Path -LiteralPath $asar)) { throw "Missing app.asar: $asar" }
+          if (-not (Test-Path -LiteralPath $asarRelative)) { throw "Missing app.asar: $asarRelative" }
+          $asar = (Resolve-Path -LiteralPath $asarRelative).Path
           $asarEntries = (pnpm --filter @yangshao/desktop exec asar list $asar) -replace '\\', '/'
           foreach ($runtimeFile in @('dist/build-info.json', 'dist/main.js', 'dist/find-preload.cjs')) {
             if ($asarEntries -notcontains "/$runtimeFile") { throw "Missing $runtimeFile in $asar" }
@@ -178,7 +179,7 @@ jobs:
           fi
           app_path="desktop/release/${{ matrix.target }}/mac-arm64/$app_name.app"
           dmg="desktop/release/${{ matrix.target }}/$prefix-1.0.1-mac-arm64.dmg"
-          asar="$app_path/Contents/Resources/app.asar"
+          asar="$(pwd)/$app_path/Contents/Resources/app.asar"
           test -d "$app_path"
           test -s "$dmg"
           test -s "$asar"

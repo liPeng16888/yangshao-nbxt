@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
@@ -9,6 +12,7 @@ const workflow = readFileSync(
   ),
   'utf8',
 )
+const repositoryDirectory = fileURLToPath(new URL('../..', import.meta.url))
 const desktopPackage = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ) as { devDependencies?: Record<string, string> }
@@ -94,5 +98,44 @@ describe('private desktop installer workflow', () => {
           ?.length ?? 0,
       ).toBeGreaterThanOrEqual(2)
     }
+  })
+
+  it('passes absolute app.asar paths to the filtered desktop command', () => {
+    expect(workflow).toContain(
+      '$asar = (Resolve-Path -LiteralPath $asarRelative).Path',
+    )
+    expect(workflow).toContain(
+      'asar="$(pwd)/$app_path/Contents/Resources/app.asar"',
+    )
+    expect(workflow).not.toContain('$asar = "desktop/release/')
+    expect(workflow).not.toContain(
+      'asar="$app_path/Contents/Resources/app.asar"',
+    )
+
+    const temporaryDirectory = mkdtempSync(
+      join(tmpdir(), 'yangshao-workflow-asar-'),
+    )
+    const sourceDirectory = join(temporaryDirectory, 'source')
+    const runtimeDirectory = join(sourceDirectory, 'dist')
+    const archivePath = join(temporaryDirectory, 'app.asar')
+    mkdirSync(runtimeDirectory, { recursive: true })
+    writeFileSync(join(runtimeDirectory, 'main.js'), 'export {}\n')
+
+    const command = (args: string[]) =>
+      spawnSync(
+        'pnpm',
+        ['--filter', '@yangshao/desktop', 'exec', 'asar', ...args],
+        {
+          cwd: repositoryDirectory,
+          encoding: 'utf8',
+          env: { ...process.env, CI: 'true' },
+        },
+      )
+
+    const pack = command(['pack', sourceDirectory, archivePath])
+    expect(pack.status, pack.stderr).toBe(0)
+    const list = command(['list', archivePath])
+    expect(list.status, list.stderr).toBe(0)
+    expect(list.stdout).toContain('/dist/main.js')
   })
 })
