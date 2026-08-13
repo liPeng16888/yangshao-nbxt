@@ -1,0 +1,20 @@
+{
+  "name": "@yangshao/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc -p tsconfig.json",
+    "pack": "electron-builder --config electron-builder.config.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.0",
+    "electron": "43.2.0",
+    "electron-builder": "26.15.7",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}
