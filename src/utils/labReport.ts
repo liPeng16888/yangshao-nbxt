@@ -119,46 +119,6 @@ export function saveLabReportSmsTemplate(template: LabReportSmsTemplate) {
   )
 }
 
-export function loadLabReportSampleUnits(): string[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(getLabReportSampleUnitStorageKey())
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return normalizeLabReportSampleUnits(Array.isArray(parsed) ? parsed : [])
-  } catch {
-    return []
-  }
-}
-
-export function saveLabReportSampleUnits(units: string[]): string[] {
-  const normalized = normalizeLabReportSampleUnits(units)
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(getLabReportSampleUnitStorageKey(), JSON.stringify(normalized))
-  }
-  return normalized
-}
-
-function getLabReportSampleUnitStorageKey() {
-  let owner = 'guest'
-  try {
-    const rawUser = window.localStorage.getItem('ys_user')
-    const user = rawUser ? (JSON.parse(rawUser) as { id?: string; account?: string }) : null
-    owner = user?.id || user?.account || owner
-  } catch {
-    // Invalid login cache should not prevent the report from being edited.
-  }
-  return `${LAB_REPORT_SAMPLE_UNIT_STORAGE_PREFIX}${owner}`
-}
-
-function normalizeLabReportSampleUnits(units: unknown[]) {
-  const normalized = units
-    .filter((unit): unit is string => typeof unit === 'string')
-    .map((unit) => unit.trim())
-    .filter(Boolean)
-  return [...new Set(normalized)].slice(0, 100)
-}
-
 export function getBlockDisplayName(block: SampleBlock) {
   return block.inputs.sampleNumber?.trim() || block.inputs.sequence?.trim() || String(block.index).padStart(3, '0')
 }

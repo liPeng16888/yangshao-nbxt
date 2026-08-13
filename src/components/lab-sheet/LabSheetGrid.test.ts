@@ -1,8 +1,9 @@
 import { mount } from '@vue/test-utils'
 import { defineComponent, nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ElementPlus, { ElMessage } from 'element-plus'
+import { createPinia, setActivePinia } from 'pinia'
 import LabSheetGrid from './LabSheetGrid.vue'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import { calculateSampleResults } from '@/utils/formulaEngine'
@@ -38,6 +39,18 @@ const prepaidPickerStub = defineComponent({
   `
 })
 
+function memoryStorage(): Storage {
+  const values = new Map<string, string>()
+  return {
+    get length() { return values.size },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, String(value))
+  }
+}
+
 function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock {
   const inputs: SampleBlock['inputs'] = {
     sequence: '001',
@@ -60,6 +73,11 @@ function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock 
 }
 
 describe('LabSheetGrid', () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: memoryStorage() })
+    setActivePinia(createPinia())
+  })
+
   it('hides only completed sample detection, amount, and payment values without the completed-data grant', () => {
     const wrapper = mount(LabSheetGrid, {
       props: {

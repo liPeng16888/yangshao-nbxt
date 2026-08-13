@@ -11,10 +11,8 @@ import {
   detectReportElementKeys,
   downloadLabReportElementAsPng,
   loadLabReportSmsTemplate,
-  loadLabReportSampleUnits,
   loadLabReportTemplate,
   parseLabElementKeys,
-  saveLabReportSampleUnits
 } from './labReport'
 
 function createMemoryStorage(): Storage {
@@ -166,19 +164,6 @@ describe('lab report generation', () => {
     expect(layout.resultRows).toBe(8)
     expect(layout.inspectorTop - layout.resultTop).toBe(layout.resultRowHeight * 8)
     expect(layout.height - fiveSampleLayout.height).toBe(layout.resultRowHeight)
-  })
-
-  it('stores report sample unit shortcuts separately for each signed-in account', () => {
-    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', account: 'account-1' }))
-    expect(saveLabReportSampleUnits([' 王庄客户 ', '王庄客户', '', '清镇客户'])).toEqual(['王庄客户', '清镇客户'])
-    expect(loadLabReportSampleUnits()).toEqual(['王庄客户', '清镇客户'])
-
-    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-2', account: 'account-2' }))
-    expect(loadLabReportSampleUnits()).toEqual([])
-    saveLabReportSampleUnits(['富宁客户'])
-
-    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', account: 'account-1' }))
-    expect(loadLabReportSampleUnits()).toEqual(['王庄客户', '清镇客户'])
   })
 
   it('reads only known legacy template fields and drops migration metadata', () => {

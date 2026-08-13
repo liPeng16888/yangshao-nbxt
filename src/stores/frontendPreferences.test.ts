@@ -245,7 +245,10 @@ describe('frontend preference owner sync store', () => {
   it('deep-copies server values, read results, and caller fallbacks', async () => {
     const serverValue = { prefix: '服务器', suffix: '' }
     const serverRecord = record(smsSection, serverValue, 3)
-    api.listFrontendPreferences.mockResolvedValueOnce([serverRecord])
+    const groupsRecord = record('LAB_ELEMENT_GROUPS', [
+      { id: 'group-1', name: '铝硅铁', elementKeys: ['aluminum', 'silicon', 'iron'] }
+    ], 2)
+    api.listFrontendPreferences.mockResolvedValueOnce([serverRecord, groupsRecord])
     const store = useFrontendPreferencesStore()
     await store.loadAll()
 
@@ -254,11 +257,18 @@ describe('frontend preference owner sync store', () => {
     firstRead.prefix = '读取结果被修改'
     expect(store.value(smsSection, { prefix: '', suffix: '' }).prefix).toBe('服务器')
 
+    const groupsRead = store.value('LAB_ELEMENT_GROUPS', [{ id: '', name: '', elementKeys: [] }])
+    groupsRead[0].name = '读取数组结果被修改'
+    groupsRead[0].elementKeys.pop()
+    expect(store.value('LAB_ELEMENT_GROUPS', [])).toEqual([
+      { id: 'group-1', name: '铝硅铁', elementKeys: ['aluminum', 'silicon', 'iron'] }
+    ])
+
     const fallback = [{ name: '默认组' }]
-    const fallbackRead = store.value('LAB_ELEMENT_GROUPS', fallback)
+    const fallbackRead = store.value('LAB_REPORT_SAMPLE_UNITS', fallback)
     fallbackRead[0].name = '读取结果被修改'
     expect(fallback).toEqual([{ name: '默认组' }])
-    expect(store.value('LAB_ELEMENT_GROUPS', fallback)).toEqual([{ name: '默认组' }])
+    expect(store.value('LAB_REPORT_SAMPLE_UNITS', fallback)).toEqual([{ name: '默认组' }])
   })
 
   it('deep-copies save input and the installed successful server record', async () => {

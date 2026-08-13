@@ -32,7 +32,7 @@
             <div v-for="group in groups" :key="group.id" class="element-group">
               <el-button size="small" plain @click="applyGroup(group)">{{ group.name }}</el-button>
               <span>{{ formatElementKeys(group.elementKeys) }}</span>
-              <el-button link type="danger" :icon="Delete" @click="deleteGroup(group.id)">删除</el-button>
+              <el-button link type="danger" :icon="Delete" :disabled="catalogueSaving" @click="deleteGroup(group.id)">删除</el-button>
             </div>
           </div>
           <div v-else class="element-picker__empty">暂无常用组合</div>
@@ -46,7 +46,14 @@
 
         <div class="element-picker__create">
           <el-input v-model.trim="groupName" size="small" placeholder="输入组合名称" clearable />
-          <el-button size="small" type="primary" :icon="Plus" :disabled="!canSaveGroup" @click="saveCurrentGroup">
+          <el-button
+            size="small"
+            type="primary"
+            :icon="Plus"
+            :loading="catalogueSaving"
+            :disabled="!canSaveGroup || catalogueSaving"
+            @click="saveCurrentGroup"
+          >
             保存当前选择为组合
           </el-button>
         </div>
@@ -61,9 +68,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { useFrontendPreferencesStore } from '@/stores/frontendPreferences'
 import type { LabReportElementKey } from '@/types/labReport'
 import { getSmsElementLabel, labReportElements, parseLabElementKeys } from '@/utils/labReport'
 
@@ -82,13 +90,18 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
 
-const STORAGE_KEY = 'ys_lab_element_groups'
+const preferences = useFrontendPreferencesStore()
 const panelVisible = ref(false)
 const selectedKeys = ref<LabReportElementKey[]>([])
-const groups = ref<ElementGroup[]>([])
 const groupName = ref('')
+const catalogueSaving = ref(false)
+let fallbackGroupIdSequence = 0
 
 const knownKeys = new Set(labReportElements.map((element) => element.key))
+const groups = computed(() => {
+  void preferences.statuses.LAB_ELEMENT_GROUPS
+  return normalizeElementGroups(preferences.value<unknown>('LAB_ELEMENT_GROUPS', []))
+})
 
 const displayText = computed(() => {
   const text = formatElementKeys(selectedKeys.value)
@@ -105,14 +118,6 @@ watch(
   { immediate: true }
 )
 
-watch(panelVisible, (visible) => {
-  if (visible) groups.value = loadGroups()
-})
-
-onMounted(() => {
-  groups.value = loadGroups()
-})
-
 function handleSelectionChange(value: string[]) {
   selectedKeys.value = sortKeys(value.filter((item): item is LabReportElementKey => knownKeys.has(item as LabReportElementKey)))
   commitSelection()
@@ -128,29 +133,39 @@ function clearSelection() {
   emit('update:modelValue', '')
 }
 
-function saveCurrentGroup() {
-  if (!canSaveGroup.value) return
+async function saveCurrentGroup() {
+  if (!canSaveGroup.value || catalogueSaving.value) return
   const name = groupName.value.trim()
   const elementKeys = sortKeys(selectedKeys.value)
   const existingIndex = groups.value.findIndex((group) => group.name === name)
   const group: ElementGroup = {
-    id: existingIndex >= 0 ? groups.value[existingIndex].id : `group-${Date.now()}`,
+    id: existingIndex >= 0 ? groups.value[existingIndex].id : createGroupId(),
     name,
     elementKeys
   }
-  if (existingIndex >= 0) {
-    groups.value.splice(existingIndex, 1, group)
-  } else {
-    groups.value.push(group)
+  const next = existingIndex >= 0
+    ? groups.value.map((item, index) => index === existingIndex ? group : item)
+    : [...groups.value, group]
+  catalogueSaving.value = true
+  try {
+    const result = await preferences.save('LAB_ELEMENT_GROUPS', normalizeElementGroups(next))
+    handleCatalogueSaveResult(result, '常用组合已保存')
+    if (result === 'saved' || result === 'queued') groupName.value = ''
+  } finally {
+    catalogueSaving.value = false
   }
-  saveGroups(groups.value)
-  groupName.value = ''
-  ElMessage.success('常用组合已保存')
 }
 
-function deleteGroup(groupId: string) {
-  groups.value = groups.value.filter((group) => group.id !== groupId)
-  saveGroups(groups.value)
+async function deleteGroup(groupId: string) {
+  if (catalogueSaving.value) return
+  const next = normalizeElementGroups(groups.value.filter((group) => group.id !== groupId))
+  catalogueSaving.value = true
+  try {
+    const result = await preferences.save('LAB_ELEMENT_GROUPS', next)
+    handleCatalogueSaveResult(result, '常用组合已删除')
+  } finally {
+    catalogueSaving.value = false
+  }
 }
 
 function commitSelection() {
@@ -173,24 +188,52 @@ function parseElementKeys(value: string) {
   return parseLabElementKeys(value)
 }
 
-function loadGroups(): ElementGroup[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as Partial<ElementGroup>[]
-    return parsed
-      .filter((group): group is ElementGroup => Boolean(group.id && group.name && Array.isArray(group.elementKeys)))
-      .map((group) => ({ ...group, elementKeys: sortKeys(group.elementKeys.filter((key) => knownKeys.has(key))) }))
-      .filter((group) => group.elementKeys.length)
-  } catch {
-    return []
+function normalizeElementGroups(value: unknown): ElementGroup[] {
+  if (!Array.isArray(value)) return []
+  const ids = new Set<string>()
+  const names = new Set<string>()
+  const normalized: ElementGroup[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const candidate = item as Partial<ElementGroup>
+    const id = typeof candidate.id === 'string' ? candidate.id.trim() : ''
+    const name = typeof candidate.name === 'string' ? candidate.name.trim() : ''
+    const elementKeys = Array.isArray(candidate.elementKeys)
+      ? sortKeys(candidate.elementKeys.filter((key): key is LabReportElementKey => knownKeys.has(key as LabReportElementKey)))
+      : []
+    if (!id || !name || !elementKeys.length || ids.has(id) || names.has(name)) continue
+    ids.add(id)
+    names.add(name)
+    normalized.push({ id, name, elementKeys })
+    if (normalized.length === 100) break
   }
+  return normalized
 }
 
-function saveGroups(nextGroups: ElementGroup[]) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextGroups))
+function createGroupId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  fallbackGroupIdSequence += 1
+  const random = `${Math.random().toString(36).slice(2, 10)}-${fallbackGroupIdSequence.toString(36)}`
+  return `group-${Date.now()}-${random}`
+}
+
+function handleCatalogueSaveResult(
+  result: 'saved' | 'queued' | 'conflict' | 'error',
+  successMessage: string
+) {
+  if (result === 'saved') {
+    ElMessage.success(successMessage)
+    return
+  }
+  if (result === 'queued') {
+    ElMessage.warning('已保存到本机，联网后请确认同步')
+    return
+  }
+  if (result === 'conflict') {
+    ElMessage.warning('常用组合发生同步冲突，请使用页面同步提示处理')
+    return
+  }
+  ElMessage.error('常用组合保存失败，请稍后重试')
 }
 </script>
 
