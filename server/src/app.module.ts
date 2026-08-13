@@ -15,6 +15,7 @@ import { MedicineInventoryModule } from './medicine-inventory/medicine-inventory
 import { EmployeeAttendanceModule } from './employee-attendance/employee-attendance.module'
 import { TenantRealtimeModule } from './realtime/tenant-realtime.module'
 import { SharedPrepaidModule } from './shared-prepaid/shared-prepaid.module'
+import { FrontendPreferencesModule } from './frontend-preferences/frontend-preferences.module'
 
 @Module({
   imports: [
@@ -33,7 +34,8 @@ import { SharedPrepaidModule } from './shared-prepaid/shared-prepaid.module'
     MedicineInventoryModule,
     EmployeeAttendanceModule,
     TenantRealtimeModule,
-    SharedPrepaidModule
+    SharedPrepaidModule,
+    FrontendPreferencesModule
   ]
 })
 export class AppModule {}
