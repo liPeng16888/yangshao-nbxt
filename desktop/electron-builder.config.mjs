@@ -45,6 +45,7 @@ export function createBuilderConfig(targetKey) {
     files: ['dist/**/*', 'package.json'],
     extraMetadata: {
       version: '1.0.0',
+      productName: target.productName,
     },
     win: {
       target: [{ target: 'nsis', arch: ['x64'] }],

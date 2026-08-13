@@ -3,8 +3,27 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { createBuilderConfig } from '../electron-builder.config.mjs'
+import { resolveRuntimeDesktopTarget } from './runtime'
 
 describe('electron-builder target configuration', () => {
+  it.each([
+    ['internal', 'art.ysjc.internal-system'],
+    ['backend', 'art.ysjc.backend-system'],
+  ])(
+    'embeds the %s product identity consumed by the packaged runtime',
+    (targetKey, expectedAppId) => {
+      const config = createBuilderConfig(targetKey)
+
+      expect(
+        resolveRuntimeDesktopTarget({
+          isPackaged: true,
+          appName: config.extraMetadata?.productName,
+          environmentTarget: undefined,
+        }).appId,
+      ).toBe(expectedAppId)
+    },
+  )
+
   it('builds the approved internal Windows and macOS installer metadata', () => {
     const config = createBuilderConfig('internal')
 
