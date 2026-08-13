@@ -50,7 +50,7 @@
         <div>
           <span>电子公章</span>
           <div class="seal-actions">
-            <input ref="fileInputRef" type="file" accept="image/*" class="seal-file" @change="handleSealFile" />
+            <input ref="fileInputRef" type="file" accept="image/png,image/jpeg,image/webp" class="seal-file" @change="handleSealFile" />
             <el-button @click="fileInputRef?.click()">上传/替换公章</el-button>
             <el-button v-if="modelValue.sealImage" @click="updateField('sealImage', '')">删除公章</el-button>
           </div>
@@ -68,6 +68,7 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { LabReportTemplate } from '@/types/labReport'
+import { resizeSealImage } from '@/utils/imageDataUrl'
 
 const props = defineProps<{
   modelValue: LabReportTemplate
@@ -89,20 +90,18 @@ function updateStatement(index: number, value: string | number) {
   emit('update:modelValue', { ...props.modelValue, statements })
 }
 
-function handleSealFile(event: Event) {
+async function handleSealFile(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  if (!file.type.startsWith('image/')) {
-    ElMessage.error('只能上传图片格式的电子公章')
-    return
-  }
-  const reader = new FileReader()
-  reader.onload = () => {
-    updateField('sealImage', String(reader.result || ''))
+  try {
+    const sealImage = await resizeSealImage(file)
+    updateField('sealImage', sealImage)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '电子公章处理失败')
+  } finally {
     input.value = ''
   }
-  reader.readAsDataURL(file)
 }
 </script>
 

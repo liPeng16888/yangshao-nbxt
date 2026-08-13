@@ -56,18 +56,25 @@ export const defaultLabReportSmsTemplate: LabReportSmsTemplate = {
 }
 
 export function loadLabReportTemplate(): LabReportTemplate {
-  if (typeof window === 'undefined') return { ...defaultLabReportTemplate }
+  if (typeof window === 'undefined') return cloneDefaultLabReportTemplate()
   try {
     const raw = window.localStorage.getItem(LAB_REPORT_TEMPLATE_STORAGE_KEY)
-    if (!raw) return { ...defaultLabReportTemplate }
-    const parsed = JSON.parse(raw) as Partial<LabReportTemplate>
+    if (!raw) return cloneDefaultLabReportTemplate()
+    const parsed = JSON.parse(raw) as Record<string, unknown>
     return {
-      ...defaultLabReportTemplate,
-      ...parsed,
-      statements: parsed.statements?.length ? parsed.statements : [...defaultLabReportTemplate.statements]
+      title: (parsed.title ?? defaultLabReportTemplate.title) as string,
+      sampleUnit: (parsed.sampleUnit ?? defaultLabReportTemplate.sampleUnit) as string,
+      inspector: (parsed.inspector ?? defaultLabReportTemplate.inspector) as string,
+      reviewer: (parsed.reviewer ?? defaultLabReportTemplate.reviewer) as string,
+      address: (parsed.address ?? defaultLabReportTemplate.address) as string,
+      phone: (parsed.phone ?? defaultLabReportTemplate.phone) as string,
+      statements: (Array.isArray(parsed.statements) && parsed.statements.length
+        ? [...parsed.statements]
+        : [...defaultLabReportTemplate.statements]) as string[],
+      sealImage: (parsed.sealImage ?? defaultLabReportTemplate.sealImage) as string
     }
   } catch {
-    return { ...defaultLabReportTemplate }
+    return cloneDefaultLabReportTemplate()
   }
 }
 
@@ -87,14 +94,18 @@ export function loadLabReportSmsTemplate(): LabReportSmsTemplate {
   try {
     const raw = window.localStorage.getItem(LAB_REPORT_SMS_TEMPLATE_STORAGE_KEY)
     if (!raw) return { ...defaultLabReportSmsTemplate }
-    const parsed = JSON.parse(raw) as Partial<LabReportSmsTemplate>
+    const parsed = JSON.parse(raw) as Record<string, unknown>
     return {
-      ...defaultLabReportSmsTemplate,
-      ...parsed
+      prefix: (parsed.prefix ?? defaultLabReportSmsTemplate.prefix) as string,
+      suffix: (parsed.suffix ?? defaultLabReportSmsTemplate.suffix) as string
     }
   } catch {
     return { ...defaultLabReportSmsTemplate }
   }
+}
+
+function cloneDefaultLabReportTemplate(): LabReportTemplate {
+  return { ...defaultLabReportTemplate, statements: [...defaultLabReportTemplate.statements] }
 }
 
 export function saveLabReportSmsTemplate(template: LabReportSmsTemplate) {

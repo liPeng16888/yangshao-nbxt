@@ -10,7 +10,9 @@ import {
   defaultLabReportTemplate,
   detectReportElementKeys,
   downloadLabReportElementAsPng,
+  loadLabReportSmsTemplate,
   loadLabReportSampleUnits,
+  loadLabReportTemplate,
   parseLabElementKeys,
   saveLabReportSampleUnits
 } from './labReport'
@@ -177,6 +179,24 @@ describe('lab report generation', () => {
 
     window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', account: 'account-1' }))
     expect(loadLabReportSampleUnits()).toEqual(['王庄客户', '清镇客户'])
+  })
+
+  it('reads only known legacy template fields and drops migration metadata', () => {
+    window.localStorage.setItem('yangshao-lab-report-template', JSON.stringify({
+      ...defaultLabReportTemplate,
+      title: '旧报告',
+      updatedAt: '2026-08-13T00:00:00.000Z',
+      unexpected: 'drop-me'
+    }))
+    window.localStorage.setItem('yangshao-lab-report-sms-template', JSON.stringify({
+      prefix: '旧前缀',
+      suffix: '',
+      updatedAt: '2026-08-13T00:00:00.000Z',
+      unexpected: 'drop-me'
+    }))
+
+    expect(loadLabReportTemplate()).toEqual({ ...defaultLabReportTemplate, title: '旧报告' })
+    expect(loadLabReportSmsTemplate()).toEqual({ prefix: '旧前缀', suffix: '' })
   })
 
   it('creates SMS content with prefix, suffix, sample line, and blank lines between samples', () => {
