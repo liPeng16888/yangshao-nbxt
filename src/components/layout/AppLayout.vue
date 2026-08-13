@@ -21,6 +21,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
+import { useFrontendPreferencesStore } from '@/stores/frontendPreferences'
 import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import { useTenantRealtimeStore } from '@/stores/tenantRealtime'
 import AppSidebar from './AppSidebar.vue'
@@ -31,15 +32,23 @@ const sidebarCollapsed = ref(false)
 const accessGuard = useAccessGuardStore()
 const tenantRealtime = useTenantRealtimeStore()
 const sharedPrepaid = useSharedPrepaidStore()
+const frontendPreferences = useFrontendPreferencesStore()
+let unregisterPreferences: (() => void) | undefined
 
 onMounted(() => {
   sidebarCollapsed.value = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'
   void accessGuard.loadGroups()
+  void frontendPreferences.loadAll()
+  unregisterPreferences = tenantRealtime.registerModule('frontend-preferences', {
+    isDirty: () => frontendPreferences.hasPendingChanges,
+    refresh: async () => { await frontendPreferences.loadAll() }
+  })
   tenantRealtime.connect()
   void sharedPrepaid.connectRealtime()
 })
 
 onBeforeUnmount(() => {
+  unregisterPreferences?.()
   tenantRealtime.disconnect()
   sharedPrepaid.disconnectRealtime()
 })
