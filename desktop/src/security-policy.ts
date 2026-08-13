@@ -2,6 +2,10 @@ import type { DesktopTargetConfig } from './config.js'
 
 export type NavigationDecision = 'allow' | 'external-https' | 'block'
 export type ResponseHeaders = Record<string, string[]>
+export interface PermissionRequestContext {
+  requestingUrl: string
+  isMainFrame: boolean
+}
 
 function parseUrl(rawUrl: string): URL | undefined {
   try {
@@ -63,8 +67,16 @@ export function isAllowedBlobUrl(
   )
 }
 
-export function shouldGrantPermission(_permission: string): false {
-  return false
+export function shouldGrantPermission(
+  permission: string,
+  context: PermissionRequestContext,
+  target: DesktopTargetConfig,
+): boolean {
+  return (
+    permission === 'clipboard-sanitized-write' &&
+    context.isMainFrame &&
+    isAllowedNavigation(context.requestingUrl, target)
+  )
 }
 
 export function shouldAcceptCertificateError(

@@ -187,12 +187,29 @@ function installApplicationMenu(): void {
 function configureDefaultSession(): void {
   const desktopSession = session.defaultSession
 
-  desktopSession.setPermissionCheckHandler((_webContents, permission) =>
-    shouldGrantPermission(permission),
+  desktopSession.setPermissionCheckHandler(
+    (_webContents, permission, requestingOrigin, details) =>
+      shouldGrantPermission(
+        permission,
+        {
+          requestingUrl: details.requestingUrl ?? requestingOrigin,
+          isMainFrame: details.isMainFrame,
+        },
+        target,
+      ),
   )
   desktopSession.setPermissionRequestHandler(
-    (_webContents, permission, callback) => {
-      callback(shouldGrantPermission(permission))
+    (_webContents, permission, callback, details) => {
+      callback(
+        shouldGrantPermission(
+          permission,
+          {
+            requestingUrl: details.requestingUrl,
+            isMainFrame: details.isMainFrame,
+          },
+          target,
+        ),
+      )
     },
   )
   desktopSession.setDevicePermissionHandler(() => false)

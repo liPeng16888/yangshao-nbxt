@@ -56,6 +56,40 @@ describe('desktop navigation security policy', () => {
 })
 
 describe('desktop permission, certificate and CSP policy', () => {
+  it('allows sanitized clipboard writes only from the approved main frame', () => {
+    expect(
+      shouldGrantPermission(
+        'clipboard-sanitized-write',
+        {
+          requestingUrl: 'https://www.ysjc.art/dashboard/lab-report',
+          isMainFrame: true,
+        },
+        desktopTargets.internal,
+      ),
+    ).toBe(true)
+
+    expect(
+      shouldGrantPermission(
+        'clipboard-sanitized-write',
+        {
+          requestingUrl: 'https://www.ysjc.art.evil.com/dashboard/lab-report',
+          isMainFrame: true,
+        },
+        desktopTargets.internal,
+      ),
+    ).toBe(false)
+    expect(
+      shouldGrantPermission(
+        'clipboard-sanitized-write',
+        {
+          requestingUrl: 'https://www.ysjc.art/dashboard/lab-report',
+          isMainFrame: false,
+        },
+        desktopTargets.internal,
+      ),
+    ).toBe(false)
+  })
+
   it.each([
     'camera',
     'microphone',
@@ -65,7 +99,13 @@ describe('desktop permission, certificate and CSP policy', () => {
     'clipboard-read',
     'unknown-future-permission',
   ])('rejects renderer permission %s by default', (permission) => {
-    expect(shouldGrantPermission(permission)).toBe(false)
+    expect(
+      shouldGrantPermission(
+        permission,
+        { requestingUrl: 'https://www.ysjc.art/', isMainFrame: true },
+        desktopTargets.internal,
+      ),
+    ).toBe(false)
   })
 
   it('never accepts a certificate error, including for an approved host', () => {
