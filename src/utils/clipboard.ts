@@ -1,29 +1,32 @@
 export async function writeTextToClipboard(text: string): Promise<void> {
+  let clipboard: Clipboard | undefined
   try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
+    clipboard = navigator.clipboard
+    if (clipboard?.writeText) {
+      await clipboard.writeText(text)
       return
     }
   } catch {
     // Some desktop webviews expose Clipboard but reject writes. Use the DOM fallback below.
   }
 
-  const activeElement = document.activeElement
-  const inputSelection = captureInputSelection(activeElement)
-  const selectedRanges = captureSelectionRanges()
-  const textarea = document.createElement('textarea')
-  textarea.dataset.clipboardFallback = 'true'
-  textarea.value = text
-  textarea.readOnly = true
-  textarea.tabIndex = -1
-  textarea.setAttribute('aria-hidden', 'true')
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  textarea.style.pointerEvents = 'none'
-  textarea.style.left = '-9999px'
-  document.body.appendChild(textarea)
+  const snapshot = captureFallbackSnapshot()
+  let textarea: HTMLTextAreaElement | undefined
 
   try {
+    textarea = document.createElement('textarea')
+    textarea.dataset.clipboardFallback = 'true'
+    textarea.value = text
+    textarea.readOnly = true
+    textarea.tabIndex = -1
+    textarea.setAttribute('aria-hidden', 'true')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    textarea.style.pointerEvents = 'none'
+    textarea.style.left = '-9999px'
+    const body = document.body
+    if (!body) throw new Error('body unavailable')
+    body.appendChild(textarea)
     textarea.focus()
     textarea.select()
     textarea.setSelectionRange(0, text.length)
@@ -31,8 +34,12 @@ export async function writeTextToClipboard(text: string): Promise<void> {
   } catch {
     // Normalize browser-specific clipboard errors after cleanup.
   } finally {
-    textarea.remove()
-    restoreFocusAndSelection(activeElement, inputSelection, selectedRanges)
+    try {
+      textarea?.remove()
+    } catch {
+      // Cleanup is best effort; a failed cleanup must not change the copy result.
+    }
+    restoreFocusAndSelection(snapshot)
   }
 
   throw new Error('复制失败')
@@ -44,28 +51,61 @@ type InputSelection = {
   direction: 'forward' | 'backward' | 'none' | undefined
 }
 
-function captureInputSelection(element: Element | null): InputSelection | undefined {
-  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return undefined
+type FallbackSnapshot = {
+  activeElement: Element | null
+  inputSelection?: InputSelection
+  selectedRanges: Range[]
+}
+
+function captureFallbackSnapshot(): FallbackSnapshot {
+  let activeElement: Element | null = null
+  try {
+    activeElement = document.activeElement
+  } catch {
+    // Focus preservation is best effort only.
+  }
   return {
-    start: element.selectionStart,
-    end: element.selectionEnd,
-    direction: element.selectionDirection ?? undefined
+    activeElement,
+    inputSelection: captureInputSelection(activeElement),
+    selectedRanges: captureSelectionRanges()
+  }
+}
+
+function captureInputSelection(element: Element | null): InputSelection | undefined {
+  try {
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return undefined
+    return {
+      start: element.selectionStart,
+      end: element.selectionEnd,
+      direction: element.selectionDirection ?? undefined
+    }
+  } catch {
+    return undefined
   }
 }
 
 function captureSelectionRanges(): Range[] {
-  const selection = window.getSelection()
-  if (!selection) return []
-  return Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange())
+  try {
+    const selection = window.getSelection()
+    if (!selection) return []
+    const ranges: Range[] = []
+    for (let index = 0; index < selection.rangeCount; index += 1) {
+      try {
+        ranges.push(selection.getRangeAt(index).cloneRange())
+      } catch {
+        // Preserve any ranges captured before a browser-specific selection failure.
+      }
+    }
+    return ranges
+  } catch {
+    return []
+  }
 }
 
-function restoreFocusAndSelection(
-  activeElement: Element | null,
-  inputSelection: InputSelection | undefined,
-  selectedRanges: Range[]
-) {
+function restoreFocusAndSelection({ activeElement, inputSelection, selectedRanges }: FallbackSnapshot) {
   try {
-    if (activeElement instanceof HTMLElement && activeElement.isConnected) activeElement.focus()
+    const focusable = activeElement as (Element & { focus?: () => void }) | null
+    if (focusable?.isConnected && typeof focusable.focus === 'function') focusable.focus()
     if (
       inputSelection &&
       activeElement?.isConnected &&
