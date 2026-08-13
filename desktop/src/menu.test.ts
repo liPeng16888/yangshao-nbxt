@@ -67,8 +67,8 @@ describe('desktop application menu', () => {
     ).toEqual(
       expect.arrayContaining([
         'CmdOrCtrl+F',
-        'Enter',
-        'Shift+Enter',
+        'CmdOrCtrl+G',
+        'CmdOrCtrl+Shift+G',
         'CmdOrCtrl+R',
         'CmdOrCtrl+Shift+R',
         'CmdOrCtrl+0',
@@ -103,9 +103,14 @@ describe('desktop application menu', () => {
       'selectAll',
     ])
     expect(roles(menu(template, '窗口'))).toEqual(['minimize', 'zoom'])
-    expect(
-      (menu(template, '页面').submenu ?? []).map((item) => item.accelerator),
-    ).toContain('F11')
+    const accelerators = (menu(template, '页面').submenu ?? []).map(
+      (item) => item.accelerator,
+    )
+    expect(accelerators).toEqual(
+      expect.arrayContaining(['CmdOrCtrl+G', 'CmdOrCtrl+Shift+G', 'F11']),
+    )
+    expect(accelerators).not.toContain('Enter')
+    expect(accelerators).not.toContain('Shift+Enter')
   })
 
   it('connects every custom page command to its supplied action', () => {

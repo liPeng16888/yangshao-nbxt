@@ -105,6 +105,14 @@ function normalizeResultNumber(value: unknown): number {
     : 0
 }
 
+function normalizeRequestId(value: unknown): number | null {
+  return typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+    ? value
+    : null
+}
+
 export function installFindWindow(
   options: FindWindowOptions,
 ): InstalledFindWindow {
@@ -112,6 +120,7 @@ export function installFindWindow(
   const mainWebContents = mainWindow.webContents
   let findWindow: FindChildWindow | null = null
   let currentQuery = ''
+  let activeRequestId: number | null = null
   let disposed = false
 
   const senderIsTrusted = (event: { sender?: { id?: unknown } }): boolean =>
@@ -121,11 +130,28 @@ export function installFindWindow(
     !findWindow.webContents.isDestroyed() &&
     event.sender?.id === findWindow.webContents.id
 
+  const sendResult = (activeMatchOrdinal: number, matches: number) => {
+    if (
+      disposed ||
+      !findWindow ||
+      findWindow.isDestroyed() ||
+      findWindow.webContents.isDestroyed()
+    ) {
+      return
+    }
+    findWindow.webContents.send(FIND_RESULT_CHANNEL, {
+      activeMatchOrdinal,
+      matches,
+    })
+  }
+
   const clearSelection = () => {
     currentQuery = ''
+    activeRequestId = null
     if (!mainWindow.isDestroyed() && !mainWebContents.isDestroyed()) {
       mainWebContents.stopFindInPage('clearSelection')
     }
+    sendResult(0, 0)
   }
 
   const runFind = (query: string, forward: boolean): boolean => {
@@ -137,9 +163,11 @@ export function installFindWindow(
     ) {
       return false
     }
-    const findNext = currentQuery === query
+    const findNext = currentQuery !== query
     currentQuery = query
-    mainWebContents.findInPage(query, { forward, findNext })
+    activeRequestId = normalizeRequestId(
+      mainWebContents.findInPage(query, { forward, findNext }),
+    )
     return true
   }
 
@@ -166,18 +194,18 @@ export function installFindWindow(
   }
 
   const onFoundInPage = (_event: Event, result: FoundInPageResult) => {
+    const requestId = normalizeRequestId(result?.requestId)
     if (
-      disposed ||
-      !findWindow ||
-      findWindow.isDestroyed() ||
-      findWindow.webContents.isDestroyed()
+      requestId === null ||
+      activeRequestId === null ||
+      requestId !== activeRequestId
     ) {
       return
     }
-    findWindow.webContents.send(FIND_RESULT_CHANNEL, {
-      activeMatchOrdinal: normalizeResultNumber(result?.activeMatchOrdinal),
-      matches: normalizeResultNumber(result?.matches),
-    })
+    sendResult(
+      normalizeResultNumber(result?.activeMatchOrdinal),
+      normalizeResultNumber(result?.matches),
+    )
   }
 
   const onMainClosed = () => dispose()
@@ -188,6 +216,7 @@ export function installFindWindow(
     }
     disposed = true
     currentQuery = ''
+    activeRequestId = null
     ipc.removeListener(FIND_QUERY_CHANNEL, onQuery)
     ipc.removeListener(FIND_CLOSE_CHANNEL, onClose)
     if (!mainWebContents.isDestroyed()) {

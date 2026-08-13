@@ -121,10 +121,14 @@ function pageMenu(
     label: '页面',
     submenu: [
       { label: '查找', accelerator: 'CmdOrCtrl+F', click: actions.showFind },
-      { label: '查找下一个', accelerator: 'Enter', click: actions.findNext },
+      {
+        label: '查找下一个',
+        accelerator: 'CmdOrCtrl+G',
+        click: actions.findNext,
+      },
       {
         label: '查找上一个',
-        accelerator: 'Shift+Enter',
+        accelerator: 'CmdOrCtrl+Shift+G',
         click: actions.findPrevious,
       },
       separator(),

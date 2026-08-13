@@ -11,7 +11,8 @@ import {
 } from './find-window'
 
 class FakeMainWebContents extends EventEmitter {
-  readonly findInPage = vi.fn(() => 1)
+  nextRequestId = 40
+  readonly findInPage = vi.fn(() => this.nextRequestId++)
   readonly stopFindInPage = vi.fn()
   destroyed = false
   isDestroyed = vi.fn(() => this.destroyed)
@@ -160,12 +161,12 @@ describe('trusted local find window', () => {
     expect(mainWindow.webContents.findInPage).toHaveBeenNthCalledWith(
       1,
       'silicon',
-      { forward: true, findNext: false },
+      { forward: true, findNext: true },
     )
     expect(mainWindow.webContents.findInPage).toHaveBeenNthCalledWith(
       2,
       'silicon',
-      { forward: false, findNext: true },
+      { forward: false, findNext: false },
     )
 
     ipc.emit(FIND_CLOSE_CHANNEL, { sender: { id: 999 } })
@@ -192,12 +193,12 @@ describe('trusted local find window', () => {
     expect(mainWindow.webContents.findInPage).toHaveBeenNthCalledWith(
       2,
       'lead',
-      { forward: true, findNext: true },
+      { forward: true, findNext: false },
     )
     expect(mainWindow.webContents.findInPage).toHaveBeenNthCalledWith(
       3,
       'lead',
-      { forward: false, findNext: true },
+      { forward: false, findNext: false },
     )
     expect(mainWindow.webContents.stopFindInPage).toHaveBeenCalledWith(
       'clearSelection',
@@ -206,32 +207,121 @@ describe('trusted local find window', () => {
     expect(mainWindow.webContents.findInPage).toHaveBeenCalledTimes(3)
   })
 
-  it('sends only normalized numeric match data to a live find renderer', () => {
-    const { controller, mainWindow, windows } = fixture()
+  it('sends only normalized numeric match data for the active request', () => {
+    const { controller, mainWindow, ipc, windows } = fixture()
     controller.show()
+    const sender = { id: windows[0]!.webContents.id }
+    ipc.emit(FIND_QUERY_CHANNEL, { sender }, { query: 'zinc', forward: true })
 
     mainWindow.webContents.emit('found-in-page', {}, {
-      requestId: 91,
+      requestId: 40,
       activeMatchOrdinal: 2.9,
       matches: 5.8,
       finalUpdate: true,
       selectionArea: { x: 0, y: 0, width: 5, height: 5 },
     })
-    mainWindow.webContents.emit('found-in-page', {}, {
-      activeMatchOrdinal: Number.NaN,
-      matches: -4,
-    })
-
-    expect(windows[0]?.webContents.send).toHaveBeenNthCalledWith(
-      1,
+    expect(windows[0]?.webContents.send).toHaveBeenCalledOnce()
+    expect(windows[0]?.webContents.send).toHaveBeenCalledWith(
       FIND_RESULT_CHANNEL,
       { activeMatchOrdinal: 2, matches: 5 },
     )
-    expect(windows[0]?.webContents.send).toHaveBeenNthCalledWith(
-      2,
-      FIND_RESULT_CHANNEL,
-      { activeMatchOrdinal: 0, matches: 0 },
-    )
+  })
+
+  it('drops a late result from query A after query B becomes active', () => {
+    const { controller, mainWindow, ipc, windows } = fixture()
+    controller.show()
+    const findContents = windows[0]!.webContents
+    const sender = { id: findContents.id }
+    ipc.emit(FIND_QUERY_CHANNEL, { sender }, { query: 'A', forward: true })
+    ipc.emit(FIND_QUERY_CHANNEL, { sender }, { query: 'B', forward: true })
+
+    mainWindow.webContents.emit('found-in-page', {}, {
+      requestId: 40,
+      activeMatchOrdinal: 8,
+      matches: 9,
+    })
+    expect(findContents.send).not.toHaveBeenCalled()
+
+    mainWindow.webContents.emit('found-in-page', {}, {
+      requestId: 41,
+      activeMatchOrdinal: 1,
+      matches: 3,
+    })
+    expect(findContents.send).toHaveBeenCalledOnce()
+    expect(findContents.send).toHaveBeenCalledWith(FIND_RESULT_CHANNEL, {
+      activeMatchOrdinal: 1,
+      matches: 3,
+    })
+  })
+
+  it('invalidates the request and resets the label when the query is cleared', () => {
+    const { controller, mainWindow, ipc, windows } = fixture()
+    controller.show()
+    const findContents = windows[0]!.webContents
+    const sender = { id: findContents.id }
+    ipc.emit(FIND_QUERY_CHANNEL, { sender }, { query: 'tin', forward: true })
+    ipc.emit(FIND_QUERY_CHANNEL, { sender }, { query: '', forward: true })
+
+    expect(findContents.send).toHaveBeenCalledOnce()
+    expect(findContents.send).toHaveBeenCalledWith(FIND_RESULT_CHANNEL, {
+      activeMatchOrdinal: 0,
+      matches: 0,
+    })
+    mainWindow.webContents.emit('found-in-page', {}, {
+      requestId: 40,
+      activeMatchOrdinal: 1,
+      matches: 1,
+    })
+    expect(findContents.send).toHaveBeenCalledOnce()
+  })
+
+  it('does not deliver old results after close and reopen', () => {
+    const { controller, mainWindow, ipc, windows } = fixture()
+    controller.show()
+    const first = windows[0]!
+    ipc.emit(FIND_QUERY_CHANNEL, { sender: { id: first.webContents.id } }, {
+      query: 'first',
+      forward: true,
+    })
+    first.close()
+    controller.show()
+    const second = windows[1]!
+    ipc.emit(FIND_QUERY_CHANNEL, { sender: { id: second.webContents.id } }, {
+      query: 'second',
+      forward: true,
+    })
+
+    mainWindow.webContents.emit('found-in-page', {}, {
+      requestId: 40,
+      activeMatchOrdinal: 1,
+      matches: 2,
+    })
+    expect(second.webContents.send).not.toHaveBeenCalled()
+    mainWindow.webContents.emit('found-in-page', {}, {
+      requestId: 41,
+      activeMatchOrdinal: 2,
+      matches: 2,
+    })
+    expect(second.webContents.send).toHaveBeenCalledOnce()
+  })
+
+  it('ignores missing, non-numeric and non-integer result request IDs', () => {
+    const { controller, mainWindow, ipc, windows } = fixture()
+    controller.show()
+    const findContents = windows[0]!.webContents
+    ipc.emit(FIND_QUERY_CHANNEL, { sender: { id: findContents.id } }, {
+      query: 'valid',
+      forward: true,
+    })
+
+    for (const requestId of [undefined, '40', Number.NaN, 40.5]) {
+      mainWindow.webContents.emit('found-in-page', {}, {
+        requestId,
+        activeMatchOrdinal: 1,
+        matches: 1,
+      })
+    }
+    expect(findContents.send).not.toHaveBeenCalled()
   })
 
   it('rejects stale senders and removes every listener on parent disposal', () => {
