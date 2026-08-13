@@ -43,6 +43,13 @@ enum FrontendMenuPermission {
   BLACKLIST
 }
 
+enum FrontendPreferenceSection {
+  LAB_REPORT_TEMPLATE
+  LAB_REPORT_SMS_TEMPLATE
+  LAB_REPORT_SAMPLE_UNITS
+  LAB_ELEMENT_GROUPS
+}
+
 enum PaymentMethod {
   cash
   online
@@ -252,6 +259,8 @@ model User {
   cancelledSharedPrepaidSettlements   SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementCanceller")
   actedSharedPrepaidSettlementActions SharedPrepaidSettlementAction[] @relation("SharedPrepaidSettlementActionActor")
   ownedSharedPrepaidSettlementActions SharedPrepaidSettlementAction[] @relation("SharedPrepaidSettlementActionOwner")
+  ownedFrontendBusinessPreferences   FrontendBusinessPreference[]    @relation("FrontendBusinessPreferenceOwner")
+  updatedFrontendBusinessPreferences FrontendBusinessPreference[]    @relation("FrontendBusinessPreferenceActor")
   parentFrontendUser                  User?                           @relation("FrontendSubAccounts", fields: [parentFrontendUserId], references: [id], onDelete: Restrict)
   frontendSubAccounts                 User[]                          @relation("FrontendSubAccounts")
   frontendSubAccountPermissions       FrontendSubAccountPermission[]
@@ -259,6 +268,24 @@ model User {
   @@index([role])
   @@index([parentFrontendUserId])
   @@index([deletedAt])
+}
+
+model FrontendBusinessPreference {
+  id             String                    @id @default(uuid())
+  frontendUserId String
+  section        FrontendPreferenceSection
+  value          Json
+  version        Int                       @default(1)
+  updatedById    String
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  frontendUser User @relation("FrontendBusinessPreferenceOwner", fields: [frontendUserId], references: [id], onDelete: Restrict)
+  updatedBy    User @relation("FrontendBusinessPreferenceActor", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@unique([frontendUserId, section])
+  @@index([frontendUserId])
+  @@index([updatedById])
 }
 
 model FrontendSubAccountPermission {
