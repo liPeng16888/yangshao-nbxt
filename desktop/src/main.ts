@@ -14,6 +14,7 @@ import {
 } from 'electron'
 import { fileURLToPath } from 'node:url'
 
+import { formatAboutDetail, readBuildInfo } from './build-info.js'
 import { installContextMenu } from './context-menu.js'
 import { configureDownloadPrompt } from './downloads.js'
 import { confirmAndOpenExternalLink } from './external-links.js'
@@ -195,6 +196,13 @@ function createMainWindow(): BrowserWindow {
 }
 
 function installApplicationMenu(): void {
+  app.setAboutPanelOptions({
+    applicationName: target.productName,
+    applicationVersion: app.getVersion(),
+    version: app.getVersion(),
+    credits: formatAboutDetail(app.getVersion(), readBuildInfo()),
+  })
+
   const template = createApplicationMenuTemplate(
     target.productName,
     process.platform,

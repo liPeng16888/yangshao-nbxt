@@ -11,7 +11,7 @@
 
 “后端系统”在产品名中指后台管理桌面软件。NestJS API、PostgreSQL、账号、权限和业务数据仍在现有服务器上运行，不会安装到员工电脑。
 
-网页发布后，桌面软件下次打开或使用“页面 → 强制刷新”即可同步。只有域名、图标、窗口、Electron 或原生外壳变更才重新制作安装包。
+网页发布后，桌面软件下次打开或使用“页面 → 强制刷新”即可同步。只有域名、图标、窗口、Electron 或原生外壳变更才重新制作安装包。当前整改阶段只在本地完成代码和 macOS 安装包验证，不上传 GitHub、不部署 VPS、不执行生产数据库迁移；必须等负责人明确通知后，才进入 GitHub 私有构建和 VPS 发布流程。
 
 ## 2. 在 GitHub 生成并下载安装包
 
@@ -23,13 +23,13 @@
 4. 点击右侧 `Run workflow`，选择要构建的分支，再点绿色 `Run workflow`。
 5. 等待 `Validate`、Windows、macOS 和 `Bundle` 全部变绿。
 6. 打开这次运行页面，滚动到底部 `Artifacts`。
-7. 下载 `Yangshao-Desktop-Installers-1.0.0`。
+7. 下载 `Yangshao-Desktop-Installers-1.0.1`。
 8. 解压后得到四个安装包和 `SHA256SUMS.txt`：
 
-   - `Yangshao-Internal-System-1.0.0-win-x64.exe`
-   - `Yangshao-Backend-System-1.0.0-win-x64.exe`
-   - `Yangshao-Internal-System-1.0.0-mac-arm64.dmg`
-   - `Yangshao-Backend-System-1.0.0-mac-arm64.dmg`
+   - `Yangshao-Internal-System-1.0.1-win-x64.exe`
+   - `Yangshao-Backend-System-1.0.1-win-x64.exe`
+   - `Yangshao-Internal-System-1.0.1-mac-arm64.dmg`
+   - `Yangshao-Backend-System-1.0.1-mac-arm64.dmg`
 
 Artifact 私有保存 30 天，不创建公开 Release。只有对私有仓库有权限的成员能下载。Actions 会消耗 GitHub 额度，额度耗尽且未配置付费方式时构建会暂停。
 
@@ -47,8 +47,8 @@ shasum -a 256 -c SHA256SUMS.txt
 Windows PowerShell：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\Yangshao-Internal-System-1.0.0-win-x64.exe
-Get-FileHash -Algorithm SHA256 .\Yangshao-Backend-System-1.0.0-win-x64.exe
+Get-FileHash -Algorithm SHA256 .\Yangshao-Internal-System-1.0.1-win-x64.exe
+Get-FileHash -Algorithm SHA256 .\Yangshao-Backend-System-1.0.1-win-x64.exe
 ```
 
 把输出与 `SHA256SUMS.txt` 中对应文件的哈希比较，必须完全一致。
@@ -80,9 +80,20 @@ Get-FileHash -Algorithm SHA256 .\Yangshao-Backend-System-1.0.0-win-x64.exe
 - Windows：退出软件后直接运行新 `.exe`，安装到原位置即可。
 - macOS：退出软件，打开新 DMG，把新应用拖入“应用程序”并选择“替换”。
 
-登录态保存在独立 `userData` 目录中，正常覆盖安装不会清除。打开应用菜单中的“关于 仰韶化验内部系统”或“关于 仰韶化验后端系统”可查看桌面外壳版本。
+登录态保存在独立 `userData` 目录中，正常覆盖安装不会清除。打开应用菜单中的“关于 仰韶化验内部系统”或“关于 仰韶化验后端系统”，可查看桌面外壳权威版本、UTC 构建时间、七位 Git 提交号和构建目标；报障时应一并提供这些信息。本版应显示版本 `1.0.1`。
 
-## 7. 卸载和清理本地登录态
+## 7. 主账号共享与本机数据边界
+
+内部系统的以下四类配置以主账号的数据所有者为范围保存在服务器，主账号和拥有对应权限的子账号共用同一套数据：
+
+- 化验报告模板及公章；
+- 短信模板；
+- 来样单位快捷名称；
+- 常用化验元素组合。
+
+不同主账号之间仍严格隔离。尚未提交的表单草稿、当前样品的实际元素选择、计算过程和页面临时状态仍保存在当前设备或当前页面中，不会自动同步到另一台电脑。清理本机应用数据会移除登录态、本机缓存和这些本机状态，但不会删除服务器上的四类共享配置。
+
+## 8. 卸载和清理本地登录态
 
 ### Windows
 
@@ -106,19 +117,28 @@ Get-FileHash -Algorithm SHA256 .\Yangshao-Backend-System-1.0.0-win-x64.exe
 
 清理本地登录态不会删除服务器账号或业务数据，但下次启动需要重新登录。
 
-## 8. 网络和服务器故障
+## 9. 桌面编辑、查找与刷新
+
+- 在可编辑输入框内右键可使用撤销、剪切、复制、粘贴、删除和全选；只读选区可复制。
+- `Cmd+F`（Windows 为 `Ctrl+F`）打开页面查找，`Cmd/Ctrl+G` 查找下一个，`Cmd/Ctrl+Shift+G` 查找上一个。
+- `Cmd/Ctrl+0` 恢复 100% 显示；`Cmd/Ctrl++` 和 `Cmd/Ctrl+-` 在 50% 至 200% 之间缩放。
+- `Cmd/Ctrl+R` 普通刷新；`Cmd/Ctrl+Shift+R` 强制刷新并重新获取网页资源。
+
+普通刷新和强制刷新都不会主动清除 Cookie、登录令牌、localStorage、本机草稿或计算状态。网页自身在重新加载时尚未提交的内存输入仍可能丢失，因此刷新前应先保存正在编辑的数据。
+
+## 10. 网络和服务器故障
 
 出现“网络或服务器不可用”时：
 
 1. 确认电脑能访问互联网。
 2. 用系统浏览器分别打开对应固定入口，判断是本机网络还是服务器问题。
-3. 回到桌面软件点击“重试”。
+3. 启动或刷新超过 15 秒仍未成功时，软件会显示“网络或服务器不可用”；回到桌面软件点击“重试”。
 4. 如页面显示旧内容，使用“页面 → 强制刷新”。
 5. 仍失败时记录发生时间、应用名称、页面位置和错误截图交给维护人员。
 
-启动时桌面软件只清理 HTTP 缓存，不清 Cookie、localStorage、登录令牌或页面偏好。普通关闭/重启后登录应保持。
+启动时桌面软件只清理 HTTP 缓存，不清 Cookie、localStorage、登录令牌、本机草稿、计算状态或页面偏好。普通关闭、重启、普通刷新和强制刷新后登录应保持。
 
-## 9. 真机验收清单
+## 11. 真机验收清单
 
 Windows 10/11 x64 与 macOS 13+ Apple Silicon 各自验证：
 

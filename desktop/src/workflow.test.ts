@@ -9,6 +9,9 @@ const workflow = readFileSync(
   ),
   'utf8',
 )
+const desktopPackage = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+) as { devDependencies?: Record<string, string> }
 
 describe('private desktop installer workflow', () => {
   it('is manual, read-only and does not publish a release', () => {
@@ -54,16 +57,42 @@ describe('private desktop installer workflow', () => {
   })
 
   it('bundles exactly four installers with SHA-256 for 30 private days', () => {
-    for (const filename of [
-      'Yangshao-Internal-System-1.0.0-win-x64.exe',
-      'Yangshao-Backend-System-1.0.0-win-x64.exe',
-      'Yangshao-Internal-System-1.0.0-mac-arm64.dmg',
-      'Yangshao-Backend-System-1.0.0-mac-arm64.dmg',
-    ]) {
+    const expectedFilenames = [
+      'Yangshao-Internal-System-1.0.1-win-x64.exe',
+      'Yangshao-Backend-System-1.0.1-win-x64.exe',
+      'Yangshao-Internal-System-1.0.1-mac-arm64.dmg',
+      'Yangshao-Backend-System-1.0.1-mac-arm64.dmg',
+    ]
+    for (const filename of expectedFilenames) {
       expect(workflow).toContain(filename)
     }
+    expect(
+      [
+        ...new Set(
+          workflow.match(
+            /Yangshao-(?:Internal|Backend)-System-[\d.]+-(?:win-x64\.exe|mac-arm64\.dmg)/gu,
+          ),
+        ),
+      ].sort(),
+    ).toEqual([...expectedFilenames].sort())
+    expect(workflow).not.toContain('1.0.0')
     expect(workflow).toContain('SHA256SUMS.txt')
     expect(workflow).toContain('retention-days: 30')
-    expect(workflow).toContain('name: Yangshao-Desktop-Installers-1.0.0')
+    expect(workflow).toContain('name: Yangshao-Desktop-Installers-1.0.1')
+  })
+
+  it('checks every packaged runtime before uploading an installer', () => {
+    expect(desktopPackage.devDependencies?.['@electron/asar']).toBe('3.4.1')
+    expect(workflow).toContain('Resources/app.asar')
+    for (const runtimeFile of [
+      'dist/build-info.json',
+      'dist/main.js',
+      'dist/find-preload.cjs',
+    ]) {
+      expect(
+        workflow.match(new RegExp(runtimeFile.replace('.', '\\.'), 'g'))
+          ?.length ?? 0,
+      ).toBeGreaterThanOrEqual(2)
+    }
   })
 })

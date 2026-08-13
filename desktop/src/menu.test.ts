@@ -149,6 +149,9 @@ describe('desktop application menu', () => {
       (item) => item.role,
     )
     expect(roleItems.every((item) => item.click === undefined)).toBe(true)
+    const aboutItem = roleItems.find((item) => item.role === 'about')
+    expect(aboutItem).toMatchObject({ role: 'about' })
+    expect(aboutItem).not.toHaveProperty('click')
   })
 
   it('changes zoom in tenths and clamps it to the approved range', () => {
