@@ -60,3 +60,42 @@ exit 0
 None. This task is intentionally constrained to Electron native roles and does
 not change renderer permissions; the existing `clipboard-read` denial remains
 covered by the security-policy test.
+
+## Review fix round 1
+
+Base reviewed: `005c51e`.
+
+- Captured `webContents` when installing the context-menu listener. The
+  idempotent unsubscribe closure now uses only that captured object, skips
+  removal after it has been destroyed, and therefore never reads
+  `window.webContents` after the BrowserWindow has closed.
+- Read-only selections now always return both Copy and Select All roles; their
+  `enabled` values independently match `canCopy` and `canSelectAll`, including
+  the disabled state.
+- Added regressions for destroyed-window unsubscribe, destroyed-webContents
+  unsubscribe, and disabled read-only Copy/Select All.
+
+### RED → GREEN evidence
+
+1. The revised read-only assertion failed because Select All was omitted, and
+   the destroyed-window unsubscribe test failed with `Object has been
+   destroyed`.
+2. A destroyed-webContents regression also failed when removal was attempted
+   on the captured destroyed object.
+3. After the minimal lifecycle and role-shape changes, verification was GREEN:
+
+```text
+pnpm --filter @yangshao/desktop exec vitest run src/context-menu.test.ts src/security-policy.test.ts
+22 tests passed in 2 files
+
+pnpm desktop:test
+69 tests passed in 12 files
+
+pnpm desktop:build
+tsc -p tsconfig.json (exit 0)
+
+git diff --check
+exit 0
+```
+
+No new concerns.

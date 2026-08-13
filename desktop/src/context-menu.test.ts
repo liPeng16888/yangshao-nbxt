@@ -93,7 +93,10 @@ describe('native edit context menu', () => {
           editFlags: { canCopy: false, canSelectAll: false },
         }),
       ),
-    ).toEqual([{ label: '复制', role: 'copy', enabled: false }])
+    ).toEqual([
+      { label: '复制', role: 'copy', enabled: false },
+      { label: '全选', role: 'selectAll', enabled: false },
+    ])
   })
 
   it('treats missing edit flags as disabled for editable fields', () => {
@@ -175,5 +178,53 @@ describe('native edit context menu', () => {
     } as Electron.ContextMenuParams)
 
     expect(menuMock.buildFromTemplate).not.toHaveBeenCalled()
+  })
+
+  it('unsubscribes idempotently without reading a destroyed window', () => {
+    const removeListener = vi.fn()
+    const webContents = {
+      isDestroyed: () => false,
+      on: vi.fn(),
+      removeListener,
+    }
+    let windowDestroyed = false
+    const window = {
+      isDestroyed: () => windowDestroyed,
+      get webContents() {
+        if (windowDestroyed) {
+          throw new Error('Object has been destroyed')
+        }
+        return webContents
+      },
+    } as never
+
+    const unsubscribe = installContextMenu(window)
+    windowDestroyed = true
+
+    expect(unsubscribe).not.toThrow()
+    expect(unsubscribe).not.toThrow()
+    expect(removeListener).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not remove a listener from destroyed web contents', () => {
+    const removeListener = vi.fn(() => {
+      throw new Error('Object has been destroyed')
+    })
+    let webContentsDestroyed = false
+    const webContents = {
+      isDestroyed: () => webContentsDestroyed,
+      on: vi.fn(),
+      removeListener,
+    }
+    const window = {
+      isDestroyed: () => false,
+      webContents,
+    } as never
+
+    const unsubscribe = installContextMenu(window)
+    webContentsDestroyed = true
+
+    expect(unsubscribe).not.toThrow()
+    expect(removeListener).not.toHaveBeenCalled()
   })
 })

@@ -50,11 +50,10 @@ export function createContextMenuTemplate(
       return []
     }
 
-    const template = [editMenuItem('复制', 'copy', editFlags.canCopy)]
-    if (editFlags.canSelectAll) {
-      template.push(editMenuItem('全选', 'selectAll', true))
-    }
-    return template
+    return [
+      editMenuItem('复制', 'copy', editFlags.canCopy),
+      editMenuItem('全选', 'selectAll', editFlags.canSelectAll),
+    ]
   }
 
   return [
@@ -71,8 +70,9 @@ export function createContextMenuTemplate(
 }
 
 export function installContextMenu(window: BrowserWindow): () => void {
+  const webContents = window.webContents
   const showContextMenu = (_event: Electron.Event, params: ContextMenuParams) => {
-    if (window.isDestroyed() || window.webContents.isDestroyed()) {
+    if (window.isDestroyed() || webContents.isDestroyed()) {
       return
     }
 
@@ -82,6 +82,16 @@ export function installContextMenu(window: BrowserWindow): () => void {
     }
   }
 
-  window.webContents.on('context-menu', showContextMenu)
-  return () => window.webContents.removeListener('context-menu', showContextMenu)
+  webContents.on('context-menu', showContextMenu)
+
+  let installed = true
+  return () => {
+    if (!installed) {
+      return
+    }
+    installed = false
+    if (!webContents.isDestroyed()) {
+      webContents.removeListener('context-menu', showContextMenu)
+    }
+  }
 }
