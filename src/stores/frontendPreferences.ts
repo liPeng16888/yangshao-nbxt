@@ -29,6 +29,10 @@ export const FRONTEND_PREFERENCE_SECTIONS = [
 
 type SectionRecord<T> = Partial<Record<FrontendPreferenceSection, T>>
 type SaveResult = 'saved' | 'queued' | 'conflict' | 'error'
+type MutationToken = {
+  ownerSessionGeneration: number
+  sequence: number
+}
 
 function idleStatuses(): Record<FrontendPreferenceSection, FrontendPreferenceStatus> {
   return Object.fromEntries(
@@ -88,7 +92,9 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
   const statuses = ref<Record<FrontendPreferenceSection, FrontendPreferenceStatus>>(idleStatuses())
   const conflicts = ref<SectionRecord<FrontendPreferenceConflict>>({})
   let loadEpoch = 0
-  const mutationEpochs = new Map<string, number>()
+  let ownerSessionGeneration = 0
+  let mutationSequence = 0
+  const mutationSequences = new Map<string, number>()
 
   const hasPendingChanges = computed(() => {
     syncOwnerState()
@@ -122,6 +128,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     const ownerId = frontendPreferenceOwnerId(authStore.user)
     if (activeOwnerId.value === ownerId) return ownerId
     loadEpoch += 1
+    ownerSessionGeneration += 1
     if (ownerId) hydrateOwner(ownerId)
     else resetState()
     return ownerId
@@ -129,15 +136,16 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
 
   function beginMutation(ownerId: string, section: FrontendPreferenceSection) {
     const key = `${ownerId}:${section}`
-    const epoch = (mutationEpochs.get(key) ?? 0) + 1
-    mutationEpochs.set(key, epoch)
-    return epoch
+    const sequence = ++mutationSequence
+    mutationSequences.set(key, sequence)
+    return { ownerSessionGeneration, sequence } satisfies MutationToken
   }
 
-  function isCurrentMutation(ownerId: string, section: FrontendPreferenceSection, epoch: number) {
+  function isCurrentMutation(ownerId: string, section: FrontendPreferenceSection, token: MutationToken) {
     return activeOwnerId.value === ownerId &&
       frontendPreferenceOwnerId(authStore.user) === ownerId &&
-      mutationEpochs.get(`${ownerId}:${section}`) === epoch
+      token.ownerSessionGeneration === ownerSessionGeneration &&
+      mutationSequences.get(`${ownerId}:${section}`) === token.sequence
   }
 
   function installServerRecord(
@@ -221,6 +229,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     }
 
     const requestEpoch = ++loadEpoch
+    const requestOwnerSessionGeneration = ownerSessionGeneration
     for (const section of FRONTEND_PREFERENCE_SECTIONS) {
       if (statuses.value[section] !== 'queued') statuses.value[section] = 'loading'
     }
@@ -229,6 +238,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
       const serverRecords = await listFrontendPreferences()
       if (
         requestEpoch !== loadEpoch ||
+        requestOwnerSessionGeneration !== ownerSessionGeneration ||
         frontendPreferenceOwnerId(authStore.user) !== ownerId ||
         activeOwnerId.value !== ownerId
       ) {
@@ -237,6 +247,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
 
       const serverBySection = new Map(serverRecords.map((record) => [record.section, record]))
       for (const section of FRONTEND_PREFERENCE_SECTIONS) {
+        beginMutation(ownerId, section)
         const server = serverBySection.get(section) ?? null
         const cached = readFrontendPreferenceCache(ownerId, section)
         if (cached && hasPendingValue(cached)) {
@@ -254,6 +265,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     } catch {
       if (
         requestEpoch !== loadEpoch ||
+        requestOwnerSessionGeneration !== ownerSessionGeneration ||
         frontendPreferenceOwnerId(authStore.user) !== ownerId ||
         activeOwnerId.value !== ownerId
       ) {
@@ -290,7 +302,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     }
     const current = records.value[section] ?? null
     const baseVersion = current?.version ?? 0
-    const mutationEpoch = beginMutation(ownerId, section)
+    const mutationToken = beginMutation(ownerId, section)
     statuses.value[section] = 'saving'
     let submittedValue: unknown
     try {
@@ -301,22 +313,22 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     }
     try {
       const saved = await saveFrontendPreference(section, submittedValue, baseVersion)
-      if (isCurrentMutation(ownerId, section, mutationEpoch)) installServerRecord(ownerId, saved)
+      if (isCurrentMutation(ownerId, section, mutationToken)) installServerRecord(ownerId, saved)
       return 'saved'
     } catch (error) {
       if (isPreferenceConflict(error)) {
-        if (isCurrentMutation(ownerId, section, mutationEpoch)) {
+        if (isCurrentMutation(ownerId, section, mutationToken)) {
           installConflict(ownerId, section, submittedValue, error.response.data.current, baseVersion)
         }
         return 'conflict'
       }
       if (isTransportError(error)) {
-        if (isCurrentMutation(ownerId, section, mutationEpoch)) {
+        if (isCurrentMutation(ownerId, section, mutationToken)) {
           installPending(ownerId, section, submittedValue, baseVersion, current)
         }
         return 'queued'
       }
-      if (isCurrentMutation(ownerId, section, mutationEpoch)) {
+      if (isCurrentMutation(ownerId, section, mutationToken)) {
         statuses.value[section] = 'error'
       }
       return 'error'
@@ -340,7 +352,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
       return 'saved'
     }
 
-    const mutationEpoch = beginMutation(ownerId, section)
+    const mutationToken = beginMutation(ownerId, section)
     statuses.value[section] = 'saving'
     try {
       const saved = await saveFrontendPreference(
@@ -348,11 +360,11 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
         cloneJsonValue(conflict.localValue),
         conflict.serverVersion
       )
-      if (isCurrentMutation(ownerId, section, mutationEpoch)) installServerRecord(ownerId, saved)
+      if (isCurrentMutation(ownerId, section, mutationToken)) installServerRecord(ownerId, saved)
       return 'saved'
     } catch (error) {
       if (isPreferenceConflict(error)) {
-        if (isCurrentMutation(ownerId, section, mutationEpoch)) {
+        if (isCurrentMutation(ownerId, section, mutationToken)) {
           installConflict(
             ownerId,
             section,
@@ -364,7 +376,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
         return 'conflict'
       }
       if (isTransportError(error)) {
-        if (isCurrentMutation(ownerId, section, mutationEpoch)) {
+        if (isCurrentMutation(ownerId, section, mutationToken)) {
           installPending(
             ownerId,
             section,
@@ -375,7 +387,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
         }
         return 'queued'
       }
-      if (isCurrentMutation(ownerId, section, mutationEpoch)) {
+      if (isCurrentMutation(ownerId, section, mutationToken)) {
         statuses.value[section] = 'error'
       }
       return 'error'

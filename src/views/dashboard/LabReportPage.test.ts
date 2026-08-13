@@ -284,6 +284,15 @@ describe('LabReportPage shared preferences', () => {
     })
     await nextTick()
 
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
+    expect(api.save).toHaveBeenNthCalledWith(
+      3,
+      'LAB_REPORT_TEMPLATE',
+      { ...defaultLabReportTemplate, title: '冲突后继续修改' },
+      5
+    )
+
     resolveOverwrite(record(
       'LAB_REPORT_TEMPLATE',
       { ...defaultLabReportTemplate, title: '用户修改' },
@@ -291,16 +300,44 @@ describe('LabReportPage shared preferences', () => {
     ))
     await flushPromises()
     expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '冲突后继续修改' })
+    expect(wrapper.text()).toContain('已保存')
+    wrapper.unmount()
+  })
 
+  it('retains the current draft and error status after an HTTP save failure', async () => {
+    const serverTemplate = { ...defaultLabReportTemplate, title: '服务器标题' }
+    const { wrapper, preferences } = await setup([
+      record('LAB_REPORT_TEMPLATE', serverTemplate, 3)
+    ])
+    api.save
+      .mockRejectedValueOnce({ response: { status: 500 }, isAxiosError: true })
+      .mockResolvedValueOnce(record(
+        'LAB_REPORT_TEMPLATE',
+        { ...serverTemplate, title: '错误后再次修改' },
+        4
+      ))
+
+    await wrapper.get('.edit-report').trigger('click')
     await vi.advanceTimersByTimeAsync(500)
     await flushPromises()
-    expect(api.save).toHaveBeenNthCalledWith(
-      3,
+
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '用户修改' })
+    expect(wrapper.text()).toContain('保存失败')
+    expect(preferences.hasPendingChanges).toBe(false)
+
+    wrapper.getComponent(ReportPanelStub).vm.$emit('update:modelValue', {
+      ...serverTemplate,
+      title: '错误后再次修改'
+    })
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
+
+    expect(api.save).toHaveBeenLastCalledWith(
       'LAB_REPORT_TEMPLATE',
-      { ...defaultLabReportTemplate, title: '冲突后继续修改' },
-      6
+      { ...serverTemplate, title: '错误后再次修改' },
+      3
     )
-    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '冲突后继续修改' })
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '错误后再次修改' })
     expect(wrapper.text()).toContain('已保存')
     wrapper.unmount()
   })

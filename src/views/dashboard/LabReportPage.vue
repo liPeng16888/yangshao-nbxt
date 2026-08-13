@@ -55,6 +55,7 @@ const smsTemplate = ref<LabReportSmsTemplate>(preferences.value('LAB_REPORT_SMS_
 const saveTimers: Partial<Record<FrontendPreferenceSection, number>> = {}
 const editRevisions: Partial<Record<FrontendPreferenceSection, number>> = {}
 const localDirty = reactive<Partial<Record<FrontendPreferenceSection, boolean>>>({})
+const localErrorRevisions = reactive<Partial<Record<FrontendPreferenceSection, number>>>({})
 let ownerGeneration = 0
 
 const sections: { label: string; value: ReportSection; path: string }[] = [
@@ -69,11 +70,11 @@ const activeSection = computed<ReportSection>(() => {
 const activePreferenceSection = computed<FrontendPreferenceSection>(() => (
   activeSection.value === 'image' ? 'LAB_REPORT_TEMPLATE' : 'LAB_REPORT_SMS_TEMPLATE'
 ))
-const activeStatus = computed(() => (
-  localDirty[activePreferenceSection.value]
-    ? 'saving'
-    : preferences.statuses[activePreferenceSection.value]
-))
+const activeStatus = computed(() => {
+  const section = activePreferenceSection.value
+  if (!localDirty[section]) return preferences.statuses[section]
+  return localErrorRevisions[section] === editRevisions[section] ? 'error' : 'saving'
+})
 const saveStatusText = computed(() => statusText(activeStatus.value))
 const saveStatusType = computed(() => {
   if (activeStatus.value === 'conflict' || activeStatus.value === 'error') return 'danger'
@@ -110,6 +111,7 @@ watch(
     for (const section of ['LAB_REPORT_TEMPLATE', 'LAB_REPORT_SMS_TEMPLATE'] as const) {
       editRevisions[section] = (editRevisions[section] ?? 0) + 1
       localDirty[section] = false
+      delete localErrorRevisions[section]
     }
     reportTemplate.value = preferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate)
     smsTemplate.value = preferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate)
@@ -130,6 +132,7 @@ watch(
       cancelSave(section)
       editRevisions[section] = (editRevisions[section] ?? 0) + 1
       localDirty[section] = false
+      delete localErrorRevisions[section]
     })
   },
   { flush: 'sync' }
@@ -151,6 +154,7 @@ function nextEditRevision(section: FrontendPreferenceSection) {
   const revision = (editRevisions[section] ?? 0) + 1
   editRevisions[section] = revision
   localDirty[section] = true
+  delete localErrorRevisions[section]
   return revision
 }
 
@@ -173,8 +177,8 @@ async function saveRevision(
   generation: number,
   revision: number
 ) {
-  await preferences.save(section, value)
-  settleRevision(section, ownerId, generation, revision)
+  const result = await preferences.save(section, value)
+  settleRevision(section, ownerId, generation, revision, result)
 }
 
 async function resolveActiveConflict(strategy: 'server' | 'overwrite') {
@@ -183,18 +187,24 @@ async function resolveActiveConflict(strategy: 'server' | 'overwrite') {
   const ownerId = frontendPreferenceOwnerId(authStore.user)
   const generation = ownerGeneration
   const revision = editRevisions[section] ?? 0
-  await preferences.resolveConflict(section, strategy)
-  settleRevision(section, ownerId, generation, revision)
+  const result = await preferences.resolveConflict(section, strategy)
+  settleRevision(section, ownerId, generation, revision, result)
 }
 
 function settleRevision(
   section: FrontendPreferenceSection,
   ownerId: string,
   generation: number,
-  revision: number
+  revision: number,
+  result: 'saved' | 'queued' | 'conflict' | 'error'
 ) {
   if (!isCurrentRevision(ownerId, generation, section, revision)) return
+  if (result === 'error') {
+    localErrorRevisions[section] = revision
+    return
+  }
   localDirty[section] = false
+  delete localErrorRevisions[section]
   if (section === 'LAB_REPORT_TEMPLATE') {
     reportTemplate.value = preferences.value(section, defaultLabReportTemplate)
   } else if (section === 'LAB_REPORT_SMS_TEMPLATE') {

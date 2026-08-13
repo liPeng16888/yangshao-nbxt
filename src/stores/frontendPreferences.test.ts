@@ -361,6 +361,52 @@ describe('frontend preference owner sync store', () => {
     expect(store.value(smsSection, { prefix: '', suffix: '' })).toEqual({ prefix: '新请求', suffix: '' })
   })
 
+  it('makes an in-flight save inert after a successful authoritative hydration', async () => {
+    const initial = record(smsSection, { prefix: '初始', suffix: '' }, 4)
+    api.listFrontendPreferences.mockResolvedValueOnce([initial])
+    const store = useFrontendPreferencesStore()
+    await store.loadAll()
+
+    let resolveSave!: (value: FrontendPreferenceRecord) => void
+    api.saveFrontendPreference.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve }))
+    const saving = store.save(smsSection, { prefix: '在途旧保存', suffix: '' })
+    const hydrated = record(smsSection, { prefix: '实时刷新', suffix: '' }, 6)
+    api.listFrontendPreferences.mockResolvedValueOnce([hydrated])
+
+    await expect(store.loadAll()).resolves.toBe('loaded')
+    resolveSave(record(smsSection, { prefix: '在途旧保存', suffix: '' }, 5))
+    await expect(saving).resolves.toBe('saved')
+
+    expect(store.records[smsSection]).toEqual(hydrated)
+    expect(store.statuses[smsSection]).toBe('saved')
+    expect(readFrontendPreferenceCache('main-1', smsSection)).toEqual(cached('main-1', hydrated))
+  })
+
+  it('makes an old owner-A save inert after an A to B to A session transition', async () => {
+    const ownerAInitial = record(smsSection, { prefix: '账号 A 初始', suffix: '' }, 4)
+    api.listFrontendPreferences.mockResolvedValueOnce([ownerAInitial])
+    const store = useFrontendPreferencesStore()
+    await store.loadAll()
+
+    let resolveOldOwnerA!: (value: FrontendPreferenceRecord) => void
+    api.saveFrontendPreference.mockReturnValueOnce(new Promise((resolve) => { resolveOldOwnerA = resolve }))
+    const oldOwnerASave = store.save(smsSection, { prefix: '账号 A 旧在途', suffix: '' })
+
+    useAuthStore().user = user({ id: 'main-2', dataOwnerId: 'main-2' })
+    store.value(smsSection, { prefix: '', suffix: '' })
+    useAuthStore().user = user()
+    const ownerAFresh = record(smsSection, { prefix: '账号 A 新会话', suffix: '' }, 6)
+    api.listFrontendPreferences.mockResolvedValueOnce([ownerAFresh])
+    await store.loadAll()
+
+    resolveOldOwnerA(record(smsSection, { prefix: '账号 A 旧在途', suffix: '' }, 5))
+    await expect(oldOwnerASave).resolves.toBe('saved')
+
+    expect(store.records[smsSection]).toEqual(ownerAFresh)
+    expect(store.statuses[smsSection]).toBe('saved')
+    expect(readFrontendPreferenceCache('main-1', smsSection)).toEqual(cached('main-1', ownerAFresh))
+  })
+
   it('ignores a stale owner response after the authenticated owner changes', async () => {
     let resolveList!: (records: FrontendPreferenceRecord[]) => void
     api.listFrontendPreferences.mockReturnValue(new Promise((resolve) => { resolveList = resolve }))
