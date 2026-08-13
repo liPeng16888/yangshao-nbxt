@@ -9,17 +9,31 @@ import {
 
 describe('desktop offline fallback', () => {
   it('renders an isolated offline page with a safe retry link', () => {
-    const html = renderOfflinePage(desktopTargets.internal)
+    const html = renderOfflinePage(desktopTargets.internal, 'timeout')
 
     expect(html).toContain('网络或服务器不可用')
-    expect(html).toContain('请检查网络连接，或稍后重试。')
+    expect(html).toContain('连接服务器超时')
     expect(html).toContain('href="https://www.ysjc.art/"')
     expect(html).toContain('>重试</a>')
+    expect(html).toContain('href="#exit"')
+    expect(html).toContain('>退出</a>')
     expect(html).toContain(
       "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'",
     )
     expect(html).not.toContain('nodeIntegration')
     expect(html).not.toContain('<script')
+  })
+
+  it.each([
+    ['load', '无法加载服务器页面'],
+    ['render-process-gone', '页面运行进程已意外退出'],
+    ['unresponsive', '页面暂时无响应'],
+  ] as const)('shows a safe summary for %s without technical details', (reason, summary) => {
+    const html = renderOfflinePage(desktopTargets.internal, reason)
+
+    expect(html).toContain(summary)
+    expect(html).not.toContain('ERR_')
+    expect(html).not.toContain('stack')
   })
 
   it('escapes product names and retry URLs before embedding them', () => {

@@ -21,6 +21,37 @@ export interface DesktopWindowOptions {
   webPreferences: DesktopWebPreferences
 }
 
+export interface DesktopWindowBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface DesktopLoadingWindowOptions extends DesktopWindowBounds {
+  title: string
+  show: boolean
+  resizable: boolean
+  closable: boolean
+  minimizable: boolean
+  maximizable: boolean
+  fullscreenable: boolean
+  skipTaskbar: boolean
+  webPreferences: DesktopWebPreferences
+}
+
+function createSecureWebPreferences(): DesktopWebPreferences {
+  return {
+    nodeIntegration: false,
+    contextIsolation: true,
+    sandbox: true,
+    webSecurity: true,
+    devTools: false,
+    navigateOnDragDrop: false,
+    spellcheck: false,
+  }
+}
+
 export function createWindowOptions(
   target: DesktopTargetConfig,
   icon?: string,
@@ -33,14 +64,24 @@ export function createWindowOptions(
     minHeight: 700,
     show: false,
     ...(icon ? { icon } : {}),
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      webSecurity: true,
-      devTools: false,
-      navigateOnDragDrop: false,
-      spellcheck: false,
-    },
+    webPreferences: createSecureWebPreferences(),
+  }
+}
+
+export function createLoadingWindowOptions(
+  target: DesktopTargetConfig,
+  bounds: DesktopWindowBounds,
+): DesktopLoadingWindowOptions {
+  return {
+    title: target.productName,
+    ...bounds,
+    show: false,
+    resizable: false,
+    closable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    webPreferences: createSecureWebPreferences(),
   }
 }

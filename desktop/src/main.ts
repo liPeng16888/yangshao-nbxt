@@ -15,6 +15,11 @@ import {
 import { installContextMenu } from './context-menu.js'
 import { configureDownloadPrompt } from './downloads.js'
 import { confirmAndOpenExternalLink } from './external-links.js'
+import {
+  LoadingCoordinator,
+  type LoadingFailureReason,
+} from './loading-coordinator.js'
+import { createLoadingPageDataUrl } from './loading-page.js'
 import { createApplicationMenuTemplate } from './menu.js'
 import {
   createOfflinePageDataUrl,
@@ -35,7 +40,10 @@ import {
   type ResponseHeaders,
 } from './security-policy.js'
 import { clearHttpCache, resolveUserDataPath } from './session.js'
-import { createWindowOptions } from './window-options.js'
+import {
+  createLoadingWindowOptions,
+  createWindowOptions,
+} from './window-options.js'
 
 const target = resolveRuntimeDesktopTarget({
   isPackaged: app.isPackaged,
@@ -50,7 +58,8 @@ app.setPath(
 )
 
 let mainWindow: BrowserWindow | null = null
-let showingOfflinePage = false
+let reloadApplication: ((force: boolean) => void) | null = null
+let bringApplicationToFront: (() => void) | null = null
 
 function showApplicationMessageBox(
   options: MessageBoxOptions,
@@ -97,16 +106,161 @@ function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow(
     createWindowOptions(target) as BrowserWindowConstructorOptions,
   )
+  const loadingWindow = new BrowserWindow(
+    createLoadingWindowOptions(
+      target,
+      window.getBounds(),
+    ) as BrowserWindowConstructorOptions,
+  )
 
   const removeContextMenu = installContextMenu(window)
+  let showingOfflinePage = false
+  let offlinePageDataUrl = ''
+  let activeLoadingGeneration = 0
+  let loadingInProgress = false
+  let loadingPageRequest = 0
+
+  const syncLoadingWindowBounds = () => {
+    if (!loadingWindow.isDestroyed() && !window.isDestroyed()) {
+      loadingWindow.setBounds(window.getBounds())
+    }
+  }
+
+  const coordinator = new LoadingCoordinator({
+    show: (mode) => {
+      loadingInProgress = true
+      ++loadingPageRequest
+      const request = loadingPageRequest
+      if (!window.isDestroyed()) {
+        window.hide()
+      }
+      if (loadingWindow.isDestroyed()) {
+        return
+      }
+      syncLoadingWindowBounds()
+      void loadingWindow
+        .loadURL(createLoadingPageDataUrl(target, mode))
+        .then(() => {
+          if (
+            request === loadingPageRequest &&
+            loadingInProgress &&
+            !loadingWindow.isDestroyed()
+          ) {
+            loadingWindow.show()
+          }
+        })
+        .catch(() => undefined)
+    },
+    hide: () => {
+      loadingInProgress = false
+      ++loadingPageRequest
+      if (!loadingWindow.isDestroyed()) {
+        loadingWindow.hide()
+      }
+      if (!window.isDestroyed()) {
+        window.show()
+      }
+    },
+    showOffline: (reason) => {
+      loadingInProgress = false
+      showingOfflinePage = true
+      ++loadingPageRequest
+      if (!loadingWindow.isDestroyed()) {
+        loadingWindow.hide()
+      }
+      if (window.isDestroyed()) {
+        return
+      }
+      offlinePageDataUrl = createOfflinePageDataUrl(target, reason)
+      void window
+        .loadURL(offlinePageDataUrl)
+        .then(() => {
+          if (showingOfflinePage && !window.isDestroyed()) {
+            window.show()
+          }
+        })
+        .catch(() => {
+          if (!window.isDestroyed()) {
+            window.show()
+          }
+        })
+    },
+  })
+
+  const failLoading = (
+    reason: LoadingFailureReason,
+    generation?: number,
+  ) => {
+    if (showingOfflinePage || window.isDestroyed()) {
+      return
+    }
+    if (generation !== undefined) {
+      coordinator.fail(reason, generation)
+      return
+    }
+    if (!loadingInProgress) {
+      activeLoadingGeneration = coordinator.start('recovery')
+    }
+    coordinator.fail(reason, activeLoadingGeneration)
+  }
+
+  const loadFixedTarget = (mode: 'startup' | 'recovery') => {
+    showingOfflinePage = false
+    const generation = coordinator.start(mode)
+    activeLoadingGeneration = generation
+    void window.loadURL(target.entryUrl).catch(() => {
+      failLoading('load', generation)
+    })
+  }
+
+  const reloadWindow = (force: boolean) => {
+    if (window.isDestroyed()) {
+      return
+    }
+    if (showingOfflinePage) {
+      loadFixedTarget('recovery')
+      return
+    }
+    activeLoadingGeneration = coordinator.start('reload')
+    if (force) {
+      window.webContents.reloadIgnoringCache()
+    } else {
+      window.webContents.reload()
+    }
+  }
+
+  reloadApplication = reloadWindow
+  bringApplicationToFront = () => {
+    if (loadingInProgress && !loadingWindow.isDestroyed()) {
+      bringWindowToFront(loadingWindow)
+    } else if (!window.isDestroyed()) {
+      bringWindowToFront(window)
+    }
+  }
+
+  loadingWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  loadingWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault()
+  })
 
   window.on('closed', () => {
     removeContextMenu()
+    coordinator.dispose()
+    if (!loadingWindow.isDestroyed()) {
+      loadingWindow.destroy()
+    }
+    if (reloadApplication === reloadWindow) {
+      reloadApplication = null
+    }
+    if (mainWindow === window) {
+      bringApplicationToFront = null
+    }
     if (mainWindow === window) {
       mainWindow = null
     }
   })
-  window.once('ready-to-show', () => window.show())
+  window.on('move', syncLoadingWindowBounds)
+  window.on('resize', syncLoadingWindowBounds)
 
   window.webContents.on('page-title-updated', (event) => {
     event.preventDefault()
@@ -118,8 +272,24 @@ function createMainWindow(): BrowserWindow {
   window.webContents.on(
     'did-start-navigation',
     (_event, url, _isInPlace, isMainFrame) => {
-      if (isMainFrame && isAllowedNavigation(url, target)) {
+      if (
+        isMainFrame &&
+        showingOfflinePage &&
+        url === target.entryUrl
+      ) {
         showingOfflinePage = false
+        activeLoadingGeneration = coordinator.start('recovery')
+      }
+    },
+  )
+  window.webContents.on(
+    'did-frame-finish-load',
+    (_event, isMainFrame) => {
+      if (
+        isMainFrame &&
+        isAllowedNavigation(window.webContents.getURL(), target)
+      ) {
+        coordinator.finish(activeLoadingGeneration)
       }
     },
   )
@@ -127,10 +297,22 @@ function createMainWindow(): BrowserWindow {
     window.setTitle(target.productName)
   })
   window.webContents.on(
+    'did-navigate-in-page',
+    (_event, url, isMainFrame) => {
+      if (
+        isMainFrame &&
+        showingOfflinePage &&
+        offlinePageDataUrl &&
+        url === `${offlinePageDataUrl}#exit`
+      ) {
+        app.quit()
+      }
+    },
+  )
+  window.webContents.on(
     'did-fail-load',
     (_event, errorCode, _errorDescription, validatedUrl, isMainFrame) => {
       if (
-        !showingOfflinePage &&
         shouldShowOfflinePage(
           isMainFrame,
           errorCode,
@@ -138,13 +320,16 @@ function createMainWindow(): BrowserWindow {
           target,
         )
       ) {
-        showingOfflinePage = true
-        void window
-          .loadURL(createOfflinePageDataUrl(target))
-          .catch(() => undefined)
+        failLoading('load')
       }
     },
   )
+  window.webContents.on('render-process-gone', () => {
+    failLoading('render-process-gone')
+  })
+  window.on('unresponsive', () => {
+    failLoading('unresponsive')
+  })
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     const decision = classifyNavigation(url, target)
@@ -156,7 +341,7 @@ function createMainWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
-  void window.loadURL(target.entryUrl).catch(() => undefined)
+  loadFixedTarget('startup')
   return window
 }
 
@@ -165,8 +350,8 @@ function installApplicationMenu(): void {
     target.productName,
     process.platform,
     {
-      reload: () => mainWindow?.webContents.reload(),
-      forceReload: () => mainWindow?.webContents.reloadIgnoringCache(),
+      reload: () => reloadApplication?.(false),
+      forceReload: () => reloadApplication?.(true),
       about: () => {
         void showApplicationMessageBox({
           type: 'info',
@@ -258,13 +443,13 @@ async function startApplication(): Promise<void> {
     if (!mainWindow) {
       mainWindow = createMainWindow()
     } else {
-      bringWindowToFront(mainWindow)
+      bringApplicationToFront?.()
     }
   })
 }
 
 if (acquireSingleInstanceLock(app)) {
-  app.on('second-instance', () => bringWindowToFront(mainWindow))
+  app.on('second-instance', () => bringApplicationToFront?.())
   app.on(
     'certificate-error',
     (event, _webContents, url, error, _certificate, callback) => {
