@@ -113,6 +113,62 @@ describe('writeTextToClipboard', () => {
     expect(document.querySelector('[data-clipboard-fallback]')).toBeNull()
   })
 
+  it('removes the fallback through its parent when textarea.remove throws', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    const fallbackNodes: HTMLTextAreaElement[] = []
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: vi.fn(() => {
+        const fallback = document.querySelector<HTMLTextAreaElement>('[data-clipboard-fallback]')
+        if (fallback) fallbackNodes.push(fallback)
+        return true
+      })
+    })
+    vi.spyOn(HTMLTextAreaElement.prototype, 'remove').mockImplementation(() => { throw new Error('remove denied') })
+
+    await expect(writeTextToClipboard('内容')).resolves.toBeUndefined()
+
+    const fallback = fallbackNodes[0]
+    expect(fallback).not.toBeNull()
+    expect(fallback?.isConnected).toBe(false)
+  })
+
+  it('neutralizes a retained fallback when both removal paths throw without changing success', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    const fallbackNodes: HTMLTextAreaElement[] = []
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: vi.fn(() => {
+        const fallback = document.querySelector<HTMLTextAreaElement>('[data-clipboard-fallback]')
+        if (fallback) fallbackNodes.push(fallback)
+        return true
+      })
+    })
+    vi.spyOn(HTMLTextAreaElement.prototype, 'remove').mockImplementation(() => { throw new Error('remove denied') })
+    vi.spyOn(document.body, 'removeChild').mockImplementation(() => { throw new Error('parent remove denied') })
+
+    await expect(writeTextToClipboard('内容')).resolves.toBeUndefined()
+
+    const fallback = fallbackNodes[0]
+    expect(fallback).not.toBeNull()
+    expect(fallback?.isConnected).toBe(true)
+    expect(fallback?.value).toBe('')
+    expect(fallback?.disabled).toBe(true)
+    expect(fallback?.getAttribute('aria-hidden')).toBe('true')
+    expect(fallback?.hasAttribute('inert')).toBe(true)
+    expect(fallback?.style.position).toBe('fixed')
+    expect(fallback?.style.opacity).toBe('0')
+  })
+
+  it('keeps the stable failure error when both cleanup paths throw', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn().mockReturnValue(false) })
+    vi.spyOn(HTMLTextAreaElement.prototype, 'remove').mockImplementation(() => { throw new Error('remove denied') })
+    vi.spyOn(document.body, 'removeChild').mockImplementation(() => { throw new Error('parent remove denied') })
+
+    await expect(writeTextToClipboard('内容')).rejects.toThrow('复制失败')
+  })
+
   it('normalizes a missing document body failure', async () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
     vi.spyOn(document, 'body', 'get').mockReturnValue(null as unknown as HTMLBodyElement)

@@ -34,15 +34,56 @@ export async function writeTextToClipboard(text: string): Promise<void> {
   } catch {
     // Normalize browser-specific clipboard errors after cleanup.
   } finally {
-    try {
-      textarea?.remove()
-    } catch {
-      // Cleanup is best effort; a failed cleanup must not change the copy result.
-    }
+    cleanupFallbackTextarea(textarea)
     restoreFocusAndSelection(snapshot)
   }
 
   throw new Error('复制失败')
+}
+
+function cleanupFallbackTextarea(textarea: HTMLTextAreaElement | undefined) {
+  if (!textarea) return
+
+  try {
+    textarea.remove()
+  } catch {
+    // Try the parent path below.
+  }
+
+  let parent: ParentNode | null = null
+  try {
+    parent = textarea.parentNode
+    if (!textarea.isConnected && !parent) return
+  } catch {
+    neutralizeFallbackTextarea(textarea)
+    return
+  }
+
+  try {
+    parent?.removeChild(textarea)
+  } catch {
+    // A hostile DOM shim can reject both removal paths. Neutralize in place below.
+  }
+
+  try {
+    if (!textarea.isConnected && !textarea.parentNode) return
+  } catch {
+    // If connected state is unreadable, neutralize the retained node defensively.
+  }
+  neutralizeFallbackTextarea(textarea)
+}
+
+function neutralizeFallbackTextarea(textarea: HTMLTextAreaElement) {
+  try { textarea.value = '' } catch { /* best effort */ }
+  try { textarea.readOnly = true } catch { /* best effort */ }
+  try { textarea.disabled = true } catch { /* best effort */ }
+  try { textarea.tabIndex = -1 } catch { /* best effort */ }
+  try { textarea.setAttribute('aria-hidden', 'true') } catch { /* best effort */ }
+  try { textarea.setAttribute('inert', '') } catch { /* best effort */ }
+  try { textarea.style.position = 'fixed' } catch { /* best effort */ }
+  try { textarea.style.opacity = '0' } catch { /* best effort */ }
+  try { textarea.style.pointerEvents = 'none' } catch { /* best effort */ }
+  try { textarea.style.left = '-9999px' } catch { /* best effort */ }
 }
 
 type InputSelection = {
