@@ -77,11 +77,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { canAccessFrontendPreference, useFrontendPreferencesStore } from '@/stores/frontendPreferences'
+import {
+  canAccessFrontendPreference,
+  frontendPreferenceOwnerId,
+  useFrontendPreferencesStore
+} from '@/stores/frontendPreferences'
 import type { LabReportElementKey } from '@/types/labReport'
 import { getSmsElementLabel, labReportElements, parseLabElementKeys } from '@/utils/labReport'
 
@@ -89,6 +93,12 @@ interface ElementGroup {
   id: string
   name: string
   elementKeys: LabReportElementKey[]
+}
+
+type ElementGroupOperationContext = {
+  generation: number
+  actorKey: string
+  ownerId: string
 }
 
 const props = defineProps<{
@@ -108,8 +118,10 @@ const groupName = ref('')
 const catalogueSaving = ref(false)
 const catalogueResolving = ref(false)
 let fallbackGroupIdSequence = 0
+let catalogueOperationGeneration = 0
 
 const knownKeys = new Set(labReportElements.map((element) => element.key))
+const actorKey = computed(() => frontendPreferenceActorKey(authStore.user))
 const canAccessElementGroups = computed(() => canAccessFrontendPreference(
   authStore.user,
   'LAB_ELEMENT_GROUPS'
@@ -141,6 +153,16 @@ watch(
   { immediate: true }
 )
 
+watch(
+  actorKey,
+  () => invalidateCatalogueOperations(),
+  { flush: 'sync' }
+)
+
+onBeforeUnmount(() => {
+  invalidateCatalogueOperations()
+})
+
 function handleSelectionChange(value: string[]) {
   selectedKeys.value = sortKeys(value.filter((item): item is LabReportElementKey => knownKeys.has(item as LabReportElementKey)))
   commitSelection()
@@ -158,6 +180,8 @@ function clearSelection() {
 
 async function saveCurrentGroup() {
   if (!canSaveGroup.value || catalogueMutationLocked.value) return
+  const operation = captureCatalogueOperation()
+  if (!operation) return
   const name = groupName.value.trim()
   const elementKeys = sortKeys(selectedKeys.value)
   const existingIndex = groups.value.findIndex((group) => group.name === name)
@@ -172,28 +196,34 @@ async function saveCurrentGroup() {
   catalogueSaving.value = true
   try {
     const result = await preferences.save('LAB_ELEMENT_GROUPS', normalizeElementGroups(next))
+    if (!isCurrentCatalogueOperation(operation)) return
     handleCatalogueSaveResult(result, '常用组合已保存')
     if (result === 'saved' || result === 'queued') groupName.value = ''
   } finally {
-    catalogueSaving.value = false
+    if (isCurrentCatalogueOperation(operation)) catalogueSaving.value = false
   }
 }
 
 async function deleteGroup(groupId: string) {
   if (catalogueMutationLocked.value) return
+  const operation = captureCatalogueOperation()
+  if (!operation) return
   const next = normalizeElementGroups(groups.value.filter((group) => group.id !== groupId))
   catalogueSaving.value = true
   try {
     const result = await preferences.save('LAB_ELEMENT_GROUPS', next)
+    if (!isCurrentCatalogueOperation(operation)) return
     handleCatalogueSaveResult(result, '常用组合已删除')
   } finally {
-    catalogueSaving.value = false
+    if (isCurrentCatalogueOperation(operation)) catalogueSaving.value = false
   }
 }
 
 async function resolveGroupConflict(strategy: 'server' | 'overwrite') {
   if (!canAccessElementGroups.value || catalogueResolving.value ||
     preferences.statuses.LAB_ELEMENT_GROUPS !== 'conflict') return
+  const operation = captureCatalogueOperation()
+  if (!operation) return
   catalogueResolving.value = true
   try {
     if (strategy === 'overwrite') {
@@ -209,16 +239,54 @@ async function resolveGroupConflict(strategy: 'server' | 'overwrite') {
         )
       } catch (error) {
         if (error === 'cancel' || error === 'close') return
+        if (!isCurrentCatalogueOperation(operation)) return
         ElMessage.error('常用组合冲突处理失败，请稍后重试')
         return
       }
     }
-    if (!canAccessElementGroups.value || preferences.statuses.LAB_ELEMENT_GROUPS !== 'conflict') return
+    if (!isCurrentCatalogueOperation(operation) ||
+      preferences.statuses.LAB_ELEMENT_GROUPS !== 'conflict') return
     const result = await preferences.resolveConflict('LAB_ELEMENT_GROUPS', strategy)
+    if (!isCurrentCatalogueOperation(operation)) return
     handleConflictResult(result, strategy)
   } finally {
-    catalogueResolving.value = false
+    if (isCurrentCatalogueOperation(operation)) catalogueResolving.value = false
   }
+}
+
+function invalidateCatalogueOperations() {
+  catalogueOperationGeneration += 1
+  catalogueSaving.value = false
+  catalogueResolving.value = false
+}
+
+function captureCatalogueOperation(): ElementGroupOperationContext | null {
+  if (!canAccessElementGroups.value) return null
+  return {
+    generation: catalogueOperationGeneration,
+    actorKey: actorKey.value,
+    ownerId: frontendPreferenceOwnerId(authStore.user)
+  }
+}
+
+function isCurrentCatalogueOperation(operation: ElementGroupOperationContext) {
+  return operation.generation === catalogueOperationGeneration &&
+    operation.actorKey === actorKey.value &&
+    operation.ownerId === frontendPreferenceOwnerId(authStore.user) &&
+    canAccessElementGroups.value
+}
+
+function frontendPreferenceActorKey(user: typeof authStore.user) {
+  if (!user) return ''
+  return JSON.stringify({
+    actorId: user.id,
+    ownerId: frontendPreferenceOwnerId(user),
+    role: user.role,
+    isMain: Boolean(user.isFrontendMainAccount),
+    isSub: Boolean(user.isFrontendSubAccount),
+    permissionVersion: user.permissionVersion ?? 0,
+    permissions: [...(user.permissions ?? [])].sort()
+  })
 }
 
 function commitSelection() {

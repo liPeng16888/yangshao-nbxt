@@ -319,6 +319,104 @@ describe('LabElementSelector shared common groups', () => {
     expect(api.saveFrontendPreference).not.toHaveBeenCalled()
   })
 
+  it('ignores a pending conflict overwrite after the same owner switches to an unauthorized actor', async () => {
+    const local = [{ id: 'group-local', name: '本机组合', elementKeys: ['aluminum'] }] as ElementGroup[]
+    const server = [{ id: 'group-server', name: '服务器组合', elementKeys: ['iron'] }] as ElementGroup[]
+    api.saveFrontendPreference.mockRejectedValueOnce({
+      response: { status: 409, data: { code: 'PREFERENCE_VERSION_CONFLICT', current: record(server, 4) } }
+    })
+    const store = useFrontendPreferencesStore(pinia)
+    await store.save('LAB_ELEMENT_GROUPS', local)
+    const wrapper = mountSelector(pinia, '铝')
+    await openSelector(wrapper)
+    let resolveOverwrite!: (saved: FrontendPreferenceRecord<ElementGroup[]>) => void
+    api.saveFrontendPreference.mockReturnValueOnce(new Promise((resolve) => { resolveOverwrite = resolve }))
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
+    const success = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as never)
+    const warning = vi.spyOn(ElMessage, 'warning').mockReturnValue({ close: vi.fn() } as never)
+    const error = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as never)
+
+    await button(wrapper, '用本机内容覆盖').trigger('click')
+    await vi.waitFor(() => expect(api.saveFrontendPreference).toHaveBeenCalledTimes(2))
+    useAuthStore(pinia).user = user({
+      id: 'sub-1',
+      account: 'sub-1',
+      role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1',
+      isFrontendMainAccount: false,
+      isFrontendSubAccount: true,
+      permissions: []
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.element-group-conflict').exists()).toBe(false)
+    expect(wrapper.find('.element-picker__create').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('本机组合')
+    expect(wrapper.find('.lab-element-selector__text').text()).toContain('铝')
+
+    resolveOverwrite(record(local, 5))
+    await flushPromises()
+
+    expect(success).not.toHaveBeenCalled()
+    expect(warning).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+    expect(wrapper.find('.element-group-conflict').exists()).toBe(false)
+    expect(wrapper.find('.element-picker__create').exists()).toBe(false)
+    expect(wrapper.find('.lab-element-selector__text').text()).toContain('铝')
+  })
+
+  it.each([
+    { operation: 'save', initial: [] as ElementGroup[], name: '延迟组合' },
+    {
+      operation: 'delete',
+      initial: [{ id: 'group-1', name: '旧组合', elementKeys: ['iron'] }] as ElementGroup[],
+      name: ''
+    }
+  ])('ignores a pending normal $operation completion after same-owner actor permission loss', async ({ operation, initial, name }) => {
+    installGroups(initial)
+    const wrapper = mountSelector(pinia, '铝')
+    await openSelector(wrapper)
+    if (operation === 'save') await enterGroupName(wrapper, name)
+    let resolveSave!: (saved: FrontendPreferenceRecord<ElementGroup[]>) => void
+    api.saveFrontendPreference.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve }))
+    const success = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as never)
+    const warning = vi.spyOn(ElMessage, 'warning').mockReturnValue({ close: vi.fn() } as never)
+    const error = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as never)
+
+    await button(wrapper, operation === 'save' ? '保存当前选择为组合' : '删除').trigger('click')
+    await vi.waitFor(() => expect(api.saveFrontendPreference).toHaveBeenCalledTimes(1))
+    const submitted = api.saveFrontendPreference.mock.calls[0][1] as ElementGroup[]
+    useAuthStore(pinia).user = user({
+      id: 'sub-1',
+      account: 'sub-1',
+      role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1',
+      isFrontendMainAccount: false,
+      isFrontendSubAccount: true,
+      permissions: []
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.element-picker__create').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain(name || '旧组合')
+    expect(wrapper.find('.lab-element-selector__text').text()).toContain('铝')
+
+    resolveSave(record(submitted, 2))
+    await flushPromises()
+
+    expect(success).not.toHaveBeenCalled()
+    expect(warning).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+    expect(wrapper.find('.element-picker__create').exists()).toBe(false)
+    expect(wrapper.find('.lab-element-selector__text').text()).toContain('铝')
+
+    if (operation === 'save') {
+      useAuthStore(pinia).user = user()
+      await flushPromises()
+      expect((wrapper.find('.element-picker__create input').element as HTMLInputElement).value).toBe(name)
+    }
+  })
+
   it('leaves an unauthorized catalogue empty when the server rejects a save', async () => {
     const wrapper = mountSelector(pinia, '铝')
     await openSelector(wrapper)
