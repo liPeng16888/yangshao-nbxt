@@ -46,6 +46,7 @@ export function createBuilderConfig(targetKey) {
     extraMetadata: {
       version: '1.0.0',
       productName: target.productName,
+      main: 'dist/main.js',
     },
     win: {
       target: [{ target: 'nsis', arch: ['x64'] }],

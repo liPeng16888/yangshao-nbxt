@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   Menu,
   session,
   shell,
@@ -11,12 +12,18 @@ import {
   type MessageBoxOptions,
   type MessageBoxReturnValue,
 } from 'electron'
+import { fileURLToPath } from 'node:url'
 
 import { installContextMenu } from './context-menu.js'
 import { configureDownloadPrompt } from './downloads.js'
 import { confirmAndOpenExternalLink } from './external-links.js'
+import { installFindWindow } from './find-window.js'
 import { installLoadingFlow } from './loading-flow.js'
-import { createApplicationMenuTemplate } from './menu.js'
+import {
+  adjustWindowZoom,
+  createApplicationMenuTemplate,
+  resetWindowZoom,
+} from './menu.js'
 import {
   acquireSingleInstanceLock,
   resolveRuntimeDesktopTarget,
@@ -51,6 +58,9 @@ app.setPath(
 let mainWindow: BrowserWindow | null = null
 let reloadApplication: ((force: boolean) => void) | null = null
 let bringApplicationToFront: (() => void) | null = null
+let showFindApplication: (() => void) | null = null
+let findNextApplication: (() => void) | null = null
+let findPreviousApplication: (() => void) | null = null
 
 function showApplicationMessageBox(
   options: MessageBoxOptions,
@@ -105,6 +115,12 @@ function createMainWindow(): BrowserWindow {
   )
 
   const removeContextMenu = installContextMenu(window)
+  const findWindow = installFindWindow({
+    mainWindow: window,
+    ipc: ipcMain,
+    preloadPath: fileURLToPath(new URL('./find-preload.cjs', import.meta.url)),
+    createWindow: (options) => new BrowserWindow(options),
+  })
   const loadingFlow = installLoadingFlow({
     mainWindow: window,
     loadingWindow,
@@ -116,14 +132,21 @@ function createMainWindow(): BrowserWindow {
 
   reloadApplication = reloadWindow
   bringApplicationToFront = () => loadingFlow.bringToFront()
+  showFindApplication = () => findWindow.show()
+  findNextApplication = () => findWindow.findNext()
+  findPreviousApplication = () => findWindow.findPrevious()
 
   window.on('closed', () => {
     removeContextMenu()
+    findWindow.dispose()
     if (reloadApplication === reloadWindow) {
       reloadApplication = null
     }
     if (mainWindow === window) {
       bringApplicationToFront = null
+      showFindApplication = null
+      findNextApplication = null
+      findPreviousApplication = null
     }
     if (mainWindow === window) {
       mainWindow = null
@@ -178,19 +201,29 @@ function installApplicationMenu(): void {
     {
       reload: () => reloadApplication?.(false),
       forceReload: () => reloadApplication?.(true),
-      about: () => {
-        void showApplicationMessageBox({
-          type: 'info',
-          title: `关于 ${target.productName}`,
-          message: target.productName,
-          detail: `版本 ${app.getVersion()}`,
-          buttons: ['确定'],
-          defaultId: 0,
-          cancelId: 0,
-          noLink: true,
-        })
+      showFind: () => showFindApplication?.(),
+      findNext: () => findNextApplication?.(),
+      findPrevious: () => findPreviousApplication?.(),
+      resetZoom: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          resetWindowZoom(mainWindow.webContents)
+        }
       },
-      quit: () => app.quit(),
+      zoomIn: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          adjustWindowZoom(mainWindow.webContents, 0.1)
+        }
+      },
+      zoomOut: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          adjustWindowZoom(mainWindow.webContents, -0.1)
+        }
+      },
+      toggleFullScreen: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.setFullScreen(!mainWindow.isFullScreen())
+        }
+      },
     },
   )
 

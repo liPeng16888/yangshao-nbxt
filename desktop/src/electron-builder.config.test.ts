@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url'
 
 import { createBuilderConfig } from '../electron-builder.config.mjs'
 import { resolveRuntimeDesktopTarget } from './runtime'
+import { desktopTargets } from './config'
+import { createWindowOptions } from './window-options'
 
 describe('electron-builder target configuration', () => {
   it.each([
@@ -101,9 +103,13 @@ describe('electron-builder target configuration', () => {
     const config = createBuilderConfig('internal')
 
     expect(config.files).toEqual(['dist/**/*', 'package.json'])
+    expect(config.extraMetadata?.main).toBe('dist/main.js')
     expect(() => createBuilderConfig('admin')).toThrow(
       'Unsupported desktop target: admin',
     )
+    expect(
+      createWindowOptions(desktopTargets.internal).webPreferences,
+    ).not.toHaveProperty('preload')
   })
 })
 
