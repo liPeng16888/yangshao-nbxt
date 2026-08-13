@@ -28,6 +28,16 @@ export function createBuilderConfig(targetKey) {
     npmRebuild: false,
     forceCodeSigning: false,
     publish: null,
+    electronFuses: {
+      runAsNode: false,
+      enableCookieEncryption: true,
+      enableNodeOptionsEnvironmentVariable: false,
+      enableNodeCliInspectArguments: false,
+      enableEmbeddedAsarIntegrityValidation: true,
+      onlyLoadAppFromAsar: true,
+      grantFileProtocolExtraPrivileges: false,
+      resetAdHocDarwinSignature: true,
+    },
     directories: {
       output: `release/${targetKey}`,
       buildResources: iconDirectory,

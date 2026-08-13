@@ -71,7 +71,7 @@ Get-FileHash -Algorithm SHA256 .\Yangshao-Backend-System-1.0.0-win-x64.exe
 
 也可以在 Finder 的“应用程序”中按住 Control 点击应用，选择“打开”，再确认一次。只有来源和 SHA-256 已核对时才放行。
 
-本版没有 Apple Developer 正式签名和公证，因此首次放行提示是预期现象。若企业 MDM 禁止未公证应用，需要 IT 白名单；不要关闭整台 Mac 的 Gatekeeper。
+本版没有 Apple Developer ID 正式签名和公证；安装包内仅有 Electron Fuses 写入后所需的 ad-hoc 临时签名，因此首次放行提示是预期现象。若企业 MDM 禁止未公证应用，需要 IT 白名单；不要关闭整台 Mac 的 Gatekeeper。
 
 ## 6. 覆盖安装和版本查看
 

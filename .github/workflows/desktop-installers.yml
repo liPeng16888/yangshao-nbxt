@@ -174,9 +174,11 @@ jobs:
           dmg="desktop/release/${{ matrix.target }}/$prefix-1.0.0-mac-arm64.dmg"
           test -d "$app_path"
           test -s "$dmg"
-          test "$(defaults read "$app_path/Contents/Info" CFBundleIdentifier)" = "$bundle_id"
-          test "$(defaults read "$app_path/Contents/Info" LSMinimumSystemVersion)" = "13.0.0"
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$app_path/Contents/Info.plist")" = "$bundle_id"
+          test "$(plutil -extract LSMinimumSystemVersion raw -o - "$app_path/Contents/Info.plist")" = "13.0.0"
+          test "$(plutil -extract ElectronAsarIntegrity raw -o - "$app_path/Contents/Info.plist")" = "Resources/app.asar"
           file "$app_path/Contents/MacOS/$app_name" | grep -q 'arm64'
+          codesign --verify --deep --strict "$app_path"
           shasum -a 256 "$dmg" | sed 's#  .*/#  #' > "desktop/release/${{ matrix.target }}/SHA256SUMS-${{ matrix.target }}-mac.txt"
 
       - uses: actions/upload-artifact@v7

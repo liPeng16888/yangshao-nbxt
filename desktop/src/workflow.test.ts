@@ -39,6 +39,20 @@ describe('private desktop installer workflow', () => {
     expect(workflow).toContain('test "$(uname -m)" = "arm64"')
   })
 
+  it('reads packaged macOS metadata from the exact Info.plist path', () => {
+    expect(workflow).toContain(
+      'plutil -extract CFBundleIdentifier raw -o - "$app_path/Contents/Info.plist"',
+    )
+    expect(workflow).toContain(
+      'plutil -extract LSMinimumSystemVersion raw -o - "$app_path/Contents/Info.plist"',
+    )
+    expect(workflow).not.toContain('defaults read')
+    expect(workflow).toContain('codesign --verify --deep --strict "$app_path"')
+    expect(workflow).toContain(
+      'plutil -extract ElectronAsarIntegrity raw -o - "$app_path/Contents/Info.plist"',
+    )
+  })
+
   it('bundles exactly four installers with SHA-256 for 30 private days', () => {
     for (const filename of [
       'Yangshao-Internal-System-1.0.0-win-x64.exe',

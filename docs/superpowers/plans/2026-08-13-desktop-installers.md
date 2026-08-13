@@ -16,7 +16,7 @@
 - Login state persists across restarts; only HTTP cache is cleared at startup.
 - Customer and backend applications use different `userData` directories.
 - Windows is x64 only; macOS is arm64 only and requires macOS 13+.
-- Builds are unsigned/unnotarized; no auto-updater is included.
+- Builds have no Developer ID/Authenticode signature and are not notarized; macOS arm64 receives only the ad-hoc signature required after Electron Fuse mutation. No auto-updater is included.
 - Existing API contracts, Prisma schema and business data are untouched.
 - Do not push, deploy or create a public Release until the user separately authorizes it.
 

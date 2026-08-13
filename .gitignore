@@ -3,6 +3,7 @@ node_modules/
 dist/
 admin/dist/
 server/dist/
+desktop/release/
 server/generated/
 /uploads/
 .DS_Store
