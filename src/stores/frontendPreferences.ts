@@ -27,6 +27,13 @@ export const FRONTEND_PREFERENCE_SECTIONS = [
   'LAB_ELEMENT_GROUPS'
 ] as const satisfies readonly FrontendPreferenceSection[]
 
+const FRONTEND_PREFERENCE_PERMISSIONS: Record<FrontendPreferenceSection, readonly string[]> = {
+  LAB_REPORT_TEMPLATE: ['LAB_REPORT_IMAGE_TEMPLATE'],
+  LAB_REPORT_SMS_TEMPLATE: ['LAB_REPORT_SMS_TEMPLATE'],
+  LAB_REPORT_SAMPLE_UNITS: ['DATA_MAIN', 'LAB_REPORT_IMAGE_TEMPLATE'],
+  LAB_ELEMENT_GROUPS: ['DATA_MAIN']
+}
+
 type SectionRecord<T> = Partial<Record<FrontendPreferenceSection, T>>
 type SaveResult = 'saved' | 'queued' | 'conflict' | 'error'
 type MutationToken = {
@@ -58,6 +65,17 @@ export function frontendPreferenceOwnerId(user: AuthUser | null): string {
     return user.dataOwnerId ?? user.id
   }
   return ''
+}
+
+export function canAccessFrontendPreference(
+  user: AuthUser | null,
+  section: FrontendPreferenceSection
+): boolean {
+  if (!user) return false
+  if (user.role === 'FRONTEND_USER' || user.isFrontendMainAccount) return true
+  if (user.role !== 'FRONTEND_SUB_USER' && !user.isFrontendSubAccount) return false
+  const permissions = new Set<string>(user.permissions ?? [])
+  return FRONTEND_PREFERENCE_PERMISSIONS[section].some((permission) => permissions.has(permission))
 }
 
 export function isPreferenceConflict(error: unknown): error is {

@@ -35,7 +35,7 @@ function memoryStorage(): Storage {
   }
 }
 
-function user(): AuthUser {
+function user(overrides: Partial<AuthUser> = {}): AuthUser {
   return {
     id: 'main-1',
     account: 'main-1',
@@ -45,7 +45,8 @@ function user(): AuthUser {
     isFrontendMainAccount: true,
     isFrontendSubAccount: false,
     permissions: [],
-    permissionVersion: 1
+    permissionVersion: 1,
+    ...overrides
   }
 }
 
@@ -211,8 +212,134 @@ describe('LabReportDialog shared sample-unit shortcuts', () => {
 
     expect((sampleUnitInput(wrapper).element as HTMLInputElement).value).toBe('清镇')
     expect(useFrontendPreferencesStore(pinia).conflicts.LAB_REPORT_SAMPLE_UNITS).toBeDefined()
+    expect(wrapper.find('.sample-unit-conflict').text()).toContain('来样单位快捷名称存在同步冲突')
+    expect(button(wrapper, '保存名称').attributes('disabled')).toBeDefined()
+    await button(wrapper, '保存名称').trigger('click')
+    expect(api.saveFrontendPreference).toHaveBeenCalledTimes(1)
     expect(warning).toHaveBeenCalled()
     expect(success).not.toHaveBeenCalled()
+  })
+
+  it('loads server units explicitly and confirms before overwriting local conflict', async () => {
+    const store = useFrontendPreferencesStore(pinia)
+    api.saveFrontendPreference.mockRejectedValueOnce({
+      response: { status: 409, data: { code: 'PREFERENCE_VERSION_CONFLICT', current: record(['服务器单位'], 4) } }
+    })
+    await store.save('LAB_REPORT_SAMPLE_UNITS', ['本机单位'])
+    const wrapper = mountReportDialog(pinia)
+    await showPreview(wrapper)
+
+    await button(wrapper, '加载服务器内容').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.option-stub').map((option) => option.text())).toEqual(['服务器单位'])
+    expect(store.conflicts.LAB_REPORT_SAMPLE_UNITS).toBeUndefined()
+
+    api.saveFrontendPreference
+      .mockRejectedValueOnce({
+        response: { status: 409, data: { code: 'PREFERENCE_VERSION_CONFLICT', current: record(['服务器单位'], 5) } }
+      })
+      .mockRejectedValueOnce({
+        response: { status: 409, data: { code: 'PREFERENCE_VERSION_CONFLICT', current: record(['服务器单位'], 6) } }
+      })
+      .mockResolvedValueOnce(record(['本机单位'], 7))
+    await store.save('LAB_REPORT_SAMPLE_UNITS', ['本机单位'])
+    await flushPromises()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+
+    await button(wrapper, '用本机内容覆盖').trigger('click')
+    await flushPromises()
+    expect(api.saveFrontendPreference).toHaveBeenCalledTimes(2)
+    expect(store.conflicts.LAB_REPORT_SAMPLE_UNITS).toBeDefined()
+
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await button(wrapper, '用本机内容覆盖').trigger('click')
+    await flushPromises()
+    expect(api.saveFrontendPreference).toHaveBeenCalledTimes(3)
+    expect(store.conflicts.LAB_REPORT_SAMPLE_UNITS).toBeDefined()
+    expect(wrapper.find('.sample-unit-conflict').exists()).toBe(true)
+
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await button(wrapper, '用本机内容覆盖').trigger('click')
+    await flushPromises()
+    expect(api.saveFrontendPreference).toHaveBeenCalledTimes(4)
+    expect(store.conflicts.LAB_REPORT_SAMPLE_UNITS).toBeUndefined()
+    expect(wrapper.findAll('.option-stub').map((option) => option.text())).toEqual(['本机单位'])
+  })
+
+  it('ignores an in-flight unit save after close and reopen with a new draft', async () => {
+    installUnits(['王庄'])
+    const wrapper = mountReportDialog(pinia, '旧草稿')
+    await showPreview(wrapper)
+    let resolveSave!: (saved: FrontendPreferenceRecord<string[]>) => void
+    api.saveFrontendPreference.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve }))
+    const success = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as never)
+
+    await button(wrapper, '保存名称').trigger('click')
+    await wrapper.setProps({ visible: false })
+    await wrapper.setProps({
+      visible: true,
+      template: { ...defaultLabReportTemplate, statements: [...defaultLabReportTemplate.statements], sampleUnit: '新草稿' }
+    })
+    await showPreview(wrapper)
+    resolveSave(record(['旧草稿', '王庄'], 2))
+    await flushPromises()
+
+    expect((sampleUnitInput(wrapper).element as HTMLInputElement).value).toBe('新草稿')
+    expect(wrapper.findAll('.option-stub').map((option) => option.text())).toEqual(['王庄'])
+    expect(success).not.toHaveBeenCalled()
+  })
+
+  it('ignores an in-flight unit save after a same-owner actor switch', async () => {
+    installUnits(['王庄'])
+    const wrapper = mountReportDialog(pinia, '旧账号草稿')
+    await showPreview(wrapper)
+    let resolveSave!: (saved: FrontendPreferenceRecord<string[]>) => void
+    api.saveFrontendPreference.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve }))
+    const success = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as never)
+
+    await button(wrapper, '保存名称').trigger('click')
+    useAuthStore(pinia).user = user({
+      id: 'sub-1',
+      account: 'sub-1',
+      role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1',
+      isFrontendMainAccount: false,
+      isFrontendSubAccount: true,
+      permissions: ['LAB_REPORT_IMAGE_TEMPLATE']
+    })
+    await flushPromises()
+    await sampleUnitInput(wrapper).setValue('新账号草稿')
+    resolveSave(record(['旧账号草稿', '王庄'], 2))
+    await flushPromises()
+
+    expect((sampleUnitInput(wrapper).element as HTMLInputElement).value).toBe('新账号草稿')
+    expect(wrapper.findAll('.option-stub').map((option) => option.text())).toEqual(['王庄'])
+    expect(success).not.toHaveBeenCalled()
+  })
+
+  it('hides same-owner cached units and blocks mutation after actor permission loss', async () => {
+    installUnits(['共享单位'])
+    const wrapper = mountReportDialog(pinia, '当前草稿')
+    await showPreview(wrapper)
+    expect(wrapper.findAll('.option-stub').map((option) => option.text())).toEqual(['共享单位'])
+
+    useAuthStore(pinia).user = user({
+      id: 'sub-1',
+      account: 'sub-1',
+      role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1',
+      isFrontendMainAccount: false,
+      isFrontendSubAccount: true,
+      permissions: []
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('.option-stub')).toHaveLength(0)
+    expect(button(wrapper, '保存名称').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.sample-unit-conflict').exists()).toBe(false)
+    await button(wrapper, '保存名称').trigger('click')
+    expect(api.saveFrontendPreference).not.toHaveBeenCalled()
+    expect((sampleUnitInput(wrapper).element as HTMLInputElement).value).toBe('当前草稿')
   })
 
   it('keeps the report draft and shared catalogue unchanged on an error', async () => {

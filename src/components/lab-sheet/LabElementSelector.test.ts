@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { AxiosError } from 'axios'
-import ElementPlus, { ElMessage } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import { defineComponent, h } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -50,7 +50,7 @@ function memoryStorage(): Storage {
   }
 }
 
-function user(): AuthUser {
+function user(overrides: Partial<AuthUser> = {}): AuthUser {
   return {
     id: 'main-1',
     account: 'main-1',
@@ -60,7 +60,8 @@ function user(): AuthUser {
     isFrontendMainAccount: true,
     isFrontendSubAccount: false,
     permissions: [],
-    permissionVersion: 1
+    permissionVersion: 1,
+    ...overrides
   }
 }
 
@@ -217,8 +218,105 @@ describe('LabElementSelector shared common groups', () => {
 
     expect((wrapper.find('.element-picker__create input').element as HTMLInputElement).value).toBe('冲突组合')
     expect(useFrontendPreferencesStore(pinia).conflicts.LAB_ELEMENT_GROUPS).toBeDefined()
+    expect(wrapper.find('.element-group-conflict').text()).toContain('常用组合存在同步冲突')
+    expect(button(wrapper, '保存当前选择为组合').attributes('disabled')).toBeDefined()
+    await button(wrapper, '保存当前选择为组合').trigger('click')
+    expect(api.saveFrontendPreference).toHaveBeenCalledTimes(1)
     expect(warning).toHaveBeenCalled()
     expect(success).not.toHaveBeenCalled()
+  })
+
+  it('loads server groups explicitly and only overwrites local conflict after confirmation', async () => {
+    const local = [{ id: 'group-local', name: '本机组合', elementKeys: ['aluminum'] }] as ElementGroup[]
+    const server = [{ id: 'group-server', name: '服务器组合', elementKeys: ['iron'] }] as ElementGroup[]
+    api.saveFrontendPreference.mockRejectedValueOnce({
+      response: { status: 409, data: { code: 'PREFERENCE_VERSION_CONFLICT', current: record(server, 4) } }
+    })
+    const store = useFrontendPreferencesStore(pinia)
+    await store.save('LAB_ELEMENT_GROUPS', local)
+    const wrapper = mountSelector(pinia, '铝')
+    await openSelector(wrapper)
+
+    await button(wrapper, '加载服务器内容').trigger('click')
+    await flushPromises()
+    expect(store.value('LAB_ELEMENT_GROUPS', [])).toEqual(server)
+    expect(store.conflicts.LAB_ELEMENT_GROUPS).toBeUndefined()
+
+    api.saveFrontendPreference
+      .mockRejectedValueOnce({
+        response: { status: 409, data: { code: 'PREFERENCE_VERSION_CONFLICT', current: record(server, 5) } }
+      })
+      .mockRejectedValueOnce({
+        response: { status: 409, data: { code: 'PREFERENCE_VERSION_CONFLICT', current: record(server, 6) } }
+      })
+      .mockResolvedValueOnce(record(local, 7))
+    await store.save('LAB_ELEMENT_GROUPS', local)
+    await flushPromises()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+
+    await button(wrapper, '用本机内容覆盖').trigger('click')
+    await flushPromises()
+    expect(api.saveFrontendPreference).toHaveBeenCalledTimes(2)
+    expect(store.conflicts.LAB_ELEMENT_GROUPS).toBeDefined()
+
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await button(wrapper, '用本机内容覆盖').trigger('click')
+    await flushPromises()
+    expect(api.saveFrontendPreference).toHaveBeenCalledTimes(3)
+    expect(store.conflicts.LAB_ELEMENT_GROUPS).toBeDefined()
+    expect(wrapper.find('.element-group-conflict').exists()).toBe(true)
+
+    confirm.mockResolvedValueOnce('confirm' as never)
+    await button(wrapper, '用本机内容覆盖').trigger('click')
+    await flushPromises()
+    expect(api.saveFrontendPreference).toHaveBeenCalledTimes(4)
+    expect(store.conflicts.LAB_ELEMENT_GROUPS).toBeUndefined()
+    expect(store.value('LAB_ELEMENT_GROUPS', [])).toEqual(local)
+  })
+
+  it('uses the shared section saving status to block a second selector mutation', async () => {
+    const first = mountSelector(pinia, '铝')
+    const second = mountSelector(pinia, '铁')
+    await openSelector(first)
+    await openSelector(second)
+    await enterGroupName(first, '第一组')
+    await enterGroupName(second, '第二组')
+    let resolveSave!: (saved: FrontendPreferenceRecord<ElementGroup[]>) => void
+    api.saveFrontendPreference.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve }))
+
+    await button(first, '保存当前选择为组合').trigger('click')
+    expect(useFrontendPreferencesStore(pinia).statuses.LAB_ELEMENT_GROUPS).toBe('saving')
+    expect(button(second, '保存当前选择为组合').attributes('disabled')).toBeDefined()
+    await button(second, '保存当前选择为组合').trigger('click')
+    expect(api.saveFrontendPreference).toHaveBeenCalledTimes(1)
+
+    const submitted = api.saveFrontendPreference.mock.calls[0][1] as ElementGroup[]
+    resolveSave(record(submitted, 1))
+    await flushPromises()
+  })
+
+  it('hides same-owner cached groups and blocks mutations after actor permission loss', async () => {
+    installGroups([{ id: 'group-1', name: '共享组合', elementKeys: ['aluminum'] }])
+    const wrapper = mountSelector(pinia, '铝')
+    await openSelector(wrapper)
+    expect(wrapper.text()).toContain('共享组合')
+
+    useAuthStore(pinia).user = user({
+      id: 'sub-1',
+      account: 'sub-1',
+      role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1',
+      isFrontendMainAccount: false,
+      isFrontendSubAccount: true,
+      permissions: []
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('共享组合')
+    expect(wrapper.find('.element-picker__create').exists()).toBe(false)
+    expect(wrapper.find('.element-group-conflict').exists()).toBe(false)
+    expect(wrapper.find('.lab-element-selector__text').text()).toContain('铝')
+    expect(api.saveFrontendPreference).not.toHaveBeenCalled()
   })
 
   it('leaves an unauthorized catalogue empty when the server rejects a save', async () => {

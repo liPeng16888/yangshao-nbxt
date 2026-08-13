@@ -1,6 +1,7 @@
 import type { AuthUser } from '@/types/auth'
 import type { FrontendPreferenceSection } from '@/types/frontendPreference'
 import type { LabReportElementKey, LabReportSmsTemplate, LabReportTemplate } from '@/types/labReport'
+import { canAccessFrontendPreference } from '@/stores/frontendPreferences'
 import {
   LAB_REPORT_SAMPLE_UNIT_STORAGE_PREFIX,
   LAB_REPORT_SMS_TEMPLATE_STORAGE_KEY,
@@ -35,12 +36,6 @@ const REPORT_LIMITS = {
   phone: 120
 } as const
 const KNOWN_ELEMENT_KEYS = new Set(labReportElements.map((element) => element.key))
-const SECTION_PERMISSIONS: Record<FrontendPreferenceSection, readonly string[]> = {
-  LAB_REPORT_TEMPLATE: ['LAB_REPORT_IMAGE_TEMPLATE'],
-  LAB_REPORT_SMS_TEMPLATE: ['LAB_REPORT_SMS_TEMPLATE'],
-  LAB_REPORT_SAMPLE_UNITS: ['DATA_MAIN', 'LAB_REPORT_IMAGE_TEMPLATE'],
-  LAB_ELEMENT_GROUPS: ['DATA_MAIN']
-}
 
 export function collectLegacyPreferenceCandidates(
   user: AuthUser | null,
@@ -55,7 +50,7 @@ export function collectLegacyPreferenceCandidates(
       value === undefined ||
       serverSections.has(section) ||
       migrationFinished(ownerId, section) ||
-      !canAccessSection(user, section)
+      !canAccessFrontendPreference(user, section)
     ) return
     candidates[section] = value
   }
@@ -86,12 +81,6 @@ function preferenceOwnerId(user: AuthUser | null): string {
     return user.dataOwnerId ?? user.id
   }
   return ''
-}
-
-function canAccessSection(user: AuthUser, section: FrontendPreferenceSection) {
-  if (user.role === 'FRONTEND_USER' || user.isFrontendMainAccount) return true
-  const assigned = new Set(user.permissions ?? [])
-  return SECTION_PERMISSIONS[section].some((permission) => assigned.has(permission as never))
 }
 
 function migrationFinished(ownerId: string, section: FrontendPreferenceSection) {

@@ -28,11 +28,20 @@
             <span>常用组合</span>
             <small>可创建多组，一键套用</small>
           </div>
-          <div v-if="groups.length" class="element-groups">
+          <div v-if="elementGroupConflict" class="element-group-conflict">
+            <strong>常用组合存在同步冲突</strong>
+            <span>请选择服务器内容，或确认后用本机内容覆盖。</span>
+            <div>
+              <el-button size="small" :disabled="catalogueResolving" @click="resolveGroupConflict('server')">加载服务器内容</el-button>
+              <el-button size="small" type="warning" :disabled="catalogueResolving" @click="resolveGroupConflict('overwrite')">用本机内容覆盖</el-button>
+            </div>
+          </div>
+          <div v-if="!canAccessElementGroups" class="element-picker__empty">当前账号无权使用常用组合</div>
+          <div v-else-if="groups.length" class="element-groups">
             <div v-for="group in groups" :key="group.id" class="element-group">
               <el-button size="small" plain @click="applyGroup(group)">{{ group.name }}</el-button>
               <span>{{ formatElementKeys(group.elementKeys) }}</span>
-              <el-button link type="danger" :icon="Delete" :disabled="catalogueSaving" @click="deleteGroup(group.id)">删除</el-button>
+              <el-button link type="danger" :icon="Delete" :disabled="catalogueMutationLocked" @click="deleteGroup(group.id)">删除</el-button>
             </div>
           </div>
           <div v-else class="element-picker__empty">暂无常用组合</div>
@@ -44,14 +53,14 @@
           </el-checkbox>
         </el-checkbox-group>
 
-        <div class="element-picker__create">
+        <div v-if="canAccessElementGroups" class="element-picker__create">
           <el-input v-model.trim="groupName" size="small" placeholder="输入组合名称" clearable />
           <el-button
             size="small"
             type="primary"
             :icon="Plus"
-            :loading="catalogueSaving"
-            :disabled="!canSaveGroup || catalogueSaving"
+            :loading="catalogueSaving || sharedCatalogueSaving"
+            :disabled="!canSaveGroup || catalogueMutationLocked"
             @click="saveCurrentGroup"
           >
             保存当前选择为组合
@@ -70,8 +79,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import { useFrontendPreferencesStore } from '@/stores/frontendPreferences'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
+import { canAccessFrontendPreference, useFrontendPreferencesStore } from '@/stores/frontendPreferences'
 import type { LabReportElementKey } from '@/types/labReport'
 import { getSmsElementLabel, labReportElements, parseLabElementKeys } from '@/utils/labReport'
 
@@ -91,15 +101,28 @@ const emit = defineEmits<{
 }>()
 
 const preferences = useFrontendPreferencesStore()
+const authStore = useAuthStore()
 const panelVisible = ref(false)
 const selectedKeys = ref<LabReportElementKey[]>([])
 const groupName = ref('')
 const catalogueSaving = ref(false)
+const catalogueResolving = ref(false)
 let fallbackGroupIdSequence = 0
 
 const knownKeys = new Set(labReportElements.map((element) => element.key))
+const canAccessElementGroups = computed(() => canAccessFrontendPreference(
+  authStore.user,
+  'LAB_ELEMENT_GROUPS'
+))
+const sharedCatalogueSaving = computed(() => preferences.statuses.LAB_ELEMENT_GROUPS === 'saving')
+const elementGroupConflict = computed(() => canAccessElementGroups.value &&
+  preferences.statuses.LAB_ELEMENT_GROUPS === 'conflict' &&
+  Boolean(preferences.conflicts.LAB_ELEMENT_GROUPS))
+const catalogueMutationLocked = computed(() => !canAccessElementGroups.value ||
+  catalogueSaving.value || catalogueResolving.value || sharedCatalogueSaving.value || elementGroupConflict.value)
 const groups = computed(() => {
   void preferences.statuses.LAB_ELEMENT_GROUPS
+  if (!canAccessElementGroups.value) return []
   return normalizeElementGroups(preferences.value<unknown>('LAB_ELEMENT_GROUPS', []))
 })
 
@@ -134,7 +157,7 @@ function clearSelection() {
 }
 
 async function saveCurrentGroup() {
-  if (!canSaveGroup.value || catalogueSaving.value) return
+  if (!canSaveGroup.value || catalogueMutationLocked.value) return
   const name = groupName.value.trim()
   const elementKeys = sortKeys(selectedKeys.value)
   const existingIndex = groups.value.findIndex((group) => group.name === name)
@@ -157,7 +180,7 @@ async function saveCurrentGroup() {
 }
 
 async function deleteGroup(groupId: string) {
-  if (catalogueSaving.value) return
+  if (catalogueMutationLocked.value) return
   const next = normalizeElementGroups(groups.value.filter((group) => group.id !== groupId))
   catalogueSaving.value = true
   try {
@@ -165,6 +188,36 @@ async function deleteGroup(groupId: string) {
     handleCatalogueSaveResult(result, '常用组合已删除')
   } finally {
     catalogueSaving.value = false
+  }
+}
+
+async function resolveGroupConflict(strategy: 'server' | 'overwrite') {
+  if (!canAccessElementGroups.value || catalogueResolving.value ||
+    preferences.statuses.LAB_ELEMENT_GROUPS !== 'conflict') return
+  catalogueResolving.value = true
+  try {
+    if (strategy === 'overwrite') {
+      try {
+        await ElMessageBox.confirm(
+          '覆盖会用本机常用组合替换服务器上的最新内容，确认继续吗？',
+          '确认覆盖常用组合',
+          {
+            type: 'warning',
+            confirmButtonText: '确认覆盖',
+            cancelButtonText: '取消'
+          }
+        )
+      } catch (error) {
+        if (error === 'cancel' || error === 'close') return
+        ElMessage.error('常用组合冲突处理失败，请稍后重试')
+        return
+      }
+    }
+    if (!canAccessElementGroups.value || preferences.statuses.LAB_ELEMENT_GROUPS !== 'conflict') return
+    const result = await preferences.resolveConflict('LAB_ELEMENT_GROUPS', strategy)
+    handleConflictResult(result, strategy)
+  } finally {
+    catalogueResolving.value = false
   }
 }
 
@@ -234,6 +287,25 @@ function handleCatalogueSaveResult(
     return
   }
   ElMessage.error('常用组合保存失败，请稍后重试')
+}
+
+function handleConflictResult(
+  result: 'saved' | 'queued' | 'conflict' | 'error',
+  strategy: 'server' | 'overwrite'
+) {
+  if (result === 'saved') {
+    ElMessage.success(strategy === 'server' ? '已加载服务器常用组合' : '已用本机常用组合覆盖')
+    return
+  }
+  if (result === 'queued') {
+    ElMessage.warning('已保存到本机，联网后请确认同步')
+    return
+  }
+  if (result === 'conflict') {
+    ElMessage.warning('服务器内容已再次更新，请重新确认冲突内容')
+    return
+  }
+  ElMessage.error('常用组合冲突处理失败，请稍后重试')
 }
 </script>
 
@@ -315,6 +387,23 @@ function handleCatalogueSaveResult(
   background: #f8fbff;
   border: 1px solid #dce5ef;
   border-radius: 8px;
+}
+
+.element-group-conflict {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  font-size: 13px;
+
+  > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 }
 
 .element-groups {

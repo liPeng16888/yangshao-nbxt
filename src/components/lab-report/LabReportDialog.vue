@@ -43,6 +43,14 @@
     </div>
 
     <div v-else-if="draft" class="preview-step">
+      <div v-if="sampleUnitConflict" class="sample-unit-conflict">
+        <strong>来样单位快捷名称存在同步冲突</strong>
+        <span>请选择服务器内容，或确认后用本机内容覆盖。</span>
+        <div>
+          <el-button size="small" :disabled="sampleUnitsResolving" @click="resolveSampleUnitConflict('server')">加载服务器内容</el-button>
+          <el-button size="small" type="warning" :disabled="sampleUnitsResolving" @click="resolveSampleUnitConflict('overwrite')">用本机内容覆盖</el-button>
+        </div>
+      </div>
       <div class="preview-actions">
         <div class="sample-unit-shortcuts">
           <span class="sample-unit-shortcuts__label">来样单位快捷名称</span>
@@ -62,7 +70,7 @@
                   link
                   type="danger"
                   :icon="Delete"
-                  :disabled="sampleUnitsSaving"
+                  :disabled="sampleUnitMutationLocked"
                   title="删除快捷名称"
                   @mousedown.prevent
                   @click.stop="removeSavedSampleUnit(unit)"
@@ -70,7 +78,12 @@
               </div>
             </el-option>
           </el-select>
-          <el-button :icon="Plus" :loading="sampleUnitsSaving" :disabled="sampleUnitsSaving" @click="saveCurrentSampleUnit">保存名称</el-button>
+          <el-button
+            :icon="Plus"
+            :loading="sampleUnitsSaving || sharedSampleUnitsSaving"
+            :disabled="sampleUnitMutationLocked"
+            @click="saveCurrentSampleUnit"
+          >保存名称</el-button>
         </div>
         <div class="preview-actions__commands">
           <el-button @click="step = 'elements'">返回选择元素</el-button>
@@ -152,10 +165,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { useFrontendPreferencesStore } from '@/stores/frontendPreferences'
+import { useAuthStore } from '@/stores/auth'
+import {
+  canAccessFrontendPreference,
+  frontendPreferenceOwnerId,
+  useFrontendPreferencesStore
+} from '@/stores/frontendPreferences'
 import type { LabReportDraft, LabReportDraftRow, LabReportElementKey, LabReportTemplate } from '@/types/labReport'
 import type { SampleBlock } from '@/types/labSheet'
 import {
@@ -179,6 +197,13 @@ type DisplayElement = {
   blank: boolean
 }
 
+type SampleUnitOperationContext = {
+  generation: number
+  actorKey: string
+  ownerId: string
+  draft: LabReportDraft
+}
+
 const props = defineProps<{
   visible: boolean
   blocks: SampleBlock[]
@@ -192,19 +217,30 @@ const emit = defineEmits<{
 }>()
 
 const preferences = useFrontendPreferencesStore()
+const authStore = useAuthStore()
 const step = ref<'elements' | 'preview'>('elements')
 const selectionMap = ref<Record<string, LabReportElementKey[]>>({})
 const bulkElementKeys = ref<LabReportElementKey[]>([])
 const draft = ref<LabReportDraft | null>(null)
 const exportingReport = ref(false)
 const sampleUnitsSaving = ref(false)
+const sampleUnitsResolving = ref(false)
+const savedSampleUnits = ref<string[]>([])
+let sampleUnitOperationGeneration = 0
 
 const selectedBlocks = computed(() => props.blocks.filter((block) => props.selectedBlockIds.includes(block.id)))
 const dialogTitle = computed(() => (step.value === 'elements' ? '选择化验报告检测元素' : '化验报告预览'))
-const savedSampleUnits = computed(() => {
-  void preferences.statuses.LAB_REPORT_SAMPLE_UNITS
-  return normalizeSampleUnits(preferences.value<unknown>('LAB_REPORT_SAMPLE_UNITS', []))
-})
+const actorKey = computed(() => frontendPreferenceActorKey(authStore.user))
+const canAccessSampleUnits = computed(() => canAccessFrontendPreference(
+  authStore.user,
+  'LAB_REPORT_SAMPLE_UNITS'
+))
+const sharedSampleUnitsSaving = computed(() => preferences.statuses.LAB_REPORT_SAMPLE_UNITS === 'saving')
+const sampleUnitConflict = computed(() => canAccessSampleUnits.value &&
+  preferences.statuses.LAB_REPORT_SAMPLE_UNITS === 'conflict' &&
+  Boolean(preferences.conflicts.LAB_REPORT_SAMPLE_UNITS))
+const sampleUnitMutationLocked = computed(() => !canAccessSampleUnits.value ||
+  sampleUnitsSaving.value || sampleUnitsResolving.value || sharedSampleUnitsSaving.value || sampleUnitConflict.value)
 const displayElements = computed<DisplayElement[]>(() => {
   if (!draft.value) return []
   const elements: DisplayElement[] = draft.value.elements.map((element, index) => ({
@@ -237,18 +273,33 @@ const paddedRows = computed(() => {
 watch(
   () => props.visible,
   (visible) => {
+    invalidateSampleUnitOperations()
     if (!visible) return
     step.value = 'elements'
     draft.value = null
     bulkElementKeys.value = []
+    refreshSavedSampleUnits()
     const nextSelections: Record<string, LabReportElementKey[]> = {}
     selectedBlocks.value.forEach((block) => {
       nextSelections[block.id] = parseLabElementKeys(block.inputs.elementNote || '')
     })
     selectionMap.value = nextSelections
   },
-  { immediate: true }
+  { immediate: true, flush: 'sync' }
 )
+
+watch(
+  actorKey,
+  () => {
+    invalidateSampleUnitOperations()
+    if (props.visible) refreshSavedSampleUnits()
+  },
+  { flush: 'sync' }
+)
+
+onBeforeUnmount(() => {
+  invalidateSampleUnitOperations()
+})
 
 function applyBulkElements() {
   if (!selectedBlocks.value.length) {
@@ -294,7 +345,7 @@ function createPreview() {
 }
 
 async function saveCurrentSampleUnit() {
-  if (sampleUnitsSaving.value) return
+  if (sampleUnitMutationLocked.value) return
   const unit = draft.value?.sampleUnit.trim() || ''
   if (!unit) {
     ElMessage.warning('请先填写来样单位名称')
@@ -305,20 +356,26 @@ async function saveCurrentSampleUnit() {
     return
   }
   const next = normalizeSampleUnits([unit, ...savedSampleUnits.value])
+  const operation = captureSampleUnitOperation()
+  if (!operation) return
   sampleUnitsSaving.value = true
   try {
     const result = await preferences.save('LAB_REPORT_SAMPLE_UNITS', next)
+    if (!isCurrentSampleUnitOperation(operation)) return
+    if (result === 'saved' || result === 'queued') refreshSavedSampleUnits()
     handleSampleUnitSaveResult(result, '来样单位名称已保存')
-    if ((result === 'saved' || result === 'queued') && draft.value) {
-      draft.value.sampleUnit = unit
+    if (result === 'saved' || result === 'queued') {
+      operation.draft.sampleUnit = unit
     }
   } finally {
-    sampleUnitsSaving.value = false
+    if (isCurrentSampleUnitOperation(operation)) sampleUnitsSaving.value = false
   }
 }
 
 async function removeSavedSampleUnit(unit: string) {
-  if (sampleUnitsSaving.value) return
+  if (sampleUnitMutationLocked.value) return
+  const operation = captureSampleUnitOperation()
+  if (!operation) return
   sampleUnitsSaving.value = true
   try {
     await ElMessageBox.confirm(
@@ -330,16 +387,101 @@ async function removeSavedSampleUnit(unit: string) {
         cancelButtonText: '取消'
       }
     )
+    if (!isCurrentSampleUnitOperation(operation) ||
+      preferences.statuses.LAB_REPORT_SAMPLE_UNITS === 'saving' ||
+      preferences.statuses.LAB_REPORT_SAMPLE_UNITS === 'conflict') return
     const next = normalizeSampleUnits(savedSampleUnits.value.filter((item) => item !== unit))
     const result = await preferences.save('LAB_REPORT_SAMPLE_UNITS', next)
+    if (!isCurrentSampleUnitOperation(operation)) return
+    if (result === 'saved' || result === 'queued') refreshSavedSampleUnits()
     handleSampleUnitSaveResult(result, '快捷名称已删除')
   } catch (error) {
-    if (error !== 'cancel' && error !== 'close') {
+    if (isCurrentSampleUnitOperation(operation) && error !== 'cancel' && error !== 'close') {
       ElMessage.error('快捷名称删除失败，请重试')
     }
   } finally {
-    sampleUnitsSaving.value = false
+    if (isCurrentSampleUnitOperation(operation)) sampleUnitsSaving.value = false
   }
+}
+
+async function resolveSampleUnitConflict(strategy: 'server' | 'overwrite') {
+  if (!canAccessSampleUnits.value || sampleUnitsResolving.value ||
+    preferences.statuses.LAB_REPORT_SAMPLE_UNITS !== 'conflict') return
+  const operation = captureSampleUnitOperation()
+  if (!operation) return
+  sampleUnitsResolving.value = true
+  try {
+    if (strategy === 'overwrite') {
+      try {
+        await ElMessageBox.confirm(
+          '覆盖会用本机来样单位快捷名称替换服务器上的最新内容，确认继续吗？',
+          '确认覆盖来样单位快捷名称',
+          {
+            type: 'warning',
+            confirmButtonText: '确认覆盖',
+            cancelButtonText: '取消'
+          }
+        )
+      } catch (error) {
+        if (!isCurrentSampleUnitOperation(operation)) return
+        if (error !== 'cancel' && error !== 'close') {
+          ElMessage.error('来样单位快捷名称冲突处理失败，请稍后重试')
+        }
+        return
+      }
+    }
+    if (!isCurrentSampleUnitOperation(operation) ||
+      preferences.statuses.LAB_REPORT_SAMPLE_UNITS !== 'conflict') return
+    const result = await preferences.resolveConflict('LAB_REPORT_SAMPLE_UNITS', strategy)
+    if (!isCurrentSampleUnitOperation(operation)) return
+    if (result === 'saved' || result === 'queued') refreshSavedSampleUnits()
+    handleSampleUnitConflictResult(result, strategy)
+  } finally {
+    if (isCurrentSampleUnitOperation(operation)) sampleUnitsResolving.value = false
+  }
+}
+
+function refreshSavedSampleUnits() {
+  savedSampleUnits.value = canAccessSampleUnits.value
+    ? normalizeSampleUnits(preferences.value<unknown>('LAB_REPORT_SAMPLE_UNITS', []))
+    : []
+}
+
+function invalidateSampleUnitOperations() {
+  sampleUnitOperationGeneration += 1
+  sampleUnitsSaving.value = false
+  sampleUnitsResolving.value = false
+}
+
+function captureSampleUnitOperation(): SampleUnitOperationContext | null {
+  if (!props.visible || !draft.value || !canAccessSampleUnits.value) return null
+  return {
+    generation: sampleUnitOperationGeneration,
+    actorKey: actorKey.value,
+    ownerId: frontendPreferenceOwnerId(authStore.user),
+    draft: draft.value
+  }
+}
+
+function isCurrentSampleUnitOperation(operation: SampleUnitOperationContext) {
+  return props.visible &&
+    operation.generation === sampleUnitOperationGeneration &&
+    operation.actorKey === actorKey.value &&
+    operation.ownerId === frontendPreferenceOwnerId(authStore.user) &&
+    operation.draft === draft.value
+}
+
+function frontendPreferenceActorKey(user: typeof authStore.user) {
+  if (!user) return ''
+  return JSON.stringify({
+    actorId: user.id,
+    ownerId: frontendPreferenceOwnerId(user),
+    role: user.role,
+    isMain: Boolean(user.isFrontendMainAccount),
+    isSub: Boolean(user.isFrontendSubAccount),
+    permissionVersion: user.permissionVersion ?? 0,
+    permissions: [...(user.permissions ?? [])].sort()
+  })
 }
 
 function normalizeSampleUnits(value: unknown): string[] {
@@ -368,6 +510,25 @@ function handleSampleUnitSaveResult(
     return
   }
   ElMessage.error('来样单位快捷名称保存失败，请稍后重试')
+}
+
+function handleSampleUnitConflictResult(
+  result: 'saved' | 'queued' | 'conflict' | 'error',
+  strategy: 'server' | 'overwrite'
+) {
+  if (result === 'saved') {
+    ElMessage.success(strategy === 'server' ? '已加载服务器来样单位快捷名称' : '已用本机来样单位快捷名称覆盖')
+    return
+  }
+  if (result === 'queued') {
+    ElMessage.warning('已保存到本机，联网后请确认同步')
+    return
+  }
+  if (result === 'conflict') {
+    ElMessage.warning('服务器内容已再次更新，请重新确认冲突内容')
+    return
+  }
+  ElMessage.error('来样单位快捷名称冲突处理失败，请稍后重试')
 }
 
 async function downloadCurrentReport() {
@@ -530,6 +691,24 @@ function contactInputWidth(value: string, minChars: number) {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.sample-unit-conflict {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+
+  > div {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+  }
 }
 
 .sample-unit-shortcuts,

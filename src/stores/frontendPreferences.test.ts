@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
 vi.mock('@/api/frontendPreferences', () => api)
 
 import {
+  canAccessFrontendPreference,
   frontendPreferenceOwnerId,
   useFrontendPreferencesStore
 } from './frontendPreferences'
@@ -115,6 +116,18 @@ describe('frontend preference owner sync store', () => {
       id: 'sub-1', role: 'FRONTEND_SUB_USER', dataOwnerId: undefined,
       isFrontendMainAccount: false, isFrontendSubAccount: true
     }))).toBe('')
+  })
+
+  it('maps current actor permissions to each shared shortcut section', () => {
+    const subaccount = user({
+      id: 'sub-1', role: 'FRONTEND_SUB_USER', dataOwnerId: 'main-1',
+      isFrontendMainAccount: false, isFrontendSubAccount: true, permissions: []
+    })
+    expect(canAccessFrontendPreference(user(), 'LAB_ELEMENT_GROUPS')).toBe(true)
+    expect(canAccessFrontendPreference(subaccount, 'LAB_ELEMENT_GROUPS')).toBe(false)
+    expect(canAccessFrontendPreference({ ...subaccount, permissions: ['DATA_MAIN'] }, 'LAB_ELEMENT_GROUPS')).toBe(true)
+    expect(canAccessFrontendPreference({ ...subaccount, permissions: ['LAB_REPORT_IMAGE_TEMPLATE'] }, 'LAB_REPORT_SAMPLE_UNITS')).toBe(true)
+    expect(canAccessFrontendPreference(subaccount, 'LAB_REPORT_SAMPLE_UNITS')).toBe(false)
   })
 
   it('shows cache first and then replaces it with the server version for the same owner', async () => {
