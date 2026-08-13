@@ -78,8 +78,8 @@ function normalizeReportTemplate(value: unknown): FrontendReportTemplateValue {
 
 function normalizeSmsTemplate(value: unknown): FrontendSmsTemplateValue {
   const template = exactObject(value, SMS_FIELDS, '短信模板字段无效')
-  const prefix = limitedString(template.prefix, 500, '短信前缀').trim()
-  const suffix = limitedString(template.suffix, 500, '短信后缀').trim()
+  const prefix = trimmedLimitedString(template.prefix, 500, '短信前缀')
+  const suffix = trimmedLimitedString(template.suffix, 500, '短信后缀')
   if (codePointLength(prefix) + codePointLength(suffix) > 800) {
     throw new BadRequestException('短信模板总长度不能超过 800 个字符')
   }
@@ -93,7 +93,7 @@ function normalizeUnits(value: unknown): string[] {
   const units: string[] = []
   const seen = new Set<string>()
   for (const unit of value) {
-    const normalized = limitedString(unit, 80, '来样单位').trim()
+    const normalized = trimmedLimitedString(unit, 80, '来样单位')
     if (!normalized || seen.has(normalized)) continue
     seen.add(normalized)
     units.push(normalized)
@@ -161,8 +161,15 @@ function limitedString(value: unknown, maxLength: number, label: string): string
 }
 
 function nonEmptyString(value: unknown, maxLength: number, label: string): string {
-  const normalized = limitedString(value, maxLength, label).trim()
+  const normalized = trimmedLimitedString(value, maxLength, label)
   if (!normalized) throw new BadRequestException(`${label}不能为空`)
+  return normalized
+}
+
+function trimmedLimitedString(value: unknown, maxLength: number, label: string): string {
+  if (typeof value !== 'string') throw new BadRequestException(`${label}无效`)
+  const normalized = value.trim()
+  if (codePointLength(normalized) > maxLength) throw new BadRequestException(`${label}不能超过 ${maxLength} 个字符`)
   return normalized
 }
 

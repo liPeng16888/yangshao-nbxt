@@ -58,6 +58,21 @@ describe('normalizeFrontendPreferenceValue', () => {
       .toEqual({ prefix: '😀'.repeat(500), suffix: '' })
   })
 
+  it('checks SMS, units, and group identities after boundary trimming', () => {
+    const prefix = '前'.repeat(500)
+    const unit = '样'.repeat(80)
+    const id = 'group-'.repeat(13).slice(0, 80)
+    const name = '铝'.repeat(40)
+
+    expect(normalizeFrontendPreferenceValue('LAB_REPORT_SMS_TEMPLATE', { prefix: ` ${prefix} `, suffix: '' }))
+      .toEqual({ prefix, suffix: '' })
+    expect(normalizeFrontendPreferenceValue('LAB_REPORT_SAMPLE_UNITS', [` ${unit} `]))
+      .toEqual([unit])
+    expect(normalizeFrontendPreferenceValue('LAB_ELEMENT_GROUPS', [
+      { id: ` ${id} `, name: ` ${name} `, elementKeys: ['aluminum'] }
+    ])).toEqual([{ id, name, elementKeys: ['aluminum'] }])
+  })
+
   it('canonicalizes group elements and rejects duplicate group identities', () => {
     expect(normalizeFrontendPreferenceValue('LAB_ELEMENT_GROUPS', [
       { id: ' group-1 ', name: ' 铝硅 ', elementKeys: ['silicon', 'aluminum', 'silicon'] }
