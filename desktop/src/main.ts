@@ -15,19 +15,10 @@ import {
 import { installContextMenu } from './context-menu.js'
 import { configureDownloadPrompt } from './downloads.js'
 import { confirmAndOpenExternalLink } from './external-links.js'
-import {
-  LoadingCoordinator,
-  type LoadingFailureReason,
-} from './loading-coordinator.js'
-import { createLoadingPageDataUrl } from './loading-page.js'
+import { installLoadingFlow } from './loading-flow.js'
 import { createApplicationMenuTemplate } from './menu.js'
 import {
-  createOfflinePageDataUrl,
-  shouldShowOfflinePage,
-} from './offline-page.js'
-import {
   acquireSingleInstanceLock,
-  bringWindowToFront,
   resolveRuntimeDesktopTarget,
 } from './runtime.js'
 import {
@@ -114,141 +105,20 @@ function createMainWindow(): BrowserWindow {
   )
 
   const removeContextMenu = installContextMenu(window)
-  let showingOfflinePage = false
-  let offlinePageDataUrl = ''
-  let activeLoadingGeneration = 0
-  let loadingInProgress = false
-  let loadingPageRequest = 0
-
-  const syncLoadingWindowBounds = () => {
-    if (!loadingWindow.isDestroyed() && !window.isDestroyed()) {
-      loadingWindow.setBounds(window.getBounds())
-    }
-  }
-
-  const coordinator = new LoadingCoordinator({
-    show: (mode) => {
-      loadingInProgress = true
-      ++loadingPageRequest
-      const request = loadingPageRequest
-      if (!window.isDestroyed()) {
-        window.hide()
-      }
-      if (loadingWindow.isDestroyed()) {
-        return
-      }
-      syncLoadingWindowBounds()
-      void loadingWindow
-        .loadURL(createLoadingPageDataUrl(target, mode))
-        .then(() => {
-          if (
-            request === loadingPageRequest &&
-            loadingInProgress &&
-            !loadingWindow.isDestroyed()
-          ) {
-            loadingWindow.show()
-          }
-        })
-        .catch(() => undefined)
-    },
-    hide: () => {
-      loadingInProgress = false
-      ++loadingPageRequest
-      if (!loadingWindow.isDestroyed()) {
-        loadingWindow.hide()
-      }
-      if (!window.isDestroyed()) {
-        window.show()
-      }
-    },
-    showOffline: (reason) => {
-      loadingInProgress = false
-      showingOfflinePage = true
-      ++loadingPageRequest
-      if (!loadingWindow.isDestroyed()) {
-        loadingWindow.hide()
-      }
-      if (window.isDestroyed()) {
-        return
-      }
-      offlinePageDataUrl = createOfflinePageDataUrl(target, reason)
-      void window
-        .loadURL(offlinePageDataUrl)
-        .then(() => {
-          if (showingOfflinePage && !window.isDestroyed()) {
-            window.show()
-          }
-        })
-        .catch(() => {
-          if (!window.isDestroyed()) {
-            window.show()
-          }
-        })
-    },
+  const loadingFlow = installLoadingFlow({
+    mainWindow: window,
+    loadingWindow,
+    target,
+    quit: () => app.quit(),
+    isAllowedNavigation: (url) => isAllowedNavigation(url, target),
   })
-
-  const failLoading = (
-    reason: LoadingFailureReason,
-    generation?: number,
-  ) => {
-    if (showingOfflinePage || window.isDestroyed()) {
-      return
-    }
-    if (generation !== undefined) {
-      coordinator.fail(reason, generation)
-      return
-    }
-    if (!loadingInProgress) {
-      activeLoadingGeneration = coordinator.start('recovery')
-    }
-    coordinator.fail(reason, activeLoadingGeneration)
-  }
-
-  const loadFixedTarget = (mode: 'startup' | 'recovery') => {
-    showingOfflinePage = false
-    const generation = coordinator.start(mode)
-    activeLoadingGeneration = generation
-    void window.loadURL(target.entryUrl).catch(() => {
-      failLoading('load', generation)
-    })
-  }
-
-  const reloadWindow = (force: boolean) => {
-    if (window.isDestroyed()) {
-      return
-    }
-    if (showingOfflinePage) {
-      loadFixedTarget('recovery')
-      return
-    }
-    activeLoadingGeneration = coordinator.start('reload')
-    if (force) {
-      window.webContents.reloadIgnoringCache()
-    } else {
-      window.webContents.reload()
-    }
-  }
+  const reloadWindow = (force: boolean) => loadingFlow.reload(force)
 
   reloadApplication = reloadWindow
-  bringApplicationToFront = () => {
-    if (loadingInProgress && !loadingWindow.isDestroyed()) {
-      bringWindowToFront(loadingWindow)
-    } else if (!window.isDestroyed()) {
-      bringWindowToFront(window)
-    }
-  }
-
-  loadingWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  loadingWindow.webContents.on('will-navigate', (event) => {
-    event.preventDefault()
-  })
+  bringApplicationToFront = () => loadingFlow.bringToFront()
 
   window.on('closed', () => {
     removeContextMenu()
-    coordinator.dispose()
-    if (!loadingWindow.isDestroyed()) {
-      loadingWindow.destroy()
-    }
     if (reloadApplication === reloadWindow) {
       reloadApplication = null
     }
@@ -259,76 +129,32 @@ function createMainWindow(): BrowserWindow {
       mainWindow = null
     }
   })
-  window.on('move', syncLoadingWindowBounds)
-  window.on('resize', syncLoadingWindowBounds)
 
   window.webContents.on('page-title-updated', (event) => {
     event.preventDefault()
     window.setTitle(target.productName)
   })
-  window.webContents.on('will-navigate', handleRendererNavigation)
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!loadingFlow.handleWillNavigate(event, url)) {
+      handleRendererNavigation(event, url)
+    }
+  })
   window.webContents.on('will-redirect', handleRendererNavigation)
   window.webContents.on('will-attach-webview', (event) => event.preventDefault())
-  window.webContents.on(
-    'did-start-navigation',
-    (_event, url, _isInPlace, isMainFrame) => {
-      if (
-        isMainFrame &&
-        showingOfflinePage &&
-        url === target.entryUrl
-      ) {
-        showingOfflinePage = false
-        activeLoadingGeneration = coordinator.start('recovery')
-      }
-    },
-  )
-  window.webContents.on(
-    'did-frame-finish-load',
-    (_event, isMainFrame) => {
-      if (
-        isMainFrame &&
-        isAllowedNavigation(window.webContents.getURL(), target)
-      ) {
-        coordinator.finish(activeLoadingGeneration)
-      }
-    },
-  )
   window.webContents.on('did-finish-load', () => {
     window.setTitle(target.productName)
   })
   window.webContents.on(
     'did-navigate-in-page',
     (_event, url, isMainFrame) => {
-      if (
-        isMainFrame &&
-        showingOfflinePage &&
-        offlinePageDataUrl &&
-        url === `${offlinePageDataUrl}#exit`
-      ) {
-        app.quit()
-      }
-    },
-  )
-  window.webContents.on(
-    'did-fail-load',
-    (_event, errorCode, _errorDescription, validatedUrl, isMainFrame) => {
-      if (
-        shouldShowOfflinePage(
-          isMainFrame,
-          errorCode,
-          validatedUrl,
-          target,
-        )
-      ) {
-        failLoading('load')
-      }
+      loadingFlow.handleInPageNavigation(isMainFrame, url)
     },
   )
   window.webContents.on('render-process-gone', () => {
-    failLoading('render-process-gone')
+    loadingFlow.fail('render-process-gone')
   })
   window.on('unresponsive', () => {
-    failLoading('unresponsive')
+    loadingFlow.fail('unresponsive')
   })
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -341,7 +167,7 @@ function createMainWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
-  loadFixedTarget('startup')
+  loadingFlow.startStartup()
   return window
 }
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { desktopTargets } from './config'
 import {
   createLoadingPageDataUrl,
+  loadingIconDataUrls,
   renderLoadingPage,
 } from './loading-page'
 
@@ -20,6 +21,21 @@ describe('trusted desktop loading page', () => {
     expect(html).toContain("style-src 'unsafe-inline'")
     expect(html).not.toContain('<script')
     expect(html).not.toContain('preload')
+  })
+
+  it('uses each approved local product icon without widening CSP', () => {
+    const internal = renderLoadingPage(desktopTargets.internal, 'startup')
+    const backend = renderLoadingPage(desktopTargets.backend, 'startup')
+
+    expect(loadingIconDataUrls.internal).toMatch(/^data:image\/png;base64,/)
+    expect(loadingIconDataUrls.backend).toMatch(/^data:image\/png;base64,/)
+    expect(loadingIconDataUrls.internal).not.toBe(loadingIconDataUrls.backend)
+    expect(internal).toContain(`src="${loadingIconDataUrls.internal}"`)
+    expect(internal).not.toContain(loadingIconDataUrls.backend)
+    expect(backend).toContain(`src="${loadingIconDataUrls.backend}"`)
+    expect(backend).not.toContain(loadingIconDataUrls.internal)
+    expect(internal).toContain("img-src data:")
+    expect(backend).toContain("img-src data:")
   })
 
   it('escapes product identity and returns a self-contained local data URL', () => {
