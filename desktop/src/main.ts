@@ -12,6 +12,7 @@ import {
   type MessageBoxReturnValue,
 } from 'electron'
 
+import { installContextMenu } from './context-menu.js'
 import { configureDownloadPrompt } from './downloads.js'
 import { confirmAndOpenExternalLink } from './external-links.js'
 import { createApplicationMenuTemplate } from './menu.js'
@@ -97,7 +98,10 @@ function createMainWindow(): BrowserWindow {
     createWindowOptions(target) as BrowserWindowConstructorOptions,
   )
 
+  const removeContextMenu = installContextMenu(window)
+
   window.on('closed', () => {
+    removeContextMenu()
     if (mainWindow === window) {
       mainWindow = null
     }
