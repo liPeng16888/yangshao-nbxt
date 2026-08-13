@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import axios from 'axios'
+import { computed, readonly, ref, watch } from 'vue'
 import {
   listFrontendPreferences,
   saveFrontendPreference
@@ -39,6 +40,11 @@ function hasPendingValue(entry: CachedFrontendPreference): boolean {
   return Object.prototype.hasOwnProperty.call(entry, 'pendingValue')
 }
 
+function cloneJsonValue<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
 export function frontendPreferenceOwnerId(user: AuthUser | null): string {
   if (!user) return ''
   if (user.role === 'FRONTEND_SUB_USER' || user.isFrontendSubAccount) {
@@ -66,8 +72,15 @@ export function isPreferenceConflict(error: unknown): error is {
 }
 
 function isTransportError(error: unknown): boolean {
-  const response = (error as { response?: unknown } | null)?.response
-  return response === undefined || response === null
+  if (!axios.isAxiosError(error) || error.response) return false
+  const code = error.code?.toUpperCase() ?? ''
+  if (['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET'].includes(code)) return true
+  const message = error.message.toLowerCase()
+  return message === 'network error' ||
+    message.includes('timeout') ||
+    message.includes('timed out') ||
+    message.includes('failed to fetch') ||
+    message.includes('load failed')
 }
 
 export const useFrontendPreferencesStore = defineStore('frontendPreferences', () => {
@@ -77,10 +90,12 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
   const pendingValues = ref<SectionRecord<unknown>>({})
   const statuses = ref<Record<FrontendPreferenceSection, FrontendPreferenceStatus>>(idleStatuses())
   const conflicts = ref<SectionRecord<FrontendPreferenceConflict>>({})
+  let loadEpoch = 0
 
-  const hasPendingChanges = computed(() => (
-    Object.keys(pendingValues.value).length > 0 || Object.keys(conflicts.value).length > 0
-  ))
+  const hasPendingChanges = computed(() => {
+    syncOwnerState()
+    return Object.keys(pendingValues.value).length > 0 || Object.keys(conflicts.value).length > 0
+  })
 
   function resetState(ownerId = '') {
     activeOwnerId.value = ownerId
@@ -95,9 +110,9 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     for (const section of FRONTEND_PREFERENCE_SECTIONS) {
       const cached = readFrontendPreferenceCache(ownerId, section)
       if (!cached) continue
-      if (cached.server) records.value[section] = cached.server
+      if (cached.server) records.value[section] = cloneJsonValue(cached.server)
       if (hasPendingValue(cached)) {
-        pendingValues.value[section] = cached.pendingValue
+        pendingValues.value[section] = cloneJsonValue(cached.pendingValue)
         statuses.value[section] = 'queued'
       } else if (cached.server) {
         statuses.value[section] = 'saved'
@@ -105,8 +120,13 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     }
   }
 
-  function ensureActiveOwner(ownerId: string) {
-    if (activeOwnerId.value !== ownerId) hydrateOwner(ownerId)
+  function syncOwnerState() {
+    const ownerId = frontendPreferenceOwnerId(authStore.user)
+    if (activeOwnerId.value === ownerId) return ownerId
+    loadEpoch += 1
+    if (ownerId) hydrateOwner(ownerId)
+    else resetState()
+    return ownerId
   }
 
   function installServerRecord(
@@ -115,17 +135,18 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     section = record?.section
   ) {
     if (!section) return
-    if (record) {
-      writeFrontendPreferenceCache({ ownerId, section, server: record })
+    const installedRecord = record ? cloneJsonValue(record) : null
+    if (installedRecord) {
+      writeFrontendPreferenceCache({ ownerId, section, server: installedRecord })
     } else {
       removeFrontendPreferenceCache(ownerId, section)
     }
     if (activeOwnerId.value !== ownerId || frontendPreferenceOwnerId(authStore.user) !== ownerId) return
-    if (record) records.value[section] = record
+    if (installedRecord) records.value[section] = installedRecord
     else delete records.value[section]
     delete pendingValues.value[section]
     delete conflicts.value[section]
-    statuses.value[section] = record ? 'saved' : 'idle'
+    statuses.value[section] = installedRecord ? 'saved' : 'idle'
   }
 
   function installPending(
@@ -135,18 +156,20 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     baseVersion: number,
     server: FrontendPreferenceRecord | null
   ) {
+    const installedServer = server ? cloneJsonValue(server) : null
+    const installedLocalValue = cloneJsonValue(localValue)
     const entry: CachedFrontendPreference = {
       ownerId,
       section,
-      server,
-      pendingValue: localValue,
+      server: installedServer,
+      pendingValue: installedLocalValue,
       pendingBaseVersion: baseVersion
     }
     writeFrontendPreferenceCache(entry)
     if (activeOwnerId.value !== ownerId || frontendPreferenceOwnerId(authStore.user) !== ownerId) return
-    if (server) records.value[section] = server
+    if (installedServer) records.value[section] = cloneJsonValue(installedServer)
     else delete records.value[section]
-    pendingValues.value[section] = localValue
+    pendingValues.value[section] = cloneJsonValue(installedLocalValue)
     delete conflicts.value[section]
     statuses.value[section] = 'queued'
   }
@@ -158,38 +181,46 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     server: FrontendPreferenceRecord | null,
     pendingBaseVersion: number
   ) {
-    const serverVersion = server?.version ?? 0
+    const installedServer = server ? cloneJsonValue(server) : null
+    const installedLocalValue = cloneJsonValue(localValue)
+    const serverVersion = installedServer?.version ?? 0
     writeFrontendPreferenceCache({
       ownerId,
       section,
-      server,
-      pendingValue: localValue,
+      server: installedServer,
+      pendingValue: installedLocalValue,
       pendingBaseVersion
     })
     if (activeOwnerId.value !== ownerId || frontendPreferenceOwnerId(authStore.user) !== ownerId) return
-    if (server) records.value[section] = server
+    if (installedServer) records.value[section] = cloneJsonValue(installedServer)
     else delete records.value[section]
-    pendingValues.value[section] = localValue
-    conflicts.value[section] = { localValue, server, serverVersion }
+    pendingValues.value[section] = cloneJsonValue(installedLocalValue)
+    conflicts.value[section] = {
+      localValue: cloneJsonValue(installedLocalValue),
+      server: installedServer ? cloneJsonValue(installedServer) : null,
+      serverVersion
+    }
     statuses.value[section] = 'conflict'
   }
 
   async function loadAll() {
-    const ownerId = frontendPreferenceOwnerId(authStore.user)
+    const ownerId = syncOwnerState()
     if (!ownerId) {
-      resetState()
       return 'error' as const
     }
 
-    hydrateOwner(ownerId)
+    const requestEpoch = ++loadEpoch
     for (const section of FRONTEND_PREFERENCE_SECTIONS) {
       if (statuses.value[section] !== 'queued') statuses.value[section] = 'loading'
     }
 
     try {
       const serverRecords = await listFrontendPreferences()
-      if (frontendPreferenceOwnerId(authStore.user) !== ownerId || activeOwnerId.value !== ownerId) {
-        resetState(frontendPreferenceOwnerId(authStore.user))
+      if (
+        requestEpoch !== loadEpoch ||
+        frontendPreferenceOwnerId(authStore.user) !== ownerId ||
+        activeOwnerId.value !== ownerId
+      ) {
         return 'stale' as const
       }
 
@@ -210,6 +241,13 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
       }
       return 'loaded' as const
     } catch {
+      if (
+        requestEpoch !== loadEpoch ||
+        frontendPreferenceOwnerId(authStore.user) !== ownerId ||
+        activeOwnerId.value !== ownerId
+      ) {
+        return 'stale' as const
+      }
       if (frontendPreferenceOwnerId(authStore.user) === ownerId && activeOwnerId.value === ownerId) {
         for (const section of FRONTEND_PREFERENCE_SECTIONS) {
           if (statuses.value[section] !== 'queued' && statuses.value[section] !== 'conflict') {
@@ -222,36 +260,44 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
   }
 
   function value<T>(section: FrontendPreferenceSection, fallback: T): T {
+    syncOwnerState()
     if (Object.prototype.hasOwnProperty.call(pendingValues.value, section)) {
-      return pendingValues.value[section] as T
+      return cloneJsonValue(pendingValues.value[section] as T)
     }
-    return (records.value[section]?.value as T | undefined) ?? fallback
+    const storedValue = records.value[section]?.value as T | undefined
+    return cloneJsonValue(storedValue ?? fallback)
   }
 
   async function save(
     section: FrontendPreferenceSection,
     nextValue: unknown
   ): Promise<SaveResult> {
-    const ownerId = frontendPreferenceOwnerId(authStore.user)
+    const ownerId = syncOwnerState()
     if (!ownerId) {
       statuses.value[section] = 'error'
       return 'error'
     }
-    ensureActiveOwner(ownerId)
     const current = records.value[section] ?? null
     const baseVersion = current?.version ?? 0
     statuses.value[section] = 'saving'
+    let submittedValue: unknown
     try {
-      const saved = await saveFrontendPreference(section, nextValue, baseVersion)
+      submittedValue = cloneJsonValue(nextValue)
+    } catch {
+      statuses.value[section] = 'error'
+      return 'error'
+    }
+    try {
+      const saved = await saveFrontendPreference(section, submittedValue, baseVersion)
       installServerRecord(ownerId, saved)
       return 'saved'
     } catch (error) {
       if (isPreferenceConflict(error)) {
-        installConflict(ownerId, section, nextValue, error.response.data.current, baseVersion)
+        installConflict(ownerId, section, submittedValue, error.response.data.current, baseVersion)
         return 'conflict'
       }
       if (isTransportError(error)) {
-        installPending(ownerId, section, nextValue, baseVersion, current)
+        installPending(ownerId, section, submittedValue, baseVersion, current)
         return 'queued'
       }
       if (frontendPreferenceOwnerId(authStore.user) === ownerId && activeOwnerId.value === ownerId) {
@@ -265,8 +311,9 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     section: FrontendPreferenceSection,
     strategy: 'server' | 'overwrite'
   ): Promise<SaveResult> {
-    const ownerId = frontendPreferenceOwnerId(authStore.user)
-    const conflict = conflicts.value[section]
+    const ownerId = syncOwnerState()
+    const storedConflict = conflicts.value[section]
+    const conflict = storedConflict ? cloneJsonValue(storedConflict) : undefined
     if (!ownerId || activeOwnerId.value !== ownerId || !conflict) {
       statuses.value[section] = 'error'
       return 'error'
@@ -280,7 +327,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     try {
       const saved = await saveFrontendPreference(
         section,
-        conflict.localValue,
+        cloneJsonValue(conflict.localValue),
         conflict.serverVersion
       )
       installServerRecord(ownerId, saved)
@@ -313,10 +360,16 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     }
   }
 
+  watch(
+    () => frontendPreferenceOwnerId(authStore.user),
+    () => { syncOwnerState() },
+    { immediate: true, flush: 'sync' }
+  )
+
   return {
-    records,
-    statuses,
-    conflicts,
+    records: readonly(records),
+    statuses: readonly(statuses),
+    conflicts: readonly(conflicts),
     hasPendingChanges,
     loadAll,
     value,
