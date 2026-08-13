@@ -105,6 +105,10 @@ watch(
   { immediate: true }
 )
 
+watch(panelVisible, (visible) => {
+  if (visible) groups.value = loadGroups()
+})
+
 onMounted(() => {
   groups.value = loadGroups()
 })
