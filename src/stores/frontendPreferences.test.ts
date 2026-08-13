@@ -337,6 +337,30 @@ describe('frontend preference owner sync store', () => {
     expect(store.statuses[smsSection]).toBe('conflict')
   })
 
+  it('does not let an older save or overwrite response replace the latest section mutation', async () => {
+    const initial = record(smsSection, { prefix: '初始', suffix: '' }, 4)
+    api.listFrontendPreferences.mockResolvedValueOnce([initial])
+    const store = useFrontendPreferencesStore()
+    await store.loadAll()
+
+    let rejectFirst!: (reason: unknown) => void
+    let resolveSecond!: (value: FrontendPreferenceRecord) => void
+    api.saveFrontendPreference
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectFirst = reject }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve }))
+    const first = store.save(smsSection, { prefix: '旧请求', suffix: '' })
+    const second = store.save(smsSection, { prefix: '新请求', suffix: '' })
+
+    resolveSecond(record(smsSection, { prefix: '新请求', suffix: '' }, 6))
+    await second
+    rejectFirst(networkError())
+    await first
+
+    expect(store.records[smsSection]).toMatchObject({ version: 6, value: { prefix: '新请求', suffix: '' } })
+    expect(store.statuses[smsSection]).toBe('saved')
+    expect(store.value(smsSection, { prefix: '', suffix: '' })).toEqual({ prefix: '新请求', suffix: '' })
+  })
+
   it('ignores a stale owner response after the authenticated owner changes', async () => {
     let resolveList!: (records: FrontendPreferenceRecord[]) => void
     api.listFrontendPreferences.mockReturnValue(new Promise((resolve) => { resolveList = resolve }))

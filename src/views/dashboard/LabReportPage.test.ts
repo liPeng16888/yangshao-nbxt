@@ -65,7 +65,10 @@ async function setup(initialRecords: FrontendPreferenceRecord[] = []) {
         LabReportTemplatePanel: ReportPanelStub,
         LabReportSmsTemplatePanel: SmsPanelStub,
         ElTag: { template: '<span class="status-tag"><slot /></span>' },
-        ElButton: { template: '<button type="button" @click="$emit(\'click\')"><slot /></button>' }
+        ElButton: {
+          emits: ['click'],
+          template: '<button type="button" @click="$emit(\'click\')"><slot /></button>'
+        }
       }
     }
   })
@@ -203,6 +206,148 @@ describe('LabReportPage shared preferences', () => {
       4
     )
     expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '第二次修改' })
+    wrapper.unmount()
+  })
+
+  it('keeps the latest draft, record, and status when two saves resolve out of order', async () => {
+    const serverTemplate = { ...defaultLabReportTemplate, title: '服务器标题' }
+    const { wrapper, preferences } = await setup([
+      record('LAB_REPORT_TEMPLATE', serverTemplate, 3)
+    ])
+    let resolveFirst!: (value: FrontendPreferenceRecord) => void
+    let resolveSecond!: (value: FrontendPreferenceRecord) => void
+    api.save
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve }))
+
+    wrapper.getComponent(ReportPanelStub).vm.$emit('update:modelValue', {
+      ...serverTemplate,
+      title: '第一次修改'
+    })
+    await vi.advanceTimersByTimeAsync(500)
+    wrapper.getComponent(ReportPanelStub).vm.$emit('update:modelValue', {
+      ...serverTemplate,
+      title: '第二次修改'
+    })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(api.save).toHaveBeenCalledTimes(2)
+
+    resolveSecond(record(
+      'LAB_REPORT_TEMPLATE',
+      { ...serverTemplate, title: '第二次修改' },
+      5
+    ))
+    await flushPromises()
+    resolveFirst(record(
+      'LAB_REPORT_TEMPLATE',
+      { ...serverTemplate, title: '第一次修改' },
+      4
+    ))
+    await flushPromises()
+
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '第二次修改' })
+    expect(preferences.records.LAB_REPORT_TEMPLATE).toMatchObject({ version: 5 })
+    expect(wrapper.text()).toContain('已保存')
+    expect(wrapper.text()).not.toContain('离线待同步')
+    wrapper.unmount()
+  })
+
+  it('retains and saves a newer edit made while conflict overwrite is in flight', async () => {
+    const serverCurrent = record(
+      'LAB_REPORT_TEMPLATE',
+      { ...defaultLabReportTemplate, title: '他人新内容' },
+      5
+    )
+    const { wrapper } = await setup([
+      record('LAB_REPORT_TEMPLATE', { ...defaultLabReportTemplate, title: '旧服务器' }, 4)
+    ])
+    let resolveOverwrite!: (value: FrontendPreferenceRecord) => void
+    api.save
+      .mockRejectedValueOnce({
+        response: { status: 409, data: { code: 'PREFERENCE_VERSION_CONFLICT', current: serverCurrent } },
+        isAxiosError: true
+      })
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOverwrite = resolve }))
+      .mockResolvedValueOnce(record(
+        'LAB_REPORT_TEMPLATE',
+        { ...defaultLabReportTemplate, title: '冲突后继续修改' },
+        7
+      ))
+
+    await wrapper.get('.edit-report').trigger('click')
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
+    await Array.from(wrapper.findAll('button')).find((button) => button.text() === '用本机内容覆盖')!.trigger('click')
+    wrapper.getComponent(ReportPanelStub).vm.$emit('update:modelValue', {
+      ...defaultLabReportTemplate,
+      title: '冲突后继续修改'
+    })
+    await nextTick()
+
+    resolveOverwrite(record(
+      'LAB_REPORT_TEMPLATE',
+      { ...defaultLabReportTemplate, title: '用户修改' },
+      6
+    ))
+    await flushPromises()
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '冲突后继续修改' })
+
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
+    expect(api.save).toHaveBeenNthCalledWith(
+      3,
+      'LAB_REPORT_TEMPLATE',
+      { ...defaultLabReportTemplate, title: '冲突后继续修改' },
+      6
+    )
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '冲突后继续修改' })
+    expect(wrapper.text()).toContain('已保存')
+    wrapper.unmount()
+  })
+
+  it('makes an old-owner save response inert after the new owner edits and saves', async () => {
+    const { wrapper, auth, preferences } = await setup([
+      record('LAB_REPORT_TEMPLATE', { ...defaultLabReportTemplate, title: '账号 A' }, 2)
+    ])
+    let resolveOwnerA!: (value: FrontendPreferenceRecord) => void
+    api.save
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOwnerA = resolve }))
+      .mockResolvedValueOnce(record(
+        'LAB_REPORT_TEMPLATE',
+        { ...defaultLabReportTemplate, title: '账号 B 本机编辑' },
+        9
+      ))
+    await wrapper.get('.edit-report').trigger('click')
+    await vi.advanceTimersByTimeAsync(500)
+
+    auth.user = {
+      id: 'main-2', account: 'main-2', username: '账号 B', role: 'FRONTEND_USER',
+      dataOwnerId: 'main-2', isFrontendMainAccount: true, isFrontendSubAccount: false
+    }
+    api.list.mockResolvedValueOnce([
+      record('LAB_REPORT_TEMPLATE', { ...defaultLabReportTemplate, title: '账号 B 服务器' }, 8)
+    ])
+    await preferences.loadAll()
+    wrapper.getComponent(ReportPanelStub).vm.$emit('update:modelValue', {
+      ...defaultLabReportTemplate,
+      title: '账号 B 本机编辑'
+    })
+    await nextTick()
+
+    resolveOwnerA(record(
+      'LAB_REPORT_TEMPLATE',
+      { ...defaultLabReportTemplate, title: '账号 A 响应' },
+      3
+    ))
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '账号 B 本机编辑' })
+    expect(api.save).toHaveBeenLastCalledWith(
+      'LAB_REPORT_TEMPLATE',
+      { ...defaultLabReportTemplate, title: '账号 B 本机编辑' },
+      8
+    )
     wrapper.unmount()
   })
 

@@ -34,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LabReportSmsTemplatePanel from '@/components/lab-report/LabReportSmsTemplatePanel.vue'
 import LabReportTemplatePanel from '@/components/lab-report/LabReportTemplatePanel.vue'
@@ -53,7 +53,9 @@ const preferences = useFrontendPreferencesStore()
 const reportTemplate = ref<LabReportTemplate>(preferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate))
 const smsTemplate = ref<LabReportSmsTemplate>(preferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate))
 const saveTimers: Partial<Record<FrontendPreferenceSection, number>> = {}
-const savesInFlight: Partial<Record<FrontendPreferenceSection, number>> = {}
+const editRevisions: Partial<Record<FrontendPreferenceSection, number>> = {}
+const localDirty = reactive<Partial<Record<FrontendPreferenceSection, boolean>>>({})
+let ownerGeneration = 0
 
 const sections: { label: string; value: ReportSection; path: string }[] = [
   { label: '化验报告图片模板', value: 'image', path: '/lab-report/image-template' },
@@ -67,7 +69,11 @@ const activeSection = computed<ReportSection>(() => {
 const activePreferenceSection = computed<FrontendPreferenceSection>(() => (
   activeSection.value === 'image' ? 'LAB_REPORT_TEMPLATE' : 'LAB_REPORT_SMS_TEMPLATE'
 ))
-const activeStatus = computed(() => preferences.statuses[activePreferenceSection.value])
+const activeStatus = computed(() => (
+  localDirty[activePreferenceSection.value]
+    ? 'saving'
+    : preferences.statuses[activePreferenceSection.value]
+))
 const saveStatusText = computed(() => statusText(activeStatus.value))
 const saveStatusType = computed(() => {
   if (activeStatus.value === 'conflict' || activeStatus.value === 'error') return 'danger'
@@ -79,7 +85,7 @@ const saveStatusType = computed(() => {
 watch(
   () => preferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate),
   (template) => {
-    if (hasNewerEditDuringSave('LAB_REPORT_TEMPLATE')) return
+    if (localDirty.LAB_REPORT_TEMPLATE) return
     cancelSave('LAB_REPORT_TEMPLATE')
     reportTemplate.value = cloneValue(template)
   },
@@ -89,7 +95,7 @@ watch(
 watch(
   () => preferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate),
   (template) => {
-    if (hasNewerEditDuringSave('LAB_REPORT_SMS_TEMPLATE')) return
+    if (localDirty.LAB_REPORT_SMS_TEMPLATE) return
     cancelSave('LAB_REPORT_SMS_TEMPLATE')
     smsTemplate.value = cloneValue(template)
   },
@@ -99,9 +105,32 @@ watch(
 watch(
   () => frontendPreferenceOwnerId(authStore.user),
   () => {
+    ownerGeneration += 1
     cancelAllSaves()
+    for (const section of ['LAB_REPORT_TEMPLATE', 'LAB_REPORT_SMS_TEMPLATE'] as const) {
+      editRevisions[section] = (editRevisions[section] ?? 0) + 1
+      localDirty[section] = false
+    }
     reportTemplate.value = preferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate)
     smsTemplate.value = preferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate)
+  },
+  { flush: 'sync' }
+)
+
+watch(
+  () => [
+    preferences.statuses.LAB_REPORT_TEMPLATE,
+    preferences.statuses.LAB_REPORT_SMS_TEMPLATE
+  ] as const,
+  (statuses) => {
+    const sections = ['LAB_REPORT_TEMPLATE', 'LAB_REPORT_SMS_TEMPLATE'] as const
+    statuses.forEach((status, index) => {
+      if (status !== 'loading') return
+      const section = sections[index]
+      cancelSave(section)
+      editRevisions[section] = (editRevisions[section] ?? 0) + 1
+      localDirty[section] = false
+    })
   },
   { flush: 'sync' }
 )
@@ -110,39 +139,79 @@ onBeforeUnmount(cancelAllSaves)
 
 function updateReportTemplate(template: LabReportTemplate) {
   reportTemplate.value = cloneValue(template)
-  scheduleSave('LAB_REPORT_TEMPLATE', template)
+  scheduleSave('LAB_REPORT_TEMPLATE', template, nextEditRevision('LAB_REPORT_TEMPLATE'))
 }
 
 function updateSmsTemplate(template: LabReportSmsTemplate) {
   smsTemplate.value = cloneValue(template)
-  scheduleSave('LAB_REPORT_SMS_TEMPLATE', template)
+  scheduleSave('LAB_REPORT_SMS_TEMPLATE', template, nextEditRevision('LAB_REPORT_SMS_TEMPLATE'))
 }
 
-function scheduleSave(section: FrontendPreferenceSection, value: unknown) {
+function nextEditRevision(section: FrontendPreferenceSection) {
+  const revision = (editRevisions[section] ?? 0) + 1
+  editRevisions[section] = revision
+  localDirty[section] = true
+  return revision
+}
+
+function scheduleSave(section: FrontendPreferenceSection, value: unknown, revision: number) {
   cancelSave(section)
   const ownerId = frontendPreferenceOwnerId(authStore.user)
+  const generation = ownerGeneration
   const submittedValue = cloneValue(value)
   saveTimers[section] = window.setTimeout(() => {
     delete saveTimers[section]
-    if (!ownerId || frontendPreferenceOwnerId(authStore.user) !== ownerId) return
-    savesInFlight[section] = (savesInFlight[section] ?? 0) + 1
-    void preferences.save(section, submittedValue).finally(async () => {
-      await nextTick()
-      const remaining = (savesInFlight[section] ?? 1) - 1
-      if (remaining > 0) savesInFlight[section] = remaining
-      else delete savesInFlight[section]
-    })
+    if (!isCurrentRevision(ownerId, generation, section, revision)) return
+    void saveRevision(section, submittedValue, ownerId, generation, revision)
   }, 500)
 }
 
-function hasNewerEditDuringSave(section: FrontendPreferenceSection) {
-  return (savesInFlight[section] ?? 0) > 0 && saveTimers[section] !== undefined
+async function saveRevision(
+  section: FrontendPreferenceSection,
+  value: unknown,
+  ownerId: string,
+  generation: number,
+  revision: number
+) {
+  await preferences.save(section, value)
+  settleRevision(section, ownerId, generation, revision)
 }
 
 async function resolveActiveConflict(strategy: 'server' | 'overwrite') {
   const section = activePreferenceSection.value
   cancelSave(section)
+  const ownerId = frontendPreferenceOwnerId(authStore.user)
+  const generation = ownerGeneration
+  const revision = editRevisions[section] ?? 0
   await preferences.resolveConflict(section, strategy)
+  settleRevision(section, ownerId, generation, revision)
+}
+
+function settleRevision(
+  section: FrontendPreferenceSection,
+  ownerId: string,
+  generation: number,
+  revision: number
+) {
+  if (!isCurrentRevision(ownerId, generation, section, revision)) return
+  localDirty[section] = false
+  if (section === 'LAB_REPORT_TEMPLATE') {
+    reportTemplate.value = preferences.value(section, defaultLabReportTemplate)
+  } else if (section === 'LAB_REPORT_SMS_TEMPLATE') {
+    smsTemplate.value = preferences.value(section, defaultLabReportSmsTemplate)
+  }
+}
+
+function isCurrentRevision(
+  ownerId: string,
+  generation: number,
+  section: FrontendPreferenceSection,
+  revision: number
+) {
+  return Boolean(ownerId) &&
+    generation === ownerGeneration &&
+    ownerId === frontendPreferenceOwnerId(authStore.user) &&
+    revision === (editRevisions[section] ?? 0)
 }
 
 function cancelSave(section: FrontendPreferenceSection) {
