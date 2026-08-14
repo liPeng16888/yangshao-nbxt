@@ -12,25 +12,57 @@
       </button>
     </div>
 
-    <LabReportTemplatePanel v-if="activeSection === 'image'" v-model="reportTemplate" />
-    <LabReportSmsTemplatePanel v-else v-model="smsTemplate" />
+    <div class="preference-save-state">
+      <el-tag :type="saveStatusType" effect="plain">{{ saveStatusText }}</el-tag>
+      <template v-if="activeStatus === 'conflict'">
+        <el-button size="small" @click="resolveActiveConflict('server')">加载服务器内容</el-button>
+        <el-button size="small" type="danger" @click="resolveActiveConflict('overwrite')">用本机内容覆盖</el-button>
+      </template>
+    </div>
+
+    <LabReportTemplatePanel
+      v-if="activeSection === 'image'"
+      :model-value="reportTemplate"
+      @update:model-value="updateReportTemplate"
+    />
+    <LabReportSmsTemplatePanel
+      v-else
+      :model-value="smsTemplate"
+      @update:model-value="updateSmsTemplate"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LabReportSmsTemplatePanel from '@/components/lab-report/LabReportSmsTemplatePanel.vue'
 import LabReportTemplatePanel from '@/components/lab-report/LabReportTemplatePanel.vue'
+import { useAuthStore } from '@/stores/auth'
+import {
+  frontendPreferenceActorKey,
+  frontendPreferenceOwnerId,
+  useFrontendPreferencesStore
+} from '@/stores/frontendPreferences'
+import type { FrontendPreferenceSection, FrontendPreferenceStatus } from '@/types/frontendPreference'
 import type { LabReportSmsTemplate, LabReportTemplate } from '@/types/labReport'
-import { loadLabReportSmsTemplate, loadLabReportTemplate, saveLabReportSmsTemplate, saveLabReportTemplate } from '@/utils/labReport'
+import { defaultLabReportSmsTemplate, defaultLabReportTemplate } from '@/utils/labReport'
 
 type ReportSection = 'image' | 'sms'
+type TemplatePreferenceSection = 'LAB_REPORT_TEMPLATE' | 'LAB_REPORT_SMS_TEMPLATE'
 
 const route = useRoute()
 const router = useRouter()
-const reportTemplate = ref<LabReportTemplate>(loadLabReportTemplate())
-const smsTemplate = ref<LabReportSmsTemplate>(loadLabReportSmsTemplate())
+const authStore = useAuthStore()
+const preferences = useFrontendPreferencesStore()
+const reportTemplate = ref<LabReportTemplate>(preferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate))
+const smsTemplate = ref<LabReportSmsTemplate>(preferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate))
+const saveTimers: Partial<Record<FrontendPreferenceSection, number>> = {}
+const editRevisions: Partial<Record<FrontendPreferenceSection, number>> = {}
+const localDirty = reactive<Partial<Record<FrontendPreferenceSection, boolean>>>({})
+const localErrorRevisions = reactive<Partial<Record<FrontendPreferenceSection, number>>>({})
+let ownerGeneration = 0
+let editSessions = createEditSessions()
 
 const sections: { label: string; value: ReportSection; path: string }[] = [
   { label: '化验报告图片模板', value: 'image', path: '/lab-report/image-template' },
@@ -41,21 +73,203 @@ const activeSection = computed<ReportSection>(() => {
   return route.path.endsWith('/sms-template') ? 'sms' : 'image'
 })
 
+const activePreferenceSection = computed<TemplatePreferenceSection>(() => (
+  activeSection.value === 'image' ? 'LAB_REPORT_TEMPLATE' : 'LAB_REPORT_SMS_TEMPLATE'
+))
+const activeStatus = computed(() => {
+  const section = activePreferenceSection.value
+  if (preferences.statuses[section] === 'conflict') return 'conflict'
+  if (!localDirty[section]) return preferences.statuses[section]
+  return localErrorRevisions[section] === editRevisions[section] ? 'error' : 'saving'
+})
+const saveStatusText = computed(() => statusText(activeStatus.value))
+const saveStatusType = computed(() => {
+  if (activeStatus.value === 'conflict' || activeStatus.value === 'error') return 'danger'
+  if (activeStatus.value === 'queued') return 'warning'
+  if (activeStatus.value === 'saving' || activeStatus.value === 'loading') return 'info'
+  return 'success'
+})
+
 watch(
-  reportTemplate,
+  () => preferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate),
   (template) => {
-    saveLabReportTemplate(template)
+    if (localDirty.LAB_REPORT_TEMPLATE) return
+    cancelSave('LAB_REPORT_TEMPLATE')
+    reportTemplate.value = cloneValue(template)
   },
-  { deep: true }
+  { deep: true, immediate: true }
 )
 
 watch(
-  smsTemplate,
+  () => preferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate),
   (template) => {
-    saveLabReportSmsTemplate(template)
+    if (localDirty.LAB_REPORT_SMS_TEMPLATE) return
+    cancelSave('LAB_REPORT_SMS_TEMPLATE')
+    smsTemplate.value = cloneValue(template)
   },
-  { deep: true }
+  { deep: true, immediate: true }
 )
+
+watch(
+  () => frontendPreferenceActorKey(authStore.user),
+  () => {
+    ownerGeneration += 1
+    cancelAllSaves()
+    unregisterEditSessions()
+    editSessions = createEditSessions()
+    for (const section of ['LAB_REPORT_TEMPLATE', 'LAB_REPORT_SMS_TEMPLATE'] as const) {
+      editRevisions[section] = (editRevisions[section] ?? 0) + 1
+      localDirty[section] = false
+      delete localErrorRevisions[section]
+      editSessions[section].update({ dirty: false })
+    }
+    reportTemplate.value = preferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate)
+    smsTemplate.value = preferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate)
+  },
+  { flush: 'sync' }
+)
+
+watch(
+  () => [
+    preferences.statuses.LAB_REPORT_TEMPLATE,
+    preferences.statuses.LAB_REPORT_SMS_TEMPLATE
+  ] as const,
+  (statuses) => {
+    const sections = ['LAB_REPORT_TEMPLATE', 'LAB_REPORT_SMS_TEMPLATE'] as const
+    statuses.forEach((status, index) => {
+      if (status !== 'conflict') return
+      const section = sections[index]
+      cancelSave(section)
+    })
+  },
+  { flush: 'sync' }
+)
+
+onBeforeUnmount(() => {
+  cancelAllSaves()
+  unregisterEditSessions()
+})
+
+function updateReportTemplate(template: LabReportTemplate) {
+  reportTemplate.value = cloneValue(template)
+  scheduleSave('LAB_REPORT_TEMPLATE', template, nextEditRevision('LAB_REPORT_TEMPLATE', template))
+}
+
+function updateSmsTemplate(template: LabReportSmsTemplate) {
+  smsTemplate.value = cloneValue(template)
+  scheduleSave('LAB_REPORT_SMS_TEMPLATE', template, nextEditRevision('LAB_REPORT_SMS_TEMPLATE', template))
+}
+
+function nextEditRevision(section: TemplatePreferenceSection, value: unknown) {
+  const revision = (editRevisions[section] ?? 0) + 1
+  editRevisions[section] = revision
+  localDirty[section] = true
+  editSessions[section].update({ dirty: true, value })
+  delete localErrorRevisions[section]
+  return revision
+}
+
+function scheduleSave(section: TemplatePreferenceSection, value: unknown, revision: number) {
+  cancelSave(section)
+  const ownerId = frontendPreferenceOwnerId(authStore.user)
+  const generation = ownerGeneration
+  const submittedValue = cloneValue(value)
+  saveTimers[section] = window.setTimeout(() => {
+    delete saveTimers[section]
+    if (!isCurrentRevision(ownerId, generation, section, revision)) return
+    void saveRevision(section, submittedValue, ownerId, generation, revision)
+  }, 500)
+}
+
+async function saveRevision(
+  section: TemplatePreferenceSection,
+  value: unknown,
+  ownerId: string,
+  generation: number,
+  revision: number
+) {
+  const result = await preferences.save(section, value)
+  settleRevision(section, ownerId, generation, revision, result)
+}
+
+async function resolveActiveConflict(strategy: 'server' | 'overwrite') {
+  const section = activePreferenceSection.value
+  cancelSave(section)
+  const ownerId = frontendPreferenceOwnerId(authStore.user)
+  const generation = ownerGeneration
+  const revision = editRevisions[section] ?? 0
+  const result = await preferences.resolveConflict(section, strategy)
+  settleRevision(section, ownerId, generation, revision, result)
+}
+
+function settleRevision(
+  section: TemplatePreferenceSection,
+  ownerId: string,
+  generation: number,
+  revision: number,
+  result: 'saved' | 'queued' | 'conflict' | 'error'
+) {
+  if (!isCurrentRevision(ownerId, generation, section, revision)) return
+  if (result === 'error') {
+    localErrorRevisions[section] = revision
+    return
+  }
+  localDirty[section] = false
+  editSessions[section].update({ dirty: false })
+  delete localErrorRevisions[section]
+  if (section === 'LAB_REPORT_TEMPLATE') {
+    reportTemplate.value = preferences.value(section, defaultLabReportTemplate)
+  } else if (section === 'LAB_REPORT_SMS_TEMPLATE') {
+    smsTemplate.value = preferences.value(section, defaultLabReportSmsTemplate)
+  }
+}
+
+function isCurrentRevision(
+  ownerId: string,
+  generation: number,
+  section: TemplatePreferenceSection,
+  revision: number
+) {
+  return Boolean(ownerId) &&
+    generation === ownerGeneration &&
+    ownerId === frontendPreferenceOwnerId(authStore.user) &&
+    revision === (editRevisions[section] ?? 0)
+}
+
+function cancelSave(section: FrontendPreferenceSection) {
+  const timer = saveTimers[section]
+  if (timer !== undefined) window.clearTimeout(timer)
+  delete saveTimers[section]
+}
+
+function cancelAllSaves() {
+  for (const section of Object.keys(saveTimers) as FrontendPreferenceSection[]) cancelSave(section)
+}
+
+function createEditSessions() {
+  return {
+    LAB_REPORT_TEMPLATE: preferences.registerEditSession('LAB_REPORT_TEMPLATE'),
+    LAB_REPORT_SMS_TEMPLATE: preferences.registerEditSession('LAB_REPORT_SMS_TEMPLATE')
+  }
+}
+
+function unregisterEditSessions() {
+  editSessions.LAB_REPORT_TEMPLATE.unregister()
+  editSessions.LAB_REPORT_SMS_TEMPLATE.unregister()
+}
+
+function statusText(status: FrontendPreferenceStatus) {
+  if (status === 'saving') return '保存中'
+  if (status === 'queued') return '离线待同步'
+  if (status === 'conflict') return '有版本冲突'
+  if (status === 'loading') return '正在加载'
+  if (status === 'error') return '保存失败'
+  return '已保存'
+}
+
+function cloneValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
 
 function switchSection(section: ReportSection) {
   const target = sections.find((item) => item.value === section)
@@ -95,5 +309,11 @@ function switchSection(section: ReportSection) {
       border-color: #2563eb;
     }
   }
+}
+
+.preference-save-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

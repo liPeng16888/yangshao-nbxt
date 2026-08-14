@@ -7,6 +7,8 @@
     "dev": "vite --host 0.0.0.0",
     "dev:admin": "pnpm --filter yangshao-admin dev",
     "dev:server": "pnpm --filter yangshao-server dev",
+    "desktop:test": "pnpm --filter @yangshao/desktop test",
+    "desktop:build": "pnpm --filter @yangshao/desktop build",
     "build": "vue-tsc --noEmit && vite build",
     "build:admin": "pnpm --filter yangshao-admin build",
     "build:server": "pnpm --filter yangshao-server build",

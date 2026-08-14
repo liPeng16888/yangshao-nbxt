@@ -45,7 +45,7 @@
     <div v-else class="sms-preview-step">
       <div class="preview-actions">
         <el-button @click="step = 'elements'">返回选择元素</el-button>
-        <el-button type="primary" @click="copySmsText">复制短信</el-button>
+        <el-button type="primary" :loading="copying" :disabled="copying" @click="copySmsText">复制短信</el-button>
       </div>
       <el-input v-model="smsText" type="textarea" :rows="16" resize="vertical" />
     </div>
@@ -53,7 +53,7 @@
     <template #footer>
       <el-button @click="emit('close')">关闭</el-button>
       <el-button v-if="step === 'elements'" type="primary" @click="createSmsPreview">生成短信</el-button>
-      <el-button v-else type="primary" @click="copySmsText">复制短信</el-button>
+      <el-button v-else type="primary" :loading="copying" :disabled="copying" @click="copySmsText">复制短信</el-button>
     </template>
   </el-dialog>
 </template>
@@ -70,6 +70,7 @@ import {
   labReportElements,
   parseLabElementKeys
 } from '@/utils/labReport'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 const props = defineProps<{
   visible: boolean
@@ -86,6 +87,7 @@ const step = ref<'elements' | 'preview'>('elements')
 const selectionMap = ref<Record<string, LabReportElementKey[]>>({})
 const bulkElementKeys = ref<LabReportElementKey[]>([])
 const smsText = ref('')
+const copying = ref(false)
 
 const selectedBlocks = computed(() => props.blocks.filter((block) => props.selectedBlockIds.includes(block.id)))
 const dialogTitle = computed(() => (step.value === 'elements' ? '选择化验短信检测元素' : '化验短信预览'))
@@ -155,16 +157,20 @@ function createSmsPreview() {
 }
 
 async function copySmsText() {
+  if (copying.value) return
   const text = smsText.value.trim()
   if (!text) {
     ElMessage.warning('暂无短信内容可复制')
     return
   }
+  copying.value = true
   try {
-    await navigator.clipboard.writeText(text)
+    await writeTextToClipboard(text)
     ElMessage.success('短信内容已复制')
   } catch {
     ElMessage.error('复制失败，请手动复制短信内容')
+  } finally {
+    copying.value = false
   }
 }
 </script>

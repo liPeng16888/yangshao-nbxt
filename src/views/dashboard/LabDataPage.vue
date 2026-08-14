@@ -117,9 +117,14 @@ import SampleCompletionDialog from '@/components/lab-sheet/SampleCompletionDialo
 import LabReportDialog from '@/components/lab-report/LabReportDialog.vue'
 import LabSmsDialog from '@/components/lab-report/LabSmsDialog.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
+import { useAuthStore } from '@/stores/auth'
+import {
+  canAccessFrontendPreference,
+  useFrontendPreferencesStore
+} from '@/stores/frontendPreferences'
 import { useLabSheetStore } from '@/stores/labSheet'
 import { businessDateInBeijing, millisecondsUntilNextBusinessDayInBeijing } from '@/utils/date'
-import { loadLabReportSmsTemplate, loadLabReportTemplate } from '@/utils/labReport'
+import { defaultLabReportSmsTemplate, defaultLabReportTemplate } from '@/utils/labReport'
 
 type GenerationMode = 'report' | 'sms' | 'bulkFill' | null
 
@@ -127,6 +132,8 @@ const route = useRoute()
 const router = useRouter()
 const labStore = useLabSheetStore()
 const accessGuard = useAccessGuardStore()
+const authStore = useAuthStore()
+const frontendPreferences = useFrontendPreferencesStore()
 const BUSINESS_DAY_PREFLUSH_LEAD_MS = 5_000
 const BUSINESS_DAY_RETRY_MS = 60_000
 
@@ -142,8 +149,11 @@ const bulkFillDialogVisible = ref(false)
 const completionDialogVisible = ref(false)
 const switchingBusinessDay = ref(false)
 const highlightBlockId = ref('')
-const reportTemplate = ref<LabReportTemplate>(loadLabReportTemplate())
-const smsTemplate = ref<LabReportSmsTemplate>(loadLabReportSmsTemplate())
+const reportTemplate = ref<LabReportTemplate>({
+  ...defaultLabReportTemplate,
+  statements: [...defaultLabReportTemplate.statements]
+})
+const smsTemplate = ref<LabReportSmsTemplate>({ ...defaultLabReportSmsTemplate })
 let businessDayBoundaryTimer: number | undefined
 let businessDayPreflushTimer: number | undefined
 
@@ -384,7 +394,9 @@ async function handleGenerateReport() {
   }
   const saved = await labStore.persistAllBlocks({ silent: true })
   if (!saved.success) return
-  reportTemplate.value = loadLabReportTemplate()
+  reportTemplate.value = canAccessFrontendPreference(authStore.user, 'LAB_REPORT_TEMPLATE')
+    ? frontendPreferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate)
+    : cloneDefaultReportTemplate()
   reportDialogVisible.value = true
 }
 
@@ -398,7 +410,9 @@ async function handleGenerateSms() {
   }
   const saved = await labStore.persistAllBlocks({ silent: true })
   if (!saved.success) return
-  smsTemplate.value = loadLabReportSmsTemplate()
+  smsTemplate.value = canAccessFrontendPreference(authStore.user, 'LAB_REPORT_SMS_TEMPLATE')
+    ? frontendPreferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate)
+    : { ...defaultLabReportSmsTemplate }
   smsDialogVisible.value = true
 }
 
@@ -551,6 +565,13 @@ async function scrollToHighlightedBlock(blockId: string) {
   window.setTimeout(() => {
     document.querySelector(`[data-block-id="${blockId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
   }, 120)
+}
+
+function cloneDefaultReportTemplate(): LabReportTemplate {
+  return {
+    ...defaultLabReportTemplate,
+    statements: [...defaultLabReportTemplate.statements]
+  }
 }
 </script>
 

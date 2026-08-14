@@ -56,18 +56,25 @@ export const defaultLabReportSmsTemplate: LabReportSmsTemplate = {
 }
 
 export function loadLabReportTemplate(): LabReportTemplate {
-  if (typeof window === 'undefined') return { ...defaultLabReportTemplate }
+  if (typeof window === 'undefined') return cloneDefaultLabReportTemplate()
   try {
     const raw = window.localStorage.getItem(LAB_REPORT_TEMPLATE_STORAGE_KEY)
-    if (!raw) return { ...defaultLabReportTemplate }
-    const parsed = JSON.parse(raw) as Partial<LabReportTemplate>
+    if (!raw) return cloneDefaultLabReportTemplate()
+    const parsed = JSON.parse(raw) as Record<string, unknown>
     return {
-      ...defaultLabReportTemplate,
-      ...parsed,
-      statements: parsed.statements?.length ? parsed.statements : [...defaultLabReportTemplate.statements]
+      title: (parsed.title ?? defaultLabReportTemplate.title) as string,
+      sampleUnit: (parsed.sampleUnit ?? defaultLabReportTemplate.sampleUnit) as string,
+      inspector: (parsed.inspector ?? defaultLabReportTemplate.inspector) as string,
+      reviewer: (parsed.reviewer ?? defaultLabReportTemplate.reviewer) as string,
+      address: (parsed.address ?? defaultLabReportTemplate.address) as string,
+      phone: (parsed.phone ?? defaultLabReportTemplate.phone) as string,
+      statements: (Array.isArray(parsed.statements) && parsed.statements.length
+        ? [...parsed.statements]
+        : [...defaultLabReportTemplate.statements]) as string[],
+      sealImage: (parsed.sealImage ?? defaultLabReportTemplate.sealImage) as string
     }
   } catch {
-    return { ...defaultLabReportTemplate }
+    return cloneDefaultLabReportTemplate()
   }
 }
 
@@ -87,14 +94,18 @@ export function loadLabReportSmsTemplate(): LabReportSmsTemplate {
   try {
     const raw = window.localStorage.getItem(LAB_REPORT_SMS_TEMPLATE_STORAGE_KEY)
     if (!raw) return { ...defaultLabReportSmsTemplate }
-    const parsed = JSON.parse(raw) as Partial<LabReportSmsTemplate>
+    const parsed = JSON.parse(raw) as Record<string, unknown>
     return {
-      ...defaultLabReportSmsTemplate,
-      ...parsed
+      prefix: (parsed.prefix ?? defaultLabReportSmsTemplate.prefix) as string,
+      suffix: (parsed.suffix ?? defaultLabReportSmsTemplate.suffix) as string
     }
   } catch {
     return { ...defaultLabReportSmsTemplate }
   }
+}
+
+function cloneDefaultLabReportTemplate(): LabReportTemplate {
+  return { ...defaultLabReportTemplate, statements: [...defaultLabReportTemplate.statements] }
 }
 
 export function saveLabReportSmsTemplate(template: LabReportSmsTemplate) {
@@ -106,46 +117,6 @@ export function saveLabReportSmsTemplate(template: LabReportSmsTemplate) {
       updatedAt: new Date().toISOString()
     })
   )
-}
-
-export function loadLabReportSampleUnits(): string[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(getLabReportSampleUnitStorageKey())
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return normalizeLabReportSampleUnits(Array.isArray(parsed) ? parsed : [])
-  } catch {
-    return []
-  }
-}
-
-export function saveLabReportSampleUnits(units: string[]): string[] {
-  const normalized = normalizeLabReportSampleUnits(units)
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(getLabReportSampleUnitStorageKey(), JSON.stringify(normalized))
-  }
-  return normalized
-}
-
-function getLabReportSampleUnitStorageKey() {
-  let owner = 'guest'
-  try {
-    const rawUser = window.localStorage.getItem('ys_user')
-    const user = rawUser ? (JSON.parse(rawUser) as { id?: string; account?: string }) : null
-    owner = user?.id || user?.account || owner
-  } catch {
-    // Invalid login cache should not prevent the report from being edited.
-  }
-  return `${LAB_REPORT_SAMPLE_UNIT_STORAGE_PREFIX}${owner}`
-}
-
-function normalizeLabReportSampleUnits(units: unknown[]) {
-  const normalized = units
-    .filter((unit): unit is string => typeof unit === 'string')
-    .map((unit) => unit.trim())
-    .filter(Boolean)
-  return [...new Set(normalized)].slice(0, 100)
 }
 
 export function getBlockDisplayName(block: SampleBlock) {
