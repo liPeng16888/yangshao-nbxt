@@ -42,6 +42,40 @@ function memoryStorage(): Storage {
   }
 }
 
+function cacheWriteFailingStorage(): Storage {
+  const storage = memoryStorage()
+  return {
+    get length() { return storage.length },
+    clear: () => storage.clear(),
+    getItem: (key) => storage.getItem(key),
+    key: (index) => storage.key(index),
+    removeItem: (key) => storage.removeItem(key),
+    setItem: (key, value) => {
+      if (key.startsWith('ys_frontend_preferences:')) {
+        throw new DOMException('Storage quota exceeded', 'QuotaExceededError')
+      }
+      storage.setItem(key, value)
+    }
+  }
+}
+
+function cacheReadFailingStorage(): Storage {
+  const storage = memoryStorage()
+  return {
+    get length() { return storage.length },
+    clear: () => storage.clear(),
+    getItem: (key) => {
+      if (key.startsWith('ys_frontend_preferences:')) {
+        throw new DOMException('Storage unavailable', 'SecurityError')
+      }
+      return storage.getItem(key)
+    },
+    key: (index) => storage.key(index),
+    removeItem: (key) => storage.removeItem(key),
+    setItem: (key, value) => storage.setItem(key, value)
+  }
+}
+
 function user(overrides: Partial<AuthUser> = {}): AuthUser {
   return {
     id: 'main-1',
@@ -170,6 +204,62 @@ describe('frontend preference owner sync store', () => {
     await promise
     expect(store.value(smsSection, { prefix: '', suffix: '' }).prefix).toBe('服务器')
     expect(store.statuses[smsSection]).toBe('saved')
+  })
+
+  it('uses server report templates and element groups when the local cache cannot be written', async () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: cacheWriteFailingStorage()
+    })
+    const reportSection = 'LAB_REPORT_TEMPLATE' as const
+    const groupSection = 'LAB_ELEMENT_GROUPS' as const
+    api.listFrontendPreferences.mockResolvedValueOnce([
+      record(reportSection, { title: '服务器模板' }, 8),
+      record(groupSection, [{ id: 'g-1', name: '铝矿', elementKeys: ['aluminum', 'silicon'] }], 3)
+    ])
+    const store = useFrontendPreferencesStore()
+
+    await expect(store.loadAll()).resolves.toBe('loaded')
+
+    expect(store.value(reportSection, { title: '默认模板' })).toEqual({ title: '服务器模板' })
+    expect(store.value(groupSection, [])).toEqual([
+      { id: 'g-1', name: '铝矿', elementKeys: ['aluminum', 'silicon'] }
+    ])
+    expect(store.statuses[reportSection]).toBe('saved')
+    expect(store.statuses[groupSection]).toBe('saved')
+  })
+
+  it('shares a successful server save in memory when the local cache cannot be written', async () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: cacheWriteFailingStorage()
+    })
+    const groupSection = 'LAB_ELEMENT_GROUPS' as const
+    const groups = [{ id: 'g-1', name: '铝矿', elementKeys: ['aluminum', 'silicon'] }]
+    api.saveFrontendPreference.mockResolvedValueOnce(record(groupSection, groups, 1))
+    const store = useFrontendPreferencesStore()
+
+    await expect(store.save(groupSection, groups)).resolves.toBe('saved')
+
+    expect(store.value(groupSection, [])).toEqual(groups)
+    expect(store.statuses[groupSection]).toBe('saved')
+  })
+
+  it('loads server preferences when the local cache cannot be read', async () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: cacheReadFailingStorage()
+    })
+    const reportSection = 'LAB_REPORT_TEMPLATE' as const
+    api.listFrontendPreferences.mockResolvedValueOnce([
+      record(reportSection, { title: '服务器模板' }, 8)
+    ])
+    const store = useFrontendPreferencesStore()
+
+    await expect(store.loadAll()).resolves.toBe('loaded')
+
+    expect(store.value(reportSection, { title: '默认模板' })).toEqual({ title: '服务器模板' })
+    expect(store.statuses[reportSection]).toBe('saved')
   })
 
   it('synchronously switches in-memory values to the authenticated owner before another load', async () => {

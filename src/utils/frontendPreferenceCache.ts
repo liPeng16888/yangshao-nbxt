@@ -14,14 +14,19 @@ export function readFrontendPreferenceCache(
   section: FrontendPreferenceSection
 ): CachedFrontendPreference | null {
   const key = preferenceCacheKey(ownerId, section)
-  const raw = window.localStorage.getItem(key)
+  let raw: string | null
+  try {
+    raw = window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
   if (!raw) return null
 
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch {
-    window.localStorage.removeItem(key)
+    removeFrontendPreferenceCache(ownerId, section)
     return null
   }
 
@@ -32,15 +37,23 @@ export function readFrontendPreferenceCache(
 }
 
 export function writeFrontendPreferenceCache(entry: CachedFrontendPreference) {
-  window.localStorage.setItem(
-    preferenceCacheKey(entry.ownerId, entry.section),
-    JSON.stringify(entry)
-  )
+  try {
+    window.localStorage.setItem(
+      preferenceCacheKey(entry.ownerId, entry.section),
+      JSON.stringify(entry)
+    )
+  } catch {
+    // The server remains authoritative when local storage is full or unavailable.
+  }
 }
 
 export function removeFrontendPreferenceCache(
   ownerId: string,
   section: FrontendPreferenceSection
 ) {
-  window.localStorage.removeItem(preferenceCacheKey(ownerId, section))
+  try {
+    window.localStorage.removeItem(preferenceCacheKey(ownerId, section))
+  } catch {
+    // Cache cleanup is best-effort and must not block live server data.
+  }
 }
