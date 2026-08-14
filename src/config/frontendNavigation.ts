@@ -70,9 +70,8 @@ export const frontendNavigation: FrontendNavigationItem[] = [
   {
     key: 'ATTENDANCE', path: '/employee-attendance', label: '员工考勤', icon: 'attendance',
     children: [
-      { path: '/employee-attendance/overview', label: '考勤概览', permission: 'ATTENDANCE_OVERVIEW' },
+      { path: '/employee-attendance/schedules', label: '排班考勤概览', permission: 'ATTENDANCE_SCHEDULES' },
       { path: '/employee-attendance/employees', label: '员工档案', permission: 'ATTENDANCE_EMPLOYEES' },
-      { path: '/employee-attendance/schedules', label: '排班管理', permission: 'ATTENDANCE_SCHEDULES' },
       { path: '/employee-attendance/records', label: '考勤记录', permission: 'ATTENDANCE_RECORDS' },
       { path: '/employee-attendance/leave', label: '请假管理', permission: 'ATTENDANCE_LEAVE' },
       { path: '/employee-attendance/compensation', label: '提成与奖金', permission: 'ATTENDANCE_COMPENSATION' },

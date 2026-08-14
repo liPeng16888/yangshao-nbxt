@@ -7,14 +7,13 @@ import {
 import { employeeAttendanceColumns } from './employeeAttendanceColumns'
 
 describe('employee attendance admin navigation', () => {
-  it('contains the seven approved read-only pages in their fixed order', () => {
+  it('contains six read-only pages with the merged calendar first', () => {
     expect(employeeAttendanceNavigation.map((item) => item.label)).toEqual([
-      '考勤概览', '员工档案', '排班管理', '考勤记录', '请假管理', '提成与奖金', '工资统计'
+      '排班考勤概览', '员工档案', '考勤记录', '请假管理', '提成与奖金', '工资统计'
     ])
     expect(employeeAttendanceNavigation.map((item) => item.path)).toEqual([
-      '/employee-attendance/overview',
-      '/employee-attendance/employees',
       '/employee-attendance/schedules',
+      '/employee-attendance/employees',
       '/employee-attendance/records',
       '/employee-attendance/leave',
       '/employee-attendance/compensation',
@@ -22,10 +21,11 @@ describe('employee attendance admin navigation', () => {
     ])
   })
 
-  it('resolves unknown paths to overview', () => {
-    expect(defaultEmployeeAttendanceRoute.path).toBe('/employee-attendance/overview')
+  it('resolves unknown and old overview paths to schedules', () => {
+    expect(defaultEmployeeAttendanceRoute.path).toBe('/employee-attendance/schedules')
     expect(resolveEmployeeAttendancePage('/employee-attendance/payroll')).toBe('payroll')
-    expect(resolveEmployeeAttendancePage('/employee-attendance/unknown')).toBe('overview')
+    expect(resolveEmployeeAttendancePage('/employee-attendance/overview')).toBe('schedules')
+    expect(resolveEmployeeAttendancePage('/employee-attendance/unknown')).toBe('schedules')
   })
 
   it('keeps multi-account rows identifiable and includes both punch times', () => {

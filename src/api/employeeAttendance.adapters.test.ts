@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('@/utils/request', () => ({
+  default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
+  useMocks: false
+}))
+
+import request from '@/utils/request'
 import {
   buildEmployeeMutationPayload,
   normalizeAttendanceGenerationResponse,
-  normalizeAttendanceMutationPayload,
+  normalizeAttendanceResponse,
+  normalizeLegacyAttendanceMutationPayload,
   normalizeAttendanceQuery,
   normalizeBonusResponse,
   normalizeCommissionResponse,
@@ -12,14 +20,133 @@ import {
   normalizeEmployeeResponse,
   normalizeLeaveResponse,
   normalizeMonthlySettingResponse,
+  getLeaves,
+  getMonthlySchedules,
+  getScheduleAttendanceOverview,
+  saveMonthlySetting,
+  saveAttendance,
   normalizePayrollAdjustmentResponse,
   normalizePayrollResponse,
+  normalizeScheduleAttendanceOverview,
   selectEmployeeAttendanceGrant,
   toBeijingDateTimeLocal
 } from './employeeAttendance'
-import { verifyAccessGuardGroup } from './accessGuard'
+import { ACCESS_GUARD_SESSION_KEY, verifyAccessGuardGroup } from './accessGuard'
+
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>()
+  return {
+    get length() { return values.size },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, value)
+  }
+}
 
 describe('employee attendance real API adapters', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: createMemoryStorage() })
+    vi.mocked(request.get).mockReset()
+    vi.mocked(request.post).mockReset()
+    vi.mocked(request.post).mockResolvedValue({ expiresAt: Date.now() + 60_000, token: 'mock-access-grant:attendance-group:1', groupId: 'attendance-group', grantVersion: 1, features: [] })
+    window.localStorage.clear()
+  })
+
+  it('normalizes monthly schedules and sends selected leave employee ids', async () => {
+    vi.mocked(request.get)
+      .mockResolvedValueOnce([{ id: 'day-1', employeeId: 'emp-1', date: '2026-08-03', isWorkday: true, scheduledMinutes: '480', breakMinutes: '60', segments: [{ sequence: 1, startTime: '13:00', endTime: '17:00' }, { sequence: 0, startTime: '08:00', endTime: '12:00' }] }])
+      .mockResolvedValueOnce([])
+
+    await expect(getMonthlySchedules('emp-1', '2026-08')).resolves.toEqual([{
+      id: 'day-1', employeeId: 'emp-1', date: '2026-08-03', isWorkday: true, scheduledMinutes: 480, breakMinutes: 60,
+      segments: [{ sequence: 0, startTime: '08:00', endTime: '12:00' }, { sequence: 1, startTime: '13:00', endTime: '17:00' }]
+    }])
+    await getLeaves({ employeeIds: ['emp-1', 'emp-2'], month: '2026-08' })
+    expect(request.get).toHaveBeenCalledWith('/employee-attendance/leaves', {
+      params: expect.objectContaining({ employeeIds: 'emp-1,emp-2', month: '2026-08' })
+    })
+  })
+
+  it('forwards the current attendance grant on representative schedule, attendance and leave routes through the shared adapter', async () => {
+    window.localStorage.setItem(ACCESS_GUARD_SESSION_KEY, JSON.stringify({
+      attendance: {
+        groupId: 'attendance', grantVersion: 1, expiresAt: Date.now() + 60_000,
+        token: 'attendance-grant', features: ['EMPLOYEE_ATTENDANCE']
+      }
+    }))
+    vi.mocked(request.get).mockResolvedValueOnce([]).mockResolvedValueOnce([])
+    vi.mocked(request.post).mockResolvedValueOnce({
+      id: 'attendance-1', employeeId: 'emp-1', date: '2026-08-03',
+      actualSegments: [], explicitAbsenceMinutes: 0, absenceMinutes: 0
+    })
+
+    await getMonthlySchedules('emp-1', '2026-08')
+    await saveAttendance({ employeeId: 'emp-1', date: '2026-08-03', actualSegments: [], explicitAbsenceMinutes: 0, overtimeMinutes: 0 })
+    await getLeaves({ employeeIds: ['emp-1'] })
+
+    const headers = { 'X-YS-Access-Grant': 'attendance-grant' }
+    expect(request.get).toHaveBeenNthCalledWith(1, '/employee-attendance/monthly-schedules', { params: { employeeId: 'emp-1', month: '2026-08' }, headers })
+    expect(request.post).toHaveBeenCalledWith('/employee-attendance/attendance', expect.any(Object), { headers })
+    expect(request.get).toHaveBeenNthCalledWith(2, '/employee-attendance/leaves', { params: { employeeIds: 'emp-1' }, headers })
+  })
+
+  it('requests the unified schedule attendance endpoint with an optional employee and the current attendance grant', async () => {
+    window.localStorage.setItem(ACCESS_GUARD_SESSION_KEY, JSON.stringify({
+      attendance: {
+        groupId: 'attendance', grantVersion: 1, expiresAt: Date.now() + 60_000,
+        token: 'attendance-grant', features: ['EMPLOYEE_ATTENDANCE']
+      }
+    }))
+    const response = {
+      month: '2026-08', readonly: false, employee: null, days: [],
+      overview: {
+        month: '2026-08', activeEmployees: 0, todayPresent: 0, todayOnLeave: 0,
+        todayAbsent: 0, overtimeHours: 0, pendingLeaves: 0, projectedPayroll: 0,
+        issueCount: 0, issues: []
+      }
+    }
+    vi.mocked(request.get).mockResolvedValue(response)
+
+    await getScheduleAttendanceOverview('emp-1', '2026-08')
+    await getScheduleAttendanceOverview(undefined, '2026-08')
+
+    const headers = { 'X-YS-Access-Grant': 'attendance-grant' }
+    expect(request.get).toHaveBeenNthCalledWith(1, '/employee-attendance/schedule-attendance-overview', {
+      params: { employeeId: 'emp-1', month: '2026-08' }, headers
+    })
+    expect(request.get).toHaveBeenNthCalledWith(2, '/employee-attendance/schedule-attendance-overview', {
+      params: { month: '2026-08' }, headers
+    })
+  })
+
+  it('sends only the editable monthly rest quota and receives a server-derived workday count', async () => {
+    vi.mocked(request.post).mockResolvedValueOnce({ id: 'ms-1', employeeId: 'emp-1', month: '2026-08', restQuotaDays: '3', scheduledWorkDays: '21' })
+    await expect(saveMonthlySetting({ employeeId: 'emp-1', month: '2026-08', restQuotaDays: 3 })).resolves.toMatchObject({ restQuotaDays: 3, scheduledWorkDays: 21 })
+    expect(request.post).toHaveBeenCalledWith('/employee-attendance/month-settings', { employeeId: 'emp-1', month: '2026-08', restQuotaDays: 3 }, {})
+  })
+
+  it('normalizes ordered actual attendance segments and numeric totals', () => {
+    expect(normalizeAttendanceResponse({ id: 'att-1', employeeId: 'emp-1', date: '2026-08-03', isScheduledWorkday: true, scheduledMinutes: '480', workedMinutes: '450', lateMinutes: '10', earlyLeaveMinutes: '20', absenceMinutes: '30', overtimeMinutes: '45', actualSegments: [{ sequence: 1, checkInAt: '2026-08-03T13:00:00+08:00', checkOutAt: '2026-08-03T17:00:00+08:00' }, { sequence: 0, checkInAt: '2026-08-03T08:00:00+08:00', checkOutAt: '2026-08-03T12:00:00+08:00' }] }))
+      .toMatchObject({ scheduledMinutes: 480, workedMinutes: 450, lateMinutes: 10, earlyLeaveMinutes: 20, absenceMinutes: 30, overtimeMinutes: 45, actualSegments: [{ sequence: 0 }, { sequence: 1 }] })
+  })
+
+  it('preserves server absence as explicit absence only when no actual intervals exist', () => {
+    expect(normalizeAttendanceResponse({ id: 'manual-absence', employeeId: 'emp-1', date: '2026-08-03', absenceMinutes: 120, explicitAbsenceMinutes: 45, actualSegments: [] }))
+      .toMatchObject({ actualSegments: [], absenceMinutes: 120, explicitAbsenceMinutes: 45 })
+    expect(normalizeAttendanceResponse({ id: 'derived-absence', employeeId: 'emp-1', date: '2026-08-03', absenceMinutes: 120, explicitAbsenceMinutes: 45, actualSegments: [{ checkInAt: '2026-08-03T08:00:00+08:00', checkOutAt: '2026-08-03T16:00:00+08:00' }] }))
+      .toMatchObject({ absenceMinutes: 120, explicitAbsenceMinutes: 45 })
+  })
+
+  it('sends the DTO-shaped actual-segment attendance payload through the public save adapter', async () => {
+    vi.mocked(request.post).mockResolvedValueOnce({ id: 'att-1', employeeId: 'emp-1', date: '2026-08-03', isScheduledWorkday: true, scheduledMinutes: 480, actualSegments: [], explicitAbsenceMinutes: 30, absenceMinutes: 30 })
+    await expect(saveAttendance({ employeeId: 'emp-1', date: '2026-08-03', actualSegments: [], explicitAbsenceMinutes: 30, overtimeMinutes: 0 })).resolves.toMatchObject({ actualSegments: [], absenceMinutes: 30 })
+    expect(request.post).toHaveBeenCalledWith('/employee-attendance/attendance', {
+      employeeId: 'emp-1', date: '2026-08-03', actualSegments: [], explicitAbsenceMinutes: 30, overtimeMinutes: 0
+    }, {})
+  })
+
   it('omits blank sensitive fields from edits while retaining explicit changes', () => {
     const payload = buildEmployeeMutationPayload({ employeeNumber: 'YG001', name: '张三', hireDate: '2026-01-01', idCard: '', bankCard: ' ', address: '新地址', emergencyContact: '' }, true)
     expect(payload).toEqual(expect.objectContaining({ employeeNumber: 'YG001', address: '新地址' }))
@@ -53,7 +180,7 @@ describe('employee attendance real API adapters', () => {
   })
 
   it('serializes datetime-local punches with a fixed Beijing offset and restores Beijing wall time for editing', () => {
-    const payload = normalizeAttendanceMutationPayload({
+    const payload = normalizeLegacyAttendanceMutationPayload({
       employeeId: 'e1', date: '2026-08-08', isScheduledWorkday: true, scheduledMinutes: 480,
       checkInAt: '2026-08-08T08:05', checkOutAt: '2026-08-08T17:30'
     })
@@ -62,7 +189,7 @@ describe('employee attendance real API adapters', () => {
       checkOutAt: '2026-08-08T17:30:00+08:00'
     })
     expect(toBeijingDateTimeLocal('2026-08-08T00:05:00Z')).toBe('2026-08-08T08:05')
-    expect(normalizeAttendanceMutationPayload({
+    expect(normalizeLegacyAttendanceMutationPayload({
       employeeId: 'e1', date: '2026-08-08', isScheduledWorkday: true, scheduledMinutes: 480,
       checkInAt: '', checkOutAt: ''
     })).toMatchObject({ checkInAt: null, checkOutAt: null })
@@ -72,6 +199,17 @@ describe('employee attendance real API adapters', () => {
     expect(() => normalizeAttendanceQuery({ month: '2026-08', startDate: '2026-08-01', endDate: '2026-08-31' }))
       .toThrow('月份和日期范围不能同时筛选')
     expect(normalizeAttendanceQuery({ month: '2026-08' })).toEqual({ month: '2026-08' })
+  })
+
+  it('rejects unknown calendar semantics and malformed nested schedules', () => {
+    const valid = {
+      month: '2026-08', readonly: false, employee: null,
+      overview: { month: '2026-08', workforce: 0, todayAttendance: 0, todayLeave: 0, todayAbsence: 0, overtimeMinutes: 0, pendingLeave: 0, projectedPayroll: 0, issueCount: 0, issues: [] },
+      days: [{ date: '2026-08-01', day: 1, isFuture: false, status: 'NORMAL', schedule: null, actualSegments: [], scheduledMinutes: 0, workedMinutes: 0, approvedLeaveMinutes: 0, overtimeMinutes: 0, displayMinutes: 0, shortageMinutes: 0, durationText: '0 小时', leaveTypeName: '', leaveReason: '', absenceReason: '', backgroundTone: 'normal', durationTone: 'normal' }]
+    }
+    expect(() => normalizeScheduleAttendanceOverview({ ...valid, days: [{ ...valid.days[0], status: 'BOGUS' }] })).toThrow('响应格式无效')
+    expect(() => normalizeScheduleAttendanceOverview({ ...valid, days: [{ ...valid.days[0], backgroundTone: 'danger' }] })).toThrow('响应格式无效')
+    expect(() => normalizeScheduleAttendanceOverview({ ...valid, days: [{ ...valid.days[0], schedule: { id: 's1', employeeId: 'e1', date: '2026-08-01', isWorkday: true, segments: 'not-an-array' } }] })).toThrow('响应格式无效')
   })
 
   it('provides a mock grant token that can be tagged with attendance features', async () => {

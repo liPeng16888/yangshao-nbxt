@@ -13,6 +13,8 @@ import type {
   AdminAttendanceOverview,
   AdminAttendancePayrollRun,
   AdminAttendanceSchedules,
+  AdminScheduleAttendanceOverview,
+  AdminAttendanceCalendarDay,
   AdminCustomerOverviewRow,
   AdminFrontendAccount,
   AdminEmployeeAttendanceQuery,
@@ -370,23 +372,41 @@ const mockEmployeeAttendance = {
     'emp-3': { idCard: '410000199303033456', bankCard: '6222023456789012', address: '郑州市金水区', emergencyContact: '王父 13800001003' }
   } as Record<string, { idCard: string; bankCard: string; address: string; emergencyContact: string }>,
   schedules: {
-    weekly: [
-      { id: 'weekly-1', frontendUserId: 'front-1', employeeId: 'emp-1', weekday: 1, isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480 },
-      { id: 'weekly-2', frontendUserId: 'front-2', employeeId: 'emp-3', weekday: 1, isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '16:00', scheduledMinutes: 480 }
-    ],
-    overrides: [
-      { id: 'override-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-09', isWorkday: true, plannedStartTime: '08:00', plannedEndTime: '14:00', scheduledMinutes: 360, remark: '临时值班' }
-    ],
-    monthly: [
-      { id: 'month-1', frontendUserId: 'front-1', employeeId: 'emp-1', month: '2026-08', scheduledWorkDays: 22, restQuotaDays: 4 }
+    days: [
+      {
+        id: 'schedule-day-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', isWorkday: true,
+        scheduledMinutes: 600, breakMinutes: 0, remark: '常规班', segments: [{ sequence: 0, startTime: '08:00', endTime: '18:00' }],
+        employee: { employeeNumber: 'YG001', name: '张三' }, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+      },
+      ...['2026-08-04', '2026-08-06', '2026-08-07', '2026-08-09', '2026-08-20'].map((date, index) => ({
+        id: `schedule-parity-${index}`, frontendUserId: 'front-1', employeeId: 'emp-1', date, isWorkday: true,
+        scheduledMinutes: 600, breakMinutes: 0, remark: '', segments: [{ sequence: 0, startTime: '08:00', endTime: '18:00' }],
+        employee: { employeeNumber: 'YG001', name: '张三' }, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+      })),
+      {
+        id: 'schedule-day-2', frontendUserId: 'front-1', employeeId: 'emp-2', date: '2026-08-09', isWorkday: false,
+        scheduledMinutes: 0, breakMinutes: 0, remark: '休息', segments: [],
+        employee: { employeeNumber: 'YG002', name: '李四' }, frontendUser: { account: 'kaili001', username: '凯里化验室', displayRemark: '' }
+      },
+      {
+        id: 'schedule-day-3', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', isWorkday: true,
+        scheduledMinutes: 480, breakMinutes: 0, remark: '', segments: [{ sequence: 0, startTime: '08:00', endTime: '16:00' }],
+        employee: { employeeNumber: 'YG001', name: '王五' }, frontendUser: { account: 'yangshao002', username: '仰韶客户二', displayRemark: '' }
+      }
     ]
   },
   attendance: [
-    { id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 510, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' } },
-    { id: 'attendance-2', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 470, lateMinutes: 10, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '王五' } }
+    {
+      id: 'attendance-1', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-08', scheduledMinutes: 600, workedMinutes: 600, lateMinutes: 0, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 0, absenceMinutes: 0, overtimeMinutes: 30, remark: '', employee: { employeeNumber: 'YG001', name: '张三' },
+      actualSegments: [{ sequence: 0, checkInAt: '2026-08-08T08:00:00+08:00', checkOutAt: '2026-08-08T18:00:00+08:00' }]
+    },
+    { id: 'attendance-short', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-06', scheduledMinutes: 600, workedMinutes: 540, lateMinutes: 0, earlyLeaveMinutes: 60, explicitAbsenceMinutes: 0, absenceMinutes: 60, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '张三' }, actualSegments: [{ sequence: 0, checkInAt: '2026-08-06T08:00:00+08:00', checkOutAt: '2026-08-06T17:00:00+08:00' }] },
+    { id: 'attendance-absent', frontendUserId: 'front-1', employeeId: 'emp-1', date: '2026-08-09', scheduledMinutes: 600, workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 600, absenceMinutes: 600, overtimeMinutes: 0, remark: '无故未到', employee: { employeeNumber: 'YG001', name: '张三' }, actualSegments: [] },
+    { id: 'attendance-2', frontendUserId: 'front-2', employeeId: 'emp-3', date: '2026-08-08', scheduledMinutes: 480, workedMinutes: 470, lateMinutes: 10, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', employee: { employeeNumber: 'YG001', name: '王五' } }
   ],
   leaves: [
-    { id: 'leave-1', frontendUserId: 'front-1', employeeId: 'emp-2', leaveTypeId: 'leave-type-1', startDate: '2026-08-08', endDate: '2026-08-08', unit: 'HALF_DAY', countedDays: 0.5, reason: '个人事务', status: 'PENDING', reviewRemark: '', employee: { employeeNumber: 'YG002', name: '李四' }, leaveType: { id: 'leave-type-1', name: '事假' } }
+    { id: 'leave-1', frontendUserId: 'front-1', employeeId: 'emp-2', leaveTypeId: 'leave-type-1', startDate: '2026-08-08', endDate: '2026-08-08', unit: 'HALF_DAY', countedDays: 0.5, reason: '个人事务', status: 'PENDING', reviewRemark: '', employee: { employeeNumber: 'YG002', name: '李四' }, leaveType: { id: 'leave-type-1', name: '事假' } },
+    { id: 'leave-parity', frontendUserId: 'front-1', employeeId: 'emp-1', leaveTypeId: 'leave-type-1', startDate: '2026-08-07', endDate: '2026-08-07', unit: 'HOUR', countedDays: 0.4, reason: '照顾家人', status: 'APPROVED', reviewRemark: '', employee: { employeeNumber: 'YG001', name: '张三' }, leaveType: { id: 'leave-type-1', name: '事假' } }
   ],
   commissions: [
     { id: 'commission-1', frontendUserId: 'front-1', employeeId: 'emp-1', commissionTypeId: 'commission-type-1', date: '2026-08-08', quantity: 8, unitPriceSnapshot: 12, amount: 96, remark: '当日送样', employee: { employeeNumber: 'YG001', name: '张三' }, commissionType: { id: 'commission-type-1', name: '送样提成' } }
@@ -418,37 +438,98 @@ function mockAuthorizedFrontendIds() {
 function mockAttendanceIds(config?: AdminRequestConfig) {
   const permitted = mockAuthorizedFrontendIds()
   const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
-  return requested.length ? requested.filter((id) => permitted.includes(id)) : permitted
+  if (requested.length && mockAdminUser().role === 'SUB_ADMIN' && requested.some((id) => !permitted.includes(id))) {
+    throw new Error('没有访问部分前端账号的权限')
+  }
+  return requested.length ? requested : permitted
 }
 
 function assertExclusiveAttendanceDateFilter(config?: AdminRequestConfig) {
   if (config?.params?.month && (config.params.startDate || config.params.endDate)) throw new Error('月份和日期范围不能同时筛选')
 }
 
-function mockAttendanceEntityFilter<T extends Record<string, unknown>>(rows: T[], config?: AdminRequestConfig) {
-  const ids = mockAttendanceIds(config)
-  const employeeId = String(config?.params?.employeeId || '')
-  return rows.filter((row) => ids.includes(String(row.frontendUserId)) && (!employeeId || row.employeeId === employeeId))
-}
-
 function mockMonthlyScheduleFilter(config?: AdminRequestConfig) {
-  const ids = mockAttendanceIds(config)
-  const employeeId = String(config?.params?.employeeId || '')
-  const month = String(config?.params?.month || '')
-  return mockEmployeeAttendance.schedules.monthly.filter((row) => ids.includes(row.frontendUserId)
-    && (!employeeId || row.employeeId === employeeId)
-    && (!month || row.month === month))
-}
-
-function mockScheduleOverrideFilter(config?: AdminRequestConfig) {
   const ids = mockAttendanceIds(config)
   const employeeId = String(config?.params?.employeeId || '')
   const month = String(config?.params?.month || '')
   const startDate = String(config?.params?.startDate || '')
   const endDate = String(config?.params?.endDate || '')
-  return mockEmployeeAttendance.schedules.overrides.filter((row) => ids.includes(row.frontendUserId)
+  return mockEmployeeAttendance.schedules.days.filter((row) => ids.includes(row.frontendUserId)
     && (!employeeId || row.employeeId === employeeId)
     && (month ? row.date.startsWith(month) : (!startDate || row.date >= startDate) && (!endDate || row.date <= endDate)))
+    .slice()
+    .sort((left, right) => right.date.localeCompare(left.date) || left.employeeId.localeCompare(right.employeeId) || left.id.localeCompare(right.id))
+}
+
+function mockAdminScheduleAttendanceOverview(config?: AdminRequestConfig): AdminScheduleAttendanceOverview {
+  const ids = mockAttendanceIds(config)
+  const employeeId = String(config?.params?.employeeId || '')
+  const month = String(config?.params?.month || '')
+  const employee = employeeId ? mockEmployeeAttendance.employees.find((row) => row.id === employeeId && ids.includes(row.frontendUserId)) : undefined
+  if (employeeId && !employee) throw new Error('员工不存在或无权查看')
+  const monthRows = mockEmployeeAttendance.attendance.filter((row) => ids.includes(row.frontendUserId) && row.date.startsWith(month))
+  const pendingLeaves = mockEmployeeAttendance.leaves.filter((row) => ids.includes(row.frontendUserId) && row.status === 'PENDING' && row.startDate <= `${month}-31` && row.endDate >= `${month}-01`).length
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  const activeIds = new Set(mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE' && row.hireDate <= today && (!row.terminationDate || String(row.terminationDate) >= today)).map((row) => row.id))
+  const todayClassifications = mockEmployeeAttendance.schedules.days
+    .filter((row) => ids.includes(row.frontendUserId) && activeIds.has(row.employeeId) && row.date === today && row.isWorkday && row.scheduledMinutes > 0)
+    .map((schedule) => {
+      const leaveMinutes = mockEmployeeAttendance.leaves.filter((row) => row.employeeId === schedule.employeeId && row.status === 'APPROVED' && row.startDate <= today && row.endDate >= today)
+        .reduce((sum, leave) => sum + (leave.unit === 'FULL_DAY' ? schedule.scheduledMinutes : leave.unit === 'HALF_DAY' ? Math.round(schedule.scheduledMinutes / 2) : Math.round(schedule.scheduledMinutes * Number(leave.countedDays || 0))), 0)
+      if (leaveMinutes > 0) return 'LEAVE'
+      const record = mockEmployeeAttendance.attendance.find((row) => row.employeeId === schedule.employeeId && row.date === today)
+      return record && !(record.actualSegments || []).length && Number(record.absenceMinutes || 0) >= schedule.scheduledMinutes ? 'ABSENT' : 'PRESENT'
+    })
+  const payrollRows = mockEmployeeAttendance.payroll.filter((row) => ids.includes(row.frontendUserId) && row.month === month)
+  const projectedPayroll = payrollRows.length
+    ? payrollRows.reduce((sum, row) => sum + row.items.reduce((itemSum, item) => itemSum + Number(item.payableAmount || 0), 0), 0)
+    : mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE').reduce((sum, row) => sum + Number(row.baseSalary) + Number(row.attendanceBonus), 0)
+  const overview = {
+    month,
+    activeEmployees: mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE').length,
+    todayPresent: todayClassifications.filter((value) => value === 'PRESENT').length,
+    todayOnLeave: todayClassifications.filter((value) => value === 'LEAVE').length,
+    todayAbsent: todayClassifications.filter((value) => value === 'ABSENT').length,
+    overtimeHours: Number((monthRows.reduce((sum, row) => sum + Number(row.overtimeMinutes || 0), 0) / 60).toFixed(2)),
+    pendingLeaves, projectedPayroll, issueCount: pendingLeaves, issues: pendingLeaves ? [`${pendingLeaves} 条请假待审批`] : []
+  }
+  if (!employee) return { month, employee: null, days: [], overview, readonly: true }
+  const dayCount = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate()
+  const days: AdminAttendanceCalendarDay[] = Array.from({ length: dayCount }, (_, index) => {
+    const date = `${month}-${String(index + 1).padStart(2, '0')}`
+    const sourceSchedule = mockEmployeeAttendance.schedules.days.find((row) => row.employeeId === employee.id && row.date === date)
+    const schedule = sourceSchedule ? {
+      id: sourceSchedule.id, employeeId: sourceSchedule.employeeId, date: sourceSchedule.date, isWorkday: sourceSchedule.isWorkday,
+      scheduledMinutes: sourceSchedule.scheduledMinutes, breakMinutes: sourceSchedule.breakMinutes, segments: sourceSchedule.segments, remark: sourceSchedule.remark || ''
+    } : null
+    const record = mockEmployeeAttendance.attendance.find((row) => row.employeeId === employee.id && row.date === date)
+    const leaves = mockEmployeeAttendance.leaves.filter((row) => row.employeeId === employee.id && row.status === 'APPROVED' && row.startDate <= date && row.endDate >= date)
+    const scheduledMinutes = schedule?.isWorkday ? schedule.scheduledMinutes : 0
+    const approvedLeaveMinutes = Math.min(scheduledMinutes, leaves.reduce((sum, leave) => sum + (leave.unit === 'FULL_DAY' ? scheduledMinutes : leave.unit === 'HALF_DAY' ? Math.round(scheduledMinutes / 2) : Math.round(scheduledMinutes * Number(leave.countedDays || 0))), 0))
+    const isFuture = date > today
+    const workedMinutes = record ? Math.min(scheduledMinutes, Number(record.workedMinutes || 0)) : Math.max(0, scheduledMinutes - approvedLeaveMinutes)
+    const overtimeMinutes = Number(record?.overtimeMinutes || 0)
+    const shortageMinutes = Math.max(0, scheduledMinutes - Math.min(scheduledMinutes, workedMinutes + approvedLeaveMinutes))
+    const fullAbsence = Boolean(record && !(record.actualSegments || []).length && Number(record.absenceMinutes || 0) >= scheduledMinutes && scheduledMinutes > 0 && !approvedLeaveMinutes)
+    const status = isFuture ? 'FUTURE' : !schedule?.isWorkday ? 'REST' : fullAbsence ? 'ABSENT' : approvedLeaveMinutes ? 'LEAVE' : shortageMinutes ? 'SHORT' : overtimeMinutes ? 'OVERTIME' : 'NORMAL'
+    const credited = Math.min(scheduledMinutes, workedMinutes + approvedLeaveMinutes)
+    const displayMinutes = isFuture ? scheduledMinutes : status === 'REST' ? 0 : credited + overtimeMinutes
+    const hours = (minutes: number) => { const value = minutes / 60; return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '') }
+    const parts = isFuture || status === 'REST' ? [] : [workedMinutes ? `工作${hours(workedMinutes)}` : '', approvedLeaveMinutes ? `请假${hours(approvedLeaveMinutes)}` : '', overtimeMinutes ? `加班${hours(overtimeMinutes)}` : ''].filter(Boolean)
+    return {
+      date, day: index + 1, isFuture, status, schedule, actualSegments: record?.actualSegments || [],
+      scheduledMinutes: isFuture ? scheduledMinutes : status === 'REST' ? 0 : scheduledMinutes,
+      workedMinutes: isFuture || status === 'REST' ? 0 : workedMinutes, approvedLeaveMinutes: isFuture || status === 'REST' ? 0 : approvedLeaveMinutes,
+      overtimeMinutes: isFuture || status === 'REST' ? 0 : overtimeMinutes, displayMinutes,
+      shortageMinutes: isFuture || status === 'REST' ? 0 : shortageMinutes,
+      durationText: status === 'REST' ? '公司排休' : `${hours(displayMinutes)} 小时${parts.length ? `（${parts.join('＋')}）` : ''}`,
+      leaveTypeName: leaves[0]?.leaveType?.name || '', leaveReason: leaves[0]?.reason || '',
+      absenceReason: status === 'ABSENT' ? record?.remark || '未填写原因' : '',
+      backgroundTone: status === 'FUTURE' ? 'future' : status === 'REST' ? 'rest' : status === 'LEAVE' ? 'leave' : status === 'ABSENT' ? 'absent' : 'normal',
+      durationTone: shortageMinutes && status !== 'ABSENT' ? 'short' : status === 'OVERTIME' ? 'overtime' : status === 'ABSENT' ? 'absent' : status === 'LEAVE' ? 'leave' : status === 'REST' ? 'rest' : status === 'FUTURE' ? 'future' : 'normal'
+    }
+  })
+  return { month, employee: { id: employee.id, employeeNumber: employee.employeeNumber, name: employee.name }, days, overview, readonly: true }
 }
 
 function isEmployeeAttendanceAdminPath(url: string) {
@@ -774,7 +855,7 @@ function parseHistoryFields(value: unknown) {
 
 const mockRequest = {
   async get(url: string, config?: AdminRequestConfig) {
-    if (isEmployeeAttendanceAdminPath(url)) assertExclusiveAttendanceDateFilter(config)
+    if (isEmployeeAttendanceAdminPath(url) && url !== '/admin/employee-attendance/schedules') assertExclusiveAttendanceDateFilter(config)
     const prepaidMatch = url.match(/^\/admin\/shared-prepaid\/(recharges|members|consumptions|settlements)(?:\/([^/]+))?$/)
     if (prepaidMatch) {
       return mockSharedPrepaidResponse(
@@ -812,12 +893,9 @@ const mockRequest = {
       return mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && (!employeeId || row.id === employeeId) && (!status || row.status === status))
     }
     if (url === '/admin/employee-attendance/schedules') {
-      return {
-        weekly: mockAttendanceEntityFilter(mockEmployeeAttendance.schedules.weekly, config),
-        overrides: mockScheduleOverrideFilter(config),
-        monthly: mockMonthlyScheduleFilter(config)
-      }
+      return mockMonthlyScheduleFilter(config)
     }
+    if (url === '/admin/employee-attendance/schedule-attendance-overview') return mockAdminScheduleAttendanceOverview(config)
     if (url === '/admin/employee-attendance/attendance') return mockAttendanceFilter(mockEmployeeAttendance.attendance, config)
     if (url === '/admin/employee-attendance/leaves') return mockAttendanceFilter(mockEmployeeAttendance.leaves, config, ['startDate', 'endDate'])
     if (url === '/admin/employee-attendance/commissions') return mockAttendanceFilter(mockEmployeeAttendance.commissions, config)
@@ -973,6 +1051,7 @@ const mockRequest = {
   },
   async put(url: string) {
     if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
+    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     return { ok: true }
   },
   async patch(url: string, payload?: any) {
@@ -1099,14 +1178,14 @@ export function getAdminMedicineOutbounds(
   })
 }
 
-function employeeAttendanceParams(query: AdminEmployeeAttendanceQuery) {
-  if (query.month && (query.startDate || query.endDate)) throw new Error('月份和日期范围不能同时筛选')
+function employeeAttendanceParams(query: AdminEmployeeAttendanceQuery, monthWins = false) {
+  if (!monthWins && query.month && (query.startDate || query.endDate)) throw new Error('月份和日期范围不能同时筛选')
   return {
     frontendUserIds: buildFrontendIds(query.frontendUserIds),
     ...(query.employeeId ? { employeeId: query.employeeId } : {}),
     ...(query.month ? { month: query.month } : {}),
-    ...(query.startDate ? { startDate: query.startDate } : {}),
-    ...(query.endDate ? { endDate: query.endDate } : {}),
+    ...(!monthWins || !query.month ? (query.startDate ? { startDate: query.startDate } : {}) : {}),
+    ...(!monthWins || !query.month ? (query.endDate ? { endDate: query.endDate } : {}) : {}),
     ...(query.status ? { status: query.status } : {})
   }
 }
@@ -1132,7 +1211,50 @@ export async function getAdminAttendanceEmployees(query: AdminEmployeeAttendance
 }
 
 export async function getAdminAttendanceSchedules(query: AdminEmployeeAttendanceQuery) {
-  return request.get<any, AdminAttendanceSchedules>('/admin/employee-attendance/schedules', { params: employeeAttendanceParams(query) })
+  return request.get<any, AdminAttendanceSchedules>('/admin/employee-attendance/schedules', { params: employeeAttendanceParams(query, true) })
+}
+
+function adminRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('后台排班考勤概览响应格式无效')
+  return value as Record<string, unknown>
+}
+
+export function normalizeAdminScheduleAttendanceOverview(value: unknown): AdminScheduleAttendanceOverview {
+  const row = adminRecord(value)
+  if (typeof row.month !== 'string' || row.readonly !== true || !Array.isArray(row.days)) throw new Error('后台排班考勤概览响应格式无效')
+  const overview = adminRecord(row.overview)
+  const statuses = ['FUTURE', 'ABSENT', 'LEAVE', 'REST', 'NORMAL', 'OVERTIME', 'SHORT'] as const
+  const tones = ['future', 'normal', 'leave', 'absent', 'rest', 'overtime', 'short'] as const
+  const days = row.days.map((value): AdminAttendanceCalendarDay => {
+    const day = adminRecord(value)
+    if (typeof day.date !== 'string' || !statuses.includes(day.status as typeof statuses[number]) || !tones.includes(day.backgroundTone as typeof tones[number]) || !tones.includes(day.durationTone as typeof tones[number]) || !Array.isArray(day.actualSegments)) throw new Error('后台排班考勤概览响应格式无效')
+    const scheduleRow = day.schedule ? adminRecord(day.schedule) : null
+    if (scheduleRow && (typeof scheduleRow.id !== 'string' || typeof scheduleRow.employeeId !== 'string' || typeof scheduleRow.date !== 'string' || !Array.isArray(scheduleRow.segments))) throw new Error('后台排班考勤概览响应格式无效')
+    const schedule = scheduleRow ? {
+      id: scheduleRow.id as string, employeeId: scheduleRow.employeeId as string, date: scheduleRow.date as string, isWorkday: Boolean(scheduleRow.isWorkday),
+      scheduledMinutes: Number(scheduleRow.scheduledMinutes || 0), breakMinutes: Number(scheduleRow.breakMinutes || 0), remark: String(scheduleRow.remark || ''),
+      segments: (scheduleRow.segments as unknown[]).map((value, index) => { const segment = adminRecord(value); return { sequence: Number(segment.sequence ?? index), startTime: String(segment.startTime || ''), endTime: String(segment.endTime || '') } })
+    } : null
+    return {
+      date: day.date, day: Number(day.day || 0), isFuture: Boolean(day.isFuture), status: day.status as AdminAttendanceCalendarDay['status'], schedule,
+      actualSegments: (day.actualSegments as unknown[]).map((value, index) => { const segment = adminRecord(value); return { sequence: Number(segment.sequence ?? index), checkInAt: String(segment.checkInAt || ''), checkOutAt: String(segment.checkOutAt || '') } }),
+      scheduledMinutes: Number(day.scheduledMinutes || 0), workedMinutes: Number(day.workedMinutes || 0), approvedLeaveMinutes: Number(day.approvedLeaveMinutes || 0), overtimeMinutes: Number(day.overtimeMinutes || 0), displayMinutes: Number(day.displayMinutes || 0), shortageMinutes: Number(day.shortageMinutes || 0),
+      durationText: String(day.durationText || ''), leaveTypeName: String(day.leaveTypeName || ''), leaveReason: String(day.leaveReason || ''), absenceReason: String(day.absenceReason || ''), backgroundTone: day.backgroundTone as AdminAttendanceCalendarDay['backgroundTone'], durationTone: day.durationTone as AdminAttendanceCalendarDay['durationTone']
+    }
+  })
+  const employee = row.employee ? adminRecord(row.employee) : null
+  return {
+    month: row.month, employee: employee ? { id: String(employee.id || ''), employeeNumber: String(employee.employeeNumber || ''), name: String(employee.name || '') } : null, days,
+    overview: { month: String(overview.month || row.month), activeEmployees: Number(overview.activeEmployees ?? overview.workforce ?? 0), todayPresent: Number(overview.todayPresent ?? overview.todayAttendance ?? 0), todayOnLeave: Number(overview.todayOnLeave ?? overview.todayLeave ?? 0), todayAbsent: Number(overview.todayAbsent ?? overview.todayAbsence ?? 0), overtimeHours: Number(overview.overtimeHours ?? Number(overview.overtimeMinutes || 0) / 60), pendingLeaves: Number(overview.pendingLeaves ?? overview.pendingLeave ?? 0), projectedPayroll: Number(overview.projectedPayroll || 0), issueCount: Number(overview.issueCount || 0), issues: Array.isArray(overview.issues) ? overview.issues.map(String) : [] },
+    readonly: true
+  }
+}
+
+export async function getAdminScheduleAttendanceOverview(query: AdminEmployeeAttendanceQuery) {
+  if (!query.month) throw new Error('月份必填')
+  return request.get<unknown, unknown>('/admin/employee-attendance/schedule-attendance-overview', { params: {
+    frontendUserIds: buildFrontendIds(query.frontendUserIds), ...(query.employeeId ? { employeeId: query.employeeId } : {}), month: query.month
+  } }).then(normalizeAdminScheduleAttendanceOverview)
 }
 
 export async function getAdminAttendanceRecords(query: AdminEmployeeAttendanceQuery) {

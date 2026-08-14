@@ -11,9 +11,10 @@ import { FrontendPermission } from '../auth/frontend-permission.decorator'
 import { FrontendPermissionGuard } from '../auth/frontend-permission.guard'
 import {
   AttendanceDto, AttendanceListQueryDto, BonusDto, CommissionRecordDto, CommissionTypeDto,
-  CreateEmployeeDto, DateOverrideDto, EmployeeQueryDto, GenerateAttendanceDto, LeaveRequestDto,
-  LeaveTypeDto, MonthlySettingDto, PayrollAdjustmentDto, PayrollGenerateDto, PayrollReopenDto, RequiredOptimisticVersionDto, ReviewLeaveDto, WeeklyScheduleDto
+  BatchMonthlyScheduleDto, CopyMonthlyScheduleDto, CreateEmployeeDto, DateOverrideDto, EmployeeQueryDto, GenerateAttendanceDto, LeaveRequestDto,
+  LeaveTypeDto, MonthlyScheduleDayDto, MonthlyScheduleQueryDto, MonthlySettingDto, PayrollAdjustmentDto, PayrollGenerateDto, PayrollReopenDto, RequiredOptimisticVersionDto, ReviewLeaveDto, ScheduleAttendanceOverviewQueryDto, WeeklyScheduleDto
 } from './employee-attendance.dto'
+import { AttendanceCalendarService } from './attendance-calendar.service'
 import { EmployeeAttendanceService } from './employee-attendance.service'
 import { EmployeePhotoFile, PrivateEmployeePhotoService } from './private-employee-photo.service'
 import { PayrollService } from './payroll.service'
@@ -28,7 +29,8 @@ export class EmployeeAttendanceController {
     private readonly auth: AuthService,
     private readonly photos: PrivateEmployeePhotoService,
     @Optional() private readonly payrollService?: PayrollService,
-    @Optional() private readonly realtime?: TenantRealtimeService
+    @Optional() private readonly realtime?: TenantRealtimeService,
+    @Optional() private readonly calendar?: AttendanceCalendarService
   ) {}
 
   @Get('employees')
@@ -154,6 +156,48 @@ export class EmployeeAttendanceController {
   @FrontendPermission('ATTENDANCE_SCHEDULES')
   async deleteMonthlySetting(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
     await this.authorize(user, grant); return this.mutate(user, 'delete', id, () => this.attendance.deleteMonthlySetting(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
+  }
+
+  @Get('monthly-schedules')
+  @FrontendPermission('ATTENDANCE_SCHEDULES')
+  async listMonthlySchedules(@CurrentUserInfo() user: CurrentUser, @Query() query: MonthlyScheduleQueryDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant)
+    return this.attendance.listMonthlySchedules(user.dataOwnerId, query.employeeId, query.month)
+  }
+
+  @Get('schedule-attendance-overview')
+  @FrontendPermission('ATTENDANCE_SCHEDULES')
+  async scheduleAttendanceOverview(@CurrentUserInfo() user: CurrentUser, @Query() query: ScheduleAttendanceOverviewQueryDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant)
+    return this.calendar!.customerView(user.dataOwnerId, query.employeeId, query.month)
+  }
+
+  @Post('monthly-schedules/day')
+  @FrontendPermission('ATTENDANCE_SCHEDULES')
+  async saveMonthlyScheduleDay(@CurrentUserInfo() user: CurrentUser, @Body() body: MonthlyScheduleDayDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant)
+    return this.mutate(user, 'update', (row) => row.id, () => this.attendance.saveMonthlyScheduleDay(user.dataOwnerId, user.id, this.clean(body)))
+  }
+
+  @Delete('monthly-schedules/day/:id')
+  @FrontendPermission('ATTENDANCE_SCHEDULES')
+  async deleteMonthlyScheduleDay(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: RequiredOptimisticVersionDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant)
+    return this.mutate(user, 'delete', id, () => this.attendance.deleteMonthlyScheduleDay(user.dataOwnerId, user.id, id, body.baseUpdatedAt))
+  }
+
+  @Post('monthly-schedules/batch')
+  @FrontendPermission('ATTENDANCE_SCHEDULES')
+  async batchSaveMonthlySchedules(@CurrentUserInfo() user: CurrentUser, @Body() body: BatchMonthlyScheduleDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant)
+    return this.mutate(user, 'update', body.employeeId, () => this.attendance.batchSaveMonthlySchedules(user.dataOwnerId, user.id, this.clean(body)))
+  }
+
+  @Post('monthly-schedules/copy-previous')
+  @FrontendPermission('ATTENDANCE_SCHEDULES')
+  async copyPreviousMonthSchedules(@CurrentUserInfo() user: CurrentUser, @Body() body: CopyMonthlyScheduleDto, @Headers('x-ys-access-grant') grant?: string) {
+    await this.authorize(user, grant)
+    return this.mutate(user, 'update', body.employeeId, () => this.attendance.copyPreviousMonthSchedules(user.dataOwnerId, user.id, this.clean(body)))
   }
 
   @Get('attendance')

@@ -4,7 +4,7 @@ import dayjs from 'dayjs'
 import * as api from '@/api/employeeAttendance'
 import type {
   AttendanceOverview, AttendanceRecord, BonusRecord, CommissionRecord, CommissionType, DateOverride, Employee,
-  LeaveRequest, LeaveType, MonthlySetting, PayrollRun, WeeklySchedule
+  LeaveRequest, LeaveType, MonthlyScheduleDay, MonthlySetting, PayrollRun, WeeklySchedule
 } from '@/types/employeeAttendance'
 
 export function syncPendingLeaveIssue(run: Pick<PayrollRun, 'issues' | 'issueCount'>, pendingLeaves: number) {
@@ -27,16 +27,22 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   const error = ref('')
   const employees = ref<Employee[]>([])
   const overview = ref<AttendanceOverview | null>(null)
+  const scheduleAttendanceOverview = ref<import('@/types/employeeAttendance').ScheduleAttendanceOverview | null>(null)
   const weeklySchedules = ref<WeeklySchedule[]>([])
   const overrides = ref<DateOverride[]>([])
+  const monthlySchedules = ref<MonthlyScheduleDay[]>([])
   const monthSettings = ref<MonthlySetting[]>([])
   const attendance = ref<AttendanceRecord[]>([])
   const leaveTypes = ref<LeaveType[]>([])
   const leaves = ref<LeaveRequest[]>([])
+  const leaveEmployeeIds = ref<string[]>([])
   const commissionTypes = ref<CommissionType[]>([])
   const commissions = ref<CommissionRecord[]>([])
   const bonuses = ref<BonusRecord[]>([])
   const payroll = ref<PayrollRun | null>(null)
+  let attendanceLoadVersion = 0
+  let leaveLoadVersion = 0
+  let scheduleAttendanceOverviewVersion = 0
   const activeEmployees = computed(() => employees.value.filter((row) => row.status === 'ACTIVE'))
 
   async function run<T>(action: () => Promise<T>, save = false) {
@@ -44,9 +50,35 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
     try { return await action() } catch (reason) { error.value = reason instanceof Error ? reason.message : '操作失败'; throw reason }
     finally { if (save) pendingSaves.value -= 1; else pendingLoads.value -= 1 }
   }
+  async function runQuiet<T>(action: () => Promise<T>, save = false) {
+    if (save) pendingSaves.value += 1; else pendingLoads.value += 1
+    try { return await action() }
+    finally { if (save) pendingSaves.value -= 1; else pendingLoads.value -= 1 }
+  }
   const loadEmployees = () => run(async () => { employees.value = await api.getEmployees(); return employees.value })
   const loadOverview = () => run(async () => { overview.value = await api.getOverview(month.value); return overview.value })
   const loadSchedules = () => run(async () => { [weeklySchedules.value, overrides.value, monthSettings.value] = await Promise.all([api.getWeeklySchedules(employeeId.value || undefined), api.getDateOverrides({ employeeId: employeeId.value || undefined, month: month.value }), api.getMonthlySettings(month.value)]); return weeklySchedules.value })
+  const loadMonthlySchedules = () => run(async () => {
+    monthlySchedules.value = employeeId.value ? await api.getMonthlySchedules(employeeId.value, month.value) : []
+    return monthlySchedules.value
+  })
+  const loadScheduleAttendanceOverview = async () => {
+    const version = ++scheduleAttendanceOverviewVersion
+    const key = `${employeeId.value}:${month.value}`
+    error.value = ''
+    try {
+      const result = await runQuiet(() => api.getScheduleAttendanceOverview(employeeId.value || undefined, month.value))
+      if (version === scheduleAttendanceOverviewVersion && key === `${employeeId.value}:${month.value}`) {
+        scheduleAttendanceOverview.value = result
+        monthlySchedules.value = result.days.flatMap((day) => day.schedule ? [day.schedule] : [])
+        overview.value = result.overview
+      }
+      return result
+    } catch (reason) {
+      if (version === scheduleAttendanceOverviewVersion) { error.value = reason instanceof Error ? reason.message : '操作失败'; throw reason }
+      return scheduleAttendanceOverview.value
+    }
+  }
   function selectMonth(value: string) {
     month.value = value
     startDate.value = ''
@@ -69,8 +101,41 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
       endDate: usesDateRange ? endDate.value || undefined : undefined
     }
   }
-  const loadAttendance = () => run(async () => { attendance.value = await api.getAttendance(dateQuery()); return attendance.value })
-  const loadLeaves = () => run(async () => { [leaveTypes.value, leaves.value] = await Promise.all([api.getLeaveTypes(), api.getLeaves({ ...dateQuery(), status: leaveStatus.value || undefined })]); return leaves.value })
+  const loadAttendance = async () => {
+    const version = ++attendanceLoadVersion
+    const query = dateQuery()
+    error.value = ''
+    try {
+      const rows = await runQuiet(() => api.getAttendance(query))
+      if (version === attendanceLoadVersion) attendance.value = rows
+      return rows
+    } catch (reason) {
+      if (version === attendanceLoadVersion) {
+        error.value = reason instanceof Error ? reason.message : '操作失败'
+        throw reason
+      }
+      return attendance.value
+    }
+  }
+  const loadLeaves = async () => {
+    const version = ++leaveLoadVersion
+    const query = { ...dateQuery(), employeeId: undefined, employeeIds: [...leaveEmployeeIds.value], status: leaveStatus.value || undefined }
+    error.value = ''
+    try {
+      const [types, rows] = await runQuiet(() => Promise.all([api.getLeaveTypes(), api.getLeaves(query)]))
+      if (version === leaveLoadVersion) {
+        leaveTypes.value = types
+        leaves.value = rows
+      }
+      return rows
+    } catch (reason) {
+      if (version === leaveLoadVersion) {
+        error.value = reason instanceof Error ? reason.message : '操作失败'
+        throw reason
+      }
+      return leaves.value
+    }
+  }
   const loadCompensation = () => run(async () => { [commissionTypes.value, commissions.value, bonuses.value] = await Promise.all([api.getCommissionTypes(), api.getCommissions(dateQuery()), api.getBonuses(dateQuery())]); return commissions.value })
   const loadPayroll = () => run(async () => {
     const [run, summary] = await Promise.all([api.getPayroll(month.value), api.getOverview(month.value)])
@@ -81,5 +146,5 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
   })
   function clearError() { error.value = '' }
   function setError(message: string) { error.value = message }
-  return { month, employeeId, startDate, endDate, leaveStatus, loading, saving, error, employees, activeEmployees, overview, weeklySchedules, overrides, monthSettings, attendance, leaveTypes, leaves, commissionTypes, commissions, bonuses, payroll, run, clearError, setError, selectMonth, selectDateRange, restoreMonthMode, dateQuery, loadEmployees, loadOverview, loadSchedules, loadAttendance, loadLeaves, loadCompensation, loadPayroll }
+  return { month, employeeId, startDate, endDate, leaveStatus, leaveEmployeeIds, loading, saving, error, employees, activeEmployees, overview, scheduleAttendanceOverview, weeklySchedules, overrides, monthlySchedules, monthSettings, attendance, leaveTypes, leaves, commissionTypes, commissions, bonuses, payroll, run, runQuiet, clearError, setError, selectMonth, selectDateRange, restoreMonthMode, dateQuery, loadEmployees, loadOverview, loadSchedules, loadMonthlySchedules, loadScheduleAttendanceOverview, loadAttendance, loadLeaves, loadCompensation, loadPayroll }
 })

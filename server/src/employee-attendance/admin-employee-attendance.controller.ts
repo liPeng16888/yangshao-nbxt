@@ -6,8 +6,9 @@ import type { CurrentUser } from '../auth/current-user'
 import { CurrentUserInfo } from '../auth/current-user.decorator'
 import { Roles } from '../auth/roles.decorator'
 import { RolesGuard } from '../auth/roles.guard'
-import { AdminEmployeeAttendanceQueryDto, AdminEmployeeRevealDto } from './employee-attendance.dto'
+import { AdminEmployeeAttendanceQueryDto, AdminEmployeeRevealDto, AdminScheduleAttendanceOverviewQueryDto } from './employee-attendance.dto'
 import { PayrollService } from './payroll.service'
+import { AttendanceCalendarService } from './attendance-calendar.service'
 
 @Controller('admin/employee-attendance')
 @UseGuards(AuthGuard, RolesGuard)
@@ -15,7 +16,8 @@ import { PayrollService } from './payroll.service'
 export class AdminEmployeeAttendanceController {
   constructor(
     private readonly payrollService: PayrollService,
-    private readonly adminAccess: AdminAccessService
+    private readonly adminAccess: AdminAccessService,
+    private readonly calendar: AttendanceCalendarService
   ) {}
 
   @Get('overview')
@@ -31,6 +33,11 @@ export class AdminEmployeeAttendanceController {
   @Get('schedules')
   async schedules(@CurrentUserInfo() user: CurrentUser, @Query() query: AdminEmployeeAttendanceQueryDto) {
     return this.payrollService.adminSchedules(await this.allowed(user, query), query)
+  }
+
+  @Get('schedule-attendance-overview')
+  async scheduleAttendanceOverview(@CurrentUserInfo() user: CurrentUser, @Query() query: AdminScheduleAttendanceOverviewQueryDto) {
+    return this.calendar.adminView(await this.allowed(user, query), query.employeeId, query.month)
   }
 
   @Get('attendance')

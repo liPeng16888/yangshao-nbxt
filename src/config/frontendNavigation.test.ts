@@ -38,8 +38,9 @@ describe('frontend navigation permissions', () => {
       'FINANCE_UNSETTLED',
       'FINANCE_MONTHLY_SETTLEMENT'
     ])
-    expect(allFrontendNavigationPermissions).toHaveLength(26)
-    expect(new Set(allFrontendNavigationPermissions).size).toBe(26)
+    expect(allFrontendNavigationPermissions).toHaveLength(25)
+    expect(new Set(allFrontendNavigationPermissions).size).toBe(25)
+    expect(allFrontendNavigationPermissions).not.toContain('ATTENDANCE_OVERVIEW')
     expect(frontendNavigation.every((item) => item.permission || item.children?.length)).toBe(true)
   })
 

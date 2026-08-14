@@ -46,10 +46,12 @@ export const router = createRouter({
       children: [
         { path: '', redirect: '/data' },
         { path: 'data', component: DataStatisticsPage, meta: { title: '数据统计' } },
-        { path: 'employee-attendance', redirect: '/employee-attendance/overview' },
+        { path: 'employee-attendance', redirect: '/employee-attendance/schedules' },
+        { path: 'employee-attendance/overview', redirect: '/employee-attendance/schedules' },
         ...employeeAttendanceRoutes,
         { path: 'shared-prepaid', redirect: '/shared-prepaid/recharges' },
         ...sharedPrepaidRoutes,
+        { path: 'employee-attendance/:pathMatch(.*)*', redirect: '/employee-attendance/schedules' },
         { path: 'finance', redirect: '/finance/income' },
         ...financeRoutes,
         { path: 'todos', component: TodoPage, meta: { title: '待办事项' } },
