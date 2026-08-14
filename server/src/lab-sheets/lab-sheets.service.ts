@@ -345,7 +345,7 @@ export class LabSheetsService {
     const operation = typeof operationOrIdempotencyKey === 'function' ? operationOrIdempotencyKey : maybeOperation!
     return this.prisma.$transaction(async (tx) => {
       if (idempotencyKey) {
-        await tx.$queryRaw<Array<{ pg_advisory_xact_lock: unknown }>>(Prisma.sql`
+        await tx.$executeRaw(Prisma.sql`
           SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))
         `)
       }

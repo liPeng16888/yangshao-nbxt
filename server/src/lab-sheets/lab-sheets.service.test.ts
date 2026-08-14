@@ -35,6 +35,7 @@ describe('LabSheetsService default sheet selection', () => {
     responseSnapshot: unknown
   }>()
   const transaction = {
+    $executeRaw: vi.fn(),
     $queryRaw: vi.fn(),
     labSheet: {
       findUnique: vi.fn(),
@@ -100,6 +101,8 @@ describe('LabSheetsService default sheet selection', () => {
     transaction.labSheet.findUnique.mockReset()
     transaction.labSheet.findUnique.mockImplementation((argument) => prisma.labSheet.findUnique(argument))
     transaction.labSheet.update.mockReset()
+    transaction.$executeRaw.mockReset()
+    transaction.$executeRaw.mockResolvedValue(0)
     transaction.$queryRaw.mockReset()
     transaction.$queryRaw.mockResolvedValue([])
     transaction.sampleBlock.findUnique.mockReset()
@@ -1438,7 +1441,12 @@ describe('LabSheetsService default sheet selection', () => {
     prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [staleBlock], staleParameters))
     prisma.sampleBlock.findUnique.mockResolvedValue(staleBlock)
     prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...staleBlock, ...data }))
-    transaction.$queryRaw.mockResolvedValue([{ id: `sheet-${today}` }])
+    transaction.$queryRaw.mockImplementation(async (query: { strings?: readonly string[] }) => {
+      if (query.strings?.join('').includes('pg_advisory_xact_lock')) {
+        throw new Error("Failed to deserialize column of type 'void'")
+      }
+      return [{ id: `sheet-${today}` }]
+    })
     transaction.labSheet.findUnique.mockResolvedValue(makeSheet(today, [latestBlock], staleParameters))
     transaction.sampleBlock.findUnique.mockResolvedValue(latestBlock)
     transaction.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...latestBlock, ...data }))
@@ -1455,11 +1463,12 @@ describe('LabSheetsService default sheet selection', () => {
       }
     )
 
-    expect(transaction.$queryRaw).toHaveBeenCalledTimes(2)
-    expect(transaction.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
-      transaction.$queryRaw.mock.invocationCallOrder[1]
+    expect(transaction.$executeRaw).toHaveBeenCalledTimes(1)
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1)
+    expect(transaction.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      transaction.$queryRaw.mock.invocationCallOrder[0]
     )
-    expect(transaction.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
+    expect(transaction.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
       transaction.sampleBlock.findUnique.mock.invocationCallOrder[0]
     )
     expect((result.parameterSnapshot as Record<string, unknown>).ironFactor).toBe(10)
