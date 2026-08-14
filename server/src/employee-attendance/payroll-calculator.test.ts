@@ -62,6 +62,19 @@ describe('calculatePayroll', () => {
     expect(result.payableAmount).toBe(5200)
   })
 
+  it('keeps the bonus inside the monthly rest quota and deducts only fractional excess leave', () => {
+    expect(calculatePayroll({ ...baseInput, restQuotaDays: 4, countedLeaveDays: 4 })).toMatchObject({
+      excessLeaveDays: 0,
+      leaveDeduction: 0,
+      attendanceBonus: 300
+    })
+    expect(calculatePayroll({ ...baseInput, restQuotaDays: 4, countedLeaveDays: 5.5 })).toMatchObject({
+      excessLeaveDays: 1.5,
+      leaveDeduction: 681.82,
+      attendanceBonus: 0
+    })
+  })
+
   it('cancels the attendance bonus and deducts absence at the daily rate', () => {
     const result = calculatePayroll({
       ...baseInput,

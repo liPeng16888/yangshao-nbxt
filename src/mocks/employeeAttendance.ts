@@ -1,14 +1,19 @@
 import dayjs from 'dayjs'
 import type {
-  AttendanceOverview, AttendancePayload, AttendanceQuery, AttendanceRecord, BonusPayload, BonusRecord,
+  ActualAttendanceSegment, AttendanceOverview, AttendancePayload, AttendanceQuery, AttendanceRecord, BonusPayload, BonusRecord,
+  BatchMonthlySchedulePayload,
   CommissionPayload, CommissionRecord, CommissionType, CommissionTypePayload, CompensationTotal,
-  DateOverridePayload, Employee, EmployeeAttendanceState, EmployeePayload, EmployeeQuery, LeaveRequest,
-  LeaveRequestPayload, LeaveStatus, LeaveType, LeaveTypePayload, MonthlySetting, PayrollItem,
-  RevealedEmployee, WeeklySchedulePayload
+  DateOverridePayload, Employee, EmployeeAttendanceInput, EmployeeAttendanceState, EmployeePayload, EmployeeQuery, LeaveRequest,
+  LeaveRequestPayload, LeaveStatus, LeaveType, LeaveTypePayload, MonthlySettingPayload, PayrollItem,
+  MonthlyScheduleDay, MonthlySchedulePayload, RevealedEmployee, ScheduleSegment, WeeklySchedulePayload, ScheduleAttendanceOverview, AttendanceCalendarDay
 } from '@/types/employeeAttendance'
+import { breakMinutes, deriveAttendanceMetrics, normalizeClockIntervals, scheduledMinutes } from '@/utils/attendanceIntervals'
 
 const STORAGE_KEY = 'ys_employee_attendance_v2'
+const MOCK_SCHEMA_VERSION = 4
 const now = () => dayjs().toISOString()
+const shanghaiToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+const zonedActualDateTimePattern = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i
 const id = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 const later = async <T>(value: T) => clone(value)
@@ -28,7 +33,7 @@ function employee(seed: Partial<Employee> & Pick<Employee, 'id' | 'employeeNumbe
 
 function initialState(): EmployeeAttendanceState {
   const month = dayjs().format('YYYY-MM')
-  const today = dayjs().format('YYYY-MM-DD')
+  const today = shanghaiToday()
   const employees = [
     employee({ id: 'emp-1', employeeNumber: 'YG001', name: '张三', phone: '13800000001', baseSalary: 6000 }, { idCard: '410000199001011234', bankCard: '6222021234567890', address: '洛阳市涧西区', emergencyContact: '张父 13800001001' }),
     employee({ id: 'emp-2', employeeNumber: 'YG002', name: '李四', phone: '13800000002', baseSalary: 5500, overtimeHourlyRate: 28 }, { idCard: '410000199202022345', bankCard: '6222022345678901', address: '三门峡市湖滨区', emergencyContact: '李母 13800001002' })
@@ -39,20 +44,32 @@ function initialState(): EmployeeAttendanceState {
     plannedEndTime: weekday > 0 && weekday < 6 ? '16:00' : null,
     scheduledMinutes: weekday > 0 && weekday < 6 ? 480 : 0
   })))
+  const seededMonths = [month]
+  const monthlySchedules: MonthlyScheduleDay[] = employees.flatMap((employeeRow) => seededMonths.flatMap((scheduleMonth) => Array.from({ length: dayjs(`${scheduleMonth}-01`).daysInMonth() }, (_, index) => {
+    const date = `${scheduleMonth}-${String(index + 1).padStart(2, '0')}`
+    const weekly = weeklySchedules.find((row) => row.employeeId === employeeRow.id && row.weekday === dayjs(date).day())!
+    const segments: ScheduleSegment[] = weekly.isWorkday ? [{ sequence: 0, startTime: weekly.plannedStartTime!, endTime: weekly.plannedEndTime! }] : []
+    return { id: `monthly-${employeeRow.id}-${date}`, employeeId: employeeRow.id, date, isWorkday: weekly.isWorkday, segments, remark: '', scheduledMinutes: weekly.scheduledMinutes, breakMinutes: 0 }
+  })))
   const attendance: AttendanceRecord[] = employees.map((row, index) => ({
     id: `att-${row.id}`, employeeId: row.id, date: today, isScheduledWorkday: true, scheduledMinutes: 480,
     checkInAt: `${today}T08:${index ? '07' : '02'}:00+08:00`, checkOutAt: `${today}T16:30:00+08:00`, workedMinutes: 0, lateMinutes: index ? 7 : 2,
-    earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: index ? 60 : 30, remark: '', manuallyEdited: true
+    actualSegments: [{ sequence: 0, checkInAt: `${today}T08:${index ? '07' : '02'}:00+08:00`, checkOutAt: `${today}T16:30:00+08:00` }],
+    explicitAbsenceMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: index ? 60 : 30, remark: '', manuallyEdited: true
   }))
   return {
+    schemaVersion: MOCK_SCHEMA_VERSION,
     employees, weeklySchedules, overrides: [],
-    monthSettings: employees.map((row) => ({ id: `ms-${row.id}`, employeeId: row.id, month, scheduledWorkDays: 22, restQuotaDays: row.restQuotaDays })),
+    monthlySchedules, monthSettings: employees.map((row) => ({ id: `ms-${row.id}`, employeeId: row.id, month, scheduledWorkDays: 22, restQuotaDays: row.restQuotaDays })),
     attendance,
     leaveTypes: [
       { id: 'leave-type-rest', name: '事假', active: true, countsTowardRestQuota: true },
       { id: 'leave-type-sick', name: '病假', active: true, countsTowardRestQuota: false }
     ],
-    leaves: [{ id: 'leave-1', employeeId: 'emp-2', leaveTypeId: 'leave-type-rest', startDate: today, endDate: today, unit: 'HALF_DAY', reason: '个人事务', status: 'PENDING', countedDays: 0.5, reviewRemark: '' }],
+    leaves: [
+      { id: 'leave-1', employeeId: 'emp-2', leaveTypeId: 'leave-type-rest', startDate: today, endDate: today, unit: 'HALF_DAY', reason: '个人事务', status: 'PENDING', countedDays: 0.5, reviewRemark: '' },
+      { id: 'leave-2', employeeId: 'emp-1', leaveTypeId: 'leave-type-sick', startDate: today, endDate: today, unit: 'HALF_DAY', reason: '已驳回示例', status: 'REJECTED', countedDays: 0.5, reviewRemark: '示例' }
+    ],
     commissionTypes: [{ id: 'ct-1', name: '送样提成', unitName: '份', unitPrice: 12, active: true }],
     commissions: [{ id: 'com-1', employeeId: 'emp-1', commissionTypeId: 'ct-1', date: today, quantity: 8, unitPrice: 12, amount: 96, remark: '当日送样' }],
     bonuses: [{ id: 'bonus-1', employeeId: 'emp-1', date: today, amount: 200, reason: '月度安全奖' }], payrolls: []
@@ -92,8 +109,62 @@ function read() {
   let state: EmployeeAttendanceState
   try { state = JSON.parse(window.localStorage.getItem(storageKey()) || '') as EmployeeAttendanceState } catch { state = initialState() }
   if (!state?.employees) state = initialState()
+  upgradeState(state)
   stripAndRememberSensitive(state); seedSecrets(); memories.set(key, state); save()
   return state
+}
+function legacySeedProjection(state: EmployeeAttendanceState, row: MonthlyScheduleDay) {
+  const source = state.overrides.find((item) => item.employeeId === row.employeeId && item.date === row.date)
+    || state.weeklySchedules.find((item) => item.employeeId === row.employeeId && item.weekday === dayjs(row.date).day())
+  const isWorkday = Boolean(source?.isWorkday)
+  const segments = isWorkday && source?.plannedStartTime && source.plannedEndTime
+    ? [{ sequence: 0, startTime: source.plannedStartTime, endTime: source.plannedEndTime }]
+    : []
+  return { isWorkday, segments, scheduledMinutes: isWorkday ? source?.scheduledMinutes || 0 : 0 }
+}
+function isProvableRoundOnePhantom(state: EmployeeAttendanceState, row: MonthlyScheduleDay) {
+  const currentMonth = dayjs().format('YYYY-MM')
+  const isLegacySeedId = row.id === `migrated-${row.employeeId}-${row.date}` || row.id === `monthly-${row.employeeId}-${row.date}`
+  if (monthOf(row.date) === currentMonth || !isLegacySeedId || row.remark) return false
+  const expected = legacySeedProjection(state, row)
+  return row.isWorkday === expected.isWorkday && row.scheduledMinutes === expected.scheduledMinutes && row.breakMinutes === 0
+    && JSON.stringify(row.segments) === JSON.stringify(expected.segments)
+}
+function validLegacyAttendancePair(row: Partial<AttendanceRecord>): ActualAttendanceSegment[] {
+  const checkInAt = typeof row.checkInAt === 'string' ? row.checkInAt : ''
+  const checkOutAt = typeof row.checkOutAt === 'string' ? row.checkOutAt : ''
+  const checkIn = new Date(checkInAt), checkOut = new Date(checkOutAt)
+  if (!checkInAt || !checkOutAt || Number.isNaN(checkIn.getTime()) || Number.isNaN(checkOut.getTime()) || checkOut.getTime() <= checkIn.getTime()) return []
+  return [{ sequence: 0, checkInAt, checkOutAt }]
+}
+function upgradeAttendanceRecords(state: EmployeeAttendanceState) {
+  state.attendance ||= []
+  state.attendance.forEach((record) => {
+    const actualSegments = Array.isArray(record.actualSegments)
+      ? record.actualSegments.map((segment, sequence) => ({ ...segment, sequence: Number.isFinite(Number(segment.sequence)) ? Number(segment.sequence) : sequence }))
+      : validLegacyAttendancePair(record)
+    record.actualSegments = actualSegments
+    record.explicitAbsenceMinutes = actualSegments.length ? 0 : Math.max(0, Math.round(Number(record.explicitAbsenceMinutes ?? record.absenceMinutes ?? 0)))
+  })
+}
+function upgradeState(state: EmployeeAttendanceState) {
+  const version = Number(state.schemaVersion || 0)
+  if (version < 3) {
+    if (!Array.isArray(state.monthlySchedules) || !state.monthlySchedules.length) state.monthlySchedules = migrateMonthlySchedules(state)
+    else state.monthlySchedules = state.monthlySchedules.filter((row) => !isProvableRoundOnePhantom(state, row))
+  } else state.monthlySchedules ||= []
+  if (version < 4) upgradeAttendanceRecords(state)
+  state.schemaVersion = MOCK_SCHEMA_VERSION
+}
+function migrateMonthlySchedules(state: EmployeeAttendanceState): MonthlyScheduleDay[] {
+  const months = new Set([dayjs().format('YYYY-MM')])
+  return state.employees.flatMap((employeeRow) => Array.from(months).flatMap((month) => Array.from({ length: dayjs(`${month}-01`).daysInMonth() }, (_, index) => {
+    const date = `${month}-${String(index + 1).padStart(2, '0')}`
+    const legacy = state.overrides.find((row) => row.employeeId === employeeRow.id && row.date === date)
+      || state.weeklySchedules.find((row) => row.employeeId === employeeRow.id && row.weekday === dayjs(date).day())
+    const segments = legacy?.isWorkday && legacy.plannedStartTime && legacy.plannedEndTime ? [{ sequence: 0, startTime: legacy.plannedStartTime, endTime: legacy.plannedEndTime }] : []
+    return { id: `migrated-${employeeRow.id}-${date}`, employeeId: employeeRow.id, date, isWorkday: Boolean(legacy?.isWorkday), segments, remark: legacy && 'remark' in legacy ? legacy.remark || '' : '', scheduledMinutes: legacy?.isWorkday ? legacy.scheduledMinutes : 0, breakMinutes: 0 }
+  })))
 }
 function save() { const state = memories.get(accountKey()); if (state) window.localStorage.setItem(storageKey(), JSON.stringify(state)) }
 function ensureDraftForDate(date: string) { if (read().payrolls.some((run) => run.month === monthOf(date) && run.status === 'CONFIRMED')) throw new Error('该月工资已确认，请先撤销确认') }
@@ -124,6 +195,7 @@ export async function mockDeleteEmployee(employeeId: string) {
   const hasHistory = state.attendance.some((item) => item.employeeId === employeeId)
     || state.weeklySchedules.some((item) => item.employeeId === employeeId)
     || state.overrides.some((item) => item.employeeId === employeeId)
+    || state.monthlySchedules.some((item) => item.employeeId === employeeId)
     || state.monthSettings.some((item) => item.employeeId === employeeId)
     || state.leaves.some((item) => item.employeeId === employeeId)
     || state.commissions.some((item) => item.employeeId === employeeId)
@@ -163,12 +235,109 @@ export async function mockSaveDateOverride(payload: DateOverridePayload, overrid
 }
 export async function mockDeleteDateOverride(overrideId: string) { const row = entity(read().overrides, overrideId, '临时调班'); ensureDraftForDate(row.date); remove(read().overrides, overrideId) }
 export async function mockGetMonthlySettings(month?: string) { return later(read().monthSettings.filter((row) => !month || row.month === month)) }
-export async function mockSaveMonthlySetting(payload: Omit<MonthlySetting, 'id'>) { ensureDraftForDate(`${payload.month}-01`); const found = read().monthSettings.find((row) => row.employeeId === payload.employeeId && row.month === payload.month); if (found) Object.assign(found, payload); else read().monthSettings.push({ ...payload, id: id('month-setting') }); save(); return later(found || read().monthSettings.at(-1)!) }
+export async function mockSaveMonthlySetting(payload: MonthlySettingPayload) {
+  ensureDraftForDate(`${payload.month}-01`)
+  const state = read()
+  const scheduledWorkDays = state.monthlySchedules.filter((row) => row.employeeId === payload.employeeId && monthOf(row.date) === payload.month && row.isWorkday && row.segments.length > 0).length
+  const value = { ...payload, scheduledWorkDays }
+  const found = state.monthSettings.find((row) => row.employeeId === payload.employeeId && row.month === payload.month)
+  if (found) Object.assign(found, value)
+  else state.monthSettings.push({ ...value, id: id('month-setting') })
+  save()
+  return later(found || state.monthSettings.at(-1)!)
+}
 export async function mockDeleteMonthlySetting(settingId: string) { const row = entity(read().monthSettings, settingId, '月休设置'); ensureDraftForDate(`${row.month}-01`); remove(read().monthSettings, settingId) }
 
+function validateBusinessDate(date: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || dayjs(date).format('YYYY-MM-DD') !== date) throw new Error('日期格式无效')
+}
+function validateBusinessMonth(month: string) {
+  if (!/^\d{4}-\d{2}$/.test(month) || dayjs(`${month}-01`).format('YYYY-MM') !== month) throw new Error('月份格式无效')
+}
+function monthlySchedule(employeeId: string, date: string) {
+  return read().monthlySchedules.find((row) => row.employeeId === employeeId && row.date === date)
+}
+function monthlyScheduleDay(payload: MonthlySchedulePayload, existing?: MonthlyScheduleDay): MonthlyScheduleDay {
+  validateBusinessDate(payload.date)
+  const intervals = payload.isWorkday ? normalizeClockIntervals(payload.segments) : []
+  const segments = intervals.map((interval, sequence) => ({ sequence, ...interval }))
+  return {
+    id: existing?.id || id('monthly-schedule'), employeeId: payload.employeeId, date: payload.date, isWorkday: payload.isWorkday,
+    segments, remark: payload.remark || '', scheduledMinutes: payload.isWorkday ? scheduledMinutes(intervals) : 0,
+    breakMinutes: payload.isWorkday ? breakMinutes(intervals) : 0
+  }
+}
+export async function mockGetMonthlySchedules(employeeId: string, month: string) {
+  entity(read().employees, employeeId, '员工')
+  validateBusinessMonth(month)
+  return later(read().monthlySchedules.filter((row) => row.employeeId === employeeId && monthOf(row.date) === month).sort((left, right) => left.date.localeCompare(right.date)))
+}
+export async function mockSaveMonthlyScheduleDay(payload: MonthlySchedulePayload) {
+  entity(read().employees, payload.employeeId, '员工')
+  ensureDraftForDate(payload.date)
+  const existing = monthlySchedule(payload.employeeId, payload.date)
+  const value = monthlyScheduleDay(payload, existing)
+  if (existing) Object.assign(existing, value)
+  else read().monthlySchedules.push(value)
+  save()
+  return later(value)
+}
+function clearDeletedScheduleAttendance(employeeId: string, dates: Iterable<string>) {
+  const deletedDates = new Set(dates)
+  read().attendance
+    .filter((attendance) => attendance.employeeId === employeeId && deletedDates.has(attendance.date))
+    .forEach((attendance) => Object.assign(attendance, {
+      isScheduledWorkday: false,
+      scheduledMinutes: 0,
+      workedMinutes: 0,
+      lateMinutes: 0,
+      earlyLeaveMinutes: 0,
+      absenceMinutes: 0
+    }))
+}
+export async function mockDeleteMonthlyScheduleDay(scheduleId: string) {
+  const row = entity(read().monthlySchedules, scheduleId, '月度排班')
+  ensureDraftForDate(row.date)
+  clearDeletedScheduleAttendance(row.employeeId, [row.date])
+  remove(read().monthlySchedules, scheduleId)
+}
+export async function mockBatchSaveMonthlySchedules(payload: BatchMonthlySchedulePayload) {
+  entity(read().employees, payload.employeeId, '员工')
+  const dates = Array.from(new Set(payload.dates)).sort()
+  if (!dates.length) throw new Error('请选择排班日期')
+  dates.forEach(validateBusinessDate)
+  dates.forEach(ensureDraftForDate)
+  const existing = dates.filter((date) => Boolean(monthlySchedule(payload.employeeId, date))).length
+  for (const date of dates) await mockSaveMonthlyScheduleDay({ ...payload, date })
+  const rows = dates.map((date) => monthlySchedule(payload.employeeId, date)!).sort((left, right) => left.date.localeCompare(right.date))
+  return { rows, updated: dates.length, overwritten: existing }
+}
+export async function mockCopyPreviousMonthSchedules(employeeId: string, targetMonth: string, overwrite: boolean) {
+  entity(read().employees, employeeId, '员工')
+  validateBusinessMonth(targetMonth)
+  const sourceMonth = dayjs(`${targetMonth}-01`).subtract(1, 'month').format('YYYY-MM')
+  ensureDraftForDate(`${targetMonth}-01`)
+  const source = read().monthlySchedules.filter((row) => row.employeeId === employeeId && monthOf(row.date) === sourceMonth).sort((left, right) => left.date.localeCompare(right.date))
+  const target = read().monthlySchedules.filter((row) => row.employeeId === employeeId && monthOf(row.date) === targetMonth)
+  if (!source.length) throw new Error('上月暂无可复制排班')
+  if (target.length && !overwrite) throw new Error('目标月份已有排班，请确认覆盖')
+  const days = dayjs(`${targetMonth}-01`).daysInMonth()
+  const copies = source.filter((row) => Number(row.date.slice(-2)) <= days).map((row) => monthlyScheduleDay({
+    employeeId, date: `${targetMonth}-${row.date.slice(-2)}`, isWorkday: row.isWorkday,
+    segments: row.segments, remark: row.remark
+  }))
+  // Validate every source-derived target row before touching the existing target month.
+  const copiedDates = new Set(copies.map((row) => row.date))
+  clearDeletedScheduleAttendance(employeeId, target.filter((row) => !copiedDates.has(row.date)).map((row) => row.date))
+  if (target.length) read().monthlySchedules = read().monthlySchedules.filter((row) => !(row.employeeId === employeeId && monthOf(row.date) === targetMonth))
+  read().monthlySchedules.push(...copies)
+  save()
+  return { copied: copies.length, targetMonth }
+}
+
 function assertExclusiveDateFilter(query: AttendanceQuery) { if (query.month && (query.startDate || query.endDate)) throw new Error('月份和日期范围不能同时使用') }
-const filterDates = <T extends { employeeId: string; date: string }>(rows: T[], query: AttendanceQuery) => { assertExclusiveDateFilter(query); return rows.filter((row) => (!query.employeeId || row.employeeId === query.employeeId) && (!query.month || monthOf(row.date) === query.month) && (!query.startDate || row.date >= query.startDate) && (!query.endDate || row.date <= query.endDate)) }
-export async function mockGetAttendance(query: AttendanceQuery = {}) { return later(filterDates(read().attendance, query)) }
+const filterDates = <T extends { employeeId: string; date: string }>(rows: T[], query: AttendanceQuery) => { assertExclusiveDateFilter(query); return rows.filter((row) => (!query.employeeId || row.employeeId === query.employeeId) && (!query.employeeIds?.length || query.employeeIds.includes(row.employeeId)) && (!query.month || monthOf(row.date) === query.month) && (!query.startDate || row.date >= query.startDate) && (!query.endDate || row.date <= query.endDate)) }
+export async function mockGetAttendance(query: AttendanceQuery = {}) { return later(filterDates(read().attendance, query).map(currentAttendanceRecord)) }
 function beijingBusinessDate(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) throw new Error('时间格式无效')
@@ -181,25 +350,97 @@ function leaveCoverageForAttendance(employeeId: string, date: string, scheduledM
     return sum + Math.min(1, (leave.hours || 0) * 60 / Math.max(1, scheduledMinutes))
   }, 0))
 }
+function currentAttendanceRecord(row: AttendanceRecord): AttendanceRecord {
+  const schedule = monthlySchedule(row.employeeId, row.date)
+  const actualSegments = Array.isArray(row.actualSegments) ? row.actualSegments : validLegacyAttendancePair(row)
+  const explicitAbsenceMinutes = Math.max(0, Math.round(Number(row.explicitAbsenceMinutes || 0)))
+  if (!schedule) return { ...row, actualSegments, explicitAbsenceMinutes }
+  const total = schedule.isWorkday ? schedule.scheduledMinutes : 0
+  const leaveMinutes = Math.round(total * leaveCoverageForAttendance(row.employeeId, row.date, total))
+  const metrics = schedule.isWorkday && schedule.segments.length
+    ? deriveAttendanceMetrics(schedule.segments, actualSegments, leaveMinutes, explicitAbsenceMinutes)
+    : {
+        workedMinutes: 0,
+        lateMinutes: 0,
+        earlyLeaveMinutes: 0,
+        absenceMinutes: 0
+      }
+  return {
+    ...row,
+    isScheduledWorkday: schedule.isWorkday,
+    scheduledMinutes: total,
+    actualSegments,
+    explicitAbsenceMinutes,
+    ...metrics
+  }
+}
 function normalizeAttendance(payload: AttendancePayload): AttendancePayload {
   const row = { ...payload }
-  if (row.isScheduledWorkday && row.scheduledMinutes <= 0) throw new Error('排班工作日时长必须大于 0')
-  if (!row.isScheduledWorkday && row.scheduledMinutes !== 0) throw new Error('休息日排班时长必须为 0')
+  const scheduled = row.scheduledMinutes ?? 0
+  if (row.isScheduledWorkday && scheduled <= 0) throw new Error('排班工作日时长必须大于 0')
+  if (!row.isScheduledWorkday && scheduled !== 0) throw new Error('休息日排班时长必须为 0')
   const checkIn = String(row.checkInAt || ''), checkOut = String(row.checkOutAt || '')
   if (Boolean(checkIn) !== Boolean(checkOut)) throw new Error('必须同时填写上班和下班时间')
-  const zoned = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i
-  if (checkIn && (!zoned.test(checkIn) || !zoned.test(checkOut))) throw new Error('打卡时间必须包含明确时区')
+  if (checkIn && (!zonedActualDateTimePattern.test(checkIn) || !zonedActualDateTimePattern.test(checkOut))) throw new Error('打卡时间必须包含明确时区')
   if (checkIn) {
     if (beijingBusinessDate(checkIn) !== row.date || beijingBusinessDate(checkOut) !== row.date) throw new Error('打卡时间不属于当前北京业务考勤日期')
     if (new Date(checkOut).getTime() <= new Date(checkIn).getTime()) throw new Error('下班时间必须晚于上班时间')
   }
   if (row.isScheduledWorkday && !checkIn) {
-    const uncovered = Math.max(0, Math.round(row.scheduledMinutes * (1 - leaveCoverageForAttendance(row.employeeId, row.date, row.scheduledMinutes))))
+    const uncovered = Math.max(0, Math.round(scheduled * (1 - leaveCoverageForAttendance(row.employeeId, row.date, scheduled))))
     if ((row.absenceMinutes || 0) < uncovered) throw new Error(`未打卡时必须完整记录未被批准请假覆盖的缺勤时长（${uncovered} 分钟）`)
   }
   return row
 }
-export async function mockSaveAttendance(payload: AttendancePayload, attendanceId?: string) { const existing = attendanceId ? entity(read().attendance, attendanceId, '考勤记录') : undefined; ensureDraftForMove(existing?.date, payload.date); const duplicate = read().attendance.find((row) => row.employeeId === payload.employeeId && row.date === payload.date && row.id !== attendanceId); if (duplicate) throw new Error('该员工当日考勤已存在'); const normalized = normalizeAttendance({ ...existing, ...payload } as AttendancePayload); const row = existing || { ...normalized, id: id('attendance'), manuallyEdited: true }; Object.assign(row, normalized, { manuallyEdited: true }); if (!attendanceId) read().attendance.push(row as AttendanceRecord); save(); return later(row as AttendanceRecord) }
+function actualAttendanceRecord(payload: EmployeeAttendanceInput, existing?: AttendanceRecord): AttendanceRecord {
+  const schedule = monthlySchedule(payload.employeeId, payload.date)
+  if (!schedule) throw new Error(`缺少 ${payload.date} 的员工月度排班`)
+  const actualSegments = (payload.actualSegments || []).map((segment, sequence) => ({ ...segment, sequence }))
+  actualSegments.forEach((segment, index) => {
+    const checkIn = String(segment.checkInAt || ''), checkOut = String(segment.checkOutAt || '')
+    if (!checkIn || !checkOut) throw new Error('必须同时填写上班和下班时间')
+    if (!zonedActualDateTimePattern.test(checkIn) || !zonedActualDateTimePattern.test(checkOut)) throw new Error('打卡时间必须包含明确时区')
+    if (beijingBusinessDate(checkIn) !== payload.date || beijingBusinessDate(checkOut) !== payload.date) throw new Error('打卡时间不属于当前北京业务考勤日期')
+    if (new Date(checkOut).getTime() <= new Date(checkIn).getTime()) throw new Error('下班时间必须晚于上班时间')
+    if (index && new Date(checkIn).getTime() < new Date(actualSegments[index - 1].checkOutAt).getTime()) throw new Error('实际考勤时段不能重叠')
+  })
+  const explicitAbsenceMinutes = Math.max(0, Math.round(payload.explicitAbsenceMinutes || 0))
+  const isScheduledWorkday = schedule.isWorkday
+  const total = isScheduledWorkday ? schedule.scheduledMinutes : 0
+  const metrics = isScheduledWorkday
+    ? deriveAttendanceMetrics(schedule.segments, actualSegments, Math.round(total * leaveCoverageForAttendance(payload.employeeId, payload.date, total)), explicitAbsenceMinutes)
+    : { workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0 }
+  const first = actualSegments[0]
+  const last = actualSegments.at(-1)
+  return {
+    id: existing?.id || id('attendance'), employeeId: payload.employeeId, date: payload.date, isScheduledWorkday, scheduledMinutes: total,
+    actualSegments, explicitAbsenceMinutes, overtimeMinutes: Math.max(0, Math.round(payload.overtimeMinutes || 0)), remark: payload.remark || '',
+    checkInAt: first?.checkInAt || '', checkOutAt: last?.checkOutAt || '', ...metrics, manuallyEdited: true, lockedAt: existing?.lockedAt ?? null
+  }
+}
+export async function mockSaveAttendance(payload: EmployeeAttendanceInput | AttendancePayload, attendanceId?: string) {
+  const existing = attendanceId ? entity(read().attendance, attendanceId, '考勤记录') : undefined
+  ensureDraftForMove(existing?.date, payload.date)
+  const duplicate = read().attendance.find((row) => row.employeeId === payload.employeeId && row.date === payload.date && row.id !== attendanceId)
+  if (duplicate) throw new Error('该员工当日考勤已存在')
+  const usesMonthlyAttendanceContract = 'actualSegments' in payload && !('isScheduledWorkday' in payload) && !('scheduledMinutes' in payload) && !('checkInAt' in payload) && !('checkOutAt' in payload)
+  const value = usesMonthlyAttendanceContract ? actualAttendanceRecord(payload, existing) : (() => {
+    const normalized = normalizeAttendance({ ...existing, ...payload })
+    return {
+      id: existing?.id || id('attendance'), employeeId: normalized.employeeId, date: normalized.date,
+      isScheduledWorkday: Boolean(normalized.isScheduledWorkday), scheduledMinutes: normalized.scheduledMinutes || 0,
+      actualSegments: normalized.checkInAt && normalized.checkOutAt ? [{ sequence: 0, checkInAt: normalized.checkInAt, checkOutAt: normalized.checkOutAt }] : [],
+      explicitAbsenceMinutes: normalized.absenceMinutes ?? 0, checkInAt: normalized.checkInAt || '', checkOutAt: normalized.checkOutAt || '',
+      workedMinutes: normalized.workedMinutes || 0, lateMinutes: normalized.lateMinutes || 0, earlyLeaveMinutes: normalized.earlyLeaveMinutes || 0,
+      absenceMinutes: normalized.absenceMinutes || 0, overtimeMinutes: normalized.overtimeMinutes || 0, remark: normalized.remark || '', manuallyEdited: true,
+      lockedAt: existing?.lockedAt ?? null
+    }
+  })()
+  if (existing) Object.assign(existing, value)
+  else read().attendance.push(value)
+  save()
+  return later(value)
+}
 export async function mockDeleteAttendance(attendanceId: string) { const row = entity(read().attendance, attendanceId, '考勤记录'); ensureDraftForDate(row.date); remove(read().attendance, attendanceId) }
 export async function mockGenerateAttendance(month: string, employeeIds: string[]) {
   ensureDraftForDate(`${month}-01`)
@@ -213,11 +454,13 @@ export async function mockGenerateAttendance(month: string, employeeIds: string[
       if (date < employee.hireDate || (employee.terminationDate && date > employee.terminationDate)) continue
       const found = read().attendance.find((row) => row.employeeId === employeeId && row.date === date)
       if (found?.manuallyEdited) { skippedManual += 1; continue }
-      const weekday = dayjs(date).day()
-      const schedule = read().overrides.find((row) => row.employeeId === employeeId && row.date === date)
-        || read().weeklySchedules.find((row) => row.employeeId === employeeId && row.weekday === weekday)
+      const schedule = monthlySchedule(employeeId, date) || (() => {
+        const weekday = dayjs(date).day()
+        return read().overrides.find((row) => row.employeeId === employeeId && row.date === date)
+          || read().weeklySchedules.find((row) => row.employeeId === employeeId && row.weekday === weekday)
+      })()
       if (!schedule) continue
-      const value: AttendanceRecord = { id: found?.id || id('attendance'), employeeId, date, isScheduledWorkday: schedule.isWorkday, scheduledMinutes: schedule.scheduledMinutes, checkInAt: '', checkOutAt: '', workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', manuallyEdited: false }
+      const value: AttendanceRecord = { id: found?.id || id('attendance'), employeeId, date, isScheduledWorkday: schedule.isWorkday, scheduledMinutes: schedule.scheduledMinutes || 0, actualSegments: [], explicitAbsenceMinutes: 0, checkInAt: '', checkOutAt: '', workedMinutes: schedule.isWorkday ? schedule.scheduledMinutes || 0 : 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0, remark: '', manuallyEdited: false }
       if (found) { Object.assign(found, value); updated += 1 } else { read().attendance.push(value); created += 1 }
     }
   }
@@ -233,11 +476,17 @@ export async function mockGetLeaves(query: AttendanceQuery = {}) {
   const monthStart = query.month ? `${query.month}-01` : ''
   const monthEnd = query.month ? dayjs(monthStart).endOf('month').format('YYYY-MM-DD') : ''
   return later(read().leaves.filter((row) => (!query.employeeId || row.employeeId === query.employeeId)
+    && (!query.employeeIds?.length || query.employeeIds.includes(row.employeeId))
     && (!query.month || (row.startDate <= monthEnd && row.endDate >= monthStart))
     && (!query.startDate || row.endDate >= query.startDate) && (!query.endDate || row.startDate <= query.endDate)
     && (!query.status || row.status === query.status)))
 }
-function mockCountedLeaveDays(payload: LeaveRequestPayload) { const dates: string[] = []; for (let cursor = dayjs(payload.startDate); cursor.isBefore(payload.endDate) || cursor.isSame(payload.endDate, 'day'); cursor = cursor.add(1, 'day')) dates.push(cursor.format('YYYY-MM-DD')); const scheduled = dates.map((date) => { const override = read().overrides.find((row) => row.employeeId === payload.employeeId && row.date === date); const weekly = read().weeklySchedules.find((row) => row.employeeId === payload.employeeId && row.weekday === dayjs(date).day()); const row = override || weekly; return row?.isWorkday ? row.scheduledMinutes : 0 }); const workdays = scheduled.filter((minutes) => minutes > 0).length; if (!workdays) throw new Error('请假日期不包含排班工作日'); if (payload.unit === 'FULL_DAY') return workdays; if (payload.unit === 'HALF_DAY') return workdays * 0.5; if (dates.length !== 1) throw new Error('小时请假必须在同一天'); const leaveMinutes = (payload.hours || 0) * 60; if (leaveMinutes <= 0 || leaveMinutes > scheduled[0]) throw new Error('请假小时必须大于 0 且不能超过当日排班'); return Number((leaveMinutes / scheduled[0]).toFixed(2)) }
+function scheduledMinutesForDate(employeeId: string, date: string) {
+  const monthly = monthlySchedule(employeeId, date)
+  if (!monthly) throw new Error(`缺少 ${date} 的员工月度排班`)
+  return monthly.isWorkday ? monthly.scheduledMinutes : 0
+}
+function mockCountedLeaveDays(payload: LeaveRequestPayload) { const dates: string[] = []; for (let cursor = dayjs(payload.startDate); cursor.isBefore(payload.endDate) || cursor.isSame(payload.endDate, 'day'); cursor = cursor.add(1, 'day')) dates.push(cursor.format('YYYY-MM-DD')); const scheduled = dates.map((date) => scheduledMinutesForDate(payload.employeeId, date)); const workdays = scheduled.filter((minutes) => minutes > 0).length; if (!workdays) throw new Error('请假日期不包含排班工作日'); if (payload.unit === 'FULL_DAY') return workdays; if (payload.unit === 'HALF_DAY') return workdays * 0.5; if (dates.length !== 1) throw new Error('小时请假必须在同一天'); const leaveMinutes = (payload.hours || 0) * 60; if (leaveMinutes <= 0 || leaveMinutes > scheduled[0]) throw new Error('请假小时必须大于 0 且不能超过当日排班'); return Number((leaveMinutes / scheduled[0]).toFixed(2)) }
 export async function mockSaveLeave(payload: LeaveRequestPayload, leaveId?: string) { const existing = leaveId ? entity(read().leaves, leaveId, '请假记录') : undefined; if (existing && existing.status !== 'PENDING') throw new Error('已处理请假不能修改'); if (existing) ensureDraftForRange(existing.startDate, existing.endDate); ensureDraftForRange(payload.startDate, payload.endDate); required(payload.reason, '请假原因'); const leaveType = entity(read().leaveTypes, payload.leaveTypeId, '请假类型'); if (!leaveType.active && payload.leaveTypeId !== existing?.leaveTypeId) throw new Error('该请假类型已停用'); const overlap = read().leaves.some((row) => row.id !== leaveId && row.employeeId === payload.employeeId && row.status !== 'REJECTED' && row.startDate <= payload.endDate && row.endDate >= payload.startDate); if (overlap) throw new Error('请假时间重叠'); const countedDays = mockCountedLeaveDays(payload); const row = existing || { id: id('leave'), status: 'PENDING' as LeaveStatus, countedDays, reviewRemark: '', ...payload }; Object.assign(row, payload, { countedDays }); if (!leaveId) read().leaves.push(row as LeaveRequest); save(); return later(row as LeaveRequest) }
 export async function mockReviewLeave(leaveId: string, status: Exclude<LeaveStatus, 'PENDING'>, reviewRemark = '') { const row = entity(read().leaves, leaveId, '请假记录'); ensureDraftForDate(row.startDate); ensureDraftForDate(row.endDate); if (row.status !== 'PENDING') throw new Error('该请假已处理'); row.status = status; row.reviewRemark = reviewRemark; save(); return later(row) }
 export async function mockDeleteLeave(leaveId: string) { const row = entity(read().leaves, leaveId, '请假记录'); if (row.status !== 'PENDING') throw new Error('已处理请假不能删除'); ensureDraftForRange(row.startDate, row.endDate); remove(read().leaves, leaveId) }
@@ -255,11 +504,6 @@ export async function mockGetCompensationTotals(month: string): Promise<Compensa
 
 const money = (value: number) => Number(value.toFixed(2))
 const overlapsMonth = (startDate: string, endDate: string, month: string) => startDate <= dayjs(`${month}-01`).endOf('month').format('YYYY-MM-DD') && endDate >= `${month}-01`
-function scheduledMinutesForDate(employeeId: string, date: string) {
-  const schedule = read().overrides.find((row) => row.employeeId === employeeId && row.date === date)
-    || read().weeklySchedules.find((row) => row.employeeId === employeeId && row.weekday === dayjs(date).day())
-  return schedule?.isWorkday ? schedule.scheduledMinutes : 0
-}
 function leavePortionForMonth(leave: LeaveRequest, month: string) {
   const monthStart = `${month}-01`, monthEnd = dayjs(monthStart).endOf('month').format('YYYY-MM-DD')
   const start = leave.startDate > monthStart ? leave.startDate : monthStart
@@ -274,23 +518,36 @@ function payrollItem(emp: EmployeeAttendanceState['employees'][number], month: s
   const state = read()
   const setting = state.monthSettings.find((row) => row.employeeId === emp.id && row.month === month)
   const allRecords = state.attendance.filter((row) => row.employeeId === emp.id && monthOf(row.date) === month)
-  const records = allRecords.filter((row) => row.isScheduledWorkday)
+  const monthly = state.monthlySchedules.filter((row) => row.employeeId === emp.id && monthOf(row.date) === month)
+  const records = (monthly.length
+    ? monthly.filter((row) => row.isWorkday).map((schedule) => {
+      const stored = state.attendance.find((row) => row.employeeId === emp.id && row.date === schedule.date)
+      return stored ? currentAttendanceRecord(stored) : {
+      id: `default-attendance-${schedule.id}`, employeeId: emp.id, date: schedule.date, isScheduledWorkday: true, scheduledMinutes: schedule.scheduledMinutes,
+      actualSegments: [], explicitAbsenceMinutes: 0, checkInAt: '', checkOutAt: '', workedMinutes: schedule.scheduledMinutes, lateMinutes: 0, earlyLeaveMinutes: 0,
+      absenceMinutes: 0, overtimeMinutes: 0, remark: '', manuallyEdited: false, lockedAt: null
+      }
+    })
+    : [])
   const approvedLeaves = state.leaves.filter((row) => row.employeeId === emp.id && row.status === 'APPROVED' && overlapsMonth(row.startDate, row.endDate, month))
-  const coverageFor = (record: AttendanceRecord) => Math.min(1, approvedLeaves.filter((leave) => leave.startDate <= record.date && leave.endDate >= record.date).reduce((sum, leave) => {
-    if (leave.unit === 'FULL_DAY') return sum + 1
-    if (leave.unit === 'HALF_DAY') return sum + 0.5
-    return sum + ((leave.hours || 0) * 60 / Math.max(1, record.scheduledMinutes || 480))
-  }, 0))
   const evaluations = records.map((row) => {
-    const coverage = coverageFor(row), uncoveredMinutes = Math.max(0, row.scheduledMinutes * (1 - coverage))
+    const defaultNormal = !allRecords.some((record) => record.id === row.id)
+    if (defaultNormal) return { row, pair: true, lone: false, invalid: false, unresolved: false, absenceDays: 0 }
     const pair = Boolean(row.checkInAt && row.checkOutAt), lone = Boolean(row.checkInAt) !== Boolean(row.checkOutAt)
-    const recorded = Math.max(0, row.absenceMinutes || 0)
-    return { row, pair, lone, invalid: row.scheduledMinutes <= 0, unresolved: !pair && recorded < uncoveredMinutes, absenceDays: row.scheduledMinutes > 0 ? Math.min(uncoveredMinutes, pair ? recorded : uncoveredMinutes) / row.scheduledMinutes : 0 }
+    return {
+      row,
+      pair,
+      lone,
+      invalid: row.scheduledMinutes <= 0,
+      unresolved: false,
+      absenceDays: row.scheduledMinutes > 0 ? Math.min(row.scheduledMinutes, Math.max(0, row.absenceMinutes || 0)) / row.scheduledMinutes : 0
+    }
   })
   const quotaLeaveDays = approvedLeaves.reduce((sum, row) => sum + (state.leaveTypes.find((type) => type.id === row.leaveTypeId)?.countsTowardRestQuota ? leavePortionForMonth(row, month) : 0), 0)
   const excessLeaveDays = Math.max(0, quotaLeaveDays - (setting?.restQuotaDays ?? emp.restQuotaDays))
   const absenceDays = evaluations.reduce((sum, row) => sum + row.absenceDays, 0)
-  const dailyRate = setting?.scheduledWorkDays ? emp.baseSalary / setting.scheduledWorkDays : 0
+  const scheduledWorkDays = monthly.filter((row) => row.isWorkday).length
+  const dailyRate = scheduledWorkDays ? emp.baseSalary / scheduledWorkDays : 0
   const commissionAmount = money(state.commissions.filter((row) => row.employeeId === emp.id && monthOf(row.date) === month).reduce((sum, row) => sum + row.amount, 0))
   const bonusAmount = money(state.bonuses.filter((row) => row.employeeId === emp.id && monthOf(row.date) === month).reduce((sum, row) => sum + row.amount, 0))
   const overtimeMinutes = allRecords.reduce((sum, row) => sum + (row.overtimeMinutes || 0), 0)
@@ -301,17 +558,17 @@ function payrollItem(emp: EmployeeAttendanceState['employees'][number], month: s
   const absenceDeduction = money(dailyRate * absenceDays)
   const attendanceBonus = excessLeaveDays > 0 || absenceDays > 0 ? 0 : emp.attendanceBonus
   const issues: string[] = []
-  if (!state.weeklySchedules.some((row) => row.employeeId === emp.id) && !state.overrides.some((row) => row.employeeId === emp.id && monthOf(row.date) === month)) issues.push('缺少排班设置')
-  if (!setting || setting.scheduledWorkDays <= 0) issues.push('缺少当月应出勤天数')
-  else if (evaluations.filter((row) => !row.invalid).length < setting.scheduledWorkDays) issues.push(`缺少 ${setting.scheduledWorkDays - evaluations.filter((row) => !row.invalid).length} 天考勤记录`)
+  if (!monthly.length) issues.push('缺少员工月度排班')
+  if (!setting) issues.push('缺少当月月休设置')
+  else if (evaluations.filter((row) => !row.invalid).length < scheduledWorkDays) issues.push(`缺少 ${scheduledWorkDays - evaluations.filter((row) => !row.invalid).length} 天考勤记录`)
   const invalid = evaluations.filter((row) => row.invalid).length, lone = evaluations.filter((row) => row.lone).length, unresolved = evaluations.filter((row) => row.unresolved).length
   if (invalid) issues.push(`有 ${invalid} 天排班工作日时长必须大于 0`)
   if (lone) issues.push(`有 ${lone} 天打卡必须成对`)
   if (unresolved) issues.push(`有 ${unresolved} 天未处理缺勤`)
   const payableAmount = money(emp.baseSalary + attendanceBonus + overtimePay + commissionAmount + bonusAmount + adjustmentAmount - leaveDeduction - absenceDeduction)
   const input = {
-    baseSalary: emp.baseSalary, attendanceBonus: emp.attendanceBonus, scheduledWorkDays: setting?.scheduledWorkDays || 0,
-    restQuotaDays: setting?.restQuotaDays ?? emp.restQuotaDays, countedLeaveDays: money(quotaLeaveDays), absenceDays: money(absenceDays),
+    baseSalary: emp.baseSalary, attendanceBonus: emp.attendanceBonus, scheduledWorkDays,
+    restQuotaDays: setting?.restQuotaDays ?? emp.restQuotaDays, countedLeaveDays: money(quotaLeaveDays), absenceDays,
     overtimeMinutes, overtimeHourlyRate: emp.overtimeHourlyRate, commissionAmount, bonusAmount,
     adjustments: adjustments.map((row) => ({ amount: row.amount }))
   }
@@ -366,4 +623,68 @@ export async function mockConfirmPayroll(runId: string) {
   return later(current)
 }
 export async function mockReopenPayroll(runId: string, reason: string) { required(reason, '撤销确认原因'); const run = entity(read().payrolls, runId, '工资单'); if (run.status !== 'CONFIRMED') throw new Error('只有已确认工资可以撤销确认'); run.status = 'DRAFT'; run.confirmedAt = null; run.reopenReason = reason; setPayrollLocks(run.month, null); save(); return later(run) }
-export async function mockGetOverview(month: string): Promise<AttendanceOverview> { const employees = read().employees.filter((row) => row.status === 'ACTIVE'); const today = dayjs().format('YYYY-MM-DD'); const records = read().attendance.filter((row) => row.date === today); const monthRecords = read().attendance.filter((row) => monthOf(row.date) === month); const pendingLeaves = read().leaves.filter((row) => row.status === 'PENDING' && overlapsMonth(row.startDate, row.endDate, month)).length; const payroll = read().payrolls.find((row) => row.month === month); const lateDays = monthRecords.filter((row) => (row.lateMinutes || 0) > 0).length, earlyDays = monthRecords.filter((row) => (row.earlyLeaveMinutes || 0) > 0).length; const reminders = lateDays || earlyDays ? [`本月考勤提醒：迟到 ${lateDays} 天，早退 ${earlyDays} 天（不自动扣薪）`] : []; const pendingIssue = pendingLeaves ? `${pendingLeaves} 条请假待审批` : ''; const payrollIssues = (payroll?.issues || []).filter((issue) => !issue.includes('请假待审批')); const issues = [...payrollIssues, ...(pendingIssue ? [pendingIssue] : []), ...reminders]; return later({ month, activeEmployees: employees.length, todayPresent: records.filter((row) => row.checkInAt && row.checkOutAt).length, todayOnLeave: read().leaves.filter((row) => row.status === 'APPROVED' && row.startDate <= today && row.endDate >= today).length, todayAbsent: records.filter((row) => (row.absenceMinutes || 0) > 0).length, overtimeHours: Number((monthRecords.reduce((sum, row) => sum + (row.overtimeMinutes || 0), 0) / 60).toFixed(2)), pendingLeaves, projectedPayroll: payroll?.totalAmount || employees.reduce((sum, row) => sum + row.baseSalary + row.attendanceBonus, 0), issueCount: issues.length, issues }) }
+export async function mockGetOverview(month: string, referenceToday = shanghaiToday()): Promise<AttendanceOverview> {
+  const state = read()
+  const today = referenceToday
+  const employees = state.employees.filter((row) => row.status === 'ACTIVE')
+  const employeeIds = new Set(employees.filter((row) => row.hireDate <= today && (!row.terminationDate || row.terminationDate >= today)).map((row) => row.id))
+  const todaySchedules = state.monthlySchedules.filter((row) => row.date === today && row.isWorkday && row.scheduledMinutes > 0 && employeeIds.has(row.employeeId))
+  const todayClassifications = todaySchedules.map((schedule) => {
+    const leaveCoverage = leaveCoverageForAttendance(schedule.employeeId, today, schedule.scheduledMinutes)
+    if (leaveCoverage > 0) return 'LEAVE' as const
+    const stored = state.attendance.find((row) => row.employeeId === schedule.employeeId && row.date === today)
+    const current = stored ? currentAttendanceRecord(stored) : null
+    return current && !current.actualSegments.length && current.absenceMinutes >= schedule.scheduledMinutes ? 'ABSENT' as const : 'PRESENT' as const
+  })
+  const monthRecords = state.attendance.filter((row) => monthOf(row.date) === month).map(currentAttendanceRecord)
+  const pendingLeaves = state.leaves.filter((row) => row.status === 'PENDING' && overlapsMonth(row.startDate, row.endDate, month)).length
+  const payroll = state.payrolls.find((row) => row.month === month)
+  const lateDays = monthRecords.filter((row) => (row.lateMinutes || 0) > 0).length
+  const earlyDays = monthRecords.filter((row) => (row.earlyLeaveMinutes || 0) > 0).length
+  const reminders = lateDays || earlyDays ? [`本月考勤提醒：迟到 ${lateDays} 天，早退 ${earlyDays} 天（不自动扣薪）`] : []
+  const pendingIssue = pendingLeaves ? `${pendingLeaves} 条请假待审批` : ''
+  const payrollIssues = (payroll?.issues || []).filter((issue) => !issue.includes('请假待审批'))
+  const issues = [...payrollIssues, ...(pendingIssue ? [pendingIssue] : []), ...reminders]
+  return later({
+    month,
+    activeEmployees: employees.length,
+    todayPresent: todayClassifications.filter((value) => value === 'PRESENT').length,
+    todayOnLeave: todayClassifications.filter((value) => value === 'LEAVE').length,
+    todayAbsent: todayClassifications.filter((value) => value === 'ABSENT').length,
+    overtimeHours: Number((monthRecords.reduce((sum, row) => sum + (row.overtimeMinutes || 0), 0) / 60).toFixed(2)),
+    pendingLeaves,
+    projectedPayroll: payroll?.totalAmount || employees.reduce((sum, row) => sum + row.baseSalary + row.attendanceBonus, 0),
+    issueCount: issues.length,
+    issues
+  })
+}
+export async function mockGetScheduleAttendanceOverview(employeeId: string | undefined, month: string): Promise<ScheduleAttendanceOverview> {
+  validateBusinessMonth(month)
+  const state = read()
+  const today = shanghaiToday()
+  const overview = await mockGetOverview(month, today)
+  const employee = employeeId ? entity(state.employees, employeeId, '员工') : null
+  if (!employee) return later({ month, employee: null, days: [], overview, readonly: false })
+  const days: AttendanceCalendarDay[] = Array.from({ length: dayjs(`${month}-01`).daysInMonth() }, (_, index) => {
+    const date = `${month}-${String(index + 1).padStart(2, '0')}`
+    const schedule = state.monthlySchedules.find((row) => row.employeeId === employee.id && row.date === date) || null
+    const isFuture = date > today
+    const leaveRows = state.leaves.filter((row) => row.employeeId === employee.id && row.status === 'APPROVED' && row.startDate <= date && row.endDate >= date)
+    const leaveMinutes = schedule ? Math.min(schedule.scheduledMinutes, leaveRows.reduce((sum, leave) => sum + (leave.unit === 'FULL_DAY' ? schedule.scheduledMinutes : leave.unit === 'HALF_DAY' ? Math.round(schedule.scheduledMinutes / 2) : Math.round((leave.hours || schedule.scheduledMinutes / 60 * leave.countedDays) * 60)), 0)) : 0
+    const record = state.attendance.find((row) => row.employeeId === employee.id && row.date === date)
+    const current = record ? currentAttendanceRecord(record) : null
+    const scheduledMinutes = schedule?.isWorkday ? schedule.scheduledMinutes : 0
+    const workedMinutes = current ? current.workedMinutes : Math.max(0, scheduledMinutes - leaveMinutes)
+    const absenceMinutes = current?.absenceMinutes || 0
+    const overtimeMinutes = current?.overtimeMinutes || 0
+    const credited = Math.min(scheduledMinutes, workedMinutes + leaveMinutes)
+    const shortageMinutes = Math.max(0, scheduledMinutes - credited)
+    const status = isFuture ? 'FUTURE' : !schedule?.isWorkday ? 'REST' : leaveMinutes > 0 ? 'LEAVE' : !current?.actualSegments?.length && absenceMinutes >= scheduledMinutes && scheduledMinutes > 0 ? 'ABSENT' : shortageMinutes > 0 ? 'SHORT' : overtimeMinutes > 0 ? 'OVERTIME' : 'NORMAL'
+    const parts = isFuture || status === 'REST' ? [] : [workedMinutes ? `工作${formatHours(workedMinutes)}` : '', leaveMinutes ? `请假${formatHours(leaveMinutes)}` : '', overtimeMinutes ? `加班${formatHours(overtimeMinutes)}` : ''].filter(Boolean)
+    const displayMinutes = isFuture ? scheduledMinutes : status === 'REST' ? 0 : credited + overtimeMinutes
+    const leave = leaveRows[0]
+    return { date, day: index + 1, isFuture, status, schedule, actualSegments: current?.actualSegments || [], scheduledMinutes: isFuture ? scheduledMinutes : status === 'REST' ? 0 : scheduledMinutes, workedMinutes: isFuture || status === 'REST' ? 0 : workedMinutes, approvedLeaveMinutes: isFuture || status === 'REST' ? 0 : leaveMinutes, overtimeMinutes: isFuture || status === 'REST' ? 0 : overtimeMinutes, displayMinutes, shortageMinutes: isFuture || status === 'REST' ? 0 : shortageMinutes, durationText: status === 'REST' ? '公司排休' : `${formatHours(displayMinutes)} 小时${parts.length ? `（${parts.join('＋')}）` : ''}`, leaveTypeName: leave ? state.leaveTypes.find((row) => row.id === leave.leaveTypeId)?.name || '' : '', leaveReason: leave?.reason || '', absenceReason: status === 'ABSENT' ? current?.remark || '未填写原因' : '', backgroundTone: status === 'FUTURE' ? 'future' : status === 'REST' ? 'rest' : status === 'LEAVE' ? 'leave' : status === 'ABSENT' ? 'absent' : 'normal', durationTone: shortageMinutes > 0 && status !== 'ABSENT' ? 'short' : status === 'OVERTIME' ? 'overtime' : status === 'ABSENT' ? 'absent' : status === 'LEAVE' ? 'leave' : status === 'REST' ? 'rest' : status === 'FUTURE' ? 'future' : 'normal' } as AttendanceCalendarDay
+  })
+  return later({ month, employee: { id: employee.id, employeeNumber: employee.employeeNumber, name: employee.name }, days, overview, readonly: false })
+}
+function formatHours(minutes: number) { const hours = Math.max(0, Math.round(minutes)) / 60; return Number.isInteger(hours) ? String(hours) : hours.toFixed(1) }

@@ -1,9 +1,50 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetEmployeeAttendanceMock } from '@/mocks/employeeAttendance'
+import * as api from '@/api/employeeAttendance'
 import { syncPendingLeaveIssue, useEmployeeAttendanceStore } from './employeeAttendance'
 
 describe('employee attendance store operation state', () => {
-  beforeEach(() => setActivePinia(createPinia()))
+  beforeEach(() => {
+    const values = new Map<string, string>()
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+      clear: () => values.clear(), getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key),
+      key: (index: number) => Array.from(values.keys())[index] ?? null, get length() { return values.size }
+    } satisfies Storage })
+    setActivePinia(createPinia())
+    resetEmployeeAttendanceMock()
+  })
+
+  it('loads leaves for multiple employees while an empty selection loads all', async () => {
+    const store = useEmployeeAttendanceStore()
+    store.leaveEmployeeIds = ['emp-1', 'emp-2']
+    await store.loadLeaves()
+    expect(store.leaves.every(row => ['emp-1', 'emp-2'].includes(row.employeeId))).toBe(true)
+    store.leaveEmployeeIds = []
+    await store.loadLeaves()
+    expect(new Set(store.leaves.map(row => row.employeeId)).size).toBeGreaterThan(1)
+  })
+
+  it('keeps the latest attendance response when filters change during a pending request', async () => {
+    const store = useEmployeeAttendanceStore()
+    let resolveFirst!: (value: any[]) => void
+    let resolveSecond!: (value: any[]) => void
+    const first = new Promise<any[]>((resolve) => { resolveFirst = resolve })
+    const second = new Promise<any[]>((resolve) => { resolveSecond = resolve })
+    const request = vi.spyOn(api, 'getAttendance').mockImplementationOnce(() => first).mockImplementationOnce(() => second)
+
+    const pendingFirst = store.loadAttendance()
+    store.employeeId = 'emp-2'
+    const pendingSecond = store.loadAttendance()
+    resolveSecond([{ id: 'current', employeeId: 'emp-2', date: '2026-08-11' }])
+    await pendingSecond
+    resolveFirst([{ id: 'stale', employeeId: 'emp-1', date: '2026-08-11' }])
+    await pendingFirst
+
+    expect(store.attendance).toEqual([expect.objectContaining({ id: 'current', employeeId: 'emp-2' })])
+    request.mockRestore()
+  })
 
   it('keeps loading active until every concurrent load has completed', async () => {
     const store = useEmployeeAttendanceStore()

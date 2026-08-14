@@ -11,6 +11,7 @@ import { shouldShowOfflinePage } from './offline-page.js'
 type Listener = (...args: any[]) => void
 
 interface FlowWebContents {
+  isDestroyed(): boolean
   on(event: string, listener: Listener): unknown
   removeListener(event: string, listener: Listener): unknown
   loadURL(url: string): Promise<unknown>
@@ -71,6 +72,8 @@ export function installLoadingFlow(
     quit,
     isAllowedNavigation,
   } = options
+  const mainWebContents = mainWindow.webContents
+  const loadingWebContents = loadingWindow.webContents
 
   let state: 'idle' | 'loading' | 'offline' | 'disposed' = 'idle'
   let activeGeneration = 0
@@ -101,7 +104,7 @@ export function installLoadingFlow(
           return
         }
         syncBounds()
-        void loadingWindow.webContents
+        void loadingWebContents
           .loadURL(createLoadingPageDataUrl(target, mode))
           .then(() => {
             if (
@@ -135,9 +138,9 @@ export function installLoadingFlow(
         if (mainWindow.isDestroyed()) {
           return
         }
-        mainWindow.webContents.stop()
+        mainWebContents.stop()
         offlinePageDataUrl = createOfflinePageDataUrl(target, reason)
-        void mainWindow.webContents
+        void mainWebContents
           .loadURL(offlinePageDataUrl)
           .then(() => {
             if (state === 'offline' && !mainWindow.isDestroyed()) {
@@ -164,9 +167,9 @@ export function installLoadingFlow(
     clearReloadListeners()
     const generation = coordinator.start(mode)
     activeGeneration = generation
-    void mainWindow.webContents.loadURL(target.entryUrl).then(
+    void mainWebContents.loadURL(target.entryUrl).then(
       () => {
-        if (isAllowedNavigation(mainWindow.webContents.getURL())) {
+        if (isAllowedNavigation(mainWebContents.getURL())) {
           coordinator.finish(generation)
         } else {
           coordinator.fail('load', generation)
@@ -194,7 +197,7 @@ export function installLoadingFlow(
     ) => {
       if (
         isMainFrame &&
-        isAllowedNavigation(mainWindow.webContents.getURL())
+        isAllowedNavigation(mainWebContents.getURL())
       ) {
         clearReloadListeners()
         coordinator.finish(generation)
@@ -220,16 +223,18 @@ export function installLoadingFlow(
       }
     }
     removeReloadListeners = () => {
-      mainWindow.webContents.removeListener('did-frame-finish-load', finish)
-      mainWindow.webContents.removeListener('did-fail-load', fail)
+      if (!mainWebContents.isDestroyed()) {
+        mainWebContents.removeListener('did-frame-finish-load', finish)
+        mainWebContents.removeListener('did-fail-load', fail)
+      }
     }
-    mainWindow.webContents.on('did-frame-finish-load', finish)
-    mainWindow.webContents.on('did-fail-load', fail)
+    mainWebContents.on('did-frame-finish-load', finish)
+    mainWebContents.on('did-fail-load', fail)
 
     if (force) {
-      mainWindow.webContents.reloadIgnoringCache()
+      mainWebContents.reloadIgnoringCache()
     } else {
-      mainWindow.webContents.reload()
+      mainWebContents.reload()
     }
     return true
   }
@@ -308,17 +313,23 @@ export function installLoadingFlow(
     ++loadingPageRequest
     clearReloadListeners()
     coordinator.dispose()
-    mainWindow.removeListener('move', syncBounds)
-    mainWindow.removeListener('resize', syncBounds)
-    mainWindow.removeListener('closed', onMainWindowClosed)
-    loadingWindow.webContents.removeListener(
-      'will-navigate',
-      preventLoadingNavigation,
-    )
-    mainWindow.webContents.removeListener(
-      'did-fail-load',
-      handleOrdinaryLoadFailure,
-    )
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.removeListener('move', syncBounds)
+      mainWindow.removeListener('resize', syncBounds)
+      mainWindow.removeListener('closed', onMainWindowClosed)
+    }
+    if (!loadingWebContents.isDestroyed()) {
+      loadingWebContents.removeListener(
+        'will-navigate',
+        preventLoadingNavigation,
+      )
+    }
+    if (!mainWebContents.isDestroyed()) {
+      mainWebContents.removeListener(
+        'did-fail-load',
+        handleOrdinaryLoadFailure,
+      )
+    }
     if (!loadingWindow.isDestroyed()) {
       loadingWindow.destroy()
     }
@@ -327,9 +338,9 @@ export function installLoadingFlow(
   mainWindow.on('move', syncBounds)
   mainWindow.on('resize', syncBounds)
   mainWindow.on('closed', onMainWindowClosed)
-  loadingWindow.webContents.on('will-navigate', preventLoadingNavigation)
-  mainWindow.webContents.on('did-fail-load', handleOrdinaryLoadFailure)
-  loadingWindow.webContents.setWindowOpenHandler?.(() => ({ action: 'deny' }))
+  loadingWebContents.on('will-navigate', preventLoadingNavigation)
+  mainWebContents.on('did-fail-load', handleOrdinaryLoadFailure)
+  loadingWebContents.setWindowOpenHandler?.(() => ({ action: 'deny' }))
 
   return {
     startStartup: () => startFixedNavigation('startup'),

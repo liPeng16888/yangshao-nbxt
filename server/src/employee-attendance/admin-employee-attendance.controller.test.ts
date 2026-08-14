@@ -20,12 +20,14 @@ function fixture() {
   const payroll: any = Object.fromEntries([
     'adminOverview', 'adminEmployees', 'adminSchedules', 'adminAttendance', 'adminLeaves',
     'adminCommissions', 'adminBonuses', 'adminPayroll', 'adminAudit', 'adminRevealEmployee'
+    ,'adminScheduleAttendanceOverview'
   ].map((name) => [name, vi.fn().mockResolvedValue([])]))
   const access = {
     parseFrontendUserIds: vi.fn((value?: string | string[]) => Array.isArray(value) ? value : value ? value.split(',') : []),
     getAllowedFrontendUserIds: vi.fn().mockResolvedValue(['front-1'])
   }
-  return { controller: new AdminEmployeeAttendanceController(payroll, access as never), payroll, access }
+  const calendar = { adminView: vi.fn().mockResolvedValue({ readonly: true }) }
+  return { controller: new AdminEmployeeAttendanceController(payroll, access as never, calendar as never), payroll, access, calendar }
 }
 
 describe('AdminEmployeeAttendanceController', () => {
@@ -43,7 +45,7 @@ describe('AdminEmployeeAttendanceController', () => {
     ])
     expect(routes.map((route) => route.path).sort()).toEqual([
       'attendance', 'audit', 'bonuses', 'commissions', 'employees', 'employees/:id/reveal',
-      'leaves', 'overview', 'payroll', 'schedules'
+      'leaves', 'overview', 'payroll', 'schedule-attendance-overview', 'schedules'
     ])
   })
 
@@ -56,6 +58,22 @@ describe('AdminEmployeeAttendanceController', () => {
     expect(access.parseFrontendUserIds).toHaveBeenCalledWith(query.frontendUserIds)
     expect(access.getAllowedFrontendUserIds).toHaveBeenCalledWith(sub, ['front-1', 'front-2'])
     expect(payroll.adminPayroll).toHaveBeenCalledWith(['front-1'], expect.objectContaining({ month: '2026-08', employeeId: 'employee-1' }))
+  })
+
+  it('passes the permitted account set and monthly schedule filter to the readonly schedules query', async () => {
+    const { controller, payroll } = fixture()
+
+    await controller.schedules(sub, { frontendUserIds: 'front-1,front-2', employeeId: 'employee-1', month: '2026-08' })
+
+    expect(payroll.adminSchedules).toHaveBeenCalledWith(['front-1'], expect.objectContaining({ employeeId: 'employee-1', month: '2026-08' }))
+  })
+
+  it('passes only allowed accounts to the read-only combined calendar route', async () => {
+    const { controller, calendar } = fixture()
+
+    await controller.scheduleAttendanceOverview(sub, { frontendUserIds: 'front-1,front-2', employeeId: 'employee-1', month: '2026-08' } as never)
+
+    expect(calendar.adminView).toHaveBeenCalledWith(['front-1'], 'employee-1', '2026-08')
   })
 
   it('applies account filtering before password-gated reveal', async () => {

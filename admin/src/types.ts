@@ -189,10 +189,56 @@ export interface AdminAttendanceOverview {
   readonly: true
 }
 
-export interface AdminAttendanceSchedules {
-  weekly: AdminWeeklySchedule[]
-  overrides: AdminDateOverride[]
-  monthly: AdminMonthlyAttendanceSetting[]
+export type AdminAttendanceCalendarStatus = 'FUTURE' | 'ABSENT' | 'LEAVE' | 'REST' | 'NORMAL' | 'OVERTIME' | 'SHORT'
+export type AdminAttendanceCalendarTone = 'future' | 'normal' | 'leave' | 'absent' | 'rest' | 'overtime' | 'short'
+export interface AdminAttendanceCalendarOverview {
+  month: string
+  activeEmployees: number
+  todayPresent: number
+  todayOnLeave: number
+  todayAbsent: number
+  overtimeHours: number
+  pendingLeaves: number
+  projectedPayroll: number
+  issueCount: number
+  issues: string[]
+}
+export interface AdminAttendanceCalendarSchedule {
+  id: string
+  employeeId: string
+  date: string
+  isWorkday: boolean
+  scheduledMinutes: number
+  breakMinutes: number
+  segments: AdminScheduleSegment[]
+  remark?: string
+}
+export interface AdminAttendanceCalendarDay {
+  date: string
+  day: number
+  isFuture: boolean
+  status: AdminAttendanceCalendarStatus
+  schedule: AdminAttendanceCalendarSchedule | null
+  actualSegments: Array<{ sequence?: number; checkInAt: string; checkOutAt: string }>
+  scheduledMinutes: number
+  workedMinutes: number
+  approvedLeaveMinutes: number
+  overtimeMinutes: number
+  displayMinutes: number
+  shortageMinutes: number
+  durationText: string
+  leaveTypeName: string
+  leaveReason: string
+  absenceReason: string
+  backgroundTone: AdminAttendanceCalendarTone
+  durationTone: AdminAttendanceCalendarTone
+}
+export interface AdminScheduleAttendanceOverview {
+  month: string
+  employee: { id: string; employeeNumber: string; name: string } | null
+  days: AdminAttendanceCalendarDay[]
+  overview: AdminAttendanceCalendarOverview
+  readonly: true
 }
 
 export interface AdminAttendanceFrontendAccount {
@@ -206,37 +252,27 @@ export interface AdminAttendanceEmbeddedEmployee {
   name: string
 }
 
-export interface AdminWeeklySchedule {
-  id: string
-  frontendUserId: string
-  employeeId: string
-  weekday: number
-  isWorkday: boolean
-  plannedStartTime?: string | null
-  plannedEndTime?: string | null
-  scheduledMinutes: number
+export interface AdminScheduleSegment {
+  sequence: number
+  startTime: string
+  endTime: string
 }
 
-export interface AdminDateOverride {
+export interface AdminMonthlyScheduleDay {
   id: string
   frontendUserId: string
   employeeId: string
   date: string
   isWorkday: boolean
-  plannedStartTime?: string | null
-  plannedEndTime?: string | null
   scheduledMinutes: number
+  breakMinutes: number
+  segments: AdminScheduleSegment[]
   remark?: string | null
+  employee: AdminAttendanceEmbeddedEmployee
+  frontendUser?: AdminAttendanceFrontendAccount
 }
 
-export interface AdminMonthlyAttendanceSetting {
-  id: string
-  frontendUserId: string
-  employeeId: string
-  month: string
-  scheduledWorkDays: AdminAttendanceNumeric
-  restQuotaDays: AdminAttendanceNumeric
-}
+export type AdminAttendanceSchedules = AdminMonthlyScheduleDay[]
 
 export interface AdminAttendanceRecord {
   id: string
@@ -250,10 +286,12 @@ export interface AdminAttendanceRecord {
   workedMinutes: number
   lateMinutes: number
   earlyLeaveMinutes: number
+  explicitAbsenceMinutes: number
   absenceMinutes: number
   overtimeMinutes: number
   remark?: string | null
   employee: AdminAttendanceEmbeddedEmployee
+  actualSegments?: Array<{ sequence: number; checkInAt: string; checkOutAt: string }>
 }
 
 export interface AdminLeaveTypeSummary {
@@ -395,17 +433,15 @@ export interface AdminAttendanceTableRow {
   attendanceBonus?: AdminAttendanceNumeric
   categoryLabel?: string
   employeeLabel?: string
-  scheduleDate?: string
-  weekdayLabel?: string | number
-  isWorkday?: boolean
-  plannedStartTime?: string | null
-  plannedEndTime?: string | null
+  workdayLabel?: string
+  intervalsText?: string
+  restText?: string
+  scheduledHoursText?: string
   scheduledMinutes?: number
-  scheduledWorkDays?: AdminAttendanceNumeric
-  restQuotaDays?: AdminAttendanceNumeric
   date?: string
   checkInText?: string
   checkOutText?: string
+  actualIntervalsText?: string
   workedMinutes?: number
   lateMinutes?: number
   earlyLeaveMinutes?: number

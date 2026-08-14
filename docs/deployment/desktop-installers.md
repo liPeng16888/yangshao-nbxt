@@ -23,13 +23,13 @@
 4. 点击右侧 `Run workflow`，选择要构建的分支，再点绿色 `Run workflow`。
 5. 等待 `Validate`、Windows、macOS 和 `Bundle` 全部变绿。
 6. 打开这次运行页面，滚动到底部 `Artifacts`。
-7. 下载 `Yangshao-Desktop-Installers-1.0.1`。
+7. 下载 `Yangshao-Desktop-Installers-1.0.2`。
 8. 解压后得到四个安装包和 `SHA256SUMS.txt`：
 
-   - `Yangshao-Internal-System-1.0.1-win-x64.exe`
-   - `Yangshao-Backend-System-1.0.1-win-x64.exe`
-   - `Yangshao-Internal-System-1.0.1-mac-arm64.dmg`
-   - `Yangshao-Backend-System-1.0.1-mac-arm64.dmg`
+   - `Yangshao-Internal-System-1.0.2-win-x64.exe`
+   - `Yangshao-Backend-System-1.0.2-win-x64.exe`
+   - `Yangshao-Internal-System-1.0.2-mac-arm64.dmg`
+   - `Yangshao-Backend-System-1.0.2-mac-arm64.dmg`
 
 Artifact 私有保存 30 天，不创建公开 Release。只有对私有仓库有权限的成员能下载。Actions 会消耗 GitHub 额度，额度耗尽且未配置付费方式时构建会暂停。
 
@@ -47,8 +47,8 @@ shasum -a 256 -c SHA256SUMS.txt
 Windows PowerShell：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\Yangshao-Internal-System-1.0.1-win-x64.exe
-Get-FileHash -Algorithm SHA256 .\Yangshao-Backend-System-1.0.1-win-x64.exe
+Get-FileHash -Algorithm SHA256 .\Yangshao-Internal-System-1.0.2-win-x64.exe
+Get-FileHash -Algorithm SHA256 .\Yangshao-Backend-System-1.0.2-win-x64.exe
 ```
 
 把输出与 `SHA256SUMS.txt` 中对应文件的哈希比较，必须完全一致。
@@ -80,7 +80,7 @@ Get-FileHash -Algorithm SHA256 .\Yangshao-Backend-System-1.0.1-win-x64.exe
 - Windows：退出软件后直接运行新 `.exe`，安装到原位置即可。
 - macOS：退出软件，打开新 DMG，把新应用拖入“应用程序”并选择“替换”。
 
-登录态保存在独立 `userData` 目录中，正常覆盖安装不会清除。打开应用菜单中的“关于 仰韶化验内部系统”或“关于 仰韶化验后端系统”，可查看桌面外壳权威版本、UTC 构建时间、七位 Git 提交号和构建目标；报障时应一并提供这些信息。本版应显示版本 `1.0.1`。
+登录态保存在独立 `userData` 目录中，正常覆盖安装不会清除。打开应用菜单中的“关于 仰韶化验内部系统”或“关于 仰韶化验后端系统”，可查看桌面外壳权威版本、UTC 构建时间、七位 Git 提交号和构建目标；报障时应一并提供这些信息。本版应显示版本 `1.0.2`。
 
 ## 7. 主账号共享与本机数据边界
 

@@ -28,6 +28,21 @@
     </el-alert>
 
     <section v-loading="loading" class="panel data-panel">
+      <template v-if="section === 'schedules'">
+        <div v-if="calendarView?.employee" class="calendar-identity" data-testid="admin-calendar-identity">
+          <strong>{{ selectedAccountLabel }}</strong><span>{{ calendarView.employee.employeeNumber }} {{ calendarView.employee.name }}</span>
+        </div>
+        <AdminMonthlyAttendanceCalendar v-if="calendarView?.employee" :month="calendarView.month" :days="calendarView.days" />
+        <el-empty v-else description="请选择员工后查看每日排班考勤状态" />
+        <div class="overview-grid calendar-overview" data-testid="admin-attendance-overview-cards">
+          <el-card v-for="card in calendarOverviewCards" :key="card.label" shadow="never"><span>{{ card.label }}</span><strong>{{ card.value }}</strong></el-card>
+        </div>
+        <div class="calendar-issues" data-testid="admin-attendance-overview-issues">
+          <h4>待处理问题</h4>
+          <el-empty v-if="!calendarIssues.length" description="当前没有异常" />
+          <el-alert v-for="issue in calendarIssues" v-else :key="issue" :title="issue" type="warning" :closable="false" show-icon />
+        </div>
+      </template>
       <template v-if="section === 'overview'">
         <div class="overview-grid">
           <el-card v-for="card in overviewCards" :key="card.label" shadow="never">
@@ -37,13 +52,13 @@
         </div>
       </template>
       <AdminAttendanceTable
-        v-else
+        v-else-if="section !== 'schedules'"
         :section="section"
         :rows="tableRows"
         :columns="tableColumns"
         @reveal="openReveal"
       />
-      <el-empty v-if="!loading && section !== 'overview' && !tableRows.length" description="暂无数据" />
+      <el-empty v-if="!loading && section !== 'overview' && section !== 'schedules' && !tableRows.length" description="暂无数据" />
     </section>
 
     <section v-if="section === 'employees'" class="panel audit-panel">
@@ -101,6 +116,7 @@ import { useRoute } from 'vue-router'
 import * as api from '../api'
 import AdminAttendanceFilters from '../components/employee-attendance/AdminAttendanceFilters.vue'
 import AdminAttendanceTable from '../components/employee-attendance/AdminAttendanceTable.vue'
+import AdminMonthlyAttendanceCalendar from '../components/employee-attendance/AdminMonthlyAttendanceCalendar.vue'
 import { employeeAttendanceColumns } from '../config/employeeAttendanceColumns'
 import {
   employeeAttendanceNavigation,
@@ -119,6 +135,7 @@ import type {
   AdminAttendancePayrollRun,
   AdminAttendanceRecord,
   AdminAttendanceSchedules,
+  AdminScheduleAttendanceOverview,
   AdminAttendanceTableRow,
   AdminEmployeeAttendanceQuery,
   AdminRevealedAttendanceEmployee,
@@ -134,6 +151,7 @@ const currentNavigation = computed(() => employeeAttendanceNavigation.find((item
 const accounts = ref<FrontendOption[]>([])
 const employeeOptions = ref<AdminAttendanceEmployee[]>([])
 const overview = ref<AdminAttendanceOverview | null>(null)
+const calendarView = ref<AdminScheduleAttendanceOverview | null>(null)
 const rows = ref<AdminAttendanceTableRow[]>([])
 const auditRows = ref<AdminAttendanceAuditDisplayRow[]>([])
 const loading = ref(false)
@@ -144,6 +162,7 @@ const revealEmployeeId = ref('')
 const revealedEmployee = ref<AdminRevealedAttendanceEmployee | null>(null)
 const revealing = ref(false)
 const revealError = ref('')
+let calendarLoadSequence = 0
 const defaultMonth = dayjs().format('YYYY-MM')
 const filters = reactive<AdminEmployeeAttendanceQuery>({ frontendUserIds: [], month: defaultMonth })
 
@@ -156,7 +175,7 @@ const statusOptions = computed(() => statusOptionMap[section.value] || [])
 const filterVisibility = computed(() => ({
   employee: section.value !== 'overview',
   month: section.value !== 'employees',
-  dates: ['schedules', 'records', 'leave', 'compensation'].includes(section.value)
+  dates: ['records', 'leave', 'compensation'].includes(section.value)
 }))
 
 const tableColumns = computed(() => section.value === 'overview' ? [] : employeeAttendanceColumns[section.value])
@@ -167,12 +186,27 @@ const overviewCards = computed(() => [
   { label: '待审核请假', value: overview.value?.pendingLeave ?? 0 },
   { label: '本月工资批次', value: overview.value?.payrollRuns ?? 0 }
 ])
+const calendarOverviewCards = computed(() => {
+  const data = calendarView.value?.overview
+  return [
+    { label: '在职员工', value: data?.activeEmployees ?? 0 }, { label: '今日出勤', value: data?.todayPresent ?? 0 },
+    { label: '今日请假', value: data?.todayOnLeave ?? 0 }, { label: '今日缺勤', value: data?.todayAbsent ?? 0 },
+    { label: '本月加班总时长', value: `${data?.overtimeHours ?? 0} 小时` }, { label: '待审请假', value: data?.pendingLeaves ?? 0 },
+    { label: '预计应发', value: `¥${(data?.projectedPayroll ?? 0).toFixed(2)}` }, { label: '异常数', value: data?.issueCount ?? 0 }
+  ]
+})
+const calendarIssues = computed(() => calendarView.value?.overview.issues || [])
+const selectedAccountLabel = computed(() => {
+  const selected = employeeOptions.value.find((item) => item.id === calendarView.value?.employee?.id)
+  const account = accounts.value.find((item) => item.id === selected?.frontendUserId)
+  return account ? `${account.name}（${account.account}）` : selected?.frontendUserId || '-'
+})
 
 function query(): AdminEmployeeAttendanceQuery {
   const selected = filters.frontendUserIds.length ? filters.frontendUserIds : accounts.value.map((item) => item.id)
   const supportsEmployee = section.value !== 'overview'
   const supportsMonth = section.value !== 'employees'
-  const supportsDates = ['schedules', 'records', 'leave', 'compensation'].includes(section.value)
+  const supportsDates = ['records', 'leave', 'compensation'].includes(section.value)
   return {
     frontendUserIds: selected,
     employeeId: supportsEmployee ? filters.employeeId || undefined : undefined,
@@ -203,12 +237,15 @@ function normalizeEmployee(row: AdminAttendanceEmployee) {
 }
 
 function normalizeSchedule(data: AdminAttendanceSchedules): AdminAttendanceTableRow[] {
-  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-  return [
-    ...data.weekly.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '周排班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: weekdays[row.weekday] || row.weekday, scheduleDate: '-' })),
-    ...data.overrides.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '临时调班', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.date })),
-    ...data.monthly.map((row) => ({ ...row, accountName: accountLabel(row), categoryLabel: '月度设置', employeeLabel: employeeLabel(row.employeeId), weekdayLabel: '-', scheduleDate: row.month, plannedStartTime: '-', plannedEndTime: '-' }))
-  ]
+  return data.map((row) => ({
+    ...row,
+    accountName: accountLabel(row),
+    employeeLabel: employeeLabel(row.employeeId, row.employee),
+    workdayLabel: row.isWorkday ? '工作日' : '休息日',
+    intervalsText: row.segments.length ? row.segments.map((segment) => `${segment.startTime}—${segment.endTime}`).join('；') : '-',
+    restText: row.isWorkday ? `休息 ${row.breakMinutes} 分钟` : '-',
+    scheduledHoursText: `${(row.scheduledMinutes / 60).toFixed(2)} 小时`
+  }))
 }
 
 function normalizeCommon<T extends AdminAttendanceRecord | AdminLeaveRequest | AdminCommissionRecord | AdminBonusRecord>(row: T) {
@@ -216,10 +253,14 @@ function normalizeCommon<T extends AdminAttendanceRecord | AdminLeaveRequest | A
 }
 
 function normalizeAttendance(row: AdminAttendanceRecord): AdminAttendanceTableRow {
+  const actualIntervals = row.actualSegments || []
   return {
     ...normalizeCommon(row),
-    checkInText: formatPunchTime(row.checkInAt),
-    checkOutText: formatPunchTime(row.checkOutAt)
+    checkInText: formatPunchTime(actualIntervals[0]?.checkInAt || row.checkInAt),
+    checkOutText: formatPunchTime(actualIntervals.at(-1)?.checkOutAt || row.checkOutAt),
+    actualIntervalsText: actualIntervals.length
+      ? actualIntervals.map((segment) => `${formatPunchTime(segment.checkInAt)}—${formatPunchTime(segment.checkOutAt)}`).join('；')
+      : '未手工录入（按排班正常）'
   }
 }
 
@@ -263,9 +304,22 @@ async function ensureEmployees() {
 }
 
 async function loadSection() {
+  const requestId = section.value === 'schedules' ? ++calendarLoadSequence : 0
   loading.value = true
   error.value = ''
   try {
+    if (section.value === 'schedules') {
+      const requestQuery = query()
+      const employeeRows = await api.getAdminAttendanceEmployees({ frontendUserIds: requestQuery.frontendUserIds })
+      if (requestId !== calendarLoadSequence || section.value !== 'schedules') return
+      const validEmployeeId = requestQuery.employeeId && employeeRows.some((item) => item.id === requestQuery.employeeId) ? requestQuery.employeeId : undefined
+      const result = await api.getAdminScheduleAttendanceOverview({ ...requestQuery, employeeId: validEmployeeId })
+      if (requestId !== calendarLoadSequence || section.value !== 'schedules') return
+      employeeOptions.value = employeeRows
+      if (!validEmployeeId) filters.employeeId = undefined
+      calendarView.value = result
+      return
+    }
     if (section.value !== 'employees') await ensureEmployees()
     const requestQuery = query()
     if (section.value === 'overview') overview.value = await api.getAdminAttendanceOverview(requestQuery)
@@ -273,8 +327,7 @@ async function loadSection() {
       employeeOptions.value = await api.getAdminAttendanceEmployees(requestQuery)
       rows.value = employeeOptions.value.map(normalizeEmployee)
       await loadAudit()
-    } else if (section.value === 'schedules') rows.value = normalizeSchedule(await api.getAdminAttendanceSchedules(requestQuery))
-    else if (section.value === 'records') rows.value = (await api.getAdminAttendanceRecords(requestQuery)).map(normalizeAttendance)
+    } else if (section.value === 'records') rows.value = (await api.getAdminAttendanceRecords(requestQuery)).map(normalizeAttendance)
     else if (section.value === 'leave') rows.value = (await api.getAdminAttendanceLeaves(requestQuery)).map(normalizeLeave)
     else if (section.value === 'compensation') {
       const [commissions, bonuses] = await Promise.all([
@@ -286,9 +339,9 @@ async function loadSection() {
       ]
     } else rows.value = normalizePayroll(await api.getAdminAttendancePayroll(requestQuery))
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '员工考勤数据加载失败'
+    if (!requestId || requestId === calendarLoadSequence) error.value = caught instanceof Error ? caught.message : '员工考勤数据加载失败'
   } finally {
-    loading.value = false
+    if (!requestId || requestId === calendarLoadSequence) loading.value = false
   }
 }
 
@@ -352,6 +405,7 @@ async function submitReveal() {
 }
 
 watch(() => route.path, () => {
+  calendarLoadSequence += 1
   rows.value = []
   error.value = ''
   filters.status = undefined

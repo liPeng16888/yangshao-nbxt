@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   getAdminAttendanceOverview: vi.fn(),
   getAdminAttendanceEmployees: vi.fn(),
   getAdminAttendanceSchedules: vi.fn(),
+  getAdminScheduleAttendanceOverview: vi.fn(),
   getAdminAttendanceRecords: vi.fn(),
   getAdminAttendanceLeaves: vi.fn(),
   getAdminAttendanceCommissions: vi.fn(),
@@ -92,7 +93,16 @@ beforeEach(() => {
   ])
   api.getAdminAttendanceEmployees.mockResolvedValue(employees)
   api.getAdminAttendanceOverview.mockResolvedValue({ month: '2026-08', workforce: 2, attendanceRecords: 20, pendingLeave: 1, payrollRuns: 1, readonly: true })
-  api.getAdminAttendanceSchedules.mockResolvedValue({ weekly: [], overrides: [], monthly: [] })
+  api.getAdminAttendanceSchedules.mockResolvedValue([])
+  api.getAdminScheduleAttendanceOverview.mockResolvedValue({
+    month: '2026-08', readonly: true, employee: { id: 'emp-1', employeeNumber: 'YG001', name: '张三' },
+    overview: { month: '2026-08', activeEmployees: 2, todayPresent: 1, todayOnLeave: 0, todayAbsent: 0, overtimeHours: 0.5, pendingLeaves: 1, projectedPayroll: 12000, issueCount: 1, issues: ['1 条请假待审批'] },
+    days: [
+      { date: '2026-08-08', day: 8, isFuture: false, status: 'OVERTIME', schedule: { id: 'day-1', employeeId: 'emp-1', date: '2026-08-08', isWorkday: true, scheduledMinutes: 510, breakMinutes: 60, segments: [{ sequence: 0, startTime: '08:00', endTime: '17:30' }] }, actualSegments: [], scheduledMinutes: 510, workedMinutes: 510, approvedLeaveMinutes: 0, overtimeMinutes: 30, displayMinutes: 540, shortageMinutes: 0, durationText: '9 小时（工作8.5＋加班0.5）', leaveTypeName: '', leaveReason: '', absenceReason: '', backgroundTone: 'normal', durationTone: 'overtime' },
+      { date: '2026-08-09', day: 9, isFuture: false, status: 'LEAVE', schedule: { id: 'day-2', employeeId: 'emp-1', date: '2026-08-09', isWorkday: true, scheduledMinutes: 600, breakMinutes: 0, segments: [{ sequence: 0, startTime: '08:00', endTime: '18:00' }] }, actualSegments: [], scheduledMinutes: 600, workedMinutes: 360, approvedLeaveMinutes: 240, overtimeMinutes: 0, displayMinutes: 600, shortageMinutes: 0, durationText: '10 小时（工作6＋请假4）', leaveTypeName: '事假', leaveReason: '照顾家人', absenceReason: '', backgroundTone: 'leave', durationTone: 'leave' },
+      { date: '2026-08-10', day: 10, isFuture: false, status: 'ABSENT', schedule: { id: 'day-3', employeeId: 'emp-1', date: '2026-08-10', isWorkday: true, scheduledMinutes: 600, breakMinutes: 0, segments: [{ sequence: 0, startTime: '08:00', endTime: '18:00' }] }, actualSegments: [], scheduledMinutes: 600, workedMinutes: 0, approvedLeaveMinutes: 0, overtimeMinutes: 0, displayMinutes: 0, shortageMinutes: 600, durationText: '0 小时', leaveTypeName: '', leaveReason: '', absenceReason: '无故未到', backgroundTone: 'absent', durationTone: 'absent' }
+    ]
+  })
   api.getAdminAttendanceRecords.mockResolvedValue([])
   api.getAdminAttendanceLeaves.mockResolvedValue([])
   api.getAdminAttendanceCommissions.mockResolvedValue([])
@@ -189,30 +199,68 @@ describe('EmployeeAttendancePage', () => {
     api.getAdminAttendanceRecords.mockResolvedValueOnce([{
       id: 'attendance-1', frontendUserId: 'front-2', employeeId: 'emp-1', date: '2026-08-08',
       checkInAt: '2026-08-08T00:05:00Z', checkOutAt: null, scheduledMinutes: 480,
-      workedMinutes: 0, lateMinutes: 5, earlyLeaveMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0,
+      workedMinutes: 0, lateMinutes: 5, earlyLeaveMinutes: 0, explicitAbsenceMinutes: 0, absenceMinutes: 0, overtimeMinutes: 0,
+      actualSegments: [{ sequence: 0, checkInAt: '2026-08-08T00:05:00Z', checkOutAt: '2026-08-08T04:00:00Z' }],
       employee: { employeeNumber: 'YG001', name: '张三' }
     }])
     const wrapper = mountPage()
     await flushPromises()
 
     expect((wrapper.getComponent(TableStub).props('data')!).at(0)!).toMatchObject({
-      accountName: '仰韶客户二（yangshao002）', checkInText: '08:05', checkOutText: '未录入'
+      accountName: '仰韶客户二（yangshao002）', checkInText: '08:05', checkOutText: '12:00', actualIntervalsText: '08:05—12:00'
     })
   })
 
-  it('shows planned start/end times on the read-only schedule table', async () => {
+  it('renders the combined readonly calendar and overview without mutation controls', async () => {
     Object.assign(routeState, { path: '/employee-attendance/schedules', meta: { employeeAttendancePage: 'schedules' } })
-    api.getAdminAttendanceSchedules.mockResolvedValueOnce({
-      weekly: [{ id: 'weekly-1', frontendUserId: 'front-1', employeeId: 'emp-1', weekday: 1, isWorkday: true, plannedStartTime: '08:30', plannedEndTime: '17:30', scheduledMinutes: 540 }],
-      overrides: [], monthly: []
-    })
     const wrapper = mountPage()
     await flushPromises()
+    const employeeSelect = wrapper.findAllComponents(SelectStub)[1]!
+    employeeSelect.vm.$emit('update:modelValue', 'emp-1')
+    await nextTick()
+    await wrapper.get('[data-testid="employee-attendance-search"]').trigger('click')
+    await flushPromises()
 
-    expect(wrapper.text()).toContain('开始时间')
-    expect(wrapper.text()).toContain('结束时间')
-    expect(wrapper.text()).toContain('08:30')
-    expect(wrapper.text()).toContain('17:30')
+    expect(api.getAdminScheduleAttendanceOverview).toHaveBeenLastCalledWith(expect.objectContaining({ frontendUserIds: ['front-1', 'front-2'], employeeId: 'emp-1', month: expect.any(String) }))
+    expect(wrapper.text()).toContain('凯里化验室')
+    expect(wrapper.text()).toContain('YG001 张三')
+    expect(wrapper.text()).toContain('08:00–17:30')
+    expect(wrapper.text()).toContain('9 小时（工作8.5＋加班0.5）')
+    expect(wrapper.text()).toContain('事假')
+    expect(wrapper.text()).toContain('照顾家人')
+    expect(wrapper.text()).toContain('旷工')
+    expect(wrapper.text()).toContain('无故未到')
+    expect(wrapper.find('.calendar-day--leave').exists()).toBe(true)
+    expect(wrapper.find('.calendar-day--absent').exists()).toBe(true)
+    expect(wrapper.text()).toContain('本月加班总时长')
+    expect(wrapper.text()).toContain('1 条请假待审批')
+    expect(wrapper.findAll('button').map((button) => button.text()).join(' ')).not.toMatch(/保存|复制上月|批量覆盖|编辑|删除|审批|确认工资|导出/)
+  })
+
+  it('clears an employee outside the newly selected account before loading the aggregate snapshot', async () => {
+    Object.assign(routeState, { path: '/employee-attendance/schedules', meta: { employeeAttendancePage: 'schedules' } })
+    api.getAdminAttendanceEmployees.mockImplementation(async (query: { frontendUserIds: string[] }) => query.frontendUserIds.includes('front-1') ? employees : [])
+    api.getAdminScheduleAttendanceOverview.mockImplementation(async (query: { employeeId?: string }) => ({
+      month: '2026-08', readonly: true, employee: query.employeeId ? { id: 'emp-1', employeeNumber: 'YG001', name: '张三' } : null, days: [],
+      overview: { month: '2026-08', activeEmployees: 0, todayPresent: 0, todayOnLeave: 0, todayAbsent: 0, overtimeHours: 0, pendingLeaves: 0, projectedPayroll: 0, issueCount: 0, issues: [] }
+    }))
+    const wrapper = mountPage()
+    await flushPromises()
+    const [account, employee] = wrapper.findAllComponents(SelectStub)
+    account.vm.$emit('update:modelValue', ['front-1'])
+    employee.vm.$emit('update:modelValue', 'emp-1')
+    await nextTick()
+    await wrapper.get('[data-testid="employee-attendance-search"]').trigger('click')
+    await flushPromises()
+
+    account.vm.$emit('update:modelValue', ['front-2'])
+    await nextTick()
+    await wrapper.get('[data-testid="employee-attendance-search"]').trigger('click')
+    await flushPromises()
+
+    expect(api.getAdminScheduleAttendanceOverview).toHaveBeenLastCalledWith(expect.objectContaining({ frontendUserIds: ['front-2'], employeeId: undefined }))
+    expect(wrapper.text()).toContain('请选择员工后查看每日排班考勤状态')
+    expect(wrapper.text()).toContain('在职员工')
   })
 
   it('labels and renders a generic attendance audit with account, action and entity details', async () => {

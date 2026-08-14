@@ -19,7 +19,6 @@ import CustomerOverviewPage from '@/views/dashboard/CustomerOverviewPage.vue'
 import MedicineInventoryStockPage from '@/views/dashboard/MedicineInventoryStockPage.vue'
 import MedicineInventoryInboundPage from '@/views/dashboard/MedicineInventoryInboundPage.vue'
 import MedicineInventoryOutboundPage from '@/views/dashboard/MedicineInventoryOutboundPage.vue'
-import EmployeeAttendanceOverviewPage from '@/views/dashboard/employee-attendance/EmployeeAttendanceOverviewPage.vue'
 import EmployeeDirectoryPage from '@/views/dashboard/employee-attendance/EmployeeDirectoryPage.vue'
 import EmployeeSchedulesPage from '@/views/dashboard/employee-attendance/EmployeeSchedulesPage.vue'
 import EmployeeAttendanceRecordsPage from '@/views/dashboard/employee-attendance/EmployeeAttendanceRecordsPage.vue'
@@ -72,10 +71,10 @@ const router = createRouter({
           component: LabReportPage,
           meta: { title: '化验报告', requiresAuth: true, frontendPermission: 'LAB_REPORT_SMS_TEMPLATE' }
         },
-        { path: 'employee-attendance', redirect: () => firstAllowedPath(useAuthStore().user, '/employee-attendance') },
-        { path: 'employee-attendance/overview', name: 'employeeAttendanceOverview', component: EmployeeAttendanceOverviewPage, meta: { title: '考勤概览', requiresAuth: true, frontendPermission: 'ATTENDANCE_OVERVIEW' } },
+        { path: 'employee-attendance', redirect: '/employee-attendance/schedules' },
+        { path: 'employee-attendance/overview', redirect: '/employee-attendance/schedules' },
         { path: 'employee-attendance/employees', name: 'employeeAttendanceEmployees', component: EmployeeDirectoryPage, meta: { title: '员工档案', requiresAuth: true, frontendPermission: 'ATTENDANCE_EMPLOYEES' } },
-        { path: 'employee-attendance/schedules', name: 'employeeAttendanceSchedules', component: EmployeeSchedulesPage, meta: { title: '排班管理', requiresAuth: true, frontendPermission: 'ATTENDANCE_SCHEDULES' } },
+        { path: 'employee-attendance/schedules', name: 'employeeAttendanceSchedules', component: EmployeeSchedulesPage, meta: { title: '排班考勤概览', requiresAuth: true, frontendPermission: 'ATTENDANCE_SCHEDULES' } },
         { path: 'employee-attendance/records', name: 'employeeAttendanceRecords', component: EmployeeAttendanceRecordsPage, meta: { title: '考勤记录', requiresAuth: true, frontendPermission: 'ATTENDANCE_RECORDS' } },
         { path: 'employee-attendance/leave', name: 'employeeAttendanceLeave', component: EmployeeLeavePage, meta: { title: '请假管理', requiresAuth: true, frontendPermission: 'ATTENDANCE_LEAVE' } },
         { path: 'employee-attendance/compensation', name: 'employeeAttendanceCompensation', component: EmployeeCompensationPage, meta: { title: '提成与奖金', requiresAuth: true, frontendPermission: 'ATTENDANCE_COMPENSATION' } },

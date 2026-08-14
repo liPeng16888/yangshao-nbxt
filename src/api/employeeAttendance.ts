@@ -3,10 +3,12 @@ import baseRequest, { useMocks } from '@/utils/request'
 import { readAccessGuardSessions, selectAccessGuardGrant, type StoredAccessGuardSessions } from '@/api/accessGuard'
 import * as mock from '@/mocks/employeeAttendance'
 import type {
-  AttendanceGenerationResult, AttendanceOverview, AttendancePayload, AttendanceQuery, AttendanceRecord, BonusPayload, BonusRecord,
+  ActualAttendanceSegment, AttendanceGenerationResult, AttendanceOverview, AttendancePayload, AttendanceQuery, AttendanceRecord, BonusPayload, BonusRecord, EmployeeAttendanceInput,
+  BatchMonthlySchedulePayload, BatchMonthlyScheduleResult,
   CommissionPayload, CommissionRecord, CommissionType, CommissionTypePayload, CompensationTotal, DateOverride,
   DateOverridePayload, Employee, EmployeePayload, EmployeeQuery, LeaveRequest, LeaveRequestPayload, LeaveType,
-  LeaveTypePayload, MonthlySetting, PayrollAdjustment, PayrollRun, RevealedEmployee, WeeklySchedule, WeeklySchedulePayload
+  LeaveTypePayload, MonthlyScheduleDay, MonthlySchedulePayload, MonthlySetting, MonthlySettingPayload, PayrollAdjustment, PayrollRun, RevealedEmployee,
+  ScheduleSegment, WeeklySchedule, WeeklySchedulePayload, AttendanceCalendarDay, ScheduleAttendanceOverview
 } from '@/types/employeeAttendance'
 
 export function selectEmployeeAttendanceGrant(sessions: StoredAccessGuardSessions) {
@@ -28,7 +30,7 @@ const attendanceRequest = {
 }
 
 type VersionedTarget = { id: string; updatedAt?: string }
-const versionedBody = (baseUpdatedAt?: string) => ({ baseUpdatedAt })
+const versionedBody = (baseUpdatedAt?: string) => baseUpdatedAt ? { baseUpdatedAt } : {}
 const targetId = (target: VersionedTarget | string) => typeof target === 'string' ? target : target.id
 const targetVersion = (target: VersionedTarget | string) => typeof target === 'string' ? undefined : target.updatedAt
 
@@ -54,6 +56,60 @@ export function normalizeCommissionResponse(row: any): CommissionRecord {
 }
 export function normalizeMonthlySettingResponse(row: any): MonthlySetting {
   return { ...row, scheduledWorkDays: amount(row.scheduledWorkDays), restQuotaDays: amount(row.restQuotaDays) }
+}
+function responseObject(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+function responseSegments(value: unknown): ScheduleSegment[] {
+  if (!Array.isArray(value)) return []
+  return value.map((segment, index) => {
+    const row = responseObject(segment)
+    return {
+      ...(typeof row.id === 'string' ? { id: row.id } : {}),
+      ...(Number.isFinite(Number(row.sequence)) ? { sequence: Number(row.sequence) } : { sequence: index }),
+      startTime: String(row.startTime || ''), endTime: String(row.endTime || '')
+    }
+  }).sort((left, right) => (left.sequence || 0) - (right.sequence || 0))
+}
+export function normalizeMonthlyScheduleResponse(value: unknown): MonthlyScheduleDay {
+  const row = responseObject(value)
+  return {
+    id: String(row.id || ''), employeeId: String(row.employeeId || ''), date: String(row.date || ''), isWorkday: Boolean(row.isWorkday),
+    segments: responseSegments(row.segments), remark: typeof row.remark === 'string' ? row.remark : undefined,
+    scheduledMinutes: amount(row.scheduledMinutes), breakMinutes: amount(row.breakMinutes), updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : undefined
+  }
+}
+function responseActualSegments(value: unknown): ActualAttendanceSegment[] {
+  if (!Array.isArray(value)) return []
+  return value.map((segment, index) => {
+    const row = responseObject(segment)
+    return {
+      ...(typeof row.id === 'string' ? { id: row.id } : {}),
+      ...(Number.isFinite(Number(row.sequence)) ? { sequence: Number(row.sequence) } : { sequence: index }),
+      checkInAt: String(row.checkInAt || ''), checkOutAt: String(row.checkOutAt || '')
+    }
+  }).sort((left, right) => (left.sequence || 0) - (right.sequence || 0))
+}
+function legacyActualSegment(checkInAt: unknown, checkOutAt: unknown): ActualAttendanceSegment[] {
+  const checkIn = typeof checkInAt === 'string' ? checkInAt : ''
+  const checkOut = typeof checkOutAt === 'string' ? checkOutAt : ''
+  if (!checkIn || !checkOut || Number.isNaN(new Date(checkIn).getTime()) || Number.isNaN(new Date(checkOut).getTime()) || new Date(checkOut).getTime() <= new Date(checkIn).getTime()) return []
+  return [{ sequence: 0, checkInAt: checkIn, checkOutAt: checkOut }]
+}
+export function normalizeAttendanceResponse(value: unknown): AttendanceRecord {
+  const row = responseObject(value)
+  const actualSegments = Array.isArray(row.actualSegments) ? responseActualSegments(row.actualSegments) : legacyActualSegment(row.checkInAt, row.checkOutAt)
+  const explicitAbsenceMinutes = amount(row.explicitAbsenceMinutes)
+  return {
+    id: String(row.id || ''), employeeId: String(row.employeeId || ''), date: String(row.date || ''), isScheduledWorkday: Boolean(row.isScheduledWorkday),
+    scheduledMinutes: amount(row.scheduledMinutes), actualSegments, explicitAbsenceMinutes,
+    overtimeMinutes: amount(row.overtimeMinutes), remark: typeof row.remark === 'string' ? row.remark : undefined,
+    checkInAt: typeof row.checkInAt === 'string' ? row.checkInAt : actualSegments[0]?.checkInAt || '',
+    checkOutAt: typeof row.checkOutAt === 'string' ? row.checkOutAt : actualSegments.at(-1)?.checkOutAt || '',
+    workedMinutes: amount(row.workedMinutes), lateMinutes: amount(row.lateMinutes), earlyLeaveMinutes: amount(row.earlyLeaveMinutes),
+    absenceMinutes: amount(row.absenceMinutes), manuallyEdited: Boolean(row.manuallyEdited), updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : undefined,
+    lockedAt: typeof row.lockedAt === 'string' ? row.lockedAt : typeof row.payrollLockedAt === 'string' ? row.payrollLockedAt : null
+  }
 }
 export function normalizeLeaveResponse(row: any): LeaveRequest {
   return { ...normalizeLocked(row), hours: row.hours == null ? undefined : amount(row.hours), countedDays: amount(row.countedDays) }
@@ -85,12 +141,18 @@ function toBeijingOffsetIso(value?: string | null): string | null {
   return `${match[1]}T${match[2]}:${match[3] || '00'}+08:00`
 }
 
-export function normalizeAttendanceMutationPayload(payload: AttendancePayload): AttendancePayload {
+export function normalizeAttendanceMutationPayload(payload: EmployeeAttendanceInput): EmployeeAttendanceInput {
   return {
     ...payload,
-    checkInAt: toBeijingOffsetIso(payload.checkInAt),
-    checkOutAt: toBeijingOffsetIso(payload.checkOutAt)
+    actualSegments: payload.actualSegments.map((segment) => ({
+      ...segment,
+      checkInAt: toBeijingOffsetIso(segment.checkInAt) || '', checkOutAt: toBeijingOffsetIso(segment.checkOutAt) || ''
+    }))
   }
+}
+/** @deprecated Only the existing weekly attendance screen uses this migration adapter. */
+export function normalizeLegacyAttendanceMutationPayload(payload: AttendancePayload): AttendancePayload {
+  return { ...payload, checkInAt: toBeijingOffsetIso(payload.checkInAt), checkOutAt: toBeijingOffsetIso(payload.checkOutAt) }
 }
 
 export function toBeijingDateTimeLocal(value?: string | null): string {
@@ -155,11 +217,40 @@ export const getDateOverrides = (query: AttendanceQuery = {}): Promise<DateOverr
 export const saveDateOverride = (payload: DateOverridePayload, id?: string, baseUpdatedAt?: string): Promise<DateOverride> => useMocks ? mock.mockSaveDateOverride(payload, id) : id ? attendanceRequest.put(`/employee-attendance/overrides/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/overrides', payload)
 export const deleteDateOverride = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteDateOverride(targetId(target)) : attendanceRequest.delete(`/employee-attendance/overrides/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const getMonthlySettings = (month?: string): Promise<MonthlySetting[]> => useMocks ? mock.mockGetMonthlySettings(month) : attendanceRequest.get('/employee-attendance/month-settings', { params: { month } }).then((rows: any[]) => rows.map(normalizeMonthlySettingResponse))
-export const saveMonthlySetting = (payload: Omit<MonthlySetting, 'id' | 'updatedAt'> & { baseUpdatedAt?: string }): Promise<MonthlySetting> => (useMocks ? mock.mockSaveMonthlySetting(payload as any) : attendanceRequest.post('/employee-attendance/month-settings', payload)).then(normalizeMonthlySettingResponse)
+export const saveMonthlySetting = (payload: MonthlySettingPayload): Promise<MonthlySetting> => (useMocks ? mock.mockSaveMonthlySetting(payload) : attendanceRequest.post('/employee-attendance/month-settings', payload)).then(normalizeMonthlySettingResponse)
 export const deleteMonthlySetting = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteMonthlySetting(targetId(target)) : attendanceRequest.delete(`/employee-attendance/month-settings/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 
-export const getAttendance = (query: AttendanceQuery = {}): Promise<AttendanceRecord[]> => { const normalized = normalizeAttendanceQuery(query); return useMocks ? mock.mockGetAttendance(normalized) : attendanceRequest.get('/employee-attendance/attendance', { params: normalized }).then((rows: any[]) => rows.map(normalizeLocked)) }
-export const saveAttendance = (payload: AttendancePayload, id?: string, baseUpdatedAt?: string): Promise<AttendanceRecord> => { const normalized = normalizeAttendanceMutationPayload(payload); return useMocks ? mock.mockSaveAttendance(normalized, id) : (id ? attendanceRequest.put(`/employee-attendance/attendance/${id}`, { ...normalized, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/attendance', normalized)).then(normalizeLocked) }
+export const getMonthlySchedules = (employeeId: string, month: string): Promise<MonthlyScheduleDay[]> => useMocks
+  ? mock.mockGetMonthlySchedules(employeeId, month)
+  : attendanceRequest.get('/employee-attendance/monthly-schedules', { params: { employeeId, month } }).then((rows: unknown[]) => rows.map(normalizeMonthlyScheduleResponse))
+export const saveMonthlyScheduleDay = (payload: MonthlySchedulePayload): Promise<MonthlyScheduleDay> => (useMocks
+  ? mock.mockSaveMonthlyScheduleDay(payload)
+  : attendanceRequest.post('/employee-attendance/monthly-schedules/day', payload)).then(normalizeMonthlyScheduleResponse)
+export const deleteMonthlyScheduleDay = async (target: VersionedTarget | string): Promise<void> => {
+  if (useMocks) return mock.mockDeleteMonthlyScheduleDay(targetId(target))
+  await attendanceRequest.delete(`/employee-attendance/monthly-schedules/day/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
+}
+export const batchSaveMonthlySchedules = (payload: BatchMonthlySchedulePayload): Promise<BatchMonthlyScheduleResult> => (useMocks
+  ? mock.mockBatchSaveMonthlySchedules(payload)
+  : attendanceRequest.post('/employee-attendance/monthly-schedules/batch', payload)).then((result: unknown) => {
+  if (Array.isArray(result)) return { rows: result.map(normalizeMonthlyScheduleResponse), updated: result.length, overwritten: 0 }
+  const row = responseObject(result)
+  const rows = Array.isArray(row.rows) ? row.rows.map(normalizeMonthlyScheduleResponse) : []
+  return { rows, updated: amount(row.updated), overwritten: amount(row.overwritten) }
+})
+export const copyPreviousMonthSchedules = (employeeId: string, targetMonth: string, overwrite: boolean): Promise<{ copied: number; targetMonth: string }> => (useMocks
+  ? mock.mockCopyPreviousMonthSchedules(employeeId, targetMonth, overwrite)
+  : attendanceRequest.post('/employee-attendance/monthly-schedules/copy-previous', { employeeId, targetMonth, overwrite })).then((result: unknown) => {
+  const row = responseObject(result)
+  return { copied: amount(row.copied), targetMonth: String(row.targetMonth || targetMonth) }
+})
+
+export const getAttendance = (query: AttendanceQuery = {}): Promise<AttendanceRecord[]> => { const normalized = normalizeAttendanceQuery(query); return useMocks ? mock.mockGetAttendance(normalized) : attendanceRequest.get('/employee-attendance/attendance', { params: normalized }).then((rows: unknown[]) => rows.map(normalizeAttendanceResponse)) }
+export function saveAttendance(payload: EmployeeAttendanceInput, id?: string, baseUpdatedAt?: string): Promise<AttendanceRecord>
+export function saveAttendance(payload: EmployeeAttendanceInput, id?: string, baseUpdatedAt?: string): Promise<AttendanceRecord> {
+  const normalized = normalizeAttendanceMutationPayload(payload)
+  return (useMocks ? mock.mockSaveAttendance(normalized, id) : id ? attendanceRequest.put(`/employee-attendance/attendance/${id}`, { ...normalized, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/attendance', normalized)).then(normalizeAttendanceResponse)
+}
 export const deleteAttendance = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteAttendance(targetId(target)) : attendanceRequest.delete(`/employee-attendance/attendance/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const generateAttendance = (month: string, employeeIds: string[]): Promise<AttendanceGenerationResult> => useMocks
   ? mock.mockGenerateAttendance(month, employeeIds)
@@ -168,7 +259,11 @@ export const generateAttendance = (month: string, employeeIds: string[]): Promis
 export const getLeaveTypes = (): Promise<LeaveType[]> => useMocks ? mock.mockGetLeaveTypes() : attendanceRequest.get('/employee-attendance/leave-types')
 export const saveLeaveType = (payload: LeaveTypePayload, id?: string, baseUpdatedAt?: string): Promise<LeaveType> => useMocks ? mock.mockSaveLeaveType(payload, id) : id ? attendanceRequest.put(`/employee-attendance/leave-types/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/leave-types', payload)
 export const deleteLeaveType = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteLeaveType(targetId(target)) : attendanceRequest.delete(`/employee-attendance/leave-types/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
-export const getLeaves = (query: AttendanceQuery = {}): Promise<LeaveRequest[]> => { const normalized = normalizeAttendanceQuery(query); return useMocks ? mock.mockGetLeaves(normalized) : attendanceRequest.get('/employee-attendance/leaves', { params: normalized }).then((rows: any[]) => rows.map(normalizeLeaveResponse)) }
+export const getLeaves = (query: AttendanceQuery = {}): Promise<LeaveRequest[]> => {
+  const normalized = normalizeAttendanceQuery(query)
+  const params = { ...normalized, employeeIds: normalized.employeeIds?.length ? normalized.employeeIds.join(',') : undefined }
+  return useMocks ? mock.mockGetLeaves(normalized) : attendanceRequest.get('/employee-attendance/leaves', { params }).then((rows: any[]) => rows.map(normalizeLeaveResponse))
+}
 export const saveLeave = (payload: LeaveRequestPayload, id?: string, baseUpdatedAt?: string): Promise<LeaveRequest> => (useMocks ? mock.mockSaveLeave(payload, id) : id ? attendanceRequest.put(`/employee-attendance/leaves/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/leaves', payload)).then(normalizeLeaveResponse)
 export const deleteLeave = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteLeave(targetId(target)) : attendanceRequest.delete(`/employee-attendance/leaves/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const reviewLeave = (id: string, action: 'approve' | 'reject', reviewRemark = ''): Promise<LeaveRequest> => (useMocks ? mock.mockReviewLeave(id, action === 'approve' ? 'APPROVED' : 'REJECTED', reviewRemark) : attendanceRequest.post(`/employee-attendance/leaves/${id}/${action}`, { reviewRemark })).then(normalizeLeaveResponse)
@@ -189,6 +284,39 @@ export const getOverview = (month: string): Promise<AttendanceOverview> => useMo
   const issues = Array.isArray(row.issues) ? row.issues : []
   return { month: row.month, activeEmployees: row.activeEmployees ?? row.workforce ?? 0, todayPresent: row.todayPresent ?? row.todayAttendance ?? 0, todayOnLeave: row.todayOnLeave ?? row.todayLeave ?? 0, todayAbsent: row.todayAbsent ?? row.todayAbsence ?? 0, overtimeHours: row.overtimeHours ?? amount(row.overtimeMinutes) / 60, pendingLeaves: row.pendingLeaves ?? row.pendingLeave ?? 0, projectedPayroll: amount(row.projectedPayroll), issueCount, issues: issues.length ? issues : issueCount ? [`当前有 ${issueCount} 项考勤或工资问题，请进入工资统计查看详情`] : [] }
 })
+function normalizeCalendarDay(value: unknown): AttendanceCalendarDay {
+  const row = responseObject(value)
+  const statuses: AttendanceCalendarDay['status'][] = ['FUTURE', 'ABSENT', 'LEAVE', 'REST', 'NORMAL', 'OVERTIME', 'SHORT']
+  const tones: AttendanceCalendarDay['backgroundTone'][] = ['future', 'normal', 'leave', 'absent', 'rest', 'overtime', 'short']
+  if (typeof row.date !== 'string' || !statuses.includes(row.status as AttendanceCalendarDay['status'])
+    || !tones.includes(row.backgroundTone as AttendanceCalendarDay['backgroundTone'])
+    || !tones.includes(row.durationTone as AttendanceCalendarDay['durationTone'])
+    || !Array.isArray(row.actualSegments)) throw new Error('排班考勤概览响应格式无效')
+  if (row.schedule) {
+    const rawSchedule = responseObject(row.schedule)
+    if (typeof rawSchedule.id !== 'string' || typeof rawSchedule.employeeId !== 'string' || typeof rawSchedule.date !== 'string' || !Array.isArray(rawSchedule.segments)) {
+      throw new Error('排班考勤概览响应格式无效')
+    }
+  }
+  const schedule = row.schedule ? normalizeMonthlyScheduleResponse(row.schedule) : null
+  if (row.schedule && (!schedule?.id || !schedule.employeeId || !schedule.date)) throw new Error('排班考勤概览响应格式无效')
+  return {
+    date: row.date, day: amount(row.day), isFuture: Boolean(row.isFuture), status: row.status as AttendanceCalendarDay['status'],
+    schedule, actualSegments: responseActualSegments(row.actualSegments),
+    scheduledMinutes: amount(row.scheduledMinutes), workedMinutes: amount(row.workedMinutes), approvedLeaveMinutes: amount(row.approvedLeaveMinutes), overtimeMinutes: amount(row.overtimeMinutes),
+    displayMinutes: amount(row.displayMinutes), shortageMinutes: amount(row.shortageMinutes), durationText: String(row.durationText || ''), leaveTypeName: String(row.leaveTypeName || ''),
+    leaveReason: String(row.leaveReason || ''), absenceReason: String(row.absenceReason || ''), backgroundTone: String(row.backgroundTone || 'normal') as AttendanceCalendarDay['backgroundTone'], durationTone: String(row.durationTone || 'normal') as AttendanceCalendarDay['durationTone']
+  }
+}
+export function normalizeScheduleAttendanceOverview(value: unknown): ScheduleAttendanceOverview {
+  const row = responseObject(value)
+  if (typeof row.month !== 'string' || !Array.isArray(row.days) || !row.overview) throw new Error('排班考勤概览响应格式无效')
+  const overview = responseObject(row.overview)
+  return { month: row.month, employee: row.employee ? { id: String(responseObject(row.employee).id || ''), employeeNumber: String(responseObject(row.employee).employeeNumber || ''), name: String(responseObject(row.employee).name || '') } : null, days: row.days.map(normalizeCalendarDay), overview: { month: String(overview.month || row.month), activeEmployees: amount(overview.activeEmployees ?? overview.workforce), todayPresent: amount(overview.todayPresent ?? overview.todayAttendance), todayOnLeave: amount(overview.todayOnLeave ?? overview.todayLeave), todayAbsent: amount(overview.todayAbsent ?? overview.todayAbsence), overtimeHours: amount(overview.overtimeHours ?? amount(overview.overtimeMinutes) / 60), pendingLeaves: amount(overview.pendingLeaves ?? overview.pendingLeave), projectedPayroll: amount(overview.projectedPayroll), issueCount: amount(overview.issueCount), issues: Array.isArray(overview.issues) ? overview.issues.map(String) : [] }, readonly: Boolean(row.readonly) }
+}
+export const getScheduleAttendanceOverview = (employeeId: string | undefined, month: string): Promise<ScheduleAttendanceOverview> => useMocks
+  ? mock.mockGetScheduleAttendanceOverview(employeeId, month)
+  : attendanceRequest.get('/employee-attendance/schedule-attendance-overview', { params: { ...(employeeId ? { employeeId } : {}), month } }).then(normalizeScheduleAttendanceOverview)
 export const getPayroll = (month: string): Promise<PayrollRun | null> => useMocks ? mock.mockGetPayroll(month) : attendanceRequest.get('/employee-attendance/payroll', { params: { month } }).then(normalizePayrollResponse)
 export const generatePayroll = (month: string): Promise<PayrollRun> => useMocks ? mock.mockGeneratePayroll(month) : attendanceRequest.post('/employee-attendance/payroll/generate', { month }).then((row) => normalizePayrollResponse(row)!)
 export const createPayrollAdjustment = (itemId: string, payload: { amount: number; reason: string }): Promise<PayrollAdjustment> => (useMocks ? mock.mockCreatePayrollAdjustment(itemId, payload) : attendanceRequest.post(`/employee-attendance/payroll/items/${itemId}/adjustments`, payload)).then(normalizePayrollAdjustmentResponse)

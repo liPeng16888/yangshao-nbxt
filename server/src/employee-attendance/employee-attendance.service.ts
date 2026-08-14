@@ -24,11 +24,18 @@ import type {
   GenerateAttendanceDto,
   LeaveRequestDto,
   LeaveTypeDto,
+  BatchMonthlyScheduleDto,
+  CopyMonthlyScheduleDto,
+  MonthlyScheduleDayDto,
   MonthlySettingDto,
   WeeklyScheduleDto
 } from './employee-attendance.dto'
+import { breakMinutes, deriveAttendanceMetrics, normalizeClockIntervals, scheduledMinutes, type ActualInterval, type ClockInterval } from './attendance-intervals'
 
 type PrismaDelegate = { findFirst(args: any): Promise<any> }
+
+type MonthlySchedulePayload = Pick<MonthlyScheduleDayDto, 'employeeId' | 'date' | 'isWorkday' | 'segments' | 'remark' | 'baseUpdatedAt'>
+type BatchMonthlySchedulePayload = Omit<MonthlySchedulePayload, 'date'> & Pick<BatchMonthlyScheduleDto, 'dates'>
 
 class PayrollLockPlanChanged extends Error {
   constructor(readonly months: string[]) { super('payroll lock plan changed') }
@@ -142,6 +149,7 @@ export class EmployeeAttendanceService {
         tx.employeeWeeklySchedule.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeDateOverride.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeMonthlySetting.count({ where: { frontendUserId, employeeId: id } }),
+        tx.employeeMonthlyScheduleDay.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeAttendanceRecord.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeLeaveRequest.count({ where: { frontendUserId, employeeId: id } }),
         tx.employeeCommissionRecord.count({ where: { frontendUserId, employeeId: id } }),
@@ -181,16 +189,18 @@ export class EmployeeAttendanceService {
   }
 
   async updateWeeklySchedule(frontendUserId: string, actorUserId: string, id: string, payload: Partial<WeeklyScheduleDto>) {
+    const current = await this.owned(this.prisma.employeeWeeklySchedule, frontendUserId, id, '排班不存在')
     if (payload.employeeId) await this.assertEmployee(frontendUserId, payload.employeeId)
     if (payload.weekday !== undefined) this.assertWeekday(payload.weekday)
+    const schedule = this.scheduleData(payload, current)
     try {
-      const row = await this.configurationAtomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeWeeklySchedule', id, async (tx) => {
-        const current = await this.owned(tx.employeeWeeklySchedule, frontendUserId, id, '排班不存在')
-        this.assertVersion(current, payload.baseUpdatedAt)
+      const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeWeeklySchedule', current.id, async (tx) => {
+        const locked = await this.owned(tx.employeeWeeklySchedule, frontendUserId, id, '排班不存在')
+        this.assertVersion(locked, payload.baseUpdatedAt)
         return tx.employeeWeeklySchedule.update({ where: { id }, data: {
           ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
           ...(payload.weekday !== undefined ? { weekday: payload.weekday } : {}),
-          ...this.scheduleData(payload, current)
+          ...this.scheduleData(payload, locked)
         } })
       })
       return row
@@ -198,7 +208,7 @@ export class EmployeeAttendanceService {
   }
 
   async deleteWeeklySchedule(frontendUserId: string, actorUserId: string, id: string, baseUpdatedAt?: string) {
-    await this.configurationAtomic(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeWeeklySchedule', id, async (tx) => {
+    await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeWeeklySchedule', id, async (tx) => {
       const current = await this.owned(tx.employeeWeeklySchedule, frontendUserId, id, '排班不存在')
       this.assertVersion(current, baseUpdatedAt)
       return tx.employeeWeeklySchedule.delete({ where: { id } })
@@ -286,20 +296,25 @@ export class EmployeeAttendanceService {
   }
 
   async upsertMonthlySetting(frontendUserId: string, actorUserId: string, payload: MonthlySettingDto) {
-    await this.assertEmployee(frontendUserId, payload.employeeId)
     this.assertMonth(payload.month)
-    await this.assertMonthWritable(frontendUserId, payload.month)
-    const row = await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeMonthlySetting', (updated) => updated.id, async (tx) => {
+    return this.payrollMonthLocks().run(frontendUserId, [payload.month], async (tx) => {
+      await this.assertMonthsWritable(frontendUserId, [payload.month], tx)
+      await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
+      const scheduledWorkDays = await tx.employeeMonthlyScheduleDay.count({ where: {
+        frontendUserId, employeeId: payload.employeeId, isWorkday: true, date: { startsWith: payload.month }
+      } })
       const current = await tx.employeeMonthlySetting.findFirst({ where: { frontendUserId, employeeId: payload.employeeId, month: payload.month } })
-      const data = {
-        scheduledWorkDays: this.nonnegative(payload.scheduledWorkDays, '应出勤天数'),
-        restQuotaDays: this.nonnegative(payload.restQuotaDays, '月休额度')
-      }
-      if (!current) return tx.employeeMonthlySetting.create({ data: { frontendUserId, employeeId: payload.employeeId, month: payload.month, ...data } })
-      this.assertVersion(current, payload.baseUpdatedAt)
-      return tx.employeeMonthlySetting.update({ where: { id: current.id }, data })
-    }, undefined, [payload.month])
-    return row
+      const data = { scheduledWorkDays, restQuotaDays: this.nonnegative(payload.restQuotaDays, '月休额度') }
+      const row = current
+        ? (this.assertVersion(current, payload.baseUpdatedAt), await tx.employeeMonthlySetting.update({ where: { id: current.id }, data }))
+        : await tx.employeeMonthlySetting.upsert({
+          where: { employeeId_month: { employeeId: payload.employeeId, month: payload.month } },
+          create: { frontendUserId, employeeId: payload.employeeId, month: payload.month, ...data },
+          update: data
+        })
+      await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeMonthlySetting', row.id, `月份=${payload.month}; 排班工作日=${scheduledWorkDays}`, tx)
+      return row
+    })
   }
 
   async deleteMonthlySetting(frontendUserId: string, actorUserId: string, id: string, baseUpdatedAt?: string) {
@@ -313,30 +328,135 @@ export class EmployeeAttendanceService {
     return { ok: true }
   }
 
+  async listMonthlySchedules(frontendUserId: string, employeeId: string, month: string) {
+    this.assertMonth(month)
+    await this.assertEmployee(frontendUserId, employeeId)
+    const rows = await this.prisma.employeeMonthlyScheduleDay.findMany({
+      where: { frontendUserId, employeeId, date: { startsWith: month } },
+      include: { segments: { orderBy: { sequence: 'asc' } } },
+      orderBy: { date: 'asc' }
+    })
+    return rows.map((row) => this.monthlyScheduleDto(row))
+  }
+
+  async saveMonthlyScheduleDay(frontendUserId: string, actorUserId: string, payload: MonthlySchedulePayload) {
+    this.assertDate(payload.date)
+    const normalized = this.normalizedMonthlySegments(payload)
+    return this.withMonthlyScheduleSerialization(frontendUserId, payload.employeeId, [payload.date], async (tx) => {
+      const current = await tx.employeeMonthlyScheduleDay.findFirst({ where: { frontendUserId, employeeId: payload.employeeId, date: payload.date } })
+      if (current) this.assertVersion(current, payload.baseUpdatedAt)
+      if (current?.payrollLockedAt) throw new ConflictException('该排班记录已被工资确认锁定')
+      const row = await this.replaceMonthlyScheduleDay(tx, frontendUserId, payload.employeeId, payload.date, payload.isWorkday, normalized, payload.remark)
+      await this.audit(frontendUserId, actorUserId, current ? EmployeeAuditAction.UPDATE : EmployeeAuditAction.CREATE, 'EmployeeMonthlyScheduleDay', row.id, `员工=${payload.employeeId}; 日期=${payload.date}`, tx)
+      return this.monthlyScheduleDto({ ...row, segments: this.scheduleSegmentsForResponse(normalized) })
+    })
+  }
+
+  async deleteMonthlyScheduleDay(frontendUserId: string, actorUserId: string, id: string, baseUpdatedAt?: string) {
+    const row = await this.owned(this.prisma.employeeMonthlyScheduleDay, frontendUserId, id, '月度排班不存在')
+    return this.withCurrentPayrollSource(
+      frontendUserId,
+      [row.date],
+      (tx) => this.owned(tx.employeeMonthlyScheduleDay, frontendUserId, id, '月度排班不存在'),
+      (locked) => [locked.date],
+      async (tx, locked) => {
+        this.assertVersion(locked, baseUpdatedAt)
+        await this.owned(tx.employee, frontendUserId, locked.employeeId, '员工不存在')
+        if (locked.payrollLockedAt) throw new ConflictException('该排班记录已被工资确认锁定')
+        await this.clearDeletedScheduleAttendance(tx, frontendUserId, locked.employeeId, [locked.date])
+        await tx.employeeMonthlyScheduleDay.delete({ where: { id } })
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeMonthlyScheduleDay', id, `员工=${locked.employeeId}; 日期=${locked.date}`, tx)
+        return { ok: true }
+      }
+    )
+  }
+
+  async batchSaveMonthlySchedules(frontendUserId: string, actorUserId: string, payload: BatchMonthlySchedulePayload) {
+    const dates = Array.from(new Set(payload.dates || [])).sort()
+    if (!dates.length) throw new BadRequestException('请选择排班日期')
+    dates.forEach((date) => this.assertDate(date))
+    const normalized = this.normalizedMonthlySegments(payload)
+    return this.withMonthlyScheduleSerialization(frontendUserId, payload.employeeId, dates, async (tx) => {
+      const currentRows = await tx.employeeMonthlyScheduleDay.findMany({ where: { frontendUserId, employeeId: payload.employeeId, date: { in: dates } } })
+      if (currentRows.some((row) => row.payrollLockedAt)) throw new ConflictException('存在已被工资确认锁定的排班记录')
+      const currentByDate = new Map(currentRows.map((row) => [row.date, row]))
+      const rows = []
+      for (const date of dates) {
+        const row = await this.replaceMonthlyScheduleDay(tx, frontendUserId, payload.employeeId, date, payload.isWorkday, normalized, payload.remark)
+        await this.audit(frontendUserId, actorUserId, currentByDate.has(date) ? EmployeeAuditAction.UPDATE : EmployeeAuditAction.CREATE, 'EmployeeMonthlyScheduleDay', row.id, `员工=${payload.employeeId}; 日期=${date}; 批量排班`, tx)
+        rows.push(this.monthlyScheduleDto({ ...row, segments: this.scheduleSegmentsForResponse(normalized) }))
+      }
+      return { rows, updated: rows.length, overwritten: currentByDate.size }
+    })
+  }
+
+  async copyPreviousMonthSchedules(frontendUserId: string, actorUserId: string, payload: Pick<CopyMonthlyScheduleDto, 'employeeId' | 'targetMonth' | 'overwrite'>) {
+    this.assertMonth(payload.targetMonth)
+    const sourceMonth = this.previousMonth(payload.targetMonth)
+    return this.withMonthlyScheduleSerialization(frontendUserId, payload.employeeId, [sourceMonth, payload.targetMonth], async (tx) => {
+      const [source, target] = await Promise.all([
+        tx.employeeMonthlyScheduleDay.findMany({
+          where: { frontendUserId, employeeId: payload.employeeId, date: { startsWith: sourceMonth } },
+          include: { segments: { orderBy: { sequence: 'asc' } } }, orderBy: { date: 'asc' }
+        }),
+        tx.employeeMonthlyScheduleDay.findMany({
+          where: { frontendUserId, employeeId: payload.employeeId, date: { startsWith: payload.targetMonth } },
+          include: { segments: { orderBy: { sequence: 'asc' } } }, orderBy: { date: 'asc' }
+        })
+      ])
+      if (!source.length) throw new BadRequestException('上月暂无可复制排班')
+      if (target.some((row) => row.payrollLockedAt)) throw new ConflictException('存在已被工资确认锁定的排班记录')
+      if (target.length && !payload.overwrite) throw new ConflictException('目标月份已有排班，请确认覆盖')
+      const targetDates = new Set(this.monthDates(payload.targetMonth))
+      const copies = source
+        .filter((row) => targetDates.has(`${payload.targetMonth}-${row.date.slice(-2)}`))
+        .map((row) => ({
+          source: row,
+          date: `${payload.targetMonth}-${row.date.slice(-2)}`,
+          segments: row.isWorkday ? this.normalizedMonthlySegments({ ...row, segments: row.segments }) : []
+        }))
+      for (const targetRow of target) {
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeMonthlyScheduleDay', targetRow.id, `员工=${payload.employeeId}; 日期=${targetRow.date}; 覆盖复制删除`, tx)
+      }
+      const copiedDates = new Set(copies.map((copy) => copy.date))
+      await this.clearDeletedScheduleAttendance(
+        tx,
+        frontendUserId,
+        payload.employeeId,
+        target.filter((row) => !copiedDates.has(row.date)).map((row) => row.date)
+      )
+      if (target.length) await tx.employeeMonthlyScheduleDay.deleteMany({ where: { frontendUserId, employeeId: payload.employeeId, date: { startsWith: payload.targetMonth } } })
+      for (const copy of copies) {
+        const row = await this.replaceMonthlyScheduleDay(tx, frontendUserId, payload.employeeId, copy.date, copy.source.isWorkday, copy.segments, copy.source.remark)
+        await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'EmployeeMonthlyScheduleDay', row.id, `员工=${payload.employeeId}; 从=${copy.source.date}; 到=${copy.date}`, tx)
+      }
+      return { copied: copies.length, targetMonth: payload.targetMonth }
+    }, [payload.targetMonth])
+  }
+
   listAttendance(frontendUserId: string, query: AttendanceListQueryDto = {}) {
-    return this.prisma.employeeAttendanceRecord.findMany({ where: {
+    const where = {
       frontendUserId, ...(query.employeeId ? { employeeId: query.employeeId } : {}), ...this.dateWhere(query)
-    }, include: { employee: { select: { employeeNumber: true, name: true } } }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] })
+    }
+    return this.prisma.employeeAttendanceRecord.findMany({ where, include: {
+      employee: { select: { employeeNumber: true, name: true } },
+      segments: { orderBy: { sequence: 'asc' } }
+    }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] }).then((rows) => this.currentAttendanceDtos(frontendUserId, rows))
   }
 
   async createAttendance(frontendUserId: string, actorUserId: string, payload: AttendanceDto) {
-    await this.assertEmployee(frontendUserId, payload.employeeId)
     this.assertDate(payload.date)
-    await this.assertMonthWritable(frontendUserId, payload.date)
-    const duplicate = await this.prisma.employeeAttendanceRecord.findFirst({ where: { frontendUserId, employeeId: payload.employeeId, date: payload.date } })
-    if (duplicate) throw new ConflictException('该员工当日考勤已存在')
     try {
       return await this.atomic(frontendUserId, actorUserId, EmployeeAuditAction.CREATE, 'EmployeeAttendanceRecord', (created) => created.id, async (tx) => {
-        const data = await this.attendanceData(frontendUserId, payload, undefined, tx)
-        return tx.employeeAttendanceRecord.create({ data: {
-          frontendUserId,
-          ...data,
-          employeeId: payload.employeeId,
-          date: payload.date,
-          isScheduledWorkday: payload.isScheduledWorkday,
-          scheduledMinutes: this.minutes(payload.scheduledMinutes),
-          manuallyEdited: true
-        } })
+        await this.owned(tx.employee, frontendUserId, payload.employeeId, '员工不存在')
+        const prepared = await this.prepareAttendance(frontendUserId, payload, undefined, tx)
+        const row = await tx.employeeAttendanceRecord.upsert({
+          where: { employeeId_date: { employeeId: payload.employeeId, date: payload.date } },
+          create: { frontendUserId, employeeId: payload.employeeId, date: payload.date, ...prepared.data, manuallyEdited: true },
+          update: { ...prepared.data, manuallyEdited: true }
+        })
+        await this.replaceAttendanceSegments(tx, frontendUserId, row.id, prepared.actualSegments)
+        return this.attendanceDto(row, prepared.actualSegments)
       }, undefined, [payload.date])
     } catch (error) { this.rethrowConflict(error, '该员工当日考勤已存在') }
   }
@@ -350,7 +470,13 @@ export class EmployeeAttendanceService {
       return await this.withCurrentPayrollSource(
         frontendUserId,
         [current.date, date],
-        (tx) => this.owned(tx.employeeAttendanceRecord, frontendUserId, id, '考勤记录不存在'),
+        async (tx) => {
+          const row = await tx.employeeAttendanceRecord.findFirst({
+            where: { id, frontendUserId }, include: { segments: { orderBy: { sequence: 'asc' } } }
+          })
+          if (!row) throw new NotFoundException('考勤记录不存在')
+          return row
+        },
         (locked) => [locked.date, payload.date || locked.date],
         async (tx, locked) => {
           this.assertVersion(locked, payload.baseUpdatedAt)
@@ -363,14 +489,49 @@ export class EmployeeAttendanceService {
             frontendUserId, employeeId: payload.employeeId || locked.employeeId, date: targetDate, id: { not: id }
           } })
           if (duplicate) throw new ConflictException('该员工当日考勤已存在')
-          const row = await tx.employeeAttendanceRecord.update({ where: { id }, data: {
-            ...await this.attendanceData(frontendUserId, payload, locked, tx), manuallyEdited: true
-          } })
+          const prepared = await this.prepareAttendance(frontendUserId, payload, locked, tx)
+          const row = await tx.employeeAttendanceRecord.update({ where: { id }, data: { ...prepared.data, manuallyEdited: true } })
+          await this.replaceAttendanceSegments(tx, frontendUserId, id, prepared.actualSegments)
           await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.UPDATE, 'EmployeeAttendanceRecord', id, undefined, tx)
-          return row
+          return this.attendanceDto(row, prepared.actualSegments)
         }
       )
     } catch (error) { this.rethrowConflict(error, '该员工当日考勤已存在') }
+  }
+
+  async calculateAttendanceForDate(frontendUserId: string, employeeId: string, date: string) {
+    this.assertDate(date)
+    const [schedule, attendance] = await Promise.all([
+      this.prisma.employeeMonthlyScheduleDay.findFirst({
+        where: { frontendUserId, employeeId, date },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
+      this.prisma.employeeAttendanceRecord.findFirst({
+        where: { frontendUserId, employeeId, date },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      })
+    ])
+    if (!schedule) throw new ConflictException(`缺少 ${date} 的员工月度排班`)
+    const actualSegments = (attendance?.segments || []).map((segment: any) => ({
+      checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt
+    }))
+    const approvedLeaveMinutes = await this.approvedLeaveMinutes(frontendUserId, employeeId, date, schedule.scheduledMinutes, this.prisma)
+    const metrics = this.metricsForSchedule(
+      schedule,
+      actualSegments,
+      approvedLeaveMinutes,
+      attendance?.explicitAbsenceMinutes || 0
+    )
+    return {
+      employeeId, date,
+      isScheduledWorkday: schedule.isWorkday,
+      scheduledMinutes: schedule.isWorkday ? schedule.scheduledMinutes : 0,
+      ...metrics,
+      overtimeMinutes: attendance?.overtimeMinutes || 0,
+      explicitAbsenceMinutes: attendance?.explicitAbsenceMinutes || 0,
+      remark: attendance?.remark || null,
+      actualSegments: actualSegments.map((segment) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt }))
+    }
   }
 
   async deleteAttendance(frontendUserId: string, actorUserId: string, id: string, baseUpdatedAt?: string) {
@@ -492,7 +653,7 @@ export class EmployeeAttendanceService {
       }
       await tx.employeeLeaveType.delete({ where: { id } })
       await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeLeaveType', id, undefined, tx)
-      return { ok: true }
+      return { ok: true as const }
     })
   }
 
@@ -515,7 +676,9 @@ export class EmployeeAttendanceService {
       ...(lowerBound ? { endDate: { gte: lowerBound } } : {})
     }
     return this.prisma.employeeLeaveRequest.findMany({ where: {
-      frontendUserId, ...(query.employeeId ? { employeeId: query.employeeId } : {}), ...(query.status ? { status: query.status } : {}),
+      frontendUserId,
+      ...(query.employeeIds?.length ? { employeeId: { in: query.employeeIds } } : query.employeeId ? { employeeId: query.employeeId } : {}),
+      ...(query.status ? { status: query.status } : {}),
       ...dateFilter
     }, include: { employee: { select: { employeeNumber: true, name: true } }, leaveType: true }, orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }] })
   }
@@ -680,7 +843,7 @@ export class EmployeeAttendanceService {
       }
       await tx.employeeCommissionType.delete({ where: { id } })
       await this.audit(frontendUserId, actorUserId, EmployeeAuditAction.DELETE, 'EmployeeCommissionType', id, undefined, tx)
-      return { ok: true }
+      return { ok: true as const }
     })
   }
 
@@ -897,7 +1060,7 @@ export class EmployeeAttendanceService {
     })
   }
 
-  private async countLeaveDays(frontendUserId: string, payload: LeaveRequestDto, db: Pick<Prisma.TransactionClient, 'employeeDateOverride' | 'employeeWeeklySchedule'> = this.prisma) {
+  private async countLeaveDays(frontendUserId: string, payload: LeaveRequestDto, db: Pick<Prisma.TransactionClient, 'employeeMonthlyScheduleDay'> = this.prisma) {
     const days = this.daysInclusive(payload.startDate, payload.endDate)
     if (payload.unit === EmployeeLeaveUnit.HOUR) {
       if (days !== 1) throw new BadRequestException('小时请假必须在同一天')
@@ -916,13 +1079,10 @@ export class EmployeeAttendanceService {
     return new Prisma.Decimal(payload.unit === EmployeeLeaveUnit.HALF_DAY ? workdays * 0.5 : workdays)
   }
 
-  private async scheduledMinutesForDate(frontendUserId: string, employeeId: string, date: string, db: Pick<Prisma.TransactionClient, 'employeeDateOverride' | 'employeeWeeklySchedule'> = this.prisma) {
-    const override = await db.employeeDateOverride.findFirst({ where: { frontendUserId, employeeId, date } })
-    if (override) return override.isWorkday ? this.minutes(override.scheduledMinutes) : 0
-    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay()
-    const weekly = await db.employeeWeeklySchedule.findFirst({ where: { frontendUserId, employeeId, weekday } })
-    if (!weekly) throw new ConflictException(`缺少 ${date} 的员工排班`)
-    return weekly.isWorkday ? this.minutes(weekly.scheduledMinutes) : 0
+  private async scheduledMinutesForDate(frontendUserId: string, employeeId: string, date: string, db: Pick<Prisma.TransactionClient, 'employeeMonthlyScheduleDay'> = this.prisma) {
+    const schedule = await db.employeeMonthlyScheduleDay.findFirst({ where: { frontendUserId, employeeId, date } })
+    if (!schedule) throw new ConflictException(`缺少 ${date} 的员工月度排班`)
+    return schedule.isWorkday ? this.minutes(schedule.scheduledMinutes) : 0
   }
 
   private employeeDto(row: any, reveal: boolean) {
@@ -939,41 +1099,151 @@ export class EmployeeAttendanceService {
     }
   }
 
-  private async attendanceData(
+  private async prepareAttendance(
     frontendUserId: string,
     payload: Partial<AttendanceDto>,
-    current?: Partial<AttendanceDto>,
-    db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest'> = this.prisma
+    current: any | undefined,
+    db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest' | 'employeeMonthlyScheduleDay'> = this.prisma
   ) {
-    const merged = { ...current, ...payload } as AttendanceDto
+    const currentActualSegments = (current?.segments || current?.actualSegments || []).map((segment: any) => ({
+      checkInAt: segment.checkInAt,
+      checkOutAt: segment.checkOutAt
+    }))
+    const merged = { ...current, ...payload, actualSegments: payload.actualSegments ?? currentActualSegments } as AttendanceDto
     this.assertDate(merged.date)
-    const scheduledMinutes = this.minutes(merged.scheduledMinutes)
-    if (merged.isScheduledWorkday && scheduledMinutes <= 0) throw new BadRequestException('排班工作日时长必须大于 0')
-    if (!merged.isScheduledWorkday && scheduledMinutes !== 0) throw new BadRequestException('休息日排班时长必须为 0')
-    const checkInAt = this.optionalDateTime(merged.checkInAt, merged.date, '上班时间')
-    const checkOutAt = this.optionalDateTime(merged.checkOutAt, merged.date, '下班时间')
-    if (Boolean(checkInAt) !== Boolean(checkOutAt)) throw new BadRequestException('必须同时填写上班和下班时间')
-    if (checkInAt && checkOutAt && checkOutAt.getTime() <= checkInAt.getTime()) throw new BadRequestException('下班时间必须晚于上班时间')
-    const absenceMinutes = this.minutes(merged.absenceMinutes)
-    if (merged.isScheduledWorkday && !checkInAt && !checkOutAt) {
-      const coverage = await this.approvedLeaveCoverage(frontendUserId, merged.employeeId, merged.date, db)
-      const uncoveredMinutes = Math.max(0, Math.round(scheduledMinutes * (1 - coverage)))
-      if (absenceMinutes < uncoveredMinutes) throw new BadRequestException(`未打卡时必须完整记录未被批准请假覆盖的缺勤时长（${uncoveredMinutes} 分钟）`)
-    }
+    const schedule = await db.employeeMonthlyScheduleDay.findFirst({
+      where: { frontendUserId, employeeId: merged.employeeId, date: merged.date },
+      include: { segments: { orderBy: { sequence: 'asc' } } }
+    })
+    if (!schedule) throw new ConflictException(`缺少 ${merged.date} 的员工月度排班`)
+    if (schedule.isWorkday && this.minutes(schedule.scheduledMinutes) <= 0) throw new BadRequestException('排班工作日时长必须大于 0')
+    const actualSegments = this.normalizedActualSegments(merged.actualSegments || [], merged.date)
+    const approvedLeaveMinutes = await this.approvedLeaveMinutes(frontendUserId, merged.employeeId, merged.date, schedule.scheduledMinutes, db)
+    const explicitAbsenceMinutes = this.minutes(merged.explicitAbsenceMinutes ?? current?.explicitAbsenceMinutes ?? 0)
+    const metrics = this.metricsForSchedule(
+      schedule,
+      actualSegments,
+      approvedLeaveMinutes,
+      explicitAbsenceMinutes
+    )
+    const first = actualSegments[0]
+    const last = actualSegments.at(-1)
     return {
-      ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
-      ...(payload.date !== undefined ? { date: payload.date } : {}),
-      ...(payload.isScheduledWorkday !== undefined ? { isScheduledWorkday: payload.isScheduledWorkday } : {}),
-      ...(payload.scheduledMinutes !== undefined ? { scheduledMinutes } : {}),
-      ...(payload.checkInAt !== undefined ? { checkInAt } : {}),
-      ...(payload.checkOutAt !== undefined ? { checkOutAt } : {}),
-      ...(payload.workedMinutes !== undefined ? { workedMinutes: this.minutes(payload.workedMinutes) } : {}),
-      ...(payload.lateMinutes !== undefined ? { lateMinutes: this.minutes(payload.lateMinutes) } : {}),
-      ...(payload.earlyLeaveMinutes !== undefined ? { earlyLeaveMinutes: this.minutes(payload.earlyLeaveMinutes) } : {}),
-      ...(payload.absenceMinutes !== undefined ? { absenceMinutes } : {}),
-      ...(payload.overtimeMinutes !== undefined ? { overtimeMinutes: this.minutes(payload.overtimeMinutes) } : {}),
-      ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
+      data: {
+        ...(payload.employeeId !== undefined ? { employeeId: payload.employeeId } : {}),
+        ...(payload.date !== undefined ? { date: payload.date } : {}),
+        isScheduledWorkday: schedule.isWorkday,
+        scheduledMinutes: schedule.isWorkday ? this.minutes(schedule.scheduledMinutes) : 0,
+        checkInAt: first?.checkInAt || null,
+        checkOutAt: last?.checkOutAt || null,
+        explicitAbsenceMinutes,
+        ...metrics,
+        overtimeMinutes: this.minutes(merged.overtimeMinutes ?? 0),
+        ...(payload.remark !== undefined ? { remark: this.optional(payload.remark) } : {})
+      },
+      actualSegments
     }
+  }
+
+  private normalizedActualSegments(input: AttendanceDto['actualSegments'], businessDate: string) {
+    if (!Array.isArray(input)) throw new BadRequestException('实际考勤时段必须为数组')
+    let previousStart = Number.NEGATIVE_INFINITY
+    let previousEnd = Number.NEGATIVE_INFINITY
+    return input.map((segment, index) => {
+      const checkInAt = this.optionalDateTime(segment?.checkInAt, businessDate, `第 ${index + 1} 段上班时间`)
+      const checkOutAt = this.optionalDateTime(segment?.checkOutAt, businessDate, `第 ${index + 1} 段下班时间`)
+      if (!checkInAt || !checkOutAt) throw new BadRequestException(`第 ${index + 1} 段必须同时填写上班和下班时间`)
+      if (checkOutAt.getTime() <= checkInAt.getTime()) throw new BadRequestException(`第 ${index + 1} 段下班时间必须晚于上班时间`)
+      if (checkInAt.getTime() <= previousStart) throw new BadRequestException('实际考勤时段必须严格按上班时间升序')
+      if (checkInAt.getTime() < previousEnd) throw new BadRequestException('实际考勤时段不能重叠')
+      previousStart = checkInAt.getTime()
+      previousEnd = checkOutAt.getTime()
+      return { checkInAt, checkOutAt }
+    })
+  }
+
+  private metricsForSchedule(schedule: any, actualSegments: ActualInterval[], approvedLeaveMinutes: number, explicitAbsenceMinutes: number) {
+    if (!schedule.isWorkday) {
+      return { workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0 }
+    }
+    const plan = (schedule.segments || []).slice().sort((left: any, right: any) => left.sequence - right.sequence)
+      .map((segment: any) => ({ startTime: segment.startTime, endTime: segment.endTime }))
+    try {
+      return deriveAttendanceMetrics(plan, actualSegments, approvedLeaveMinutes, explicitAbsenceMinutes)
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '考勤时段无效')
+    }
+  }
+
+  private async replaceAttendanceSegments(
+    tx: Pick<Prisma.TransactionClient, 'employeeAttendanceSegment'>,
+    frontendUserId: string,
+    attendanceRecordId: string,
+    segments: Array<{ checkInAt: Date; checkOutAt: Date }>
+  ) {
+    await tx.employeeAttendanceSegment.deleteMany({ where: { frontendUserId, attendanceRecordId } })
+    if (segments.length) await tx.employeeAttendanceSegment.createMany({ data: segments.map((segment, sequence) => ({
+      frontendUserId, attendanceRecordId, sequence, checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt
+    })) })
+  }
+
+  private async clearDeletedScheduleAttendance(
+    tx: Pick<Prisma.TransactionClient, 'employeeAttendanceRecord'>,
+    frontendUserId: string,
+    employeeId: string,
+    dates: string[]
+  ) {
+    if (!dates.length) return
+    await tx.employeeAttendanceRecord.updateMany({
+      where: { frontendUserId, employeeId, date: dates.length === 1 ? dates[0] : { in: dates } },
+      data: {
+        isScheduledWorkday: false,
+        scheduledMinutes: 0,
+        workedMinutes: 0,
+        lateMinutes: 0,
+        earlyLeaveMinutes: 0,
+        absenceMinutes: 0
+      }
+    })
+  }
+
+  private attendanceDto(row: any, explicitSegments?: Array<{ checkInAt: Date; checkOutAt: Date }>) {
+    const actualSegments = (explicitSegments || row.segments || []).slice()
+      .sort((left: any, right: any) => (left.sequence ?? 0) - (right.sequence ?? 0))
+      .map((segment: any) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt }))
+    const { segments: _segments, ...parent } = row
+    return { ...parent, explicitAbsenceMinutes: this.minutes(parent.explicitAbsenceMinutes ?? 0), actualSegments }
+  }
+
+  private async currentAttendanceDtos(frontendUserId: string, rows: any[]) {
+    if (!rows.length) return []
+    const employeeIds = Array.from(new Set(rows.map((row) => row.employeeId)))
+    const dates = Array.from(new Set(rows.map((row) => row.date))).sort()
+    const [schedules, leaves] = await Promise.all([
+      this.prisma.employeeMonthlyScheduleDay.findMany({
+        where: { frontendUserId, employeeId: { in: employeeIds }, date: { in: dates } },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
+      this.prisma.employeeLeaveRequest.findMany({ where: {
+        frontendUserId, employeeId: { in: employeeIds }, status: EmployeeLeaveStatus.APPROVED,
+        startDate: { lte: dates.at(-1)! }, endDate: { gte: dates[0] }
+      } })
+    ])
+    const scheduleByEmployeeDate = new Map(schedules.map((schedule) => [`${schedule.employeeId}:${schedule.date}`, schedule]))
+    return rows.map((row) => {
+      const dto = this.attendanceDto(row)
+      const schedule = scheduleByEmployeeDate.get(`${row.employeeId}:${row.date}`)
+      if (!schedule) return dto
+      const actualSegments = (row.segments || []).map((segment: any) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt }))
+      const approvedLeaveMinutes = this.approvedLeaveMinutesFromRows(leaves, row.employeeId, row.date, schedule.scheduledMinutes)
+      const metrics = this.metricsForSchedule(schedule, actualSegments, approvedLeaveMinutes, dto.explicitAbsenceMinutes)
+      return {
+        ...dto,
+        isScheduledWorkday: schedule.isWorkday,
+        scheduledMinutes: schedule.isWorkday ? this.minutes(schedule.scheduledMinutes) : 0,
+        ...metrics
+      }
+    })
   }
 
   private dateWhere(query: AttendanceListQueryDto) {
@@ -996,14 +1266,6 @@ export class EmployeeAttendanceService {
     const row = await delegate.findFirst({ where: { id, frontendUserId } })
     if (!row) throw new NotFoundException(message)
     return row
-  }
-
-  private assertVersion(current: { updatedAt: Date | string }, baseUpdatedAt?: string) {
-    // Prisma records always carry updatedAt. Legacy unit-test fixtures without it
-    // predate optimistic concurrency and are not representative of an HTTP write.
-    if (!(current as { updatedAt?: Date | string }).updatedAt && !baseUpdatedAt) return
-    const expected = requiredBaseUpdatedAt(baseUpdatedAt)
-    if (new Date(current.updatedAt).getTime() !== expected.getTime()) staleWrite(current)
   }
 
   private async assertMonthWritable(frontendUserId: string, dateOrMonth: string, db: Pick<Prisma.TransactionClient, 'employeePayrollRun'> = this.prisma) {
@@ -1138,7 +1400,7 @@ export class EmployeeAttendanceService {
     }
     const text = String(value ?? '').trim()
     if (!text) return null
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(text)) {
+    if (!/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(text)) {
       throw new BadRequestException(`${label}必须包含明确时区`)
     }
     const date = new Date(text)
@@ -1159,24 +1421,109 @@ export class EmployeeAttendanceService {
     return { isWorkday: true, plannedStartTime, plannedEndTime, scheduledMinutes: end - start }
   }
 
+  private async withMonthlyScheduleSerialization<T>(
+    frontendUserId: string,
+    employeeId: string,
+    datesOrMonths: string[],
+    operation: (tx: Prisma.TransactionClient) => Promise<T>,
+    writableDatesOrMonths: string[] = datesOrMonths
+  ) {
+    const months = Array.from(new Set(datesOrMonths.map((value) => value.slice(0, 7)))).sort()
+    const writableMonths = Array.from(new Set(writableDatesOrMonths.map((value) => value.slice(0, 7)))).sort()
+    return this.payrollMonthLocks().run(frontendUserId, months, async (tx) => {
+      await this.assertMonthsWritable(frontendUserId, writableMonths, tx)
+      await this.owned(tx.employee, frontendUserId, employeeId, '员工不存在')
+      return operation(tx)
+    })
+  }
+
+  private normalizedMonthlySegments(payload: Pick<MonthlySchedulePayload, 'isWorkday' | 'segments'>): ClockInterval[] {
+    if (!payload.isWorkday) return []
+    try {
+      return normalizeClockIntervals(payload.segments || [])
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '排班时段无效')
+    }
+  }
+
+  private async replaceMonthlyScheduleDay(
+    tx: Prisma.TransactionClient,
+    frontendUserId: string,
+    employeeId: string,
+    date: string,
+    isWorkday: boolean,
+    segments: ClockInterval[],
+    remark?: string | null
+  ) {
+    const row = await tx.employeeMonthlyScheduleDay.upsert({
+      where: { employeeId_date: { employeeId, date } },
+      create: {
+        frontendUserId, employeeId, date, isWorkday, scheduledMinutes: isWorkday ? scheduledMinutes(segments) : 0,
+        remark: this.optional(remark)
+      },
+      update: {
+        isWorkday, scheduledMinutes: isWorkday ? scheduledMinutes(segments) : 0, remark: this.optional(remark)
+      }
+    })
+    await tx.employeeScheduleSegment.deleteMany({ where: { frontendUserId, scheduleDayId: row.id } })
+    if (segments.length) await tx.employeeScheduleSegment.createMany({ data: segments.map((segment, sequence) => ({
+      frontendUserId, scheduleDayId: row.id, sequence, startTime: segment.startTime, endTime: segment.endTime
+    })) })
+    return row
+  }
+
+  private scheduleSegmentsForResponse(segments: ClockInterval[]) {
+    return segments.map((segment, sequence) => ({ sequence, startTime: segment.startTime, endTime: segment.endTime }))
+  }
+
+  private monthlyScheduleDto(row: any) {
+    const segments = (row.segments || []).slice().sort((left: any, right: any) => left.sequence - right.sequence)
+      .map((segment: any) => ({ sequence: segment.sequence, startTime: segment.startTime, endTime: segment.endTime }))
+    return {
+      ...row,
+      segments,
+      scheduledMinutes: Number(row.scheduledMinutes || 0),
+      breakMinutes: row.isWorkday ? breakMinutes(segments) : 0
+    }
+  }
+
+  private previousMonth(month: string) {
+    const [year, monthNumber] = month.split('-').map(Number)
+    const date = new Date(Date.UTC(year, monthNumber - 2, 1))
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
+  }
+
   private clockMinutes(value: string) {
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new BadRequestException('计划时间必须为 HH:mm 格式')
     const [hour, minute] = value.split(':').map(Number)
     return hour * 60 + minute
   }
 
-  private async approvedLeaveCoverage(frontendUserId: string, employeeId: string, date: string, db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest'>) {
+  private async approvedLeaveMinutes(
+    frontendUserId: string,
+    employeeId: string,
+    date: string,
+    scheduled: number,
+    db: Pick<Prisma.TransactionClient, 'employeeLeaveRequest'>
+  ) {
     const leaves = await db.employeeLeaveRequest.findMany({ where: {
       frontendUserId, employeeId, status: EmployeeLeaveStatus.APPROVED,
       startDate: { lte: date }, endDate: { gte: date }
     } })
-    return Math.min(1, leaves.reduce((sum, leave: any) => sum + Number(this.leaveCoverageForAttendance(leave)), 0))
+    return this.approvedLeaveMinutesFromRows(leaves, employeeId, date, scheduled)
   }
 
-  private leaveCoverageForAttendance(leave: any) {
-    if (leave.unit === EmployeeLeaveUnit.FULL_DAY) return 1
-    if (leave.unit === EmployeeLeaveUnit.HALF_DAY) return 0.5
-    return Math.min(1, Number(leave.countedDays || 0))
+  private approvedLeaveMinutesFromRows(leaves: any[], employeeId: string, date: string, scheduled: number) {
+    return Math.min(this.minutes(scheduled), leaves
+      .filter((leave) => leave.employeeId === undefined || (leave.employeeId === employeeId && leave.startDate <= date && leave.endDate >= date))
+      .reduce((sum, leave: any) => {
+      if (leave.unit === EmployeeLeaveUnit.FULL_DAY) return sum + this.minutes(scheduled)
+      if (leave.unit === EmployeeLeaveUnit.HALF_DAY) return sum + Math.round(this.minutes(scheduled) / 2)
+      const hours = Number(leave.hours)
+      return sum + (Number.isFinite(hours) && hours > 0
+        ? Math.round(hours * 60)
+        : Math.round(this.minutes(scheduled) * Number(leave.countedDays || 0)))
+    }, 0))
   }
 
   private referencedLeaveTypeUpdateAllowed(current: any, payload: Partial<LeaveTypeDto>) {
@@ -1198,6 +1545,12 @@ export class EmployeeAttendanceService {
 
   private assertWeekday(value: number) {
     if (!Number.isInteger(value) || value < 0 || value > 6) throw new BadRequestException('星期必须为 0 至 6')
+  }
+
+  private assertVersion(current: { updatedAt: Date | string }, baseUpdatedAt?: string) {
+    if (!(current as { updatedAt?: Date | string }).updatedAt && !baseUpdatedAt) return
+    const expected = requiredBaseUpdatedAt(baseUpdatedAt)
+    if (new Date(current.updatedAt).getTime() !== expected.getTime()) staleWrite(current)
   }
 
   private assertDate(value: string) {

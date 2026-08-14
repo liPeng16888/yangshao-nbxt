@@ -14,6 +14,8 @@ import { PrismaService } from '../prisma/prisma.service'
 import { requiredBaseUpdatedAt, staleWrite } from '../common/optimistic-concurrency'
 import type { AdminEmployeeAttendanceQueryDto } from './employee-attendance.dto'
 import { EmployeeDataCipherService } from './employee-data-cipher.service'
+import { breakMinutes, deriveAttendanceMetrics } from './attendance-intervals'
+import { deriveAttendanceCalendarDay } from './attendance-calendar'
 import { calculatePayroll, type PayrollCalculationInput } from './payroll-calculator'
 import { PayrollMonthLockService } from './payroll-month-lock.service'
 
@@ -37,13 +39,32 @@ export class PayrollService {
     this.assertMonth(month)
     const today = this.today()
     const [monthStart, monthEnd] = this.monthBounds(month)
-    const [workforce, todayRows, monthRows, leaves, pendingLeave, payroll] = await Promise.all([
+    const [workforce, todayRows, monthRows, todaySchedules, monthSchedules, todayLeaves, monthLeaves, pendingLeave, payroll] = await Promise.all([
       this.prisma.employee.count({ where: { frontendUserId, status: EmployeeStatus.ACTIVE } }),
-      this.prisma.employeeAttendanceRecord.findMany({ where: { frontendUserId, date: today } }),
-      this.prisma.employeeAttendanceRecord.findMany({ where: { frontendUserId, date: { startsWith: month } } }),
-      this.prisma.employeeLeaveRequest.count({ where: {
+      this.prisma.employeeAttendanceRecord.findMany({
+        where: { frontendUserId, date: today }, include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
+      this.prisma.employeeAttendanceRecord.findMany({
+        where: { frontendUserId, date: { startsWith: month } }, include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
+      this.prisma.employeeMonthlyScheduleDay.findMany({ where: {
+        frontendUserId, date: today, isWorkday: true, scheduledMinutes: { gt: 0 },
+        employee: {
+          status: EmployeeStatus.ACTIVE, hireDate: { lte: today },
+          OR: [{ terminationDate: null }, { terminationDate: { gte: today } }]
+        }
+      }, include: { segments: { orderBy: { sequence: 'asc' } } } }),
+      this.prisma.employeeMonthlyScheduleDay.findMany({
+        where: { frontendUserId, date: { startsWith: month } },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
+      this.prisma.employeeLeaveRequest.findMany({ where: {
         frontendUserId, status: EmployeeLeaveStatus.APPROVED,
         startDate: { lte: today }, endDate: { gte: today }
+      } }),
+      this.prisma.employeeLeaveRequest.findMany({ where: {
+        frontendUserId, status: EmployeeLeaveStatus.APPROVED,
+        startDate: { lte: monthEnd }, endDate: { gte: monthStart }
       } }),
       this.prisma.employeeLeaveRequest.count({ where: {
         frontendUserId, status: EmployeeLeaveStatus.PENDING,
@@ -56,15 +77,108 @@ export class PayrollService {
     ])
     const projectedPayroll = (payroll?.items || []).reduce((sum, item) => sum.plus(item.payableAmount), new Prisma.Decimal(0))
     const payrollIssues = (payroll?.items || []).flatMap((item) => this.jsonIssues(item.issues))
-    const lateDays = monthRows.filter((row) => row.lateMinutes > 0).length
-    const earlyDays = monthRows.filter((row) => row.earlyLeaveMinutes > 0).length
+    const monthScheduleByEmployeeDate = new Map(monthSchedules.map((schedule) => [`${schedule.employeeId}:${schedule.date}`, schedule]))
+    const liveMonthRows = monthRows.map((row) => {
+      const schedule = monthScheduleByEmployeeDate.get(`${row.employeeId}:${row.date}`)
+      return schedule ? this.metricsForAttendance(schedule, row, monthLeaves) : row
+    })
+    const lateDays = liveMonthRows.filter((row) => row.lateMinutes > 0).length
+    const earlyDays = liveMonthRows.filter((row) => row.earlyLeaveMinutes > 0).length
     const reminders = lateDays || earlyDays ? [`本月考勤提醒：迟到 ${lateDays} 天，早退 ${earlyDays} 天（不自动扣薪）`] : []
+    const attendanceByEmployee = new Map(todayRows.map((row) => [row.employeeId, row]))
+    const todayClassifications = new Map<string, 'PRESENT' | 'LEAVE' | 'ABSENT'>()
+    for (const schedule of todaySchedules) {
+      const leaveMinutes = this.leaveMinutesForDate(todayLeaves.filter((leave) => leave.employeeId === schedule.employeeId), today, schedule.scheduledMinutes)
+      if (leaveMinutes > 0) {
+        todayClassifications.set(schedule.employeeId, 'LEAVE')
+        continue
+      }
+      const metrics = this.metricsForAttendance(schedule, attendanceByEmployee.get(schedule.employeeId), todayLeaves)
+      todayClassifications.set(schedule.employeeId, metrics.absenceMinutes > 0 ? 'ABSENT' : 'PRESENT')
+    }
+    const todayAttendance = Array.from(todayClassifications.values()).filter((value) => value === 'PRESENT').length
+    const todayLeave = Array.from(todayClassifications.values()).filter((value) => value === 'LEAVE').length
+    const todayAbsence = Array.from(todayClassifications.values()).filter((value) => value === 'ABSENT').length
     return {
       month,
       workforce,
-      todayAttendance: todayRows.filter((row) => Boolean(row.checkInAt || row.checkOutAt || row.workedMinutes)).length,
-      todayLeave: leaves,
-      todayAbsence: todayRows.filter((row) => row.absenceMinutes > 0).length,
+      todayAttendance,
+      todayLeave,
+      todayAbsence,
+      overtimeMinutes: monthRows.reduce((sum, row) => sum + row.overtimeMinutes, 0),
+      pendingLeave,
+      projectedPayroll: projectedPayroll.toDecimalPlaces(2).toNumber(),
+      issueCount: payrollIssues.length + pendingLeave + reminders.length,
+      issues: [...payrollIssues, ...(pendingLeave ? [`${pendingLeave} 条请假待审批`] : []), ...reminders]
+    }
+  }
+
+  async calendarOverviewForAccounts(frontendUserIds: string[], month: string, referenceToday = this.today()) {
+    this.assertMonth(month)
+    if (!frontendUserIds.length) {
+      return { month, workforce: 0, todayAttendance: 0, todayLeave: 0, todayAbsence: 0, overtimeMinutes: 0, pendingLeave: 0, projectedPayroll: 0, issueCount: 0, issues: [] }
+    }
+    const today = referenceToday
+    const [monthStart, monthEnd] = this.monthBounds(month)
+    const accountWhere = { frontendUserId: { in: frontendUserIds } }
+    const [workforce, todayRows, monthRows, todaySchedules, monthSchedules, approvedLeaves, pendingLeave, payrollRuns] = await Promise.all([
+      this.prisma.employee.count({ where: { ...accountWhere, status: EmployeeStatus.ACTIVE } }),
+      this.prisma.employeeAttendanceRecord.findMany({ where: { ...accountWhere, date: today }, include: { segments: { orderBy: { sequence: 'asc' } } } }),
+      this.prisma.employeeAttendanceRecord.findMany({ where: { ...accountWhere, date: { startsWith: month } }, include: { segments: { orderBy: { sequence: 'asc' } } } }),
+      this.prisma.employeeMonthlyScheduleDay.findMany({ where: {
+        ...accountWhere, date: today, isWorkday: true, scheduledMinutes: { gt: 0 }, employee: {
+          status: EmployeeStatus.ACTIVE, hireDate: { lte: today }, OR: [{ terminationDate: null }, { terminationDate: { gte: today } }]
+        }
+      }, include: { segments: { orderBy: { sequence: 'asc' } } } }),
+      this.prisma.employeeMonthlyScheduleDay.findMany({ where: { ...accountWhere, date: { startsWith: month } }, include: { segments: { orderBy: { sequence: 'asc' } } } }),
+      this.prisma.employeeLeaveRequest.findMany({ where: { ...accountWhere, status: EmployeeLeaveStatus.APPROVED, startDate: { lte: monthEnd }, endDate: { gte: monthStart } } }),
+      this.prisma.employeeLeaveRequest.count({ where: { ...accountWhere, status: EmployeeLeaveStatus.PENDING, startDate: { lte: monthEnd }, endDate: { gte: monthStart } } }),
+      this.prisma.employeePayrollRun.findMany({ where: { ...accountWhere, month }, include: { items: { select: { payableAmount: true, issues: true } } } })
+    ])
+    const monthScheduleByKey = new Map(monthSchedules.map((schedule) => [`${schedule.frontendUserId}:${schedule.employeeId}:${schedule.date}`, schedule]))
+    const liveMonthRows = monthRows.map((row) => {
+      const schedule = monthScheduleByKey.get(`${row.frontendUserId}:${row.employeeId}:${row.date}`)
+      const leaves = approvedLeaves.filter((leave) => leave.frontendUserId === row.frontendUserId)
+      return schedule ? this.metricsForAttendance(schedule, row, leaves) : row
+    })
+    const attendanceByKey = new Map(todayRows.map((row) => [`${row.frontendUserId}:${row.employeeId}`, row]))
+    const classifications = todaySchedules.map((schedule) => {
+      const leaves = approvedLeaves.filter((leave) => leave.frontendUserId === schedule.frontendUserId && leave.employeeId === schedule.employeeId)
+      const attendance = attendanceByKey.get(`${schedule.frontendUserId}:${schedule.employeeId}`)
+      const leaveMinutes = this.leaveMinutesForDate(leaves, today, schedule.scheduledMinutes)
+      const metrics = this.metricsForAttendance(schedule, attendance, leaves)
+      const status = deriveAttendanceCalendarDay({
+        date: today,
+        isFuture: false,
+        isWorkday: schedule.isWorkday,
+        plannedSegments: (schedule.segments || []).map((segment: any) => ({ startTime: segment.startTime, endTime: segment.endTime })),
+        actualSegments: (attendance?.segments || []).map((segment: any) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt })),
+        scheduledMinutes: schedule.scheduledMinutes,
+        workedMinutes: metrics.workedMinutes,
+        lateMinutes: metrics.lateMinutes,
+        earlyLeaveMinutes: metrics.earlyLeaveMinutes,
+        absenceMinutes: metrics.absenceMinutes,
+        explicitAbsenceMinutes: Number(attendance?.explicitAbsenceMinutes || 0),
+        approvedLeaveMinutes: leaveMinutes,
+        overtimeMinutes: Number(attendance?.overtimeMinutes || 0),
+        leaveTypeName: '',
+        leaveReason: '',
+        remark: attendance?.remark || ''
+      }).status
+      return status === 'LEAVE' ? 'LEAVE' : status === 'ABSENT' ? 'ABSENT' : 'PRESENT'
+    })
+    const lateDays = liveMonthRows.filter((row) => row.lateMinutes > 0).length
+    const earlyDays = liveMonthRows.filter((row) => row.earlyLeaveMinutes > 0).length
+    const reminders = lateDays || earlyDays ? [`本月考勤提醒：迟到 ${lateDays} 天，早退 ${earlyDays} 天（不自动扣薪）`] : []
+    const payrollItems = payrollRuns.flatMap((run) => run.items || [])
+    const projectedPayroll = payrollItems.reduce((sum, item) => sum.plus(item.payableAmount), new Prisma.Decimal(0))
+    const payrollIssues = payrollItems.flatMap((item) => this.jsonIssues(item.issues))
+    return {
+      month,
+      workforce,
+      todayAttendance: classifications.filter((value) => value === 'PRESENT').length,
+      todayLeave: classifications.filter((value) => value === 'LEAVE').length,
+      todayAbsence: classifications.filter((value) => value === 'ABSENT').length,
       overtimeMinutes: monthRows.reduce((sum, row) => sum + row.overtimeMinutes, 0),
       pendingLeave,
       projectedPayroll: projectedPayroll.toDecimalPlaces(2).toNumber(),
@@ -216,20 +330,56 @@ export class PayrollService {
   }
 
   async adminSchedules(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
-    this.assertExclusiveDateFilter(query)
-    const where = this.adminEmployeeWhere(frontendUserIds, query)
-    return {
-      weekly: await this.prisma.employeeWeeklySchedule.findMany({ where, orderBy: [{ employeeId: 'asc' }, { weekday: 'asc' }] }),
-      overrides: await this.prisma.employeeDateOverride.findMany({ where: { ...where, ...this.adminDateWhere(query) }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] }),
-      monthly: await this.prisma.employeeMonthlySetting.findMany({ where: { ...where, ...(query.month ? { month: query.month } : {}) }, orderBy: [{ month: 'desc' }, { employeeId: 'asc' }] })
-    }
+    const rows = await this.prisma.employeeMonthlyScheduleDay.findMany({
+      where: { ...this.adminEmployeeWhere(frontendUserIds, query), ...this.adminScheduleDateWhere(query) },
+      include: {
+        segments: { orderBy: { sequence: 'asc' } },
+        employee: { select: { employeeNumber: true, name: true } },
+        frontendUser: { select: { account: true, username: true, displayRemark: true } }
+      },
+      orderBy: [{ date: 'desc' }, { employeeId: 'asc' }]
+    })
+    return rows.map((row) => ({ ...row, breakMinutes: breakMinutes(row.segments) }))
   }
 
-  adminAttendance(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
+  async adminAttendance(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
     this.assertExclusiveDateFilter(query)
-    return this.prisma.employeeAttendanceRecord.findMany({ where: {
+    const rows = await this.prisma.employeeAttendanceRecord.findMany({ where: {
       ...this.adminEmployeeWhere(frontendUserIds, query), ...this.adminDateWhere(query)
-    }, include: { employee: { select: { employeeNumber: true, name: true } } }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] })
+    }, include: {
+      employee: { select: { employeeNumber: true, name: true } },
+      segments: { orderBy: { sequence: 'asc' } }
+    }, orderBy: [{ date: 'desc' }, { employeeId: 'asc' }] })
+    if (!rows.length) return []
+    const employeeIds = Array.from(new Set(rows.map((row) => row.employeeId)))
+    const dates = Array.from(new Set(rows.map((row) => row.date))).sort()
+    const [schedules, leaves] = await Promise.all([
+      this.prisma.employeeMonthlyScheduleDay.findMany({
+        where: { frontendUserId: { in: frontendUserIds }, employeeId: { in: employeeIds }, date: { in: dates } },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
+      this.prisma.employeeLeaveRequest.findMany({ where: {
+        frontendUserId: { in: frontendUserIds }, employeeId: { in: employeeIds }, status: EmployeeLeaveStatus.APPROVED,
+        startDate: { lte: dates.at(-1)! }, endDate: { gte: dates[0] }
+      } })
+    ])
+    const scheduleByKey = new Map(schedules.map((schedule) => [`${schedule.frontendUserId}:${schedule.employeeId}:${schedule.date}`, schedule]))
+    return rows.map(({ segments, ...row }) => {
+      const actualSegments = segments.slice().sort((left, right) => left.sequence - right.sequence).map((segment) => ({
+        sequence: segment.sequence, checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt
+      }))
+      const schedule = scheduleByKey.get(`${row.frontendUserId}:${row.employeeId}:${row.date}`)
+      if (!schedule) return { ...row, explicitAbsenceMinutes: Number(row.explicitAbsenceMinutes || 0), actualSegments }
+      const metrics = this.metricsForAttendance(schedule, { ...row, segments }, leaves.filter((leave) => leave.frontendUserId === row.frontendUserId))
+      return {
+        ...row,
+        isScheduledWorkday: schedule.isWorkday,
+        scheduledMinutes: schedule.isWorkday ? schedule.scheduledMinutes : 0,
+        explicitAbsenceMinutes: Number(row.explicitAbsenceMinutes || 0),
+        ...metrics,
+        actualSegments
+      }
+    })
   }
 
   adminLeaves(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
@@ -323,9 +473,16 @@ export class PayrollService {
       ]
     }, orderBy: { employeeNumber: 'asc' } })
     const employeeIds = employees.map((employee) => employee.id)
-    const [settings, attendance, leaves, commissions, bonuses] = await Promise.all([
+    const [settings, schedules, attendance, leaves, commissions, bonuses] = await Promise.all([
       db.employeeMonthlySetting.findMany({ where: { frontendUserId, month, employeeId: { in: employeeIds } } }),
-      db.employeeAttendanceRecord.findMany({ where: { frontendUserId, date: { startsWith: month }, employeeId: { in: employeeIds } } }),
+      db.employeeMonthlyScheduleDay.findMany({
+        where: { frontendUserId, date: { startsWith: month }, employeeId: { in: employeeIds } },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
+      db.employeeAttendanceRecord.findMany({
+        where: { frontendUserId, date: { startsWith: month }, employeeId: { in: employeeIds } },
+        include: { segments: { orderBy: { sequence: 'asc' } } }
+      }),
       db.employeeLeaveRequest.findMany({ where: {
         frontendUserId, employeeId: { in: employeeIds }, status: EmployeeLeaveStatus.APPROVED,
         startDate: { lte: monthEnd }, endDate: { gte: monthStart }
@@ -337,34 +494,34 @@ export class PayrollService {
       const setting = settings.find((item) => item.employeeId === employee.id)
       const employeeAttendance = attendance.filter((item) => item.employeeId === employee.id)
       const employeeLeaves = leaves.filter((item) => item.employeeId === employee.id)
+      const employeeSchedules = schedules.filter((item) => item.employeeId === employee.id &&
+        item.date >= employee.hireDate && (!employee.terminationDate || item.date <= employee.terminationDate))
+      const validWorkdays = employeeSchedules.filter((item) => item.isWorkday && item.scheduledMinutes > 0)
       const countedLeaveDays = employeeLeaves
         .filter((item) => item.leaveType.countsTowardRestQuota)
-        .reduce((sum, item) => sum.plus(this.leavePortion(item, monthStart, monthEnd, employeeAttendance)), new Prisma.Decimal(0))
-      const attendanceEvaluations = employeeAttendance.filter((item) => item.isScheduledWorkday).map((item) => {
-        const scheduledMinutes = Math.max(0, item.scheduledMinutes)
-        const approvedCoverage = Prisma.Decimal.min(
-          employeeLeaves.filter((leave) => leave.startDate <= item.date && leave.endDate >= item.date)
-            .reduce((coverage, leave) => coverage.plus(this.leaveCoverageForDate(leave)), new Prisma.Decimal(0)),
-          new Prisma.Decimal(1)
-        )
-        const uncoveredMinutes = new Prisma.Decimal(scheduledMinutes).times(new Prisma.Decimal(1).minus(approvedCoverage))
-        const hasPair = Boolean(item.checkInAt && item.checkOutAt)
+        .reduce((sum, item) => sum.plus(this.leavePortion(item, monthStart, monthEnd, validWorkdays)), new Prisma.Decimal(0))
+      const attendanceByDate = new Map(employeeAttendance.map((item) => [item.date, item]))
+      const attendanceEvaluations = validWorkdays.map((schedule) => {
+        const item = attendanceByDate.get(schedule.date)
+        if (!item) return { absenceDays: new Prisma.Decimal(0), hasLonePunch: false }
+        const approvedLeaveMinutes = this.leaveMinutesForDate(employeeLeaves, schedule.date, schedule.scheduledMinutes)
+        const actualSegments = (item.segments || []).map((segment: any) => ({ checkInAt: segment.checkInAt, checkOutAt: segment.checkOutAt }))
+        const plan = (schedule.segments || []).map((segment: any) => ({ startTime: segment.startTime, endTime: segment.endTime }))
+        const rawExplicitAbsence = Math.max(0, item.explicitAbsenceMinutes || 0)
+        const effectiveAbsence = plan.length
+          ? deriveAttendanceMetrics(plan, actualSegments, approvedLeaveMinutes, rawExplicitAbsence).absenceMinutes
+          : Math.max(0, rawExplicitAbsence - approvedLeaveMinutes)
         const hasLonePunch = Boolean(item.checkInAt) !== Boolean(item.checkOutAt)
-        const recordedAbsence = new Prisma.Decimal(Math.max(0, item.absenceMinutes || 0))
-        const insufficientExplicitAbsence = !hasPair && recordedAbsence.lt(uncoveredMinutes)
-        const effectiveAbsence = !hasPair
-          ? uncoveredMinutes
-          : Prisma.Decimal.min(recordedAbsence, uncoveredMinutes)
-        const absenceDays = scheduledMinutes > 0
-          ? Prisma.Decimal.min(effectiveAbsence.div(scheduledMinutes), new Prisma.Decimal(1))
-          : new Prisma.Decimal(0)
-        return { item, absenceDays, hasLonePunch, insufficientExplicitAbsence, invalidSchedule: scheduledMinutes <= 0 }
+        return {
+          absenceDays: Prisma.Decimal.min(new Prisma.Decimal(effectiveAbsence).div(schedule.scheduledMinutes), new Prisma.Decimal(1)),
+          hasLonePunch
+        }
       })
       const absenceDays = attendanceEvaluations.reduce((sum, evaluation) => sum.plus(evaluation.absenceDays), new Prisma.Decimal(0))
       const input: PayrollCalculationInput = {
         baseSalary: employee.baseSalary.toString(),
         attendanceBonus: employee.attendanceBonus.toString(),
-        scheduledWorkDays: setting?.scheduledWorkDays?.toString() || 0,
+        scheduledWorkDays: validWorkdays.length,
         restQuotaDays: setting?.restQuotaDays?.toString() || employee.restQuotaDays.toString(),
         countedLeaveDays: countedLeaveDays.toString(),
         absenceDays: absenceDays.toString(),
@@ -376,15 +533,11 @@ export class PayrollService {
       }
       const result = calculatePayroll(input)
       const issues = [...result.issues]
-      if (!setting || new Prisma.Decimal(setting.scheduledWorkDays).lte(0)) issues.push('缺少员工月度排班')
-      const scheduledRows = attendanceEvaluations.filter((evaluation) => !evaluation.invalidSchedule).length
-      if (setting && new Prisma.Decimal(setting.scheduledWorkDays).gt(scheduledRows)) issues.push('缺少考勤排班记录')
-      const invalidSchedules = attendanceEvaluations.filter((evaluation) => evaluation.invalidSchedule).length
+      if (!employeeSchedules.length) issues.push('缺少员工月度排班')
+      const invalidSchedules = employeeSchedules.filter((schedule) => schedule.isWorkday && schedule.scheduledMinutes <= 0).length
       if (invalidSchedules) issues.push(`有 ${invalidSchedules} 天排班工作日时长必须大于 0`)
       const lonePunches = attendanceEvaluations.filter((evaluation) => evaluation.hasLonePunch).length
       if (lonePunches) issues.push(`有 ${lonePunches} 天打卡必须成对`)
-      const unresolved = attendanceEvaluations.filter((evaluation) => evaluation.insufficientExplicitAbsence).length
-      if (unresolved) issues.push(`有 ${unresolved} 天未处理缺勤`)
       return { input, issues: Array.from(new Set(issues)), employee }
     })
   }
@@ -432,6 +585,7 @@ export class PayrollService {
   private async setLocks(tx: Prisma.TransactionClient, frontendUserId: string, month: string, value: Date | null) {
     const [start, end] = this.monthBounds(month)
     const data = { payrollLockedAt: value }
+    await tx.employeeMonthlyScheduleDay.updateMany({ where: { frontendUserId, date: { startsWith: month } }, data })
     await tx.employeeAttendanceRecord.updateMany({ where: { frontendUserId, date: { startsWith: month } }, data })
     await tx.employeeLeaveRequest.updateMany({ where: { frontendUserId, startDate: { lte: end }, endDate: { gte: start } }, data })
     await tx.employeeCommissionRecord.updateMany({ where: { frontendUserId, date: { startsWith: month } }, data })
@@ -470,22 +624,53 @@ export class PayrollService {
     return { ...safe, idCard: sensitive(idCardCipher), bankCard: sensitive(bankCardCipher), address: sensitive(addressCipher), emergencyContact: sensitive(emergencyContactCipher), hasPhoto: Boolean(photoPath) }
   }
 
-  private leavePortion(leave: any, start: string, end: string, attendance: any[]) {
+  private leavePortion(leave: any, start: string, end: string, scheduleDays: any[]) {
     const overlapStart = leave.startDate > start ? leave.startDate : start
     const overlapEnd = leave.endDate < end ? leave.endDate : end
     if (overlapStart > overlapEnd) return new Prisma.Decimal(0)
+    const scheduledDays = scheduleDays.filter((item) => item.date >= overlapStart && item.date <= overlapEnd).length
+    if (!scheduledDays) return new Prisma.Decimal(0)
     if (leave.unit === EmployeeLeaveUnit.HOUR) return new Prisma.Decimal(leave.countedDays)
-    const scheduledDays = attendance.filter((item) => item.isScheduledWorkday && item.date >= overlapStart && item.date <= overlapEnd).length
-    if (scheduledDays) return new Prisma.Decimal(scheduledDays).times(leave.unit === EmployeeLeaveUnit.HALF_DAY ? 0.5 : 1)
-    const total = this.daysInclusive(leave.startDate, leave.endDate)
-    const overlap = this.daysInclusive(overlapStart, overlapEnd)
-    return new Prisma.Decimal(leave.countedDays).times(overlap).div(total)
+    return new Prisma.Decimal(scheduledDays).times(leave.unit === EmployeeLeaveUnit.HALF_DAY ? 0.5 : 1)
   }
 
-  private leaveCoverageForDate(leave: any) {
-    if (leave.unit === EmployeeLeaveUnit.FULL_DAY) return new Prisma.Decimal(1)
-    if (leave.unit === EmployeeLeaveUnit.HALF_DAY) return new Prisma.Decimal(0.5)
-    return Prisma.Decimal.min(new Prisma.Decimal(leave.countedDays || 0), new Prisma.Decimal(1))
+  private metricsForAttendance(schedule: any, attendance: any | undefined, leaves: any[]) {
+    if (!schedule.isWorkday) {
+      return { workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, absenceMinutes: 0 }
+    }
+    const approvedLeaveMinutes = this.leaveMinutesForDate(
+      leaves.filter((leave) => leave.employeeId === schedule.employeeId),
+      schedule.date,
+      schedule.scheduledMinutes
+    )
+    const actualSegments = (attendance?.segments || []).map((segment: any) => ({
+      checkInAt: segment.checkInAt,
+      checkOutAt: segment.checkOutAt
+    }))
+    const plan = (schedule.segments || []).map((segment: any) => ({ startTime: segment.startTime, endTime: segment.endTime }))
+    const explicitAbsenceMinutes = Math.max(0, Number(attendance?.explicitAbsenceMinutes || 0))
+    if (!plan.length) {
+      return {
+        workedMinutes: 0,
+        lateMinutes: Number(attendance?.lateMinutes || 0),
+        earlyLeaveMinutes: Number(attendance?.earlyLeaveMinutes || 0),
+        absenceMinutes: Math.max(0, explicitAbsenceMinutes - approvedLeaveMinutes)
+      }
+    }
+    return deriveAttendanceMetrics(plan, actualSegments, approvedLeaveMinutes, explicitAbsenceMinutes)
+  }
+
+  private leaveMinutesForDate(leaves: any[], date: string, scheduledMinutes: number) {
+    return Math.min(scheduledMinutes, leaves
+      .filter((leave) => leave.startDate <= date && leave.endDate >= date)
+      .reduce((total, leave) => {
+        if (leave.unit === EmployeeLeaveUnit.FULL_DAY) return total + scheduledMinutes
+        if (leave.unit === EmployeeLeaveUnit.HALF_DAY) return total + Math.round(scheduledMinutes / 2)
+        const hours = Number(leave.hours)
+        return total + (Number.isFinite(hours) && hours > 0
+          ? Math.round(hours * 60)
+          : Math.round(scheduledMinutes * Number(leave.countedDays || 0)))
+      }, 0))
   }
 
   private adminEmployeeWhere(frontendUserIds: string[], query: AdminEmployeeAttendanceQueryDto) {
@@ -496,6 +681,16 @@ export class PayrollService {
     this.assertExclusiveDateFilter(query)
     if (query.month) { this.assertMonth(query.month); return { date: { startsWith: query.month } } }
     return query.startDate || query.endDate ? { date: { ...(query.startDate ? { gte: query.startDate } : {}), ...(query.endDate ? { lte: query.endDate } : {}) } } : {}
+  }
+
+  private adminScheduleDateWhere(query: AdminEmployeeAttendanceQueryDto) {
+    if (query.month) {
+      this.assertMonth(query.month)
+      return { date: { startsWith: query.month } }
+    }
+    return query.startDate || query.endDate
+      ? { date: { ...(query.startDate ? { gte: query.startDate } : {}), ...(query.endDate ? { lte: query.endDate } : {}) } }
+      : {}
   }
 
   private adminOverlapWhere(query: AdminEmployeeAttendanceQueryDto) {
