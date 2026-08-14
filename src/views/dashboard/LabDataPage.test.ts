@@ -14,6 +14,12 @@ const mocks = vi.hoisted(() => ({
     accessSessionRevision: 0
   },
   preferenceValue: vi.fn(),
+  preferenceCanAccess: vi.fn<(_user: unknown, _section: string) => boolean>(() => true),
+  authUser: {
+    id: 'main-1', account: 'main-1', username: '主账号', role: 'FRONTEND_USER',
+    dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false,
+    permissions: []
+  },
   labStore: {
     loading: false,
     saving: false,
@@ -55,7 +61,12 @@ vi.mock('@/stores/accessGuard', () => ({
 }))
 
 vi.mock('@/stores/frontendPreferences', () => ({
+  canAccessFrontendPreference: mocks.preferenceCanAccess,
   useFrontendPreferencesStore: () => ({ value: mocks.preferenceValue })
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({ get user() { return mocks.authUser } })
 }))
 
 function mountPage() {
@@ -232,6 +243,8 @@ describe('LabDataPage table layout', () => {
     mocks.accessGuard.hasFeatureAccess.mockReturnValue(true)
     mocks.preferenceValue.mockReset()
     mocks.preferenceValue.mockImplementation((_section: string, fallback: unknown) => JSON.parse(JSON.stringify(fallback)))
+    mocks.preferenceCanAccess.mockReset()
+    mocks.preferenceCanAccess.mockReturnValue(true)
     mocks.labStore.autoSaveStatus = 'idle'
     mocks.labStore.applyingParameters = false
     mocks.labStore.autoSaveError = ''
@@ -550,6 +563,48 @@ describe('LabDataPage table layout', () => {
 
     expect(wrapper.get('.lab-sms-dialog-stub').attributes('data-prefix')).toBe('服务器最新短信前缀')
     expect(mocks.preferenceValue).toHaveBeenCalledWith('LAB_REPORT_SMS_TEMPLATE', expect.any(Object))
+    wrapper.unmount()
+  })
+
+  it('does not read or use an owner-cached report template without actor permission', async () => {
+    mocks.preferenceCanAccess.mockImplementation((_user: unknown, section: string) => section !== 'LAB_REPORT_TEMPLATE')
+    mocks.preferenceValue.mockImplementation((section: string, fallback: unknown) => (
+      section === 'LAB_REPORT_TEMPLATE'
+        ? { ...(fallback as Record<string, unknown>), title: '无权不应消费的缓存模板' }
+        : JSON.parse(JSON.stringify(fallback))
+    ))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '生成化验报告').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '选择元素生成报告').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.lab-report-dialog-stub').attributes('data-title')).not.toBe('无权不应消费的缓存模板')
+    expect(mocks.preferenceValue).not.toHaveBeenCalledWith('LAB_REPORT_TEMPLATE', expect.anything())
+    wrapper.unmount()
+  })
+
+  it('does not read or use an owner-cached SMS template without actor permission', async () => {
+    mocks.preferenceCanAccess.mockImplementation((_user: unknown, section: string) => section !== 'LAB_REPORT_SMS_TEMPLATE')
+    mocks.preferenceValue.mockImplementation((section: string, fallback: unknown) => (
+      section === 'LAB_REPORT_SMS_TEMPLATE'
+        ? { prefix: '无权不应消费的缓存短信', suffix: '' }
+        : JSON.parse(JSON.stringify(fallback))
+    ))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '生成化验短信').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '选择元素生成短信').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.lab-sms-dialog-stub').attributes('data-prefix')).not.toBe('无权不应消费的缓存短信')
+    expect(mocks.preferenceValue).not.toHaveBeenCalledWith('LAB_REPORT_SMS_TEMPLATE', expect.anything())
     wrapper.unmount()
   })
 

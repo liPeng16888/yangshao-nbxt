@@ -189,6 +189,69 @@ describe('frontend preference owner sync store', () => {
     expect(store.statuses[smsSection]).toBe('saved')
   })
 
+  it('revokes unauthorized same-owner cache values without deleting durable owner data', async () => {
+    const reportSection = 'LAB_REPORT_TEMPLATE' as const
+    const groupSection = 'LAB_ELEMENT_GROUPS' as const
+    const report = record(reportSection, { title: '主账号报告模板' }, 3)
+    const groups = record(groupSection, [{ id: 'g-1', name: '铝硅', elementKeys: ['aluminum', 'silicon'] }], 2)
+    writeFrontendPreferenceCache(cached('main-1', report))
+    writeFrontendPreferenceCache({ ownerId: 'main-1', section: groupSection, server: groups })
+    const store = useFrontendPreferencesStore()
+    expect(store.value(reportSection, { title: '默认' }).title).toBe('主账号报告模板')
+
+    useAuthStore().user = user({
+      id: 'sub-data', account: 'sub-data', role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1', isFrontendMainAccount: false, isFrontendSubAccount: true,
+      permissions: ['DATA_MAIN']
+    })
+
+    expect(store.value(reportSection, { title: '无权默认' }).title).toBe('无权默认')
+    expect(store.records[reportSection]).toBeUndefined()
+    expect(store.statuses[reportSection]).toBe('idle')
+    expect(store.value(groupSection, [])).toEqual(groups.value)
+
+    api.listFrontendPreferences.mockResolvedValueOnce([groups])
+    await store.loadAll()
+    expect(readFrontendPreferenceCache('main-1', reportSection)).toEqual(cached('main-1', report))
+    expect(store.value(reportSection, { title: '离线无权默认' }).title).toBe('离线无权默认')
+
+    api.listFrontendPreferences.mockRejectedValueOnce(networkError())
+    await expect(store.loadAll()).resolves.toBe('error')
+    expect(readFrontendPreferenceCache('main-1', reportSection)).toEqual(cached('main-1', report))
+    expect(store.value(reportSection, { title: '断网无权默认' }).title).toBe('断网无权默认')
+
+    useAuthStore().user = user()
+    expect(store.value(reportSection, { title: '默认' }).title).toBe('主账号报告模板')
+  })
+
+  it('hides unauthorized pending and conflict state and rejects direct writes', async () => {
+    const reportSection = 'LAB_REPORT_TEMPLATE' as const
+    const report = record(reportSection, { title: '服务器报告' }, 3)
+    writeFrontendPreferenceCache({
+      ownerId: 'main-1',
+      section: reportSection,
+      server: report,
+      pendingValue: { title: '高权限账号待同步草稿' },
+      pendingBaseVersion: 3
+    })
+    useAuthStore().user = user({
+      id: 'sub-data', account: 'sub-data', role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1', isFrontendMainAccount: false, isFrontendSubAccount: true,
+      permissions: ['DATA_MAIN']
+    })
+    const store = useFrontendPreferencesStore()
+
+    expect(store.value(reportSection, { title: '无权默认' }).title).toBe('无权默认')
+    expect(store.statuses[reportSection]).toBe('idle')
+    expect(store.conflicts[reportSection]).toBeUndefined()
+    expect(store.hasPendingChanges).toBe(false)
+    await expect(store.save(reportSection, { title: '越权写入' })).resolves.toBe('error')
+    expect(api.saveFrontendPreference).not.toHaveBeenCalled()
+    expect(readFrontendPreferenceCache('main-1', reportSection)).toMatchObject({
+      pendingValue: { title: '高权限账号待同步草稿' }
+    })
+  })
+
   it('queues an offline edit without silently overwriting a newer server version', async () => {
     const store = useFrontendPreferencesStore()
     api.saveFrontendPreference.mockRejectedValueOnce(networkError())

@@ -125,6 +125,7 @@ function isTransportError(error: unknown): boolean {
 export const useFrontendPreferencesStore = defineStore('frontendPreferences', () => {
   const authStore = useAuthStore()
   const activeOwnerId = ref('')
+  const activeActorKey = ref('')
   const records = ref<SectionRecord<FrontendPreferenceRecord>>({})
   const pendingValues = ref<SectionRecord<unknown>>({})
   const statuses = ref<Record<FrontendPreferenceSection, FrontendPreferenceStatus>>(idleStatuses())
@@ -153,6 +154,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
       if (session.dirty &&
         session.ownerId === ownerId &&
         session.actorKey === actorKey &&
+        canAccessFrontendPreference(authStore.user, session.section) &&
         (!section || session.section === section)) return session
     }
     return undefined
@@ -173,7 +175,8 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
       update(state: { dirty: boolean; value?: unknown }) {
         if (editSessions.get(token) !== session ||
           session.ownerId !== frontendPreferenceOwnerId(authStore.user) ||
-          session.actorKey !== frontendPreferenceActorKey(authStore.user)) return
+          session.actorKey !== frontendPreferenceActorKey(authStore.user) ||
+          !canAccessFrontendPreference(authStore.user, section)) return
         session.dirty = state.dirty
         if (state.dirty) session.value = cloneJsonValue(state.value)
         else delete session.value
@@ -185,17 +188,19 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     }
   }
 
-  function resetState(ownerId = '') {
+  function resetState(ownerId = '', actorKey = '') {
     activeOwnerId.value = ownerId
+    activeActorKey.value = actorKey
     records.value = {}
     pendingValues.value = {}
     statuses.value = idleStatuses()
     conflicts.value = {}
   }
 
-  function hydrateOwner(ownerId: string) {
-    resetState(ownerId)
+  function hydrateOwner(ownerId: string, actorKey: string) {
+    resetState(ownerId, actorKey)
     for (const section of FRONTEND_PREFERENCE_SECTIONS) {
+      if (!canAccessFrontendPreference(authStore.user, section)) continue
       const cached = readFrontendPreferenceCache(ownerId, section)
       if (!cached) continue
       if (cached.server) records.value[section] = cloneJsonValue(cached.server)
@@ -210,11 +215,12 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
 
   function syncOwnerState() {
     const ownerId = frontendPreferenceOwnerId(authStore.user)
-    if (activeOwnerId.value === ownerId) return ownerId
+    const actorKey = frontendPreferenceActorKey(authStore.user)
+    if (activeOwnerId.value === ownerId && activeActorKey.value === actorKey) return ownerId
     loadEpoch += 1
     ownerSessionGeneration += 1
-    if (ownerId) hydrateOwner(ownerId)
-    else resetState()
+    if (ownerId) hydrateOwner(ownerId, actorKey)
+    else resetState('', actorKey)
     return ownerId
   }
 
@@ -314,7 +320,11 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
 
     const requestEpoch = ++loadEpoch
     const requestOwnerSessionGeneration = ownerSessionGeneration
-    for (const section of FRONTEND_PREFERENCE_SECTIONS) {
+    const requestActorKey = frontendPreferenceActorKey(authStore.user)
+    const accessibleSections = FRONTEND_PREFERENCE_SECTIONS.filter((section) => (
+      canAccessFrontendPreference(authStore.user, section)
+    ))
+    for (const section of accessibleSections) {
       if (!currentDirtyEditSession(section, ownerId) && statuses.value[section] !== 'queued') {
         statuses.value[section] = 'loading'
       }
@@ -325,6 +335,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
       if (
         requestEpoch !== loadEpoch ||
         requestOwnerSessionGeneration !== ownerSessionGeneration ||
+        requestActorKey !== frontendPreferenceActorKey(authStore.user) ||
         frontendPreferenceOwnerId(authStore.user) !== ownerId ||
         activeOwnerId.value !== ownerId
       ) {
@@ -332,7 +343,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
       }
 
       const serverBySection = new Map(serverRecords.map((record) => [record.section, record]))
-      for (const section of FRONTEND_PREFERENCE_SECTIONS) {
+      for (const section of accessibleSections) {
         const server = serverBySection.get(section) ?? null
         const cached = readFrontendPreferenceCache(ownerId, section)
         const editSession = currentDirtyEditSession(section, ownerId)
@@ -369,13 +380,14 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
       if (
         requestEpoch !== loadEpoch ||
         requestOwnerSessionGeneration !== ownerSessionGeneration ||
+        requestActorKey !== frontendPreferenceActorKey(authStore.user) ||
         frontendPreferenceOwnerId(authStore.user) !== ownerId ||
         activeOwnerId.value !== ownerId
       ) {
         return 'stale' as const
       }
       if (frontendPreferenceOwnerId(authStore.user) === ownerId && activeOwnerId.value === ownerId) {
-        for (const section of FRONTEND_PREFERENCE_SECTIONS) {
+        for (const section of accessibleSections) {
           if (statuses.value[section] !== 'queued' && statuses.value[section] !== 'conflict') {
             statuses.value[section] = 'error'
           }
@@ -387,6 +399,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
 
   function value<T>(section: FrontendPreferenceSection, fallback: T): T {
     syncOwnerState()
+    if (!canAccessFrontendPreference(authStore.user, section)) return cloneJsonValue(fallback)
     if (Object.prototype.hasOwnProperty.call(pendingValues.value, section)) {
       return cloneJsonValue(pendingValues.value[section] as T)
     }
@@ -399,8 +412,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     nextValue: unknown
   ): Promise<SaveResult> {
     const ownerId = syncOwnerState()
-    if (!ownerId) {
-      statuses.value[section] = 'error'
+    if (!ownerId || !canAccessFrontendPreference(authStore.user, section)) {
       return 'error'
     }
     const current = records.value[section] ?? null
@@ -443,6 +455,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     strategy: 'server' | 'overwrite'
   ): Promise<SaveResult> {
     const ownerId = syncOwnerState()
+    if (!canAccessFrontendPreference(authStore.user, section)) return 'error'
     const storedConflict = conflicts.value[section]
     const conflict = storedConflict ? cloneJsonValue(storedConflict) : undefined
     if (!ownerId || activeOwnerId.value !== ownerId || !conflict) {
@@ -498,7 +511,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
   }
 
   watch(
-    () => frontendPreferenceOwnerId(authStore.user),
+    () => frontendPreferenceActorKey(authStore.user),
     () => { syncOwnerState() },
     { immediate: true, flush: 'sync' }
   )
