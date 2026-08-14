@@ -171,6 +171,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import {
   canAccessFrontendPreference,
+  frontendPreferenceActorKey,
   frontendPreferenceOwnerId,
   useFrontendPreferencesStore
 } from '@/stores/frontendPreferences'
@@ -202,6 +203,7 @@ type SampleUnitOperationContext = {
   actorKey: string
   ownerId: string
   draft: LabReportDraft
+  editSession: ReturnType<ReturnType<typeof useFrontendPreferencesStore>['registerEditSession']>
 }
 
 const props = defineProps<{
@@ -227,6 +229,8 @@ const sampleUnitsSaving = ref(false)
 const sampleUnitsResolving = ref(false)
 const savedSampleUnits = ref<string[]>([])
 let sampleUnitOperationGeneration = 0
+let sampleUnitEditSession = preferences.registerEditSession('LAB_REPORT_SAMPLE_UNITS')
+let sampleUnitMutationsInFlight = 0
 
 const selectedBlocks = computed(() => props.blocks.filter((block) => props.selectedBlockIds.includes(block.id)))
 const dialogTitle = computed(() => (step.value === 'elements' ? '选择化验报告检测元素' : '化验报告预览'))
@@ -292,13 +296,30 @@ watch(
   actorKey,
   () => {
     invalidateSampleUnitOperations()
+    sampleUnitEditSession.unregister()
+    sampleUnitEditSession = preferences.registerEditSession('LAB_REPORT_SAMPLE_UNITS')
     if (props.visible) refreshSavedSampleUnits()
   },
   { flush: 'sync' }
 )
 
+watch(
+  () => ({
+    status: preferences.statuses.LAB_REPORT_SAMPLE_UNITS,
+    value: canAccessSampleUnits.value
+      ? preferences.value<unknown>('LAB_REPORT_SAMPLE_UNITS', [])
+      : []
+  }),
+  ({ status, value }) => {
+    if (sampleUnitMutationsInFlight > 0 || sampleUnitsResolving.value || status === 'saving') return
+    savedSampleUnits.value = normalizeSampleUnits(value)
+  },
+  { deep: true, immediate: true, flush: 'sync' }
+)
+
 onBeforeUnmount(() => {
   invalidateSampleUnitOperations()
+  sampleUnitEditSession.unregister()
 })
 
 function applyBulkElements() {
@@ -351,23 +372,29 @@ async function saveCurrentSampleUnit() {
     ElMessage.warning('请先填写来样单位名称')
     return
   }
-  if (savedSampleUnits.value.includes(unit)) {
+  const currentUnits = currentSampleUnits()
+  if (currentUnits.includes(unit)) {
     ElMessage.info('该名称已经保存')
     return
   }
-  const next = normalizeSampleUnits([unit, ...savedSampleUnits.value])
+  const next = normalizeSampleUnits([unit, ...currentUnits])
   const operation = captureSampleUnitOperation()
   if (!operation) return
   sampleUnitsSaving.value = true
+  operation.editSession.update({ dirty: true, value: next })
+  sampleUnitMutationsInFlight += 1
   try {
     const result = await preferences.save('LAB_REPORT_SAMPLE_UNITS', next)
     if (!isCurrentSampleUnitOperation(operation)) return
-    if (result === 'saved' || result === 'queued') refreshSavedSampleUnits()
-    handleSampleUnitSaveResult(result, '来样单位名称已保存')
-    if (result === 'saved' || result === 'queued') {
+    const effectiveResult = currentSampleUnitResult(result)
+    if (effectiveResult === 'saved' || effectiveResult === 'queued') refreshSavedSampleUnits()
+    handleSampleUnitSaveResult(effectiveResult, '来样单位名称已保存')
+    if (effectiveResult === 'saved' || effectiveResult === 'queued') {
       operation.draft.sampleUnit = unit
     }
   } finally {
+    sampleUnitMutationsInFlight -= 1
+    operation.editSession.update({ dirty: false })
     if (isCurrentSampleUnitOperation(operation)) sampleUnitsSaving.value = false
   }
 }
@@ -377,6 +404,7 @@ async function removeSavedSampleUnit(unit: string) {
   const operation = captureSampleUnitOperation()
   if (!operation) return
   sampleUnitsSaving.value = true
+  let mutationStarted = false
   try {
     await ElMessageBox.confirm(
       `确认删除快捷名称“${unit}”吗？此操作不会删除数据计算中的客户资料。`,
@@ -390,16 +418,22 @@ async function removeSavedSampleUnit(unit: string) {
     if (!isCurrentSampleUnitOperation(operation) ||
       preferences.statuses.LAB_REPORT_SAMPLE_UNITS === 'saving' ||
       preferences.statuses.LAB_REPORT_SAMPLE_UNITS === 'conflict') return
-    const next = normalizeSampleUnits(savedSampleUnits.value.filter((item) => item !== unit))
+    const next = normalizeSampleUnits(currentSampleUnits().filter((item) => item !== unit))
+    operation.editSession.update({ dirty: true, value: next })
+    sampleUnitMutationsInFlight += 1
+    mutationStarted = true
     const result = await preferences.save('LAB_REPORT_SAMPLE_UNITS', next)
     if (!isCurrentSampleUnitOperation(operation)) return
-    if (result === 'saved' || result === 'queued') refreshSavedSampleUnits()
-    handleSampleUnitSaveResult(result, '快捷名称已删除')
+    const effectiveResult = currentSampleUnitResult(result)
+    if (effectiveResult === 'saved' || effectiveResult === 'queued') refreshSavedSampleUnits()
+    handleSampleUnitSaveResult(effectiveResult, '快捷名称已删除')
   } catch (error) {
     if (isCurrentSampleUnitOperation(operation) && error !== 'cancel' && error !== 'close') {
       ElMessage.error('快捷名称删除失败，请重试')
     }
   } finally {
+    if (mutationStarted) sampleUnitMutationsInFlight -= 1
+    operation.editSession.update({ dirty: false })
     if (isCurrentSampleUnitOperation(operation)) sampleUnitsSaving.value = false
   }
 }
@@ -410,6 +444,7 @@ async function resolveSampleUnitConflict(strategy: 'server' | 'overwrite') {
   const operation = captureSampleUnitOperation()
   if (!operation) return
   sampleUnitsResolving.value = true
+  let mutationStarted = false
   try {
     if (strategy === 'overwrite') {
       try {
@@ -432,23 +467,25 @@ async function resolveSampleUnitConflict(strategy: 'server' | 'overwrite') {
     }
     if (!isCurrentSampleUnitOperation(operation) ||
       preferences.statuses.LAB_REPORT_SAMPLE_UNITS !== 'conflict') return
+    sampleUnitMutationsInFlight += 1
+    mutationStarted = true
     const result = await preferences.resolveConflict('LAB_REPORT_SAMPLE_UNITS', strategy)
     if (!isCurrentSampleUnitOperation(operation)) return
     if (result === 'saved' || result === 'queued') refreshSavedSampleUnits()
     handleSampleUnitConflictResult(result, strategy)
   } finally {
+    if (mutationStarted) sampleUnitMutationsInFlight -= 1
     if (isCurrentSampleUnitOperation(operation)) sampleUnitsResolving.value = false
   }
 }
 
 function refreshSavedSampleUnits() {
-  savedSampleUnits.value = canAccessSampleUnits.value
-    ? normalizeSampleUnits(preferences.value<unknown>('LAB_REPORT_SAMPLE_UNITS', []))
-    : []
+  savedSampleUnits.value = currentSampleUnits()
 }
 
 function invalidateSampleUnitOperations() {
   sampleUnitOperationGeneration += 1
+  sampleUnitEditSession.update({ dirty: false })
   sampleUnitsSaving.value = false
   sampleUnitsResolving.value = false
 }
@@ -459,7 +496,8 @@ function captureSampleUnitOperation(): SampleUnitOperationContext | null {
     generation: sampleUnitOperationGeneration,
     actorKey: actorKey.value,
     ownerId: frontendPreferenceOwnerId(authStore.user),
-    draft: draft.value
+    draft: draft.value,
+    editSession: sampleUnitEditSession
   }
 }
 
@@ -471,17 +509,14 @@ function isCurrentSampleUnitOperation(operation: SampleUnitOperationContext) {
     operation.draft === draft.value
 }
 
-function frontendPreferenceActorKey(user: typeof authStore.user) {
-  if (!user) return ''
-  return JSON.stringify({
-    actorId: user.id,
-    ownerId: frontendPreferenceOwnerId(user),
-    role: user.role,
-    isMain: Boolean(user.isFrontendMainAccount),
-    isSub: Boolean(user.isFrontendSubAccount),
-    permissionVersion: user.permissionVersion ?? 0,
-    permissions: [...(user.permissions ?? [])].sort()
-  })
+function currentSampleUnits() {
+  return canAccessSampleUnits.value
+    ? normalizeSampleUnits(preferences.value<unknown>('LAB_REPORT_SAMPLE_UNITS', []))
+    : []
+}
+
+function currentSampleUnitResult(result: 'saved' | 'queued' | 'conflict' | 'error') {
+  return preferences.statuses.LAB_REPORT_SAMPLE_UNITS === 'conflict' ? 'conflict' : result
 }
 
 function normalizeSampleUnits(value: unknown): string[] {

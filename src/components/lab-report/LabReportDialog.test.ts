@@ -162,6 +162,42 @@ describe('LabReportDialog shared sample-unit shortcuts', () => {
     expect(success).toHaveBeenCalledWith('来样单位名称已保存')
   })
 
+  it('merges a local add with the latest external catalogue while the dialog stays open', async () => {
+    installUnits(['王庄'])
+    const wrapper = mountReportDialog(pinia)
+    await showPreview(wrapper)
+    api.listFrontendPreferences.mockResolvedValueOnce([record(['王庄', '远程新增'], 2)])
+    await useFrontendPreferencesStore(pinia).loadAll()
+    api.saveFrontendPreference.mockResolvedValueOnce(record(['清镇', '王庄', '远程新增'], 3))
+
+    await button(wrapper, '保存名称').trigger('click')
+    await flushPromises()
+
+    expect(api.saveFrontendPreference).toHaveBeenCalledWith(
+      'LAB_REPORT_SAMPLE_UNITS',
+      ['清镇', '王庄', '远程新增'],
+      2
+    )
+  })
+
+  it('does not resurrect a remotely deleted unit when adding a local unit', async () => {
+    installUnits(['王庄', '远程已删除'])
+    const wrapper = mountReportDialog(pinia)
+    await showPreview(wrapper)
+    api.listFrontendPreferences.mockResolvedValueOnce([record(['王庄'], 2)])
+    await useFrontendPreferencesStore(pinia).loadAll()
+    api.saveFrontendPreference.mockResolvedValueOnce(record(['清镇', '王庄'], 3))
+
+    await button(wrapper, '保存名称').trigger('click')
+    await flushPromises()
+
+    expect(api.saveFrontendPreference).toHaveBeenCalledWith(
+      'LAB_REPORT_SAMPLE_UNITS',
+      ['清镇', '王庄'],
+      2
+    )
+  })
+
   it('serializes rapid deletes and saves the filtered shared catalogue once', async () => {
     installUnits(['王庄', '清镇'])
     const wrapper = mountReportDialog(pinia)
@@ -178,6 +214,69 @@ describe('LabReportDialog shared sample-unit shortcuts', () => {
     expect(api.saveFrontendPreference).toHaveBeenCalledWith('LAB_REPORT_SAMPLE_UNITS', ['清镇'], 1)
     resolveSave(record(['清镇'], 2))
     await flushPromises()
+  })
+
+  it('applies a local delete to the latest external catalogue', async () => {
+    installUnits(['王庄', '清镇'])
+    const wrapper = mountReportDialog(pinia)
+    await showPreview(wrapper)
+    api.listFrontendPreferences.mockResolvedValueOnce([record(['王庄', '远程新增'], 2)])
+    await useFrontendPreferencesStore(pinia).loadAll()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    api.saveFrontendPreference.mockResolvedValueOnce(record(['远程新增'], 3))
+
+    await wrapper.findAll('button[title="删除快捷名称"]')[0].trigger('click')
+    await flushPromises()
+
+    expect(api.saveFrontendPreference).toHaveBeenCalledWith(
+      'LAB_REPORT_SAMPLE_UNITS',
+      ['远程新增'],
+      2
+    )
+  })
+
+  it('re-bases a confirmed delete on a refresh that finishes while confirmation is open', async () => {
+    installUnits(['王庄', '清镇'])
+    const wrapper = mountReportDialog(pinia)
+    await showPreview(wrapper)
+    let resolveConfirm!: (value: string) => void
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValueOnce(new Promise((resolve) => {
+      resolveConfirm = resolve
+    }) as never)
+
+    await wrapper.findAll('button[title="删除快捷名称"]')[0].trigger('click')
+    api.listFrontendPreferences.mockResolvedValueOnce([record(['王庄', '远程新增'], 2)])
+    await useFrontendPreferencesStore(pinia).loadAll()
+    api.saveFrontendPreference.mockResolvedValueOnce(record(['远程新增'], 3))
+    resolveConfirm('confirm')
+    await flushPromises()
+
+    expect(api.saveFrontendPreference).toHaveBeenCalledWith(
+      'LAB_REPORT_SAMPLE_UNITS',
+      ['远程新增'],
+      2
+    )
+  })
+
+  it('keeps a visible conflict when a newer refresh lands during an in-flight save', async () => {
+    installUnits(['王庄'])
+    const wrapper = mountReportDialog(pinia)
+    await showPreview(wrapper)
+    let resolveSave!: (saved: FrontendPreferenceRecord<string[]>) => void
+    api.saveFrontendPreference.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve }))
+    const success = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as never)
+
+    await button(wrapper, '保存名称').trigger('click')
+    expect(useFrontendPreferencesStore(pinia).hasPendingChanges).toBe(true)
+    api.listFrontendPreferences.mockResolvedValueOnce([record(['王庄', '远程新增'], 2)])
+    await useFrontendPreferencesStore(pinia).loadAll()
+    resolveSave(record(['清镇', '王庄'], 3))
+    await flushPromises()
+
+    expect(wrapper.find('.sample-unit-conflict').exists()).toBe(true)
+    expect(useFrontendPreferencesStore(pinia).value('LAB_REPORT_SAMPLE_UNITS', []))
+      .toEqual(['清镇', '王庄'])
+    expect(success).not.toHaveBeenCalledWith('来样单位名称已保存')
   })
 
   it('shows queued units from the local preference cache and asks for later sync confirmation', async () => {
