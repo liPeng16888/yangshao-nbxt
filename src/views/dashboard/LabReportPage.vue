@@ -39,12 +39,17 @@ import { useRoute, useRouter } from 'vue-router'
 import LabReportSmsTemplatePanel from '@/components/lab-report/LabReportSmsTemplatePanel.vue'
 import LabReportTemplatePanel from '@/components/lab-report/LabReportTemplatePanel.vue'
 import { useAuthStore } from '@/stores/auth'
-import { frontendPreferenceOwnerId, useFrontendPreferencesStore } from '@/stores/frontendPreferences'
+import {
+  frontendPreferenceActorKey,
+  frontendPreferenceOwnerId,
+  useFrontendPreferencesStore
+} from '@/stores/frontendPreferences'
 import type { FrontendPreferenceSection, FrontendPreferenceStatus } from '@/types/frontendPreference'
 import type { LabReportSmsTemplate, LabReportTemplate } from '@/types/labReport'
 import { defaultLabReportSmsTemplate, defaultLabReportTemplate } from '@/utils/labReport'
 
 type ReportSection = 'image' | 'sms'
+type TemplatePreferenceSection = 'LAB_REPORT_TEMPLATE' | 'LAB_REPORT_SMS_TEMPLATE'
 
 const route = useRoute()
 const router = useRouter()
@@ -57,6 +62,7 @@ const editRevisions: Partial<Record<FrontendPreferenceSection, number>> = {}
 const localDirty = reactive<Partial<Record<FrontendPreferenceSection, boolean>>>({})
 const localErrorRevisions = reactive<Partial<Record<FrontendPreferenceSection, number>>>({})
 let ownerGeneration = 0
+let editSessions = createEditSessions()
 
 const sections: { label: string; value: ReportSection; path: string }[] = [
   { label: '化验报告图片模板', value: 'image', path: '/lab-report/image-template' },
@@ -67,11 +73,12 @@ const activeSection = computed<ReportSection>(() => {
   return route.path.endsWith('/sms-template') ? 'sms' : 'image'
 })
 
-const activePreferenceSection = computed<FrontendPreferenceSection>(() => (
+const activePreferenceSection = computed<TemplatePreferenceSection>(() => (
   activeSection.value === 'image' ? 'LAB_REPORT_TEMPLATE' : 'LAB_REPORT_SMS_TEMPLATE'
 ))
 const activeStatus = computed(() => {
   const section = activePreferenceSection.value
+  if (preferences.statuses[section] === 'conflict') return 'conflict'
   if (!localDirty[section]) return preferences.statuses[section]
   return localErrorRevisions[section] === editRevisions[section] ? 'error' : 'saving'
 })
@@ -104,14 +111,17 @@ watch(
 )
 
 watch(
-  () => frontendPreferenceOwnerId(authStore.user),
+  () => frontendPreferenceActorKey(authStore.user),
   () => {
     ownerGeneration += 1
     cancelAllSaves()
+    unregisterEditSessions()
+    editSessions = createEditSessions()
     for (const section of ['LAB_REPORT_TEMPLATE', 'LAB_REPORT_SMS_TEMPLATE'] as const) {
       editRevisions[section] = (editRevisions[section] ?? 0) + 1
       localDirty[section] = false
       delete localErrorRevisions[section]
+      editSessions[section].update({ dirty: false })
     }
     reportTemplate.value = preferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate)
     smsTemplate.value = preferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate)
@@ -127,38 +137,39 @@ watch(
   (statuses) => {
     const sections = ['LAB_REPORT_TEMPLATE', 'LAB_REPORT_SMS_TEMPLATE'] as const
     statuses.forEach((status, index) => {
-      if (status !== 'loading') return
+      if (status !== 'conflict') return
       const section = sections[index]
       cancelSave(section)
-      editRevisions[section] = (editRevisions[section] ?? 0) + 1
-      localDirty[section] = false
-      delete localErrorRevisions[section]
     })
   },
   { flush: 'sync' }
 )
 
-onBeforeUnmount(cancelAllSaves)
+onBeforeUnmount(() => {
+  cancelAllSaves()
+  unregisterEditSessions()
+})
 
 function updateReportTemplate(template: LabReportTemplate) {
   reportTemplate.value = cloneValue(template)
-  scheduleSave('LAB_REPORT_TEMPLATE', template, nextEditRevision('LAB_REPORT_TEMPLATE'))
+  scheduleSave('LAB_REPORT_TEMPLATE', template, nextEditRevision('LAB_REPORT_TEMPLATE', template))
 }
 
 function updateSmsTemplate(template: LabReportSmsTemplate) {
   smsTemplate.value = cloneValue(template)
-  scheduleSave('LAB_REPORT_SMS_TEMPLATE', template, nextEditRevision('LAB_REPORT_SMS_TEMPLATE'))
+  scheduleSave('LAB_REPORT_SMS_TEMPLATE', template, nextEditRevision('LAB_REPORT_SMS_TEMPLATE', template))
 }
 
-function nextEditRevision(section: FrontendPreferenceSection) {
+function nextEditRevision(section: TemplatePreferenceSection, value: unknown) {
   const revision = (editRevisions[section] ?? 0) + 1
   editRevisions[section] = revision
   localDirty[section] = true
+  editSessions[section].update({ dirty: true, value })
   delete localErrorRevisions[section]
   return revision
 }
 
-function scheduleSave(section: FrontendPreferenceSection, value: unknown, revision: number) {
+function scheduleSave(section: TemplatePreferenceSection, value: unknown, revision: number) {
   cancelSave(section)
   const ownerId = frontendPreferenceOwnerId(authStore.user)
   const generation = ownerGeneration
@@ -171,7 +182,7 @@ function scheduleSave(section: FrontendPreferenceSection, value: unknown, revisi
 }
 
 async function saveRevision(
-  section: FrontendPreferenceSection,
+  section: TemplatePreferenceSection,
   value: unknown,
   ownerId: string,
   generation: number,
@@ -192,7 +203,7 @@ async function resolveActiveConflict(strategy: 'server' | 'overwrite') {
 }
 
 function settleRevision(
-  section: FrontendPreferenceSection,
+  section: TemplatePreferenceSection,
   ownerId: string,
   generation: number,
   revision: number,
@@ -204,6 +215,7 @@ function settleRevision(
     return
   }
   localDirty[section] = false
+  editSessions[section].update({ dirty: false })
   delete localErrorRevisions[section]
   if (section === 'LAB_REPORT_TEMPLATE') {
     reportTemplate.value = preferences.value(section, defaultLabReportTemplate)
@@ -215,7 +227,7 @@ function settleRevision(
 function isCurrentRevision(
   ownerId: string,
   generation: number,
-  section: FrontendPreferenceSection,
+  section: TemplatePreferenceSection,
   revision: number
 ) {
   return Boolean(ownerId) &&
@@ -232,6 +244,18 @@ function cancelSave(section: FrontendPreferenceSection) {
 
 function cancelAllSaves() {
   for (const section of Object.keys(saveTimers) as FrontendPreferenceSection[]) cancelSave(section)
+}
+
+function createEditSessions() {
+  return {
+    LAB_REPORT_TEMPLATE: preferences.registerEditSession('LAB_REPORT_TEMPLATE'),
+    LAB_REPORT_SMS_TEMPLATE: preferences.registerEditSession('LAB_REPORT_SMS_TEMPLATE')
+  }
+}
+
+function unregisterEditSessions() {
+  editSessions.LAB_REPORT_TEMPLATE.unregister()
+  editSessions.LAB_REPORT_SMS_TEMPLATE.unregister()
 }
 
 function statusText(status: FrontendPreferenceStatus) {

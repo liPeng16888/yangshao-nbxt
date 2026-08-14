@@ -130,6 +130,29 @@ describe('frontend preference owner sync store', () => {
     expect(canAccessFrontendPreference(subaccount, 'LAB_REPORT_SAMPLE_UNITS')).toBe(false)
   })
 
+  it('includes only the current actor edit sessions in the realtime dirty gate', () => {
+    const store = useFrontendPreferencesStore()
+    const session = store.registerEditSession('LAB_REPORT_TEMPLATE')
+
+    session.update({ dirty: true, value: { title: '本机草稿' } })
+    expect(store.hasPendingChanges).toBe(true)
+
+    useAuthStore().user = user({
+      id: 'sub-1',
+      account: 'sub-1',
+      role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1',
+      isFrontendMainAccount: false,
+      isFrontendSubAccount: true,
+      permissions: ['LAB_REPORT_IMAGE_TEMPLATE']
+    })
+    expect(store.hasPendingChanges).toBe(false)
+
+    session.update({ dirty: true, value: { title: '迟到的旧账号状态' } })
+    expect(store.hasPendingChanges).toBe(false)
+    session.unregister()
+  })
+
   it('shows cache first and then replaces it with the server version for the same owner', async () => {
     writeFrontendPreferenceCache(cached(
       'main-1',

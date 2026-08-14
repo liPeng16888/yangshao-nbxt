@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import LabReportPage from './LabReportPage.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useFrontendPreferencesStore } from '@/stores/frontendPreferences'
+import { useTenantRealtimeStore } from '@/stores/tenantRealtime'
 import type { FrontendPreferenceRecord, FrontendPreferenceSection } from '@/types/frontendPreference'
 import { defaultLabReportTemplate } from '@/utils/labReport'
 
@@ -151,22 +152,108 @@ describe('LabReportPage shared preferences', () => {
     wrapper.unmount()
   })
 
-  it('cancels an outstanding edit when a realtime refresh hydrates server content', async () => {
+  it('gates an SSE refresh during the debounce and still saves the local draft', async () => {
     const { wrapper, preferences } = await setup([
       record('LAB_REPORT_TEMPLATE', { ...defaultLabReportTemplate, title: '服务器旧值' }, 2)
     ])
+    const realtime = useTenantRealtimeStore()
+    realtime.registerModule('frontend-preferences', {
+      isDirty: () => preferences.hasPendingChanges,
+      refresh: async () => { await preferences.loadAll() }
+    })
+    api.save.mockResolvedValueOnce(record(
+      'LAB_REPORT_TEMPLATE',
+      { ...defaultLabReportTemplate, title: '用户修改' },
+      3
+    ))
     await wrapper.get('.edit-report').trigger('click')
-    api.list.mockResolvedValueOnce([
-      record('LAB_REPORT_TEMPLATE', { ...defaultLabReportTemplate, title: '服务器刷新值' }, 3)
-    ])
+    await realtime.handleEvent({
+      type: 'change', module: 'frontend-preferences', entityId: 'LAB_REPORT_TEMPLATE',
+      operation: 'update', changedById: 'sub-2', updatedAt: '2026-08-13T01:00:00.000Z'
+    })
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
 
-    await preferences.loadAll()
+    expect(api.list).toHaveBeenCalledTimes(1)
+    expect(api.save).toHaveBeenCalledTimes(1)
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '用户修改' })
+    wrapper.unmount()
+  })
+
+  it('gates an SSE refresh while a save is in flight and keeps the local draft', async () => {
+    const serverTemplate = { ...defaultLabReportTemplate, title: '服务器旧值' }
+    const { wrapper, preferences } = await setup([
+      record('LAB_REPORT_TEMPLATE', serverTemplate, 2)
+    ])
+    const realtime = useTenantRealtimeStore()
+    realtime.registerModule('frontend-preferences', {
+      isDirty: () => preferences.hasPendingChanges,
+      refresh: async () => { await preferences.loadAll() }
+    })
+    let resolveSave!: (value: FrontendPreferenceRecord) => void
+    api.save.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve }))
+
+    await wrapper.get('.edit-report').trigger('click')
+    await vi.advanceTimersByTimeAsync(500)
+    await realtime.handleEvent({
+      type: 'change', module: 'frontend-preferences', entityId: 'LAB_REPORT_TEMPLATE',
+      operation: 'update', changedById: 'sub-2', updatedAt: '2026-08-13T01:00:00.000Z'
+    })
+
+    expect(api.list).toHaveBeenCalledTimes(1)
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '用户修改' })
+    resolveSave(record(
+      'LAB_REPORT_TEMPLATE',
+      { ...serverTemplate, title: '用户修改' },
+      3
+    ))
+    await flushPromises()
+    expect(wrapper.text()).toContain('已保存')
+    wrapper.unmount()
+  })
+
+  it('turns a remote response arriving after a local edit into a visible conflict', async () => {
+    const serverTemplate = { ...defaultLabReportTemplate, title: '服务器旧值' }
+    const { wrapper, preferences } = await setup([
+      record('LAB_REPORT_TEMPLATE', serverTemplate, 2)
+    ])
+    let resolveRefresh!: (records: FrontendPreferenceRecord[]) => void
+    api.list.mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve }))
+    const refreshing = preferences.loadAll()
+
+    await wrapper.get('.edit-report').trigger('click')
+    resolveRefresh([
+      record('LAB_REPORT_TEMPLATE', { ...serverTemplate, title: '他人远程修改' }, 3)
+    ])
+    await refreshing
     await nextTick()
     await vi.advanceTimersByTimeAsync(500)
 
-    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '服务器刷新值' })
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '用户修改' })
+    expect(wrapper.text()).toContain('有版本冲突')
     expect(api.save).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  it('revokes a dirty edit session on same-owner actor switch and unmount', async () => {
+    const { wrapper, auth, preferences } = await setup([
+      record('LAB_REPORT_TEMPLATE', { ...defaultLabReportTemplate, title: '主账号服务器' }, 2)
+    ])
+    await wrapper.get('.edit-report').trigger('click')
+    expect(preferences.hasPendingChanges).toBe(true)
+
+    auth.user = {
+      id: 'sub-1', account: 'sub-1', username: '子账号', role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1', isFrontendMainAccount: false, isFrontendSubAccount: true,
+      permissions: ['LAB_REPORT_IMAGE_TEMPLATE']
+    }
+    await nextTick()
+
+    expect(preferences.hasPendingChanges).toBe(false)
+    await wrapper.get('.edit-report').trigger('click')
+    expect(preferences.hasPendingChanges).toBe(true)
+    wrapper.unmount()
+    expect(preferences.hasPendingChanges).toBe(false)
   })
 
   it('keeps a newer debounced edit when an earlier save response hydrates the store', async () => {
@@ -323,7 +410,7 @@ describe('LabReportPage shared preferences', () => {
 
     expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '用户修改' })
     expect(wrapper.text()).toContain('保存失败')
-    expect(preferences.hasPendingChanges).toBe(false)
+    expect(preferences.hasPendingChanges).toBe(true)
 
     wrapper.getComponent(ReportPanelStub).vm.$emit('update:modelValue', {
       ...serverTemplate,

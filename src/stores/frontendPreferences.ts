@@ -40,6 +40,13 @@ type MutationToken = {
   ownerSessionGeneration: number
   sequence: number
 }
+type EditSessionState = {
+  ownerId: string
+  actorKey: string
+  section: FrontendPreferenceSection
+  dirty: boolean
+  value?: unknown
+}
 
 function idleStatuses(): Record<FrontendPreferenceSection, FrontendPreferenceStatus> {
   return Object.fromEntries(
@@ -78,6 +85,19 @@ export function canAccessFrontendPreference(
   return FRONTEND_PREFERENCE_PERMISSIONS[section].some((permission) => permissions.has(permission))
 }
 
+export function frontendPreferenceActorKey(user: AuthUser | null): string {
+  if (!user) return ''
+  return JSON.stringify({
+    actorId: user.id,
+    ownerId: frontendPreferenceOwnerId(user),
+    role: user.role,
+    isMain: Boolean(user.isFrontendMainAccount),
+    isSub: Boolean(user.isFrontendSubAccount),
+    permissionVersion: user.permissionVersion ?? 0,
+    permissions: [...(user.permissions ?? [])].sort()
+  })
+}
+
 export function isPreferenceConflict(error: unknown): error is {
   response: {
     status: 409
@@ -113,11 +133,57 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
   let ownerSessionGeneration = 0
   let mutationSequence = 0
   const mutationSequences = new Map<string, number>()
+  const editSessions = new Map<symbol, EditSessionState>()
+  const editSessionRevision = ref(0)
 
   const hasPendingChanges = computed(() => {
+    editSessionRevision.value
     syncOwnerState()
-    return Object.keys(pendingValues.value).length > 0 || Object.keys(conflicts.value).length > 0
+    return Object.keys(pendingValues.value).length > 0 ||
+      Object.keys(conflicts.value).length > 0 ||
+      Boolean(currentDirtyEditSession())
   })
+
+  function currentDirtyEditSession(
+    section?: FrontendPreferenceSection,
+    ownerId = activeOwnerId.value
+  ) {
+    const actorKey = frontendPreferenceActorKey(authStore.user)
+    for (const session of editSessions.values()) {
+      if (session.dirty &&
+        session.ownerId === ownerId &&
+        session.actorKey === actorKey &&
+        (!section || session.section === section)) return session
+    }
+    return undefined
+  }
+
+  function registerEditSession(section: FrontendPreferenceSection) {
+    syncOwnerState()
+    const token = Symbol(section)
+    const session: EditSessionState = {
+      ownerId: activeOwnerId.value,
+      actorKey: frontendPreferenceActorKey(authStore.user),
+      section,
+      dirty: false
+    }
+    editSessions.set(token, session)
+    editSessionRevision.value += 1
+    return {
+      update(state: { dirty: boolean; value?: unknown }) {
+        if (editSessions.get(token) !== session ||
+          session.ownerId !== frontendPreferenceOwnerId(authStore.user) ||
+          session.actorKey !== frontendPreferenceActorKey(authStore.user)) return
+        session.dirty = state.dirty
+        if (state.dirty) session.value = cloneJsonValue(state.value)
+        else delete session.value
+        editSessionRevision.value += 1
+      },
+      unregister() {
+        if (editSessions.delete(token)) editSessionRevision.value += 1
+      }
+    }
+  }
 
   function resetState(ownerId = '') {
     activeOwnerId.value = ownerId
@@ -249,7 +315,9 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     const requestEpoch = ++loadEpoch
     const requestOwnerSessionGeneration = ownerSessionGeneration
     for (const section of FRONTEND_PREFERENCE_SECTIONS) {
-      if (statuses.value[section] !== 'queued') statuses.value[section] = 'loading'
+      if (!currentDirtyEditSession(section, ownerId) && statuses.value[section] !== 'queued') {
+        statuses.value[section] = 'loading'
+      }
     }
 
     try {
@@ -265,9 +333,26 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
 
       const serverBySection = new Map(serverRecords.map((record) => [record.section, record]))
       for (const section of FRONTEND_PREFERENCE_SECTIONS) {
-        beginMutation(ownerId, section)
         const server = serverBySection.get(section) ?? null
         const cached = readFrontendPreferenceCache(ownerId, section)
+        const editSession = currentDirtyEditSession(section, ownerId)
+        if (editSession) {
+          const currentServer = records.value[section] ?? cached?.server ?? null
+          if ((currentServer?.version ?? 0) !== (server?.version ?? 0)) {
+            beginMutation(ownerId, section)
+            installConflict(
+              ownerId,
+              section,
+              editSession.value,
+              server,
+              currentServer?.version ?? 0
+            )
+          } else if (statuses.value[section] === 'loading') {
+            statuses.value[section] = currentServer ? 'saved' : 'idle'
+          }
+          continue
+        }
+        beginMutation(ownerId, section)
         if (cached && hasPendingValue(cached)) {
           const baseVersion = cached.pendingBaseVersion ?? cached.server?.version ?? 0
           if (baseVersion !== (server?.version ?? 0)) {
@@ -426,6 +511,7 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     loadAll,
     value,
     save,
-    resolveConflict
+    resolveConflict,
+    registerEditSession
   }
 })
