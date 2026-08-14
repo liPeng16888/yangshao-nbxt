@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useFrontendPreferencesStore } from '@/stores/frontendPreferences'
 import { useTenantRealtimeStore } from '@/stores/tenantRealtime'
 import type { FrontendPreferenceRecord, FrontendPreferenceSection } from '@/types/frontendPreference'
+import { readFrontendPreferenceCache } from '@/utils/frontendPreferenceCache'
 import { defaultLabReportTemplate } from '@/utils/labReport'
 
 const api = vi.hoisted(() => ({
@@ -232,6 +233,37 @@ describe('LabReportPage shared preferences', () => {
     expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject({ title: '用户修改' })
     expect(wrapper.text()).toContain('有版本冲突')
     expect(api.save).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps a settled page draft when an older load response arrives after its save', async () => {
+    const oldTemplate = { ...defaultLabReportTemplate, title: '旧 GET v2' }
+    const savedTemplate = { ...defaultLabReportTemplate, title: '用户修改' }
+    const { wrapper, preferences } = await setup([
+      record('LAB_REPORT_TEMPLATE', oldTemplate, 2)
+    ])
+    let resolveRefresh!: (records: FrontendPreferenceRecord[]) => void
+    api.list.mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve }))
+    api.save.mockResolvedValueOnce(record('LAB_REPORT_TEMPLATE', savedTemplate, 3))
+
+    const refreshing = preferences.loadAll()
+    await wrapper.get('.edit-report').trigger('click')
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
+    expect(wrapper.text()).toContain('已保存')
+
+    resolveRefresh([record('LAB_REPORT_TEMPLATE', oldTemplate, 2)])
+    await refreshing
+    await nextTick()
+
+    expect(wrapper.getComponent(ReportPanelStub).props('modelValue')).toMatchObject(savedTemplate)
+    expect(preferences.records.LAB_REPORT_TEMPLATE).toMatchObject({ version: 3, value: savedTemplate })
+    expect(preferences.statuses.LAB_REPORT_TEMPLATE).toBe('saved')
+    expect(preferences.conflicts.LAB_REPORT_TEMPLATE).toBeUndefined()
+    expect(preferences.hasPendingChanges).toBe(false)
+    expect(readFrontendPreferenceCache('main-1', 'LAB_REPORT_TEMPLATE')).toMatchObject({
+      server: { version: 3, value: savedTemplate }
+    })
     wrapper.unmount()
   })
 

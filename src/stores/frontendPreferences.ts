@@ -324,8 +324,15 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
     const accessibleSections = FRONTEND_PREFERENCE_SECTIONS.filter((section) => (
       canAccessFrontendPreference(authStore.user, section)
     ))
+    const requestMutationSequences = new Map(
+      accessibleSections.map((section) => [
+        section,
+        mutationSequences.get(`${ownerId}:${section}`) ?? 0
+      ])
+    )
     for (const section of accessibleSections) {
-      if (!currentDirtyEditSession(section, ownerId) && statuses.value[section] !== 'queued') {
+      if (!currentDirtyEditSession(section, ownerId) &&
+        !Object.prototype.hasOwnProperty.call(pendingValues.value, section)) {
         statuses.value[section] = 'loading'
       }
     }
@@ -344,12 +351,22 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
 
       const serverBySection = new Map(serverRecords.map((record) => [record.section, record]))
       for (const section of accessibleSections) {
+        if ((mutationSequences.get(`${ownerId}:${section}`) ?? 0) !==
+          requestMutationSequences.get(section)) continue
         const server = serverBySection.get(section) ?? null
         const cached = readFrontendPreferenceCache(ownerId, section)
         const editSession = currentDirtyEditSession(section, ownerId)
+        const currentServer = records.value[section] ?? cached?.server ?? null
+        const currentVersion = currentServer?.version ?? 0
+        const serverVersion = server?.version ?? 0
+        if (serverVersion < currentVersion) {
+          if (statuses.value[section] === 'loading') {
+            statuses.value[section] = currentServer ? 'saved' : 'idle'
+          }
+          continue
+        }
         if (editSession) {
-          const currentServer = records.value[section] ?? cached?.server ?? null
-          if ((currentServer?.version ?? 0) !== (server?.version ?? 0)) {
+          if (serverVersion > currentVersion) {
             beginMutation(ownerId, section)
             installConflict(
               ownerId,
@@ -388,6 +405,8 @@ export const useFrontendPreferencesStore = defineStore('frontendPreferences', ()
       }
       if (frontendPreferenceOwnerId(authStore.user) === ownerId && activeOwnerId.value === ownerId) {
         for (const section of accessibleSections) {
+          if ((mutationSequences.get(`${ownerId}:${section}`) ?? 0) !==
+            requestMutationSequences.get(section)) continue
           if (statuses.value[section] !== 'queued' && statuses.value[section] !== 'conflict') {
             statuses.value[section] = 'error'
           }

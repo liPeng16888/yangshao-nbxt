@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
 vi.mock('@/api/frontendPreferences', () => api)
 
 import {
+  FRONTEND_PREFERENCE_SECTIONS,
   canAccessFrontendPreference,
   frontendPreferenceOwnerId,
   useFrontendPreferencesStore
@@ -468,6 +469,64 @@ describe('frontend preference owner sync store', () => {
     expect(store.records[smsSection]).toMatchObject({ version: 6, value: { prefix: '新请求', suffix: '' } })
     expect(store.statuses[smsSection]).toBe('saved')
     expect(store.value(smsSection, { prefix: '', suffix: '' })).toEqual({ prefix: '新请求', suffix: '' })
+  })
+
+  it.each(FRONTEND_PREFERENCE_SECTIONS)(
+    'does not let a delayed load downgrade %s after a later local save',
+    async (section) => {
+      const sectionIndex = FRONTEND_PREFERENCE_SECTIONS.indexOf(section)
+      const companionSection = FRONTEND_PREFERENCE_SECTIONS[
+        (sectionIndex + 1) % FRONTEND_PREFERENCE_SECTIONS.length
+      ]
+      const oldServer = record(section, { label: '旧 GET v2' }, 2)
+      const savedServer = record(section, { label: '本机 PUT v3' }, 3)
+      const companionServer = record(companionSection, { label: '同次 GET 的其他分区' }, 4)
+      writeFrontendPreferenceCache({ ownerId: 'main-1', section, server: oldServer })
+      const store = useFrontendPreferencesStore()
+      let resolveLoad!: (records: FrontendPreferenceRecord[]) => void
+      api.listFrontendPreferences.mockReturnValueOnce(new Promise((resolve) => { resolveLoad = resolve }))
+      api.saveFrontendPreference.mockResolvedValueOnce(savedServer)
+
+      const loading = store.loadAll()
+      await expect(store.save(section, savedServer.value)).resolves.toBe('saved')
+      resolveLoad([oldServer, companionServer])
+      await expect(loading).resolves.toBe('loaded')
+
+      expect(store.records[section]).toEqual(savedServer)
+      expect(store.value(section, { label: '空' })).toEqual(savedServer.value)
+      expect(store.statuses[section]).toBe('saved')
+      expect(store.conflicts[section]).toBeUndefined()
+      expect(store.hasPendingChanges).toBe(false)
+      expect(readFrontendPreferenceCache('main-1', section)).toEqual({
+        ownerId: 'main-1', section, server: savedServer
+      })
+      expect(store.records[companionSection]).toEqual(companionServer)
+    }
+  )
+
+  it('ignores a delayed lower-version load while the saved SMS page draft is still dirty', async () => {
+    const oldServer = record(smsSection, { prefix: '旧 GET v2', suffix: '' }, 2)
+    const savedServer = record(smsSection, { prefix: '本机 PUT v3', suffix: '' }, 3)
+    writeFrontendPreferenceCache(cached('main-1', oldServer))
+    const store = useFrontendPreferencesStore()
+    const editSession = store.registerEditSession(smsSection)
+    let resolveLoad!: (records: FrontendPreferenceRecord[]) => void
+    api.listFrontendPreferences.mockReturnValueOnce(new Promise((resolve) => { resolveLoad = resolve }))
+    api.saveFrontendPreference.mockResolvedValueOnce(savedServer)
+
+    const loading = store.loadAll()
+    editSession.update({ dirty: true, value: savedServer.value })
+    await expect(store.save(smsSection, savedServer.value)).resolves.toBe('saved')
+    resolveLoad([oldServer])
+    await expect(loading).resolves.toBe('loaded')
+
+    expect(store.records[smsSection]).toEqual(savedServer)
+    expect(store.value(smsSection, { prefix: '', suffix: '' })).toEqual(savedServer.value)
+    expect(store.statuses[smsSection]).toBe('saved')
+    expect(store.conflicts[smsSection]).toBeUndefined()
+    expect(store.hasPendingChanges).toBe(true)
+    expect(readFrontendPreferenceCache('main-1', smsSection)).toEqual(cached('main-1', savedServer))
+    editSession.unregister()
   })
 
   it('makes an in-flight save inert after a successful authoritative hydration', async () => {
