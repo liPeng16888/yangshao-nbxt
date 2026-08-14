@@ -24,6 +24,7 @@ function deferred(): Deferred {
 
 class FakeWebContents extends EventEmitter {
   currentUrl = desktopTargets.internal.entryUrl
+  destroyed = false
   readonly loads: Array<{ url: string; deferred: Deferred }> = []
   readonly reload = vi.fn()
   readonly reloadIgnoringCache = vi.fn()
@@ -39,6 +40,7 @@ class FakeWebContents extends EventEmitter {
   })
 
   getURL = vi.fn(() => this.currentUrl)
+  isDestroyed = vi.fn(() => this.destroyed)
 }
 
 class FakeWindow extends EventEmitter {
@@ -284,5 +286,23 @@ describe('main-process loading flow integration', () => {
     mainWindow.emit('closed')
     expect(loadingWindow.destroy).toHaveBeenCalledOnce()
     expect(() => flow.dispose()).not.toThrow()
+  })
+
+  it('disposes after Electron has destroyed the main browser window', () => {
+    const { flow, mainWindow, loadingWindow } = fixture()
+    const mainWebContents = mainWindow.webContents
+    mainWindow.destroyed = true
+    mainWebContents.destroyed = true
+
+    Object.defineProperty(mainWindow, 'webContents', {
+      get: () => {
+        throw new Error('Object has been destroyed')
+      },
+    })
+
+    expect(() => mainWindow.emit('closed')).not.toThrow()
+    expect(loadingWindow.destroy).toHaveBeenCalledOnce()
+    expect(() => flow.dispose()).not.toThrow()
+    expect(mainWebContents.listenerCount('did-fail-load')).toBe(1)
   })
 })

@@ -44,7 +44,7 @@ export function createBuilderConfig(targetKey) {
     },
     files: ['dist/**/*', 'package.json'],
     extraMetadata: {
-      version: '1.0.1',
+      version: '1.0.2',
       productName: target.productName,
       main: 'dist/main.js',
     },
