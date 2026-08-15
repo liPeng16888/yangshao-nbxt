@@ -119,9 +119,32 @@ describe('MobileLabSampleList', () => {
     expect(wrapper.emitted('selectionChange')).toContainEqual(['block-1', true])
   })
 
+  it('independently expands multiple samples and allows every sample to collapse', async () => {
+    const wrapper = mountList({ selectionMode: true })
+    const toggles = wrapper.findAll('.mobile-sample-card__toggle')
+
+    expect(expandedBlockIds(wrapper)).toEqual(['block-1'])
+
+    await toggles[1].trigger('click')
+    await nextTick()
+    expect(expandedBlockIds(wrapper)).toEqual(['block-1', 'block-2'])
+
+    await toggles[0].trigger('click')
+    await nextTick()
+    expect(expandedBlockIds(wrapper)).toEqual(['block-2'])
+
+    await toggles[1].trigger('click')
+    await nextTick()
+    expect(expandedBlockIds(wrapper)).toEqual([])
+  })
+
   it('marks customer controls for mobile-sized touch targets', () => {
     const wrapper = mountList()
 
     expect(wrapper.findAll('.mobile-customer-editor')).toHaveLength(2)
   })
 })
+
+function expandedBlockIds(wrapper: ReturnType<typeof mountList>) {
+  return wrapper.findAll('.mobile-sample-card--expanded').map((card) => card.attributes('data-block-id'))
+}

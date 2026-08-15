@@ -5,7 +5,7 @@
       :key="block.id"
       class="mobile-sample-card"
       :class="{
-        'mobile-sample-card--expanded': activeBlockId === block.id,
+        'mobile-sample-card--expanded': isBlockExpanded(block.id),
         'mobile-sample-card--highlight': highlightBlockId === block.id,
         'mobile-sample-card--completed': block.inputs.completed
       }"
@@ -22,7 +22,12 @@
           @click.stop
           @change="emitSelection(block.id, $event)"
         />
-        <button class="mobile-sample-card__toggle" type="button" @click="openBlock(block.id)">
+        <button
+          class="mobile-sample-card__toggle"
+          type="button"
+          :aria-expanded="isBlockExpanded(block.id)"
+          @click="toggleBlock(block.id)"
+        >
           <span class="mobile-sample-card__sequence">{{ block.inputs.sequence || String(block.index).padStart(3, '0') }}</span>
           <span class="mobile-sample-card__summary">
             <strong>{{ block.inputs.sampleNumber || '未填写样品名称' }}</strong>
@@ -32,11 +37,11 @@
             <i v-if="block.inputs.completed">已完成</i>
             <i v-if="block.inputs.paymentStatus">{{ block.inputs.paymentStatus }}</i>
           </span>
-          <span class="mobile-sample-card__chevron" aria-hidden="true">{{ activeBlockId === block.id ? '⌃' : '⌄' }}</span>
+          <span class="mobile-sample-card__chevron" aria-hidden="true">{{ isBlockExpanded(block.id) ? '⌃' : '⌄' }}</span>
         </button>
       </header>
 
-      <div v-if="activeBlockId === block.id" class="mobile-sample-card__body">
+      <div v-if="isBlockExpanded(block.id)" class="mobile-sample-card__body">
         <section class="mobile-form-section mobile-form-section--identity">
           <h3>样品信息</h3>
           <div class="mobile-field-grid mobile-field-grid--identity">
@@ -302,27 +307,47 @@ const emit = defineEmits<{
   saveNext: [blockId: string]
 }>()
 
-const activeBlockId = ref(props.highlightBlockId || props.blocks[0]?.id || '')
+const initiallyExpandedBlockId = props.highlightBlockId || props.blocks[0]?.id || ''
+const expandedBlockIds = ref(new Set(initiallyExpandedBlockId ? [initiallyExpandedBlockId] : []))
 const focusedFieldValues = new Map<string, unknown>()
 
 watch(
   () => props.highlightBlockId,
   (blockId) => {
     if (!blockId || !props.blocks.some((block) => block.id === blockId)) return
-    activeBlockId.value = blockId
-    void scrollToBlock(blockId)
+    expandBlock(blockId)
   }
 )
 
 watch(
   () => props.blocks.map((block) => block.id),
   (blockIds) => {
-    if (!blockIds.includes(activeBlockId.value)) activeBlockId.value = blockIds[0] || ''
+    const allowedIds = new Set(blockIds)
+    const nextExpandedIds = new Set([...expandedBlockIds.value].filter((blockId) => allowedIds.has(blockId)))
+    if (nextExpandedIds.size !== expandedBlockIds.value.size) expandedBlockIds.value = nextExpandedIds
   }
 )
 
-function openBlock(blockId: string) {
-  activeBlockId.value = blockId
+function isBlockExpanded(blockId: string) {
+  return expandedBlockIds.value.has(blockId)
+}
+
+function toggleBlock(blockId: string) {
+  const nextExpandedIds = new Set(expandedBlockIds.value)
+  if (nextExpandedIds.has(blockId)) {
+    nextExpandedIds.delete(blockId)
+    expandedBlockIds.value = nextExpandedIds
+    return
+  }
+  nextExpandedIds.add(blockId)
+  expandedBlockIds.value = nextExpandedIds
+  void scrollToBlock(blockId)
+}
+
+function expandBlock(blockId: string) {
+  if (!expandedBlockIds.value.has(blockId)) {
+    expandedBlockIds.value = new Set([...expandedBlockIds.value, blockId])
+  }
   void scrollToBlock(blockId)
 }
 
@@ -388,7 +413,12 @@ function saveAndOpenNext(block: SampleBlock) {
   if (!isDisabled(block)) emit('saveNext', block.id)
   const index = props.blocks.findIndex((item) => item.id === block.id)
   const nextBlock = props.blocks[index + 1]
-  if (nextBlock) openBlock(nextBlock.id)
+  if (!nextBlock) return
+  const nextExpandedIds = new Set(expandedBlockIds.value)
+  nextExpandedIds.delete(block.id)
+  nextExpandedIds.add(nextBlock.id)
+  expandedBlockIds.value = nextExpandedIds
+  void scrollToBlock(nextBlock.id)
 }
 
 function focusNextField(event: KeyboardEvent) {
