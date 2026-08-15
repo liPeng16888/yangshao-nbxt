@@ -46,11 +46,15 @@ The review-fix tests first reproduced the rejected edge cases:
 
 The GREEN implementation moved day/batch/copy mutations off the Store's global error boundary and retained the authoritative API calls/payloads. Per-operation and per-session snapshots now decide whether a confirmation may start an API call and whether an API result may affect UI state. Form-revision events make edits performed while a confirmation or request is pending newer than that operation. Full-screen and touch sizing are driven directly by `isMobileLayout`, including coarse/tablet mobile layouts, while desktop remains unchanged.
 
+### Independent-review fix round 2 RED → GREEN
+
+A focused regression test proved that the three always-visible mobile schedule actions—copy previous month, enter/exit batch selection, and save rest quota—still rendered as plain 32px Element Plus buttons. The same test also locks their labels, the batch-mode state transition, and desktop class absence. Each actual `el-button` now receives the existing global 44×44 `mobile-touch-target` class only when `isMobileLayout` is true; desktop classes and sizing remain unchanged.
+
 ### Final GREEN
 
 - Focused Task 18 suite:
   - Command: `pnpm exec vitest run src/views/dashboard/employee-attendance/MobileAttendanceCalendar.test.ts src/views/dashboard/employee-attendance/MonthlyScheduleCalendar.test.ts src/views/dashboard/EmployeeAttendancePages.test.ts src/stores/employeeAttendance.test.ts --reporter=dot`
-  - Result: 4 files passed, 55 tests passed.
+  - Result: 4 files passed, 56 tests passed.
 - Type check:
   - Command: `pnpm exec vue-tsc --noEmit`
   - Result: exit 0.
@@ -59,7 +63,7 @@ The GREEN implementation moved day/batch/copy mutations off the Store's global e
   - Result: exit 0; Vue type check, Vite production bundle, and PWA service-worker generation completed. Existing dependency annotation and bundle-size warnings remained non-fatal.
 - Controlled-clock full suite at the 2026-08-15 acceptance date:
   - Command: `pnpm exec vitest run --config /private/tmp/task16-vitest.config.ts --reporter=dot`
-  - Result: 124 files passed, 1330 tests passed.
+  - Result: 124 files passed, 1331 tests passed.
 - Diff validation:
   - Command: `git diff --check`
   - Result: exit 0.

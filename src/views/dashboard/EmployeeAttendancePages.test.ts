@@ -195,6 +195,43 @@ describe('employee attendance navigation', () => {
     wrapper.unmount()
   })
 
+  it('sizes the three visible schedule actions only in mobile layout while preserving their text and behavior', async () => {
+    attendanceLayout.mobile.value = true
+    const mobilePinia = createPinia()
+    const mobile = mount(EmployeeSchedulesPage, { global: { plugins: [mobilePinia, ElementPlus] } })
+    const mobileStore = useEmployeeAttendanceStore(mobilePinia)
+    mobileStore.selectMonth('2026-08'); mobileStore.employeeId = 'emp-1'
+    await flushPromises()
+
+    const mobileCopy = mobile.get('[data-testid="copy-previous-month"]')
+    const mobileBatch = mobile.get('[data-testid="batch-mode"]')
+    const mobileQuotaSave = mobile.get('.schedule-summary__quota .el-button')
+    expect(mobileCopy.text()).toBe('复制上月排班')
+    expect(mobileBatch.text()).toBe('批量选择日期')
+    expect(mobileQuotaSave.text()).toBe('保存')
+    for (const button of [mobileCopy, mobileBatch, mobileQuotaSave]) expect(button.classes()).toContain('mobile-touch-target')
+    await mobileBatch.trigger('click')
+    expect(mobile.get('[data-testid="batch-mode"]').text()).toBe('退出批量选择')
+    expect(mobile.get('[data-testid="batch-mode"]').classes()).toContain('mobile-touch-target')
+    mobile.unmount()
+
+    attendanceLayout.mobile.value = false
+    const desktopPinia = createPinia()
+    const desktop = mount(EmployeeSchedulesPage, { global: { plugins: [desktopPinia, ElementPlus] } })
+    const desktopStore = useEmployeeAttendanceStore(desktopPinia)
+    desktopStore.selectMonth('2026-08'); desktopStore.employeeId = 'emp-1'
+    await flushPromises()
+    expect(desktop.get('[data-testid="copy-previous-month"]').text()).toBe('复制上月排班')
+    expect(desktop.get('[data-testid="batch-mode"]').text()).toBe('批量选择日期')
+    expect(desktop.get('.schedule-summary__quota .el-button').text()).toBe('保存')
+    for (const button of [
+      desktop.get('[data-testid="copy-previous-month"]'),
+      desktop.get('[data-testid="batch-mode"]'),
+      desktop.get('.schedule-summary__quota .el-button')
+    ]) expect(button.classes()).not.toContain('mobile-touch-target')
+    desktop.unmount()
+  })
+
   it('opens mobile day and batch editors fullscreen while preserving a newer edit after save failure', async () => {
     attendanceLayout.mobile.value = true
     let rejectSave!: (error: Error) => void

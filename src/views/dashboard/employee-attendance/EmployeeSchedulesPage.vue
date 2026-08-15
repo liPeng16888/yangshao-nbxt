@@ -1,8 +1,8 @@
 <template>
   <PageShell title="排班考勤概览" description="按自然月编辑排班，并查看服务端统一计算的每日考勤状态和当月概览。" :class="{ 'schedule-page--mobile': isMobileLayout, 'schedule-page--mobile-batch': isMobileLayout && batchMode }" :employee-change-refresh="false" :month-change-refresh="false" @refresh="load()">
     <template #actions>
-      <el-button v-if="!isMobileLayout || !batchMode" data-testid="copy-previous-month" :disabled="!store.employeeId" @click="openCopy">复制上月排班</el-button>
-      <el-button data-testid="batch-mode" :disabled="!store.employeeId" :type="batchMode ? 'primary' : 'default'" @click="toggleBatchMode">
+      <el-button v-if="!isMobileLayout || !batchMode" data-testid="copy-previous-month" :class="{ 'mobile-touch-target': isMobileLayout }" :disabled="!store.employeeId" @click="openCopy">复制上月排班</el-button>
+      <el-button data-testid="batch-mode" :class="{ 'mobile-touch-target': isMobileLayout }" :disabled="!store.employeeId" :type="batchMode ? 'primary' : 'default'" @click="toggleBatchMode">
         {{ batchMode ? '退出批量选择' : '批量选择日期' }}
       </el-button>
       <el-button v-if="batchMode && !isMobileLayout" data-testid="apply-batch" type="primary" :disabled="!selectedDates.length" @click="openBatch">应用到 {{ selectedDates.length }} 天</el-button>
@@ -15,7 +15,7 @@
           <span>月休额度</span>
           <el-input-number v-model="restQuotaDays" data-testid="month-rest-quota" :class="{ 'mobile-touch-control': isMobileLayout }" :min="0" />
           <span>天</span>
-          <el-button type="primary" :loading="store.saving" @click="saveMonthSetting">保存</el-button>
+          <el-button type="primary" :class="{ 'mobile-touch-target': isMobileLayout }" :loading="store.saving" @click="saveMonthSetting">保存</el-button>
         </div>
       </section>
       <MobileAttendanceCalendar
