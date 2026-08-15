@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { defineComponent, h, nextTick, ref, type Ref } from 'vue'
+import { defineComponent, h, nextTick, onScopeDispose, reactive, ref, type Ref } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AuthUser } from '@/types/auth'
 import type { CalculationDraftSyncStatus, StandardSampleDraft } from '@/types/calculationDraft'
 import { useStandardSampleCalculation } from '@/composables/useStandardSampleCalculation'
 import StandardSampleCalculationPage from './StandardSampleCalculationPage.vue'
@@ -39,6 +40,7 @@ type DraftDouble = {
   retry: ReturnType<typeof vi.fn>
   useServerVersion: ReturnType<typeof vi.fn>
   overwriteServerVersion: ReturnType<typeof vi.fn>
+  disposed: boolean
 }
 
 const mocks = vi.hoisted(() => ({
@@ -46,7 +48,8 @@ const mocks = vi.hoisted(() => ({
   routerPush: vi.fn(),
   useCalculationDraft: vi.fn(),
   draftInstances: [] as DraftDouble[],
-  confirm: vi.fn()
+  confirm: vi.fn(),
+  authStore: undefined as unknown as { user: AuthUser | null }
 }))
 
 vi.mock('vue-router', () => ({
@@ -59,6 +62,10 @@ vi.mock('@/composables/useMobileLayout', () => ({
 
 vi.mock('@/composables/useCalculationDraft', () => ({
   useCalculationDraft: (adapter: DraftAdapter) => mocks.useCalculationDraft(adapter)
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => mocks.authStore
 }))
 
 vi.mock('element-plus', async (importOriginal) => ({
@@ -137,8 +144,10 @@ function installDraftDouble(options: {
       useServerVersion: vi.fn(() => {
         if (options.serverVersion) adapter.apply(options.serverVersion)
       }),
-      overwriteServerVersion: vi.fn()
+      overwriteServerVersion: vi.fn(),
+      disposed: false
     })
+    onScopeDispose(() => { instance.disposed = true })
     mocks.draftInstances.push(instance)
     return instance
   })
@@ -165,6 +174,15 @@ async function expandCard(wrapper: VueWrapper, element: 'aluminum' | 'silicon' |
   await wrapper.get(`[data-testid="mobile-standard-toggle-${element}"]`).trigger('click')
   await nextTick()
   return wrapper.get(`[data-testid="mobile-standard-card-${element}"]`)
+}
+
+function authUser(id: string, account = id): AuthUser {
+  return {
+    id,
+    account,
+    username: `User ${id}`,
+    role: 'FRONTEND_USER'
+  }
 }
 
 describe('useStandardSampleCalculation', () => {
@@ -195,7 +213,9 @@ describe('StandardSampleCalculationPage', () => {
   beforeEach(() => {
     Object.defineProperty(window, 'localStorage', { configurable: true, value: createMemoryStorage() })
     window.localStorage.clear()
-    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'frontend-user-7', account: 'fallback-account' }))
+    mocks.authStore = reactive({
+      user: authUser('frontend-user-7', 'fallback-account')
+    })
     mocks.isMobileLayout = ref(false)
     mocks.routerPush.mockReset()
     mocks.useCalculationDraft.mockReset()
@@ -328,6 +348,133 @@ describe('StandardSampleCalculationPage', () => {
     expect(() => adapter.normalize({ ...serverSnapshot, extra: true })).toThrow(TypeError)
     expect(() => adapter.normalize({ ...serverSnapshot, aluminum: { ...serverSnapshot.aluminum, highReading: Number.NaN } })).toThrow(TypeError)
     expect(() => adapter.normalize({ aluminum: serverSnapshot.aluminum, silicon: serverSnapshot.silicon })).toThrow(TypeError)
+  })
+
+  it('does not initialize a draft or expose an editor without a valid auth-store identity', async () => {
+    mocks.authStore.user = null
+    const wrapper = mountPage(false)
+    await settle()
+
+    expect(mocks.useCalculationDraft).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="standard-desktop-view"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="standard-mobile-view"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="standard-account-pending"]').text()).toContain('登录账号')
+  })
+
+  it('rejects blank auth ids and never falls back to a guest or global draft key', async () => {
+    mocks.authStore.user = authUser('   ', 'account-without-id')
+    mountPage(false)
+    await settle()
+
+    expect(mocks.useCalculationDraft).not.toHaveBeenCalled()
+    expect(mocks.draftInstances.some((instance) => instance.adapter.legacyStorageKey.includes('guest'))).toBe(false)
+  })
+
+  it('uses the reactive auth id even when localStorage is malformed or unreadable', async () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        ...createMemoryStorage(),
+        getItem: () => { throw new Error('blocked storage') }
+      }
+    })
+    mocks.authStore.user = authUser('account-a', 'ignored-account')
+
+    mountPage(false)
+    await settle()
+
+    expect(mocks.draftInstances).toHaveLength(1)
+    expect(mocks.draftInstances[0].adapter.legacyStorageKey).toBe('ys_standard_sample_inputs:account-a')
+    expect(mocks.draftInstances[0].adapter.cacheStorageKey).toBe('ys_calculation_draft_cache:standard-sample:account-a')
+  })
+
+  it('disposes account A and shows fresh disabled defaults while account B loads', async () => {
+    const accountBLoad = deferred<void>()
+    installDraftDouble({
+      load: async (instance) => {
+        if (instance.adapter.legacyStorageKey.endsWith(':account-a')) {
+          instance.adapter.apply({ ...serverSnapshot, aluminum: { ...serverSnapshot.aluminum, highStandard: 88 } })
+          return
+        }
+        await accountBLoad.promise
+        if (!instance.disposed) {
+          instance.adapter.apply({ ...serverSnapshot, aluminum: { ...serverSnapshot.aluminum, highStandard: 62 } })
+        }
+      }
+    })
+    mocks.authStore.user = authUser('account-a')
+    const wrapper = mountPage(false)
+    await settle()
+    const accountA = mocks.draftInstances[0]
+    expect(wrapper.get<HTMLInputElement>('[data-testid="standard-desktop-view"] input').element.value).toBe('88')
+
+    mocks.authStore.user = authUser('account-b')
+    await nextTick()
+    const accountB = mocks.draftInstances[1]
+    const freshInput = wrapper.get<HTMLInputElement>('[data-testid="standard-desktop-view"] input')
+    expect(accountA.disposed).toBe(true)
+    expect(accountB.adapter.legacyStorageKey).toBe('ys_standard_sample_inputs:account-b')
+    expect(freshInput.element.value).toBe('69.74')
+    expect(freshInput.attributes('disabled')).toBeDefined()
+
+    accountA.adapter.apply({ ...serverSnapshot, aluminum: { ...serverSnapshot.aluminum, highStandard: 99 } })
+    expect(freshInput.element.value).toBe('69.74')
+    expect(accountA.scheduleSave).not.toHaveBeenCalled()
+
+    accountBLoad.resolve()
+    await settle()
+    expect(freshInput.element.value).toBe('62')
+    expect(freshInput.attributes('disabled')).toBeUndefined()
+    await freshInput.setValue('63')
+    await nextTick()
+    expect(accountB.scheduleSave).toHaveBeenCalledTimes(1)
+    expect(accountA.scheduleSave).not.toHaveBeenCalled()
+  })
+
+  it('disposes account state and hides its draft immediately on logout', async () => {
+    installDraftDouble({
+      load: async (instance) => {
+        instance.adapter.apply({ ...serverSnapshot, aluminum: { ...serverSnapshot.aluminum, highStandard: 88 } })
+      }
+    })
+    mocks.authStore.user = authUser('account-a')
+    const wrapper = mountPage(false)
+    await settle()
+    const accountA = mocks.draftInstances[0]
+    expect(wrapper.text()).toContain('88')
+
+    mocks.authStore.user = null
+    await settle()
+
+    expect(accountA.disposed).toBe(true)
+    expect(wrapper.find('[data-testid="standard-desktop-view"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('88')
+    expect(wrapper.find('[data-testid="standard-account-pending"]').exists()).toBe(true)
+  })
+
+  it('creates one fresh account scope only after a null identity becomes valid', async () => {
+    const accountBLoad = deferred<void>()
+    installDraftDouble({
+      load: async (instance) => {
+        await accountBLoad.promise
+        if (!instance.disposed) instance.adapter.apply(serverSnapshot)
+      }
+    })
+    mocks.authStore.user = null
+    const wrapper = mountPage(false)
+    await settle()
+    expect(mocks.useCalculationDraft).not.toHaveBeenCalled()
+
+    mocks.authStore.user = authUser('account-b')
+    await nextTick()
+    expect(mocks.useCalculationDraft).toHaveBeenCalledTimes(1)
+    expect(mocks.draftInstances[0].adapter.legacyStorageKey).toBe('ys_standard_sample_inputs:account-b')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="standard-desktop-view"] input').element.value).toBe('69.74')
+    expect(wrapper.get('[data-testid="standard-desktop-view"] input').attributes('disabled')).toBeDefined()
+
+    accountBLoad.resolve()
+    await settle()
+    expect(wrapper.get('[data-testid="standard-desktop-view"] input').attributes('disabled')).toBeUndefined()
   })
 
   it('loads and applies state before installing the deep save watcher', async () => {
