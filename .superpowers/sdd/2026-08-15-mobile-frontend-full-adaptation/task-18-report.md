@@ -4,12 +4,12 @@
 
 - `EmployeeAttendancePageShell` now uses `useMobileLayout()` as the only layout selector. Desktop keeps its inline Element Plus month/employee filters; mobile gets a full-screen `MobileFilterDrawer`, selected month/employee summary, 44px native controls, refresh action, and existing action slot.
 - `EmployeeSchedulesPage` mounts exactly one editable calendar: `MobileAttendanceCalendar` on mobile and the unchanged `MonthlyScheduleCalendar` on desktop. Existing Store/API payloads, monthly quota endpoint, batch endpoint, copy endpoint, and server-owned overview contract are unchanged.
-- `MobileAttendanceCalendar` renders the selected month as a seven-column, 31-day (for August 2026) touch grid. Every day retains server-provided status/tone and exposes textual planned, actual, approved-leave, overtime, and exception summaries. It only formats authoritative fields; it does not reimplement attendance or payroll calculations.
+- `MobileAttendanceCalendar` renders one unified seven-column cell sequence with leading and trailing `aria-hidden` blanks. August 2026 is a complete 42-cell grid and February 2026 is a boundary-case 28-cell grid. Every day retains server-provided status/tone and exposes textual planned, actual, approved-leave, overtime, and exception summaries. It only formats authoritative fields; it does not reimplement attendance or payroll calculations.
 - Mobile overview metrics render as eight two-column cards and issues render as readable issue cards. Desktop overview alerts remain unchanged.
 - Mobile batch mode uses `MobileActionBar` at `--mobile-page-action-bottom`, so the apply action remains above the employee-attendance secondary rail. It shows the selected-day count and retains the exact overwrite-count warning and confirmation.
 - The day editor is a safe-area-aware `100dvh` bottom drawer only on mobile. Existing multiple-interval add/remove, `24:00` end, derived break/work display, validation, payload shape, and failed-save input retention remain. Mobile deletion now requires explicit confirmation; desktop deletion behavior is unchanged.
 - The batch editor and copy-previous-month confirmation are full-screen only on mobile. Existing exact overwrite count, `ElMessageBox` confirmation, failure retention, and copy overwrite flag remain unchanged.
-- Day save/delete completion is context guarded. A late failure from an older date does not contaminate a newer open editor, and newer unsaved values remain intact. Existing latest employee/month load protection remains unchanged.
+- Day save/delete completion is scoped by mounted state, layout, employee, month, date, editor-session epoch, operation epoch, and form revision. Batch and copy operations use equivalent dialog/session snapshots, locally scoped pending/error state, and duplicate-submit guards. Late success or failure cannot close, reset, reload, notify, or contaminate a newer session, while the active failure stays visible locally and retains the exact draft. Existing latest employee/month load protection remains unchanged.
 - Mobile controls use 44px targets, safe-area padding, constrained width, wrapping text, scrollable full-screen bodies, and a landscape calendar adjustment. No server, admin, router, navigation configuration, business calculation, database, migration, deployment, or Task 19+ file changed.
 
 ## TDD evidence
@@ -35,11 +35,22 @@ Observed failures were requirement-specific:
 
 An additional lifecycle RED reproduced an older day-save failure appearing inside a newer date editor. The context guard then made this case green without changing the payload or Store/API contract.
 
+### Independent-review fix RED → GREEN
+
+The review-fix tests first reproduced the rejected edge cases:
+
+- same-date close/reopen, employee switch, newer form revision, delete, and unmount allowed obsolete day results to affect the active drawer or global Store error;
+- batch close/reopen with a newer selection/edit and copy after an employee/context change allowed obsolete failures to enter the new dialog, and batch confirmation could be triggered twice;
+- August 2026 had no trailing blank cells and the seventh-column rule counted only button elements;
+- actual mobile switch, time-select, remark, rest-quota, copy-footer controls and prop-driven full-screen classes lacked direct contract coverage.
+
+The GREEN implementation moved day/batch/copy mutations off the Store's global error boundary and retained the authoritative API calls/payloads. Per-operation and per-session snapshots now decide whether a confirmation may start an API call and whether an API result may affect UI state. Form-revision events make edits performed while a confirmation or request is pending newer than that operation. Full-screen and touch sizing are driven directly by `isMobileLayout`, including coarse/tablet mobile layouts, while desktop remains unchanged.
+
 ### Final GREEN
 
 - Focused Task 18 suite:
   - Command: `pnpm exec vitest run src/views/dashboard/employee-attendance/MobileAttendanceCalendar.test.ts src/views/dashboard/employee-attendance/MonthlyScheduleCalendar.test.ts src/views/dashboard/EmployeeAttendancePages.test.ts src/stores/employeeAttendance.test.ts --reporter=dot`
-  - Result: 4 files passed, 42 tests passed.
+  - Result: 4 files passed, 55 tests passed.
 - Type check:
   - Command: `pnpm exec vue-tsc --noEmit`
   - Result: exit 0.
@@ -48,7 +59,7 @@ An additional lifecycle RED reproduced an older day-save failure appearing insid
   - Result: exit 0; Vue type check, Vite production bundle, and PWA service-worker generation completed. Existing dependency annotation and bundle-size warnings remained non-fatal.
 - Controlled-clock full suite at the 2026-08-15 acceptance date:
   - Command: `pnpm exec vitest run --config /private/tmp/task16-vitest.config.ts --reporter=dot`
-  - Result: 124 files passed, 1317 tests passed.
+  - Result: 124 files passed, 1330 tests passed.
 - Diff validation:
   - Command: `git diff --check`
   - Result: exit 0.

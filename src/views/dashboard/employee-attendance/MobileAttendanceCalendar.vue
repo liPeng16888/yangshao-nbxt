@@ -7,10 +7,10 @@
       <span v-for="weekday in weekdays" :key="weekday" data-testid="mobile-calendar-weekday">{{ weekday }}</span>
     </div>
     <div class="mobile-attendance-calendar__grid">
-      <span v-for="cell in leadingCells" :key="cell" class="mobile-attendance-calendar__blank" aria-hidden="true" />
-      <button
-        v-for="cell in monthDays"
-        :key="cell.date"
+      <template v-for="cell in calendarCells" :key="cell.key">
+        <span v-if="!cell.date" class="mobile-attendance-calendar__blank" aria-hidden="true" />
+        <button
+        v-else
         type="button"
         data-testid="mobile-calendar-day"
         class="mobile-attendance-day mobile-touch-target"
@@ -27,7 +27,8 @@
         <span v-if="leaveSummary(cell.info)" class="mobile-attendance-day__summary mobile-attendance-day__summary--leave">{{ leaveSummary(cell.info) }}</span>
         <span v-if="overtimeSummary(cell.info)" class="mobile-attendance-day__summary mobile-attendance-day__summary--overtime">{{ overtimeSummary(cell.info) }}</span>
         <span v-if="exceptionSummary(cell.info)" class="mobile-attendance-day__summary mobile-attendance-day__summary--exception">{{ exceptionSummary(cell.info) }}</span>
-      </button>
+        </button>
+      </template>
     </div>
   </section>
 </template>
@@ -50,11 +51,16 @@ const statusLabels: Record<AttendanceCalendarStatus, string> = {
 
 const daysByDate = computed(() => new Map(props.days.map((day) => [day.date, day])))
 const monthStart = computed(() => dayjs(`${props.month || dayjs().format('YYYY-MM')}-01`))
-const leadingCells = computed(() => Array.from({ length: monthStart.value.day() }, (_, index) => `leading-${index}`))
 const monthDays = computed(() => Array.from({ length: monthStart.value.daysInMonth() }, (_, index) => {
   const date = monthStart.value.add(index, 'day').format('YYYY-MM-DD')
-  return { date, day: index + 1, info: daysByDate.value.get(date) }
+  return { key: date, date, day: index + 1, info: daysByDate.value.get(date) }
 }))
+const calendarCells = computed(() => {
+  const leading = Array.from({ length: monthStart.value.day() }, (_, index) => ({ key: `leading-${props.month}-${index}`, date: '', day: 0, info: undefined }))
+  const used = leading.length + monthDays.value.length
+  const trailing = Array.from({ length: (7 - (used % 7)) % 7 }, (_, index) => ({ key: `trailing-${props.month}-${index}`, date: '', day: 0, info: undefined }))
+  return [...leading, ...monthDays.value, ...trailing]
+})
 
 function statusLabel(status?: AttendanceCalendarStatus) { return status ? statusLabels[status] : '未排班' }
 function hours(minutes: number) {
@@ -89,5 +95,5 @@ function select(date: string) { props.batchMode ? emit('toggleDate', date) : emi
 </script>
 
 <style scoped>
-.mobile-attendance-calendar{min-width:0;overflow:hidden;border:1px solid #dbe5f0;border-radius:12px;background:#fff}.mobile-attendance-calendar__legend{display:flex;flex-wrap:wrap;gap:8px 12px;padding:10px 12px;color:#475569;font-size:11px}.mobile-attendance-calendar__legend span{display:inline-flex;align-items:center;gap:5px}.mobile-attendance-calendar__legend i{width:10px;height:10px;border:1px solid #cbd5e1;border-radius:3px}.mobile-attendance-calendar__swatch--future{background:#fff}.mobile-attendance-calendar__swatch--normal{background:#ecfdf3}.mobile-attendance-calendar__swatch--leave{background:#fef9c3}.mobile-attendance-calendar__swatch--absent{background:#fee2e2}.mobile-attendance-calendar__swatch--rest{background:#f1f5f9}.mobile-attendance-calendar__weekdays,.mobile-attendance-calendar__grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}.mobile-attendance-calendar__weekdays{background:#eff6ff;color:#475569;font-size:11px}.mobile-attendance-calendar__weekdays span{padding:8px 2px;text-align:center}.mobile-attendance-calendar__blank{min-height:44px;background:#f8fafc;border-top:1px solid #e2e8f0}.mobile-attendance-day{min-width:0;min-height:104px;padding:5px 3px;overflow:hidden;color:#1e293b;text-align:left;border:0;border-top:1px solid #e2e8f0;border-right:1px solid #e2e8f0;cursor:pointer}.mobile-attendance-day:nth-of-type(7n){border-right:0}.mobile-attendance-day--future{background:#fff}.mobile-attendance-day--normal{background:#ecfdf3}.mobile-attendance-day--leave{background:#fef9c3}.mobile-attendance-day--absent{background:#fee2e2}.mobile-attendance-day--rest{background:#f1f5f9}.mobile-attendance-day--selected{box-shadow:inset 0 0 0 2px #2563eb}.mobile-attendance-day__heading{display:flex;min-width:0;align-items:center;justify-content:space-between;gap:2px}.mobile-attendance-day__heading strong{font-size:13px}.mobile-attendance-day__heading b{min-width:0;overflow:hidden;color:#475569;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.mobile-attendance-day__summary{display:block;margin-top:3px;font-size:9px;line-height:1.25;overflow-wrap:anywhere}.mobile-attendance-day__summary--leave{color:#854d0e}.mobile-attendance-day__summary--overtime{color:#1d4ed8;font-weight:700}.mobile-attendance-day__summary--exception{color:#b91c1c;font-weight:700}@media(orientation:landscape){.mobile-attendance-day{min-height:90px;padding-inline:5px}.mobile-attendance-day__summary{font-size:10px}}
+.mobile-attendance-calendar{min-width:0;overflow:hidden;border:1px solid #dbe5f0;border-radius:12px;background:#fff}.mobile-attendance-calendar__legend{display:flex;flex-wrap:wrap;gap:8px 12px;padding:10px 12px;color:#475569;font-size:11px}.mobile-attendance-calendar__legend span{display:inline-flex;align-items:center;gap:5px}.mobile-attendance-calendar__legend i{width:10px;height:10px;border:1px solid #cbd5e1;border-radius:3px}.mobile-attendance-calendar__swatch--future{background:#fff}.mobile-attendance-calendar__swatch--normal{background:#ecfdf3}.mobile-attendance-calendar__swatch--leave{background:#fef9c3}.mobile-attendance-calendar__swatch--absent{background:#fee2e2}.mobile-attendance-calendar__swatch--rest{background:#f1f5f9}.mobile-attendance-calendar__weekdays,.mobile-attendance-calendar__grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}.mobile-attendance-calendar__weekdays{background:#eff6ff;color:#475569;font-size:11px}.mobile-attendance-calendar__weekdays span{padding:8px 2px;text-align:center}.mobile-attendance-calendar__blank{min-height:44px;background:#f8fafc;border-top:1px solid #e2e8f0;border-right:1px solid #e2e8f0}.mobile-attendance-day{min-width:0;min-height:104px;padding:5px 3px;overflow:hidden;color:#1e293b;text-align:left;border:0;border-top:1px solid #e2e8f0;border-right:1px solid #e2e8f0;cursor:pointer}.mobile-attendance-calendar__grid>:nth-child(7n){border-right:0}.mobile-attendance-day--future{background:#fff}.mobile-attendance-day--normal{background:#ecfdf3}.mobile-attendance-day--leave{background:#fef9c3}.mobile-attendance-day--absent{background:#fee2e2}.mobile-attendance-day--rest{background:#f1f5f9}.mobile-attendance-day--selected{box-shadow:inset 0 0 0 2px #2563eb}.mobile-attendance-day__heading{display:flex;min-width:0;align-items:center;justify-content:space-between;gap:2px}.mobile-attendance-day__heading strong{font-size:13px}.mobile-attendance-day__heading b{min-width:0;overflow:hidden;color:#475569;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.mobile-attendance-day__summary{display:block;margin-top:3px;font-size:9px;line-height:1.25;overflow-wrap:anywhere}.mobile-attendance-day__summary--leave{color:#854d0e}.mobile-attendance-day__summary--overtime{color:#1d4ed8;font-weight:700}.mobile-attendance-day__summary--exception{color:#b91c1c;font-weight:700}@media(orientation:landscape){.mobile-attendance-day{min-height:90px;padding-inline:5px}.mobile-attendance-day__summary{font-size:10px}}
 </style>

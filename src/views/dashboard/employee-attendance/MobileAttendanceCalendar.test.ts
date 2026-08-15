@@ -47,6 +47,11 @@ describe('MobileAttendanceCalendar', () => {
 
     expect(wrapper.findAll('[data-testid="mobile-calendar-weekday"]')).toHaveLength(7)
     expect(wrapper.findAll('[data-testid="mobile-calendar-day"]')).toHaveLength(31)
+    expect(wrapper.findAll('.mobile-attendance-calendar__grid > *')).toHaveLength(42)
+    expect(wrapper.findAll('.mobile-attendance-calendar__blank')).toHaveLength(11)
+    expect(wrapper.findAll('.mobile-attendance-calendar__grid > *')[6]!.attributes('data-date')).toBe('2026-08-01')
+    expect(wrapper.findAll('.mobile-attendance-calendar__grid > *')[36]!.attributes('data-date')).toBe('2026-08-31')
+    expect(wrapper.findAll('.mobile-attendance-calendar__blank').every((node) => node.attributes('aria-hidden') === 'true')).toBe(true)
     expect(wrapper.get('[data-date="2026-08-03"]').classes()).toContain('mobile-attendance-day--normal')
     expect(wrapper.get('[data-date="2026-08-03"]').text()).toContain('排班 08:00–12:00、13:00–18:00')
     expect(wrapper.get('[data-date="2026-08-03"]').text()).toContain('实际 08:10–18:30')
@@ -54,6 +59,17 @@ describe('MobileAttendanceCalendar', () => {
     expect(wrapper.get('[data-date="2026-08-04"]').text()).toContain('请假 4 小时 · 事假')
     expect(wrapper.get('[data-date="2026-08-05"]').text()).toContain('异常 出勤不足 1 小时')
     expect(wrapper.findAll('.mobile-touch-target')).toHaveLength(31)
+  })
+
+  it('uses complete weeks without blanks for a Sunday-start month ending Saturday', () => {
+    const wrapper = mount(MobileAttendanceCalendar, {
+      props: { month: '2026-02', days: [], selectedDates: [], batchMode: false }
+    })
+    const cells = wrapper.findAll('.mobile-attendance-calendar__grid > *')
+    expect(cells).toHaveLength(28)
+    expect(cells[0]!.attributes('data-date')).toBe('2026-02-01')
+    expect(cells[27]!.attributes('data-date')).toBe('2026-02-28')
+    expect(wrapper.findAll('.mobile-attendance-calendar__blank')).toHaveLength(0)
   })
 
   it('opens a day normally and toggles it instead while batch selecting', async () => {

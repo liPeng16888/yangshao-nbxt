@@ -20,23 +20,23 @@
       <el-alert v-if="displayError" :title="displayError" type="error" :closable="false" show-icon />
       <div class="schedule-day-drawer__body">
         <el-form label-position="top">
-          <el-form-item label="当天状态"><el-switch v-model="form.isWorkday" active-text="工作日" inactive-text="休息日" /></el-form-item>
+          <el-form-item label="当天状态"><el-switch v-model="form.isWorkday" :class="{ 'mobile-touch-control': isMobileLayout }" active-text="工作日" inactive-text="休息日" /></el-form-item>
           <template v-if="form.isWorkday">
             <div v-for="(segment, index) in form.segments" :key="segment.key" class="planned-interval" data-testid="planned-interval">
               <span class="planned-interval__label">时段 {{ index + 1 }}</span>
-              <el-time-select v-model="segment.startTime" :data-testid="`interval-start-${index}`" start="00:00" step="00:30" end="23:30" placeholder="上班" />
+              <el-time-select v-model="segment.startTime" :class="{ 'mobile-touch-control': isMobileLayout }" :data-testid="`interval-start-${index}`" start="00:00" step="00:30" end="23:30" placeholder="上班" />
               <span>至</span>
-              <el-time-select v-model="segment.endTime" :data-testid="`interval-end-${index}`" start="00:30" step="00:30" end="24:00" placeholder="下班" />
+              <el-time-select v-model="segment.endTime" :class="{ 'mobile-touch-control': isMobileLayout }" :data-testid="`interval-end-${index}`" start="00:30" step="00:30" end="24:00" placeholder="下班" />
               <el-button :class="{ 'mobile-touch-target': isMobileLayout }" link type="danger" :disabled="form.segments.length === 1" @click="removeInterval(index)">删除</el-button>
             </div>
             <el-button data-testid="add-planned-interval" :class="{ 'mobile-touch-target': isMobileLayout }" plain @click="addInterval">添加工作时段</el-button>
             <div class="schedule-day-drawer__summary">休息 {{ rest }} 分钟 · 工作 {{ workHours }} 小时</div>
           </template>
-          <el-form-item label="备注"><el-input v-model="form.remark" maxlength="200" show-word-limit /></el-form-item>
+          <el-form-item label="备注"><el-input v-model="form.remark" data-testid="schedule-day-remark" :class="{ 'mobile-touch-control': isMobileLayout }" maxlength="200" show-word-limit /></el-form-item>
         </el-form>
       </div>
       <footer class="schedule-day-drawer__footer">
-        <el-button v-if="row" :class="{ 'mobile-touch-target': isMobileLayout }" type="danger" plain :loading="saving" @click="requestDelete">删除当天排班</el-button>
+        <el-button v-if="row" :class="{ 'mobile-touch-target': isMobileLayout }" type="danger" plain :loading="saving || deleteConfirming" :disabled="saving || deleteConfirming" @click="requestDelete">删除当天排班</el-button>
         <span class="schedule-day-drawer__spacer" />
         <el-button :class="{ 'mobile-touch-target': isMobileLayout }" @click="close">取消</el-button>
         <el-button :class="{ 'mobile-touch-target': isMobileLayout }" type="primary" :loading="saving" @click="save">保存</el-button>
@@ -55,11 +55,15 @@ import type { MonthlyScheduleDay, MonthlySchedulePayload, ScheduleSegment } from
 type EditableSegment = Pick<ScheduleSegment, 'startTime' | 'endTime'> & { key: number }
 type EditablePayload = Omit<MonthlySchedulePayload, 'segments'> & { segments: EditableSegment[] }
 const props = withDefaults(defineProps<{ visible: boolean; date: string; employeeId: string; row?: MonthlyScheduleDay; saving?: boolean; error?: string }>(), { row: undefined, saving: false, error: '' })
-const emit = defineEmits<{ 'update:visible': [visible: boolean]; save: [payload: MonthlySchedulePayload]; delete: [id: string] }>()
+const emit = defineEmits<{ 'update:visible': [visible: boolean]; 'revision-change': [revision: number]; save: [payload: MonthlySchedulePayload, revision: number]; delete: [id: string, revision: number] }>()
 const { isMobileLayout } = useMobileLayout()
 const form = ref<EditablePayload>({ employeeId: '', date: '', isWorkday: true, segments: [], remark: '' })
 const localError = ref('')
+const deleteConfirming = ref(false)
 let nextSegmentKey = 0
+let formRevision = 0
+let editorEpoch = 0
+let deleteConfirmOperation = 0
 
 function editableSegments(segments: ReadonlyArray<Pick<ScheduleSegment, 'startTime' | 'endTime'>>): EditableSegment[] {
   return segments.map(({ startTime, endTime }) => ({ key: nextSegmentKey++, startTime, endTime }))
@@ -71,7 +75,12 @@ function reset() {
     ? { employeeId: props.row.employeeId, date: props.row.date, isWorkday: props.row.isWorkday, segments: editableSegments(props.row.segments), remark: props.row.remark || '' }
     : { employeeId: props.employeeId, date: props.date, isWorkday: true, segments: editableSegments([{ startTime: '08:00', endTime: '12:00' }, { startTime: '13:00', endTime: '17:30' }]), remark: '' }
 }
-watch(() => [props.visible, props.date, props.employeeId, props.row?.id] as const, () => { if (props.visible) reset() }, { immediate: true })
+watch(() => [props.visible, props.date, props.employeeId, props.row?.id] as const, () => {
+  editorEpoch += 1
+  deleteConfirming.value = false
+  if (props.visible) reset()
+}, { immediate: true })
+watch(form, () => { formRevision += 1; emit('revision-change', formRevision) }, { deep: true, flush: 'sync' })
 const displayError = computed(() => localError.value || props.error)
 const normalized = computed(() => {
   if (!form.value.isWorkday) return []
@@ -93,24 +102,30 @@ function addInterval() {
 function removeInterval(index: number) { if (form.value.segments.length > 1) form.value.segments.splice(index, 1) }
 function close() { emit('update:visible', false) }
 async function requestDelete() {
-  if (!props.row) return
-  if (!isMobileLayout.value) { emit('delete', props.row.id); return }
+  if (!props.row || deleteConfirming.value || props.saving) return
+  if (!isMobileLayout.value) { emit('delete', props.row.id, formRevision); return }
+  const context = { operation: ++deleteConfirmOperation, epoch: editorEpoch, revision: formRevision, rowId: props.row.id, date: props.date, employeeId: props.employeeId }
+  deleteConfirming.value = true
   try {
     await ElMessageBox.confirm(`确认删除 ${props.date} 的排班？`, '删除当天排班', {
       type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消'
     })
-    emit('delete', props.row.id)
-  } catch { /* retain the open editor and all current values */ }
+    if (!props.visible || context.operation !== deleteConfirmOperation || context.epoch !== editorEpoch || context.revision !== formRevision ||
+      props.row?.id !== context.rowId || props.date !== context.date || props.employeeId !== context.employeeId) return
+    emit('delete', context.rowId, context.revision)
+  } catch { /* retain the open editor and all current values */ } finally {
+    if (context.operation === deleteConfirmOperation) deleteConfirming.value = false
+  }
 }
 function save() {
   localError.value = ''
   if (form.value.isWorkday) {
     try { normalizeClockIntervals(form.value.segments) } catch (error) { localError.value = error instanceof Error ? error.message : '排班时段无效'; return }
   }
-  emit('save', { ...form.value, segments: copiedSegments(form.value.segments), remark: form.value.remark || '' })
+  emit('save', { ...form.value, segments: copiedSegments(form.value.segments), remark: form.value.remark || '' }, formRevision)
 }
 </script>
 
 <style scoped>
-.schedule-day-drawer__content{height:100%;min-width:0;display:flex;flex-direction:column}.schedule-day-drawer__header,.schedule-day-drawer__footer{padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;gap:12px;align-items:flex-start}.schedule-day-drawer__header>div{min-width:0}.schedule-day-drawer__header h3{margin:0 0 6px;overflow-wrap:anywhere}.schedule-day-drawer__header p{margin:0;color:#64748b;font-size:13px;line-height:1.5;overflow-wrap:anywhere}.schedule-day-drawer__header .el-button{margin-left:auto}.schedule-day-drawer__body{min-width:0;padding:18px 20px;overflow:auto;flex:1}.planned-interval{display:grid;grid-template-columns:58px minmax(0,1fr) 20px minmax(0,1fr) auto;align-items:center;gap:8px;margin-bottom:10px}.planned-interval__label{font-size:13px;color:#64748b}.schedule-day-drawer__summary{margin:14px 0 20px;padding:10px 12px;border-radius:6px;background:#f8fafc;color:#334155}.schedule-day-drawer__footer{border-top:1px solid #e2e8f0;border-bottom:0;align-items:center}.schedule-day-drawer__spacer{flex:1}:global(.schedule-day-drawer--fullscreen){width:100%!important;height:100dvh!important;max-height:100dvh!important;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom));border-radius:0!important}:global(.schedule-day-drawer--fullscreen .el-drawer__body){min-height:0;padding:0;overflow:hidden}@media(max-width:560px){.schedule-day-drawer__header,.schedule-day-drawer__body{padding-inline:14px}.schedule-day-drawer__footer{flex-wrap:wrap;padding:10px 14px}.schedule-day-drawer__footer .el-button{margin-left:0}.schedule-day-drawer__spacer{display:none}.planned-interval{grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr)}.planned-interval__label{grid-column:1/-1}.planned-interval .el-button{grid-column:1/-1;justify-self:start}}
+.schedule-day-drawer__content{height:100%;min-width:0;display:flex;flex-direction:column}.schedule-day-drawer__header,.schedule-day-drawer__footer{padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;gap:12px;align-items:flex-start}.schedule-day-drawer__header>div{min-width:0}.schedule-day-drawer__header h3{margin:0 0 6px;overflow-wrap:anywhere}.schedule-day-drawer__header p{margin:0;color:#64748b;font-size:13px;line-height:1.5;overflow-wrap:anywhere}.schedule-day-drawer__header .el-button{margin-left:auto}.schedule-day-drawer__body{min-width:0;padding:18px 20px;overflow:auto;flex:1}.planned-interval{display:grid;grid-template-columns:58px minmax(0,1fr) 20px minmax(0,1fr) auto;align-items:center;gap:8px;margin-bottom:10px}.planned-interval__label{font-size:13px;color:#64748b}.schedule-day-drawer__summary{margin:14px 0 20px;padding:10px 12px;border-radius:6px;background:#f8fafc;color:#334155}.schedule-day-drawer__footer{border-top:1px solid #e2e8f0;border-bottom:0;align-items:center}.schedule-day-drawer__spacer{flex:1}:global(.schedule-day-drawer--fullscreen){width:100%!important;height:100dvh!important;max-height:100dvh!important;margin:0!important;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom));border-radius:0!important}:global(.schedule-day-drawer--fullscreen .el-drawer__body){min-height:0;padding:0;overflow:hidden}:global(.schedule-day-drawer--fullscreen .mobile-touch-control),:global(.schedule-day-drawer--fullscreen .mobile-touch-control .el-input__wrapper),:global(.schedule-day-drawer--fullscreen .mobile-touch-control .el-select__wrapper){min-height:44px}@media(max-width:560px){.schedule-day-drawer__header,.schedule-day-drawer__body{padding-inline:14px}.schedule-day-drawer__footer{flex-wrap:wrap;padding:10px 14px}.schedule-day-drawer__footer .el-button{margin-left:0}.schedule-day-drawer__spacer{display:none}.planned-interval{grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr)}.planned-interval__label{grid-column:1/-1}.planned-interval .el-button{grid-column:1/-1;justify-self:start}}
 </style>

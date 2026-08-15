@@ -13,23 +13,23 @@
     <el-alert :title="`已选择 ${selectedDates.length} 个日期；保存时将完整覆盖 ${selectedDates.length} 个日期，其中 ${overwrittenCount} 天已有排班。`" type="warning" :closable="false" show-icon />
     <el-alert v-if="displayError" class="batch-error" :title="displayError" type="error" :closable="false" show-icon />
     <el-form label-position="top" class="batch-form">
-      <el-form-item label="当天状态"><el-switch v-model="form.isWorkday" active-text="工作日" inactive-text="休息日" /></el-form-item>
+      <el-form-item label="当天状态"><el-switch v-model="form.isWorkday" :class="{ 'mobile-touch-control': isMobileLayout }" active-text="工作日" inactive-text="休息日" /></el-form-item>
       <template v-if="form.isWorkday">
         <div v-for="(segment, index) in form.segments" :key="segment.key" class="batch-interval">
           <span>时段 {{ index + 1 }}</span>
-          <el-time-select v-model="segment.startTime" start="00:00" step="00:30" end="23:30" placeholder="上班" />
+          <el-time-select v-model="segment.startTime" :class="{ 'mobile-touch-control': isMobileLayout }" start="00:00" step="00:30" end="23:30" placeholder="上班" />
           <span>至</span>
-          <el-time-select v-model="segment.endTime" start="00:30" step="00:30" end="24:00" placeholder="下班" />
+          <el-time-select v-model="segment.endTime" :class="{ 'mobile-touch-control': isMobileLayout }" start="00:30" step="00:30" end="24:00" placeholder="下班" />
           <el-button :class="{ 'mobile-touch-target': isMobileLayout }" link type="danger" :disabled="form.segments.length === 1" @click="removeInterval(index)">删除</el-button>
         </div>
         <el-button :class="{ 'mobile-touch-target': isMobileLayout }" plain @click="addInterval">添加工作时段</el-button>
         <p class="batch-summary">休息 {{ rest }} 分钟 · 工作 {{ workHours }} 小时</p>
       </template>
-      <el-form-item label="备注"><el-input v-model="form.remark" maxlength="200" show-word-limit /></el-form-item>
+      <el-form-item label="备注"><el-input v-model="form.remark" data-testid="schedule-batch-remark" :class="{ 'mobile-touch-control': isMobileLayout }" maxlength="200" show-word-limit /></el-form-item>
     </el-form>
     <template #footer>
       <el-button :class="{ 'mobile-touch-target': isMobileLayout }" @click="emit('update:visible', false)">取消</el-button>
-      <el-button :class="{ 'mobile-touch-target': isMobileLayout }" type="primary" :loading="saving" @click="confirmSave">确认批量覆盖</el-button>
+      <el-button :class="{ 'mobile-touch-target': isMobileLayout }" type="primary" :loading="saving || confirming" :disabled="saving || confirming" @click="confirmSave">确认批量覆盖</el-button>
     </template>
   </el-dialog>
 </template>
@@ -44,11 +44,15 @@ import type { BatchMonthlySchedulePayload, MonthlyScheduleDay, ScheduleSegment }
 type EditableSegment = Pick<ScheduleSegment, 'startTime' | 'endTime'> & { key: number }
 type EditablePayload = Omit<BatchMonthlySchedulePayload, 'employeeId' | 'dates' | 'segments'> & { segments: EditableSegment[] }
 const props = withDefaults(defineProps<{ visible: boolean; employeeId: string; selectedDates: string[]; rows: MonthlyScheduleDay[]; saving?: boolean; error?: string }>(), { saving: false, error: '' })
-const emit = defineEmits<{ 'update:visible': [visible: boolean]; save: [payload: BatchMonthlySchedulePayload] }>()
+const emit = defineEmits<{ 'update:visible': [visible: boolean]; 'revision-change': [revision: number]; save: [payload: BatchMonthlySchedulePayload, revision: number] }>()
 const { isMobileLayout } = useMobileLayout()
 const form = ref<EditablePayload>({ isWorkday: true, segments: [], remark: '' })
 const localError = ref('')
+const confirming = ref(false)
 let nextSegmentKey = 0
+let formRevision = 0
+let dialogEpoch = 0
+let confirmOperation = 0
 const overwrittenCount = computed(() => props.selectedDates.filter((date) => props.rows.some((row) => row.date === date)).length)
 const normalized = computed(() => {
   if (!form.value.isWorkday) return []
@@ -60,11 +64,14 @@ const workHours = computed(() => {
   return Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(/\.0$/, '')
 })
 watch(() => props.visible, (visible) => {
+  dialogEpoch += 1
+  confirming.value = false
   if (visible) {
     localError.value = ''
     form.value = { isWorkday: true, segments: editableSegments([{ startTime: '08:00', endTime: '12:00' }, { startTime: '13:00', endTime: '17:30' }]), remark: '' }
   }
 })
+watch(form, () => { formRevision += 1; emit('revision-change', formRevision) }, { deep: true, flush: 'sync' })
 const displayError = computed(() => localError.value || props.error)
 function editableSegments(segments: ReadonlyArray<Pick<ScheduleSegment, 'startTime' | 'endTime'>>) { return segments.map(({ startTime, endTime }) => ({ key: nextSegmentKey++, startTime, endTime })) }
 function copiedSegments(segments: ReadonlyArray<Pick<ScheduleSegment, 'startTime' | 'endTime'>>) { return segments.map(({ startTime, endTime }) => ({ startTime, endTime })) }
@@ -77,18 +84,34 @@ function addInterval() {
 }
 function removeInterval(index: number) { if (form.value.segments.length > 1) form.value.segments.splice(index, 1) }
 async function confirmSave() {
+  if (confirming.value || props.saving) return
   localError.value = ''
   if (form.value.isWorkday) {
     try { normalizeClockIntervals(form.value.segments) } catch (error) { localError.value = error instanceof Error ? error.message : '排班时段无效'; return }
   }
   const text = `将完整覆盖 ${props.selectedDates.length} 个日期，其中 ${overwrittenCount.value} 天已有排班`
+  const context = {
+    operation: ++confirmOperation,
+    epoch: dialogEpoch,
+    revision: formRevision,
+    employeeId: props.employeeId,
+    dates: [...props.selectedDates],
+    isWorkday: form.value.isWorkday,
+    segments: copiedSegments(form.value.segments),
+    remark: form.value.remark || ''
+  }
+  confirming.value = true
   try {
     await ElMessageBox.confirm(text, '确认批量覆盖', { type: 'warning', confirmButtonText: '确认覆盖', cancelButtonText: '返回修改' })
-    emit('save', { employeeId: props.employeeId, dates: [...props.selectedDates], isWorkday: form.value.isWorkday, segments: copiedSegments(form.value.segments), remark: form.value.remark || '' })
-  } catch { /* keep the dialog and its entered intervals for direct correction */ }
+    if (!props.visible || context.operation !== confirmOperation || context.epoch !== dialogEpoch || context.revision !== formRevision ||
+      props.employeeId !== context.employeeId || props.selectedDates.join('|') !== context.dates.join('|')) return
+    emit('save', { employeeId: context.employeeId, dates: context.dates, isWorkday: context.isWorkday, segments: context.segments, remark: context.remark }, context.revision)
+  } catch { /* keep the dialog and its entered intervals for direct correction */ } finally {
+    if (context.operation === confirmOperation) confirming.value = false
+  }
 }
 </script>
 
 <style scoped>
-.batch-error{margin-top:12px}.batch-form{margin-top:16px}.batch-interval{display:grid;grid-template-columns:58px minmax(0,1fr) 20px minmax(0,1fr) auto;gap:8px;align-items:center;margin-bottom:10px}.batch-summary{margin:14px 0 20px;padding:10px 12px;background:#f8fafc;border-radius:6px;color:#334155}:global(.schedule-batch-dialog--fullscreen){height:100dvh;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom))}:global(.schedule-batch-dialog--fullscreen .el-dialog__body){min-height:0;overflow:auto}@media(max-width:640px){.batch-interval{grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr)}.batch-interval>span:first-child,.batch-interval .el-button{grid-column:1/-1}}
+.batch-error{margin-top:12px}.batch-form{margin-top:16px}.batch-interval{display:grid;grid-template-columns:58px minmax(0,1fr) 20px minmax(0,1fr) auto;gap:8px;align-items:center;margin-bottom:10px}.batch-summary{margin:14px 0 20px;padding:10px 12px;background:#f8fafc;border-radius:6px;color:#334155}:global(.schedule-batch-dialog--fullscreen){width:100%!important;height:100dvh!important;max-height:100dvh!important;margin:0!important;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom))}:global(.schedule-batch-dialog--fullscreen .el-dialog__body){min-height:0;overflow:auto}:global(.schedule-batch-dialog--fullscreen .mobile-touch-control),:global(.schedule-batch-dialog--fullscreen .mobile-touch-control .el-input__wrapper),:global(.schedule-batch-dialog--fullscreen .mobile-touch-control .el-select__wrapper){min-height:44px}@media(max-width:640px){.batch-interval{grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr)}.batch-interval>span:first-child,.batch-interval .el-button{grid-column:1/-1}}
 </style>
