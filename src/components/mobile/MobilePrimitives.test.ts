@@ -63,20 +63,39 @@ describe('mobile interaction primitives', () => {
   })
 
   it('keeps dialog footer inputs mounted after a parent rejects saving', async () => {
+    let rejectSave!: (reason?: unknown) => void
+    let markSaveStarted!: () => void
+    let markSaveFinished!: () => void
+    const rejectedSave = new Promise<void>((_resolve, reject) => {
+      rejectSave = reject
+    })
+    const saveStarted = new Promise<void>((resolve) => {
+      markSaveStarted = resolve
+    })
+    const saveFinished = new Promise<void>((resolve) => {
+      markSaveFinished = resolve
+    })
     const Parent = defineComponent({
       components: { MobileFullscreenDialog },
+      data: () => ({ open: true }),
       methods: {
         async save() {
+          markSaveStarted()
           try {
-            await Promise.reject(new Error('save failed'))
+            await rejectedSave
           } catch {
             // The parent owns the failed save state and deliberately keeps the dialog open.
+          } finally {
+            markSaveFinished()
           }
         }
       },
       template: `
-        <MobileFullscreenDialog :model-value="true" title="编辑样品" @confirm="save">
-          <template #footer><input aria-label="备注" value="保留内容" /></template>
+        <MobileFullscreenDialog v-model="open" title="编辑样品" @confirm="save">
+          <template #footer="{ confirm }">
+            <input aria-label="备注" value="保留内容" />
+            <button class="rejected-save-confirm" type="button" @click="confirm">保存</button>
+          </template>
         </MobileFullscreenDialog>
       `
     })
@@ -89,8 +108,12 @@ describe('mobile interaction primitives', () => {
     expect(dialog.get('.mobile-fullscreen-dialog').attributes('role')).toBe('dialog')
     expect(defaultDialog.get('.mobile-fullscreen-dialog__confirm').classes()).toContain('mobile-touch-target')
 
-    dialog.getComponent(MobileFullscreenDialog).vm.$emit('confirm')
+    await dialog.get('.rejected-save-confirm').trigger('click')
+    await saveStarted
+    rejectSave(new Error('save failed'))
+    await saveFinished
     await nextTick()
+    expect((dialog.vm as { open: boolean }).open).toBe(true)
     expect(dialog.get('[aria-label="备注"]').element).toBeInstanceOf(HTMLInputElement)
   })
 
