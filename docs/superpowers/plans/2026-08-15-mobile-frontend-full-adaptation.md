@@ -961,7 +961,7 @@ git commit -m "feat: adapt medicine inventory for mobile"
 expect(wrapper.find('.mobile-secondary-nav').exists()).toBe(false)
 expect(wrapper.get('[data-testid="mobile-report-filter"]').text()).toContain('筛选')
 expect(wrapper.findAll('.summary-card')).toHaveLength(expectedSummaryCount)
-expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(document.documentElement.clientWidth)
+expect(wrapper.get('[data-testid="mobile-report-charts"]').classes()).toContain('mobile-report-charts--single-column')
 ```
 
 Assert summary cards are two columns at 390px, charts stack one per row, touch tooltip handlers exist, empty/loading/error states remain visible, and desktop uses the current `ReportFilterBar`.
@@ -1048,25 +1048,15 @@ git commit -m "feat: adapt customer overview for mobile"
 - Create: `src/components/blacklist/MobileBlacklistList.vue`
 - Create: `src/components/blacklist/MobileBlacklistForm.vue`
 - Create: `src/views/dashboard/BlacklistPage.mobile.test.ts`
-- Create: `src/utils/blacklistCsv.ts`
-- Create: `src/utils/blacklistCsv.test.ts`
-- Create: `src/api/blacklist.test.ts`
-- Create: `server/src/blacklist/blacklist.service.test.ts`
 - Modify: `src/views/dashboard/BlacklistPage.vue`
 - Modify: `src/components/blacklist/BlacklistTable.vue`
 - Modify: `src/components/blacklist/BlacklistUploadForm.vue`
 - Modify: `src/components/blacklist/BlacklistTable.test.ts`
-- Modify: `src/api/blacklist.ts`
-- Modify: `src/stores/blacklist.ts`
-- Modify: `src/types/blacklist.ts`
-- Modify: `server/src/blacklist/blacklist.controller.ts`
-- Modify: `server/src/blacklist/blacklist.service.ts`
 
 **Interfaces:**
 - Mobile list emits `search`, `supplement`, `delete` with the same payloads as `BlacklistTable`.
-- Mobile form emits `submit: [BlacklistPayload]` exactly like `BlacklistUploadForm`.
+- Mobile form receives `save: (payload: BlacklistPayload) => Promise<void>` so it can retain inputs on rejection and reset only after success.
 - Existing Store, validation, upload, hit highlight, access guard and confirmation remain page-owned.
-- `POST /blacklist/import` accepts at most 100 normalized CSV rows and returns `{ success, duplicates, failures }`; the authenticated account remains the uploader.
 
 - [ ] **Step 1: Write failing mobile blacklist tests**
 
@@ -1077,15 +1067,12 @@ expect(wrapper.get('[data-testid="mobile-blacklist-create"]').exists()).toBe(tru
 expect(wrapper.find('.blacklist-table').exists()).toBe(false)
 ```
 
-Assert search/filter drawer, add form, supplement full-screen form, maximum two images, money decimal keyboard, highlighted `?hit=` card scroll, delete confirmation, and success/duplicate/failure import summary remain available. The single page must not show secondary navigation.
-
-Add CSV parser/API tests using UTF-8 headers `电话号,微信号,微信昵称,金额,其他,备注`. Quoted commas and escaped double quotes must parse; missing all identifying/content fields is a failure; invalid or negative amount is a failure. Normalize phone by removing whitespace and WeChat by trim/lowercase. A row is duplicate when its non-empty normalized phone or WeChat matches an existing record or an earlier accepted row in the same import.
+Assert search/filter drawer, add form, supplement full-screen form, maximum two images, money decimal keyboard, highlighted `?hit=` card scroll, delete confirmation, failed save retaining every input and successful save clearing the form. The single page must not show secondary navigation.
 
 - [ ] **Step 2: Run focused tests and verify RED**
 
 ```bash
-pnpm exec vitest run src/views/dashboard/BlacklistPage.mobile.test.ts src/components/blacklist/BlacklistTable.test.ts src/utils/blacklistCsv.test.ts src/api/blacklist.test.ts
-pnpm --filter yangshao-server exec vitest run src/blacklist/blacklist.service.test.ts
+pnpm exec vitest run src/views/dashboard/BlacklistPage.mobile.test.ts src/components/blacklist/BlacklistTable.test.ts
 ```
 
 Expected: FAIL because mobile cards/forms are absent.
@@ -1095,20 +1082,17 @@ Expected: FAIL because mobile cards/forms are absent.
 ```vue
 <MobileBlacklistList v-if="isMobileLayout" v-bind="listBindings" @supplement="openSupplement" @delete="handleDelete" />
 <BlacklistTable v-else v-bind="listBindings" @supplement="openSupplement" @delete="handleDelete" />
-<MobileBlacklistForm v-if="isMobileLayout" @submit="handleCreate" />
+<MobileBlacklistForm v-if="isMobileLayout" :save="handleCreate" />
 <BlacklistUploadForm v-else @submit="handleCreate" />
 ```
 
 The supplement dialog uses `MobileFullscreenDialog` on mobile and the existing `el-dialog` on desktop, both bound to the same `supplementForm`. Keep `validateBlacklistPayload`, Store calls, image URL logic and confirmation text shared.
 
-Implement the import endpoint as one transaction-scoped service operation. It validates `rows` is an array of 1–100 entries, loads existing phones/WeChat once, classifies rows in input order, creates only accepted rows with `uploadedById=user.id`, and returns original one-based row numbers with each duplicate/failure reason. CSV import does not accept image paths. The mobile form previews the parsed count and asks for confirmation before the single batch request.
-
 - [ ] **Step 4: Verify and commit**
 
 ```bash
-pnpm exec vitest run src/views/dashboard/BlacklistPage.mobile.test.ts src/components/blacklist/BlacklistTable.test.ts src/utils/blacklistCsv.test.ts src/api/blacklist.test.ts
-pnpm --filter yangshao-server exec vitest run src/blacklist/blacklist.service.test.ts
-git add src/components/blacklist src/views/dashboard/BlacklistPage.vue src/views/dashboard/BlacklistPage.mobile.test.ts src/utils/blacklistCsv.ts src/utils/blacklistCsv.test.ts src/api/blacklist.ts src/api/blacklist.test.ts src/stores/blacklist.ts src/types/blacklist.ts server/src/blacklist/blacklist.controller.ts server/src/blacklist/blacklist.service.ts server/src/blacklist/blacklist.service.test.ts
+pnpm exec vitest run src/views/dashboard/BlacklistPage.mobile.test.ts src/components/blacklist/BlacklistTable.test.ts
+git add src/components/blacklist src/views/dashboard/BlacklistPage.vue src/views/dashboard/BlacklistPage.mobile.test.ts
 git commit -m "feat: adapt blacklist for mobile"
 ```
 
@@ -1127,7 +1111,7 @@ git commit -m "feat: adapt blacklist for mobile"
 - Modify: `src/components/finance/FinanceMonthTable.vue`
 
 **Interfaces:**
-- Mobile entry form emits `submit: [FinancePayload[]]` exactly like `FinanceEntryForm`.
+- Mobile entry form receives `save: (payloads: FinancePayload[]) => Promise<void>`; desktop keeps the existing event contract and visual behavior.
 - Mobile list props/events mirror `FinanceMonthTable`: `month`, `entries`, `loading`, `deletingId`, `monthChange`, `deleteRequest`.
 - Existing `useFinanceStore()` remains the only mutation owner.
 
@@ -1153,13 +1137,13 @@ Expected: FAIL because mobile finance form/list components do not exist.
 - [ ] **Step 3: Implement mobile components using existing upload/validation rules**
 
 ```vue
-<MobileFinanceEntryForm v-if="isMobileLayout" @submit="handleCreate" />
+<MobileFinanceEntryForm v-if="isMobileLayout" :save="handleCreate" />
 <FinanceEntryForm v-else @submit="handleCreate" />
 <MobileFinanceEntryList v-if="isMobileLayout" v-bind="monthTableBindings" @delete-request="handleDeleteRequest" />
 <FinanceMonthTable v-else v-bind="monthTableBindings" @delete-request="handleDeleteRequest" />
 ```
 
-Extract shared draft helpers (`createRow`, `validateRows`, `buildPayloads`) into `src/components/finance/useFinanceEntryDraft.ts`; both desktop and mobile forms consume it. `useFinanceEntryDraft.test.ts` must prove both views produce identical `FinancePayload[]`, upload the same local files, retain rows on rejection and reset only after the parent submission resolves. Do not duplicate `uploadImages` behavior or change Store/API calls.
+Extract shared draft helpers (`createRow`, `validateRows`, `buildPayloads`) into `src/components/finance/useFinanceEntryDraft.ts`; both desktop and mobile forms consume it. `useFinanceEntryDraft.test.ts` must prove both views produce identical `FinancePayload[]` and upload the same local files. The mobile form awaits `save(payloads)`, retains rows on rejection and resets only after resolution; desktop keeps its current event/reset behavior. Do not duplicate `uploadImages` behavior or change Store/API calls.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -1634,7 +1618,7 @@ const routes = [
 expect(coveredMobileRoutes).toEqual(routes)
 ```
 
-For every route assert: one mobile page root at mobile width, no desktop table/editor mounted where a mobile alternate exists, no duplicate editable form, correct secondary group/current item, and no secondary rail for reports/customer/blacklist. Add desktop-width assertions that current desktop roots remain mounted.
+Derive `coveredMobileRoutes` from `appRouter.getRoutes()` after excluding redirects and login; do not hard-code a second coverage list that merely repeats `routes`. For every route assert: one mobile page root at mobile width, no desktop table/editor mounted where a mobile alternate exists, no duplicate editable form, correct secondary group/current item, and no secondary rail for reports/customer/blacklist. Add desktop-width assertions that current desktop roots remain mounted. Whole-page horizontal overflow is verified at the real browser sizes in Step 6, not with JSDOM layout metrics.
 
 Also lock the existing access-feature mapping:
 
