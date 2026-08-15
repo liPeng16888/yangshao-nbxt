@@ -58,7 +58,7 @@
                 @keydown.enter.prevent="focusNextField"
               />
             </label>
-            <label class="mobile-field mobile-field--wide">
+            <label class="mobile-field">
               <span>样品名称</span>
               <input
                 data-mobile-field="sampleNumber"
@@ -147,7 +147,7 @@
               <span>备注</span>
               <textarea
                 data-mobile-field="note"
-                rows="2"
+                rows="1"
                 :value="block.inputs.note || ''"
                 :disabled="isDisabled(block)"
                 enterkeyhint="done"
@@ -173,29 +173,46 @@
             {{ getSampleCalculationBlockMessage(block) }}后录入检测数据
           </div>
 
-          <section v-for="group in mobileFieldGroups" :key="group.key" class="mobile-form-section">
-            <h3>{{ group.label }}</h3>
-            <div class="mobile-field-grid">
-              <label v-for="field in group.fields" :key="field.key" class="mobile-field">
-                <span>{{ field.label }}</span>
-                <input
-                  :data-mobile-field="field.key"
-                  type="text"
-                  inputmode="decimal"
-                  :value="formatInput(block.inputs[field.key])"
-                  :disabled="isDisabled(block) || isSampleCalculationBlocked(block)"
-                  enterkeyhint="next"
-                  @focus="rememberField(block, field.key)"
-                  @input="updateNumber(block, field.key, $event)"
-                  @blur="commitNumber(block, field.key, $event)"
-                  @keydown.enter.prevent="focusNextField"
-                />
-              </label>
-            </div>
-            <div class="mobile-result-grid">
-              <div v-for="result in group.results" :key="result.label" class="mobile-result">
-                <span>{{ result.label }}</span>
-                <strong>{{ formatResult(getResultValue(block, result)) }}</strong>
+          <section
+            v-for="group in mobileFieldGroups"
+            :key="group.key"
+            class="mobile-form-section mobile-calculation-group"
+            :class="{ 'mobile-calculation-group--expanded': isGroupExpanded(block.id, group.key) }"
+            :data-mobile-group="group.key"
+          >
+            <button
+              class="mobile-group-toggle"
+              type="button"
+              :aria-expanded="isGroupExpanded(block.id, group.key)"
+              @click="toggleGroup(block.id, group.key)"
+            >
+              <strong>{{ group.label }}</strong>
+              <small>{{ isGroupExpanded(block.id, group.key) ? '收起' : '展开' }}</small>
+              <span aria-hidden="true">{{ isGroupExpanded(block.id, group.key) ? '⌃' : '⌄' }}</span>
+            </button>
+            <div v-if="isGroupExpanded(block.id, group.key)" class="mobile-calculation-group__content">
+              <div class="mobile-field-grid">
+                <label v-for="field in group.fields" :key="field.key" class="mobile-field">
+                  <span>{{ field.label }}</span>
+                  <input
+                    :data-mobile-field="field.key"
+                    type="text"
+                    inputmode="decimal"
+                    :value="formatInput(block.inputs[field.key])"
+                    :disabled="isDisabled(block) || isSampleCalculationBlocked(block)"
+                    enterkeyhint="next"
+                    @focus="rememberField(block, field.key)"
+                    @input="updateNumber(block, field.key, $event)"
+                    @blur="commitNumber(block, field.key, $event)"
+                    @keydown.enter.prevent="focusNextField"
+                  />
+                </label>
+              </div>
+              <div class="mobile-result-grid">
+                <div v-for="result in group.results" :key="result.label" class="mobile-result">
+                  <span>{{ result.label }}</span>
+                  <strong>{{ formatResult(getResultValue(block, result)) }}</strong>
+                </div>
               </div>
             </div>
           </section>
@@ -247,23 +264,33 @@ const mobileFieldGroups: MobileFieldGroup[] = [
     label: '金属元素',
     fields: [
       { key: 'ironRaw', label: '铁' }, { key: 'siliconRaw', label: '硅' }, { key: 'siliconAdjust', label: '硅调整数' },
-      { key: 'aluminumRaw', label: '铝' }, { key: 'aluminumAdjust', label: '铝调整数' }, { key: 'sulfur', label: '硫' }
+      { key: 'aluminumRaw', label: '铝' }, { key: 'aluminumAdjust', label: '铝调整数' }
     ],
     results: [
       { label: '铁结果', source: 'result', key: 'iron' }, { label: '硅结果', source: 'result', key: 'silicon' },
       { label: '铝结果', source: 'result', key: 'aluminum' }, { label: '铝硅比', source: 'result', key: 'aluminumSiliconRatio' },
-      { label: '合量', source: 'result', key: 'total' }, { label: '硫', source: 'input', key: 'sulfur' }
+      { label: '合量', source: 'result', key: 'total' }
     ]
   },
   {
     key: 'density',
     label: '比重 / 白度',
     fields: [
-      { key: 'densityRaw', label: '比重' }, { key: 'whiteness', label: '白度' }, { key: 'calciumRaw', label: '钙' },
-      { key: 'magnesiumRaw', label: '镁' }, { key: 'carbon', label: '碳' }, { key: 'titaniumRaw', label: '钛' }
+      { key: 'densityRaw', label: '比重' }, { key: 'whiteness', label: '白度' }
     ],
     results: [
-      { label: '比重结果', source: 'result', key: 'density' }, { label: '白度', source: 'input', key: 'whiteness' },
+      { label: '比重结果', source: 'result', key: 'density' }, { label: '白度', source: 'input', key: 'whiteness' }
+    ]
+  },
+  {
+    key: 'otherElements',
+    label: '其他元素',
+    fields: [
+      { key: 'sulfur', label: '硫' }, { key: 'calciumRaw', label: '钙' }, { key: 'magnesiumRaw', label: '镁' },
+      { key: 'carbon', label: '碳' }, { key: 'titaniumRaw', label: '钛' }
+    ],
+    results: [
+      { label: '硫', source: 'input', key: 'sulfur' },
       { label: '钙结果', source: 'result', key: 'calcium' }, { label: '镁结果', source: 'result', key: 'magnesium' },
       { label: '碳', source: 'input', key: 'carbon' }, { label: '钛结果', source: 'result', key: 'titanium' }
     ]
@@ -309,6 +336,7 @@ const emit = defineEmits<{
 
 const initiallyExpandedBlockId = props.highlightBlockId || props.blocks[0]?.id || ''
 const expandedBlockIds = ref(new Set(initiallyExpandedBlockId ? [initiallyExpandedBlockId] : []))
+const expandedGroupKeysByBlock = ref(new Map<string, Set<string>>())
 const focusedFieldValues = new Map<string, unknown>()
 
 watch(
@@ -325,6 +353,8 @@ watch(
     const allowedIds = new Set(blockIds)
     const nextExpandedIds = new Set([...expandedBlockIds.value].filter((blockId) => allowedIds.has(blockId)))
     if (nextExpandedIds.size !== expandedBlockIds.value.size) expandedBlockIds.value = nextExpandedIds
+    const nextExpandedGroups = new Map([...expandedGroupKeysByBlock.value].filter(([blockId]) => allowedIds.has(blockId)))
+    if (nextExpandedGroups.size !== expandedGroupKeysByBlock.value.size) expandedGroupKeysByBlock.value = nextExpandedGroups
   }
 )
 
@@ -339,6 +369,7 @@ function toggleBlock(blockId: string) {
     expandedBlockIds.value = nextExpandedIds
     return
   }
+  resetGroups(blockId)
   nextExpandedIds.add(blockId)
   expandedBlockIds.value = nextExpandedIds
   void scrollToBlock(blockId)
@@ -346,9 +377,31 @@ function toggleBlock(blockId: string) {
 
 function expandBlock(blockId: string) {
   if (!expandedBlockIds.value.has(blockId)) {
+    resetGroups(blockId)
     expandedBlockIds.value = new Set([...expandedBlockIds.value, blockId])
   }
   void scrollToBlock(blockId)
+}
+
+function isGroupExpanded(blockId: string, groupKey: string) {
+  return expandedGroupKeysByBlock.value.get(blockId)?.has(groupKey) ?? false
+}
+
+function toggleGroup(blockId: string, groupKey: string) {
+  const nextExpandedGroups = new Map(expandedGroupKeysByBlock.value)
+  const blockGroupKeys = new Set(nextExpandedGroups.get(blockId) || [])
+  if (blockGroupKeys.has(groupKey)) blockGroupKeys.delete(groupKey)
+  else blockGroupKeys.add(groupKey)
+  if (blockGroupKeys.size) nextExpandedGroups.set(blockId, blockGroupKeys)
+  else nextExpandedGroups.delete(blockId)
+  expandedGroupKeysByBlock.value = nextExpandedGroups
+}
+
+function resetGroups(blockId: string) {
+  if (!expandedGroupKeysByBlock.value.has(blockId)) return
+  const nextExpandedGroups = new Map(expandedGroupKeysByBlock.value)
+  nextExpandedGroups.delete(blockId)
+  expandedGroupKeysByBlock.value = nextExpandedGroups
 }
 
 function isDisabled(block: SampleBlock) {
@@ -416,6 +469,7 @@ function saveAndOpenNext(block: SampleBlock) {
   if (!nextBlock) return
   const nextExpandedIds = new Set(expandedBlockIds.value)
   nextExpandedIds.delete(block.id)
+  resetGroups(nextBlock.id)
   nextExpandedIds.add(nextBlock.id)
   expandedBlockIds.value = nextExpandedIds
   void scrollToBlock(nextBlock.id)
@@ -580,15 +634,15 @@ async function scrollToBlock(blockId: string) {
 
 .mobile-sample-card__body {
   display: grid;
-  gap: 12px;
-  padding: 12px;
+  gap: 8px;
+  padding: 8px;
   border-top: 1px solid #e2e8f0;
 }
 
 .mobile-form-section {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 11px;
@@ -604,10 +658,65 @@ async function scrollToBlock(blockId: string) {
   background: #ffffff;
 }
 
+.mobile-calculation-group {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.mobile-calculation-group--expanded {
+  background: #f6f9fc;
+  border-color: #cbd9e7;
+}
+
+.mobile-group-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 18px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 10px;
+  color: #183657;
+  background: transparent;
+  border: 0;
+  text-align: left;
+
+  strong {
+    font-size: 15px;
+  }
+
+  small {
+    color: #6b7f93;
+    font-size: 12px;
+  }
+
+  span {
+    color: #6b7f93;
+    text-align: center;
+  }
+
+  &:focus-visible {
+    outline: 3px solid rgba(63, 111, 153, 0.2);
+    outline-offset: -3px;
+  }
+}
+
+.mobile-calculation-group__content {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+  border-top: 1px solid #e5ebf1;
+
+  > .mobile-field-grid {
+    padding-top: 8px;
+  }
+}
+
 .mobile-field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .mobile-field-grid--identity {
@@ -617,7 +726,7 @@ async function scrollToBlock(blockId: string) {
 .mobile-field {
   display: grid;
   align-content: start;
-  gap: 5px;
+  gap: 3px;
   min-width: 0;
 
   > span {

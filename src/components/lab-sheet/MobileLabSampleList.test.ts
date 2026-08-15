@@ -53,23 +53,63 @@ function mountList(overrides: Record<string, unknown> = {}) {
 }
 
 describe('MobileLabSampleList', () => {
-  it('shows exactly one expanded card with all four field groups and shared formula results', () => {
+  it('opens one sample with all five calculation groups collapsed by default', async () => {
     const wrapper = mountList()
 
     expect(wrapper.findAll('.mobile-sample-card--expanded')).toHaveLength(1)
     expect(wrapper.get('.mobile-sample-card--expanded').attributes('data-block-id')).toBe('block-1')
-    expect(wrapper.text()).toContain('金属元素')
-    expect(wrapper.text()).toContain('比重 / 白度')
-    expect(wrapper.text()).toContain('水份')
-    expect(wrapper.text()).toContain('灼烧')
+    expect(wrapper.findAll('.mobile-group-toggle').map((toggle) => toggle.text())).toEqual([
+      expect.stringContaining('金属元素'),
+      expect.stringContaining('比重 / 白度'),
+      expect.stringContaining('其他元素'),
+      expect.stringContaining('水份'),
+      expect.stringContaining('灼烧')
+    ])
+    expect(wrapper.findAll('.mobile-group-toggle').every((toggle) => toggle.attributes('aria-expanded') === 'false')).toBe(true)
+    expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(0)
+    expect(wrapper.find('[data-mobile-field="ironRaw"]').exists()).toBe(false)
+    expect(wrapper.find('[data-mobile-field="burnedCrucibleSample"]').exists()).toBe(false)
+
+    await getGroupToggle(wrapper, '金属元素').trigger('click')
+
     expect(wrapper.find('[data-mobile-field="ironRaw"]').attributes('inputmode')).toBe('decimal')
-    expect(wrapper.find('[data-mobile-field="burnedCrucibleSample"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('铝硅比')
     expect(wrapper.text()).toContain(calculateSampleResults(wrapper.props('blocks')[0].inputs, defaultLabParameters).total.toFixed(2))
   })
 
+  it('places sulfur, calcium, magnesium, carbon and titanium in an independent element group', async () => {
+    const wrapper = mountList()
+
+    await getGroupToggle(wrapper, '其他元素').trigger('click')
+
+    expect(wrapper.get('[data-mobile-group="otherElements"]').findAll('input[data-mobile-field]').map((input) => input.attributes('data-mobile-field'))).toEqual([
+      'sulfur', 'calciumRaw', 'magnesiumRaw', 'carbon', 'titaniumRaw'
+    ])
+
+    await getGroupToggle(wrapper, '金属元素').trigger('click')
+
+    expect(wrapper.get('[data-mobile-group="metal"]').findAll('input[data-mobile-field]').map((input) => input.attributes('data-mobile-field'))).toEqual([
+      'ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust'
+    ])
+  })
+
+  it('toggles calculation groups independently and resets them after reopening the sample', async () => {
+    const wrapper = mountList()
+
+    await getGroupToggle(wrapper, '金属元素').trigger('click')
+    await getGroupToggle(wrapper, '比重 / 白度').trigger('click')
+    expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(2)
+
+    await wrapper.findAll('.mobile-sample-card__toggle')[0].trigger('click')
+    await wrapper.findAll('.mobile-sample-card__toggle')[0].trigger('click')
+
+    expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(0)
+    expect(wrapper.findAll('.mobile-group-toggle').every((toggle) => toggle.attributes('aria-expanded') === 'false')).toBe(true)
+  })
+
   it('emits parsed updates and commits, then saves and expands the next sample', async () => {
     const wrapper = mountList()
+    await getGroupToggle(wrapper, '金属元素').trigger('click')
     const iron = wrapper.get('input[data-mobile-field="ironRaw"]')
 
     await iron.trigger('focus')
@@ -84,6 +124,7 @@ describe('MobileLabSampleList', () => {
 
     expect(wrapper.emitted('saveNext')).toContainEqual(['block-1'])
     expect(wrapper.get('.mobile-sample-card--expanded').attributes('data-block-id')).toBe('block-2')
+    expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(0)
   })
 
   it('opens and highlights a route-targeted sample and keeps readonly history disabled', () => {
@@ -107,6 +148,7 @@ describe('MobileLabSampleList', () => {
     expect(wrapper.find('[data-mobile-field="sampleNumber"]').exists()).toBe(true)
 
     await wrapper.setProps({ canViewCompletedSensitiveData: true })
+    await getGroupToggle(wrapper, '金属元素').trigger('click')
     expect(wrapper.find('[data-mobile-field="ironRaw"]').exists()).toBe(true)
     expect(wrapper.find('[data-mobile-field="price"]').exists()).toBe(true)
   })
@@ -147,4 +189,10 @@ describe('MobileLabSampleList', () => {
 
 function expandedBlockIds(wrapper: ReturnType<typeof mountList>) {
   return wrapper.findAll('.mobile-sample-card--expanded').map((card) => card.attributes('data-block-id'))
+}
+
+function getGroupToggle(wrapper: ReturnType<typeof mountList>, label: string) {
+  const toggle = wrapper.findAll('.mobile-group-toggle').find((button) => button.text().includes(label))
+  if (!toggle) throw new Error(`Missing mobile group toggle: ${label}`)
+  return toggle
 }
