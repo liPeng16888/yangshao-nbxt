@@ -68,6 +68,17 @@ pnpm exec vitest run src/views/dashboard/BlacklistPage.mobile.test.ts -t "enforc
 
 The root cause was external `fileList` clearing combined with forgotten ownership: retained ElUpload instances neither unmounted nor revoke files removed through a parent model replacement.
 
+### Independent review fix round 4 RED
+
+Real Element Plus lifecycle tests opened legacy records containing an unowned stored `blob:` string and then exercised the actual picture-card delete control, page unmount, and an in-flight mobile-to-desktop layout swap:
+
+```bash
+pnpm exec vitest run src/views/dashboard/BlacklistPage.mobile.test.ts -t "legacy unowned blob"
+# 3 failed: Element Plus revoked blob:legacy-remove, blob:legacy-unmount, and blob:legacy-layout
+```
+
+Tracing confirmed the trust-boundary defect: `openSupplement` copied every server `row.images` value into ElUpload, whose own lifecycle correctly revokes every `blob:` URL without knowing the application's ownership registry.
+
 ### GREEN
 
 Focused command:
@@ -89,7 +100,7 @@ Latest review-fix focused frontend result:
 
 ```bash
 pnpm exec vitest run src/views/dashboard/BlacklistPage.mobile.test.ts src/components/blacklist/BlacklistTable.test.ts src/components/blacklist/BlacklistUploadForm.test.ts src/components/blacklist/BlacklistImagePreview.test.ts src/stores/blacklist.test.ts src/utils/validators.test.ts src/api/upload.test.ts vite-proxy.test.ts
-# 8 files, 50 tests passed
+# 8 files, 53 tests passed
 ```
 
 Review-fix focused server result:
@@ -108,7 +119,7 @@ pnpm --dir server exec vitest run src/blacklist/blacklist.service.test.ts src/bl
 - Loading lifecycle: per-consumer AbortSignals replace global cancellation; search ordering remains latest-wins, while a mutation epoch prevents an older search from resurrecting a deleted or pre-supplement record. Unmount aborts only this page and prevents late error/UI writes.
 - Hit route: string-only `?hit=` forces an unfiltered load, uses exact record IDs and element refs rather than selector interpolation, expands/highlights/scrolls once after render, handles route reuse/layout change/clear, prunes cached refs, and safely ignores missing or injection-like values.
 - Create: mobile and desktop call and await `uploadImages` and then `save(payload)`; duplicate submit is locked; rejection retains all fields and raw Files, with successful upload URLs cached for retry; unchanged success alone clears and revokes owned previews. KeepAlive preserves an in-flight mobile create draft across layout changes.
-- Images: PNG/JPEG/WebP/GIF only, 5 MB per file, maximum two record images, MIME-derived server extensions, 5 MB Multer and service defenses, and persistent `/uploads/...` URLs. Absolute API bases resolve server URLs to their API origin; relative development uses the added `/uploads` proxy. Real Element Plus `handleStart` previews are registered from the raw `File`, retained for upload retry, and revoked exactly once on removal/reset/unmount. Supplement reset first clears the retained ElUpload instance's internal list and then explicitly revokes page-owned URLs, while removal/page-unmount remain Element-owned. Persistent URLs and unowned blob strings are never revoked or trusted as stored previews. Mock uploads use persistent raster data URLs.
+- Images: PNG/JPEG/WebP/GIF only, 5 MB per file, maximum two record images, MIME-derived server extensions, 5 MB Multer and service defenses, and persistent `/uploads/...` URLs. Absolute API bases resolve server URLs to their API origin; relative development uses the added `/uploads` proxy. Real Element Plus `handleStart` previews are registered from the raw `File`, retained for upload retry, and revoked exactly once on removal/reset/unmount. Supplement reset first clears the retained ElUpload instance's internal list and then explicitly revokes page-owned URLs, while removal/page-unmount remain Element-owned. The `row.images` trust boundary accepts safe HTTP(S), relative server, and raster data URLs but drops stored `blob:` values before ElUpload, payload persistence, removal, unmount, or layout swap. App-owned raw File previews remain supported. Mock uploads use persistent raster data URLs.
 - Accessibility: desktop create, mobile create, and mobile/desktop supplement upload triggers contain visually hidden label text inside the actual focusable `.el-upload[role="button"]`; the decorative plus icon is hidden from assistive technology.
 - Money: both create and supplement reject negative, non-finite, and over-two-decimal amounts in the client and server; `0`, two-decimal values, and nullable clearing retain the established contract.
 - Supplement: mobile uses forced `MobileFullscreenDialog`; desktop retains `el-dialog`; both share `supplementForm`, validation, Store update, confirmation text, image state, and permission. Fields/uploads are locked while saving; failed saves and layout switches retain every field/raw image; each layout gets a fresh valid owned preview; retry reuses uploaded URLs; unchanged success or cancel resets; cleared money becomes `null`; duplicate saves remain tied to the captured record ID.
@@ -118,7 +129,7 @@ pnpm --dir server exec vitest run src/blacklist/blacklist.service.test.ts src/bl
 
 ```bash
 pnpm test
-# 113 files passed; 1164 tests passed
+# 113 files passed; 1167 tests passed
 
 pnpm --dir server test
 # 28 files passed; 352 tests passed

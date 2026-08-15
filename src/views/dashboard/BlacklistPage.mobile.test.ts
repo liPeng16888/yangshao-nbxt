@@ -113,6 +113,12 @@ function card(wrapper: ReturnType<typeof mountPage>, id: string) {
   return found
 }
 
+async function openMobileSupplement(wrapper: ReturnType<typeof mountPage>, row: (typeof records)[number]) {
+  wrapper.findComponent({ name: 'MobileBlacklistSection' }).vm.$emit('supplement', row)
+  await nextTick()
+  return wrapper.get('.mobile-fullscreen-dialog')
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -570,6 +576,62 @@ describe('BlacklistPage mobile', () => {
     wrapper.unmount()
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(3)
     expect(URL.revokeObjectURL).toHaveBeenLastCalledWith('blob:desktop-supplement-unmount')
+  })
+
+  it('does not give a legacy unowned blob to Element Plus when removing a persistent supplement image', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+    const dialog = await openMobileSupplement(wrapper, {
+      ...records[0],
+      images: ['blob:legacy-remove', '/uploads/persistent.png']
+    })
+
+    expect(dialog.findComponent(ElUpload).props('fileList')).toEqual([
+      expect.objectContaining({ url: '/uploads/persistent.png' })
+    ])
+    await dialog.get('.el-upload-list__item-delete').trigger('click')
+    await nextTick()
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+    expect(dialog.findComponent(ElUpload).props('fileList')).toEqual([])
+  })
+
+  it('does not give a legacy unowned blob to Element Plus before page unmount', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+    await openMobileSupplement(wrapper, {
+      ...records[0],
+      images: ['blob:legacy-unmount', 'https://example.com/persistent.png']
+    })
+
+    wrapper.unmount()
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('drops a legacy unowned blob before an in-flight supplement layout swap while preserving persistent images', async () => {
+    const request = deferred<(typeof records)[number]>()
+    mocks.updateBlacklist.mockImplementationOnce(() => request.promise)
+    const wrapper = mountPage()
+    await flushPromises()
+    const dialog = await openMobileSupplement(wrapper, {
+      ...records[0],
+      images: ['/uploads/server.png', 'blob:legacy-layout']
+    })
+
+    await dialog.get('.mobile-fullscreen-dialog__confirm').trigger('click')
+    await nextTick()
+    mocks.mobileLayout.value = false
+    await flushPromises()
+
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+    expect(mocks.updateBlacklist).toHaveBeenCalledWith('blacklist-own', expect.objectContaining({
+      images: ['/uploads/server.png']
+    }))
+    expect(wrapper.get('.dialog-stub').findComponent(ElUpload).props('fileList')).toEqual([
+      expect.objectContaining({ url: '/uploads/server.png' })
+    ])
+
+    request.reject(new Error('offline'))
+    await flushPromises()
   })
 
   it('retains an in-flight create draft and raw image when the layout changes before rejection', async () => {

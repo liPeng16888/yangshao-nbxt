@@ -31,3 +31,20 @@ export function revokeOwnedImagePreview(url: string) {
 export function isOwnedImagePreview(url: string) {
   return ownedBlobUrls.has(url)
 }
+
+export function isSafeStoredBlacklistImageUrl(value: string) {
+  const source = value.trim()
+  if (!source || source.startsWith('blob:')) return false
+  if (/^data:image\/(?:png|jpe?g|webp|gif);base64,/i.test(source)) return true
+  try {
+    const parsed = new URL(source, 'https://local.invalid')
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+export function isSafeBlacklistImageUrl(value: string) {
+  const source = value.trim()
+  return source.startsWith('blob:') ? isOwnedImagePreview(source) : isSafeStoredBlacklistImageUrl(source)
+}

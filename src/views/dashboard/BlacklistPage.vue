@@ -86,6 +86,7 @@ import type { BlacklistPayload, BlacklistRecord } from '@/types/blacklist'
 import {
   createOwnedImagePreview,
   forgetOwnedImagePreview,
+  isSafeStoredBlacklistImageUrl,
   registerOwnedImagePreview,
   revokeOwnedImagePreview,
   validateBlacklistImage
@@ -183,12 +184,13 @@ async function handleDelete(id: string) {
 function openSupplement(row: BlacklistRecord) {
   if (supplementSaving.value) return
   resetSupplementForm()
+  const existingImages = (row.images || []).filter(isSafeStoredBlacklistImageUrl)
   supplementRecord.value = row
   Object.assign(supplementForm, {
     phone: row.phone || '', wechat: row.wechat || '', wechatNickname: row.wechatNickname || '', amount: row.amount ?? null,
-    images: [...(row.images || [])], other: row.other || '', note: row.note || ''
+    images: existingImages, other: row.other || '', note: row.note || ''
   })
-  supplementImageFiles.value = (row.images || []).map((url, index) => ({ name: `黑名单图片${index + 1}`, url }))
+  supplementImageFiles.value = existingImages.map((url, index) => ({ name: `黑名单图片${index + 1}`, url }))
   supplementVisible.value = true
 }
 
