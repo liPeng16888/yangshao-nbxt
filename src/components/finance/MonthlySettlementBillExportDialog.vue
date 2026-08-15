@@ -4,6 +4,8 @@
     title="导出本月详细费用"
     width="min(1180px, calc(100vw - 32px))"
     class="monthly-bill-export-dialog"
+    :class="{ 'monthly-bill-export-dialog--mobile': mobile }"
+    :fullscreen="mobile"
     @close="emit('close')"
   >
     <section class="bill-export-settings">
@@ -44,6 +46,12 @@
       :closable="false"
       show-icon
     />
+
+    <section v-if="mobilePreviewUrl" class="bill-mobile-preview" aria-live="polite">
+      <img data-testid="bill-mobile-image-preview" :src="mobilePreviewUrl" :alt="draft ? `${draft.title} PNG 预览` : '月结款账单 PNG 预览'" />
+      <p data-testid="bill-mobile-save-hint">长按保存图片</p>
+      <p v-if="mobileShareStatus" data-testid="bill-mobile-share-status" role="status">{{ mobileShareStatus }}</p>
+    </section>
 
     <section v-if="draft && tableLayout" class="monthly-bill-preview">
       <el-input
@@ -150,13 +158,13 @@
 
     <template #footer>
       <el-button @click="emit('close')">取消</el-button>
-      <el-button type="primary" :loading="exporting" @click="exportPng">保存为 PNG</el-button>
+      <el-button type="primary" :loading="exporting" @click="exportPng">{{ mobile ? '分享或保存 PNG' : '保存为 PNG' }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { MonthlySettlementDailyRow } from '@/types/financeBills'
 import type { MonthlyBillDraft, MonthlyBillEntry } from '@/types/monthlySettlementBill'
@@ -164,6 +172,7 @@ import {
   addMonthlyBillManualEntry,
   applyMonthlyBillElementPrice,
   createMonthlyBillDraft,
+  createMonthlyBillFilename,
   createMonthlyBillTableLayout,
   formatMonthlyBillDate,
   formatMonthlyBillMoney,
@@ -171,13 +180,16 @@ import {
   updateMonthlyBillEntry,
   validateMonthlyBillDraft
 } from '@/utils/monthlySettlementBill'
-import { downloadMonthlyBillAsPng } from '@/utils/monthlySettlementBillPng'
+import { createMonthlyBillPngBlob, downloadMonthlyBillAsPng } from '@/utils/monthlySettlementBillPng'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   visible: boolean
   month: string
   rows: MonthlySettlementDailyRow[]
-}>()
+  mobile?: boolean
+}>(), {
+  mobile: false
+})
 
 const emit = defineEmits<{
   close: []
@@ -187,6 +199,10 @@ const selectedCustomer = ref('')
 const draft = ref<MonthlyBillDraft | null>(null)
 const exporting = ref(false)
 const emptyElementDrafts = ref<Record<string, string>>({})
+const mobilePreviewUrl = ref('')
+const mobileShareStatus = ref('')
+let exportVersion = 0
+let disposed = false
 
 const customerOptions = computed(() => {
   const customers = new Map<string, string>()
@@ -219,16 +235,44 @@ const priceElements = computed(() => {
 
 watch(() => props.visible, (visible) => {
   if (visible) resetDraft()
+  else invalidateExportState()
+})
+
+watch(() => props.mobile, () => invalidateExportState())
+
+onBeforeUnmount(() => {
+  disposed = true
+  invalidateExportState()
 })
 
 function resetDraft() {
+  invalidateExportState()
   selectedCustomer.value = ''
   draft.value = null
   exporting.value = false
   emptyElementDrafts.value = {}
 }
 
+function invalidateExportState() {
+  exportVersion += 1
+  exporting.value = false
+  mobileShareStatus.value = ''
+  releaseMobilePreview()
+}
+
+function releaseMobilePreview() {
+  const url = mobilePreviewUrl.value
+  if (!url) return
+  mobilePreviewUrl.value = ''
+  try {
+    URL.revokeObjectURL(url)
+  } catch {
+    // Revocation is best effort, but ownership is cleared before attempting it.
+  }
+}
+
 function selectCustomer(customer: string) {
+  invalidateExportState()
   const selected = customerOptions.value.find((item) => item.value === customer)
   selectedCustomer.value = customer
   draft.value = selected
@@ -238,16 +282,19 @@ function selectCustomer(customer: string) {
 
 function updateElementPrice(elementKey: string, unitPrice: number | null | undefined) {
   if (!draft.value) return
+  invalidateExportState()
   draft.value = applyMonthlyBillElementPrice(draft.value, elementKey, unitPrice ?? null)
 }
 
 function updateTitle(title: string) {
   if (!draft.value) return
+  invalidateExportState()
   draft.value = { ...draft.value, title }
 }
 
 function updateDateGroup(currentDate: string, nextDate: string) {
   if (!draft.value) return
+  invalidateExportState()
   const entries = draft.value.entries.map((entry) => (
     entry.date === currentDate ? { ...entry, date: nextDate } : { ...entry }
   ))
@@ -259,6 +306,7 @@ function updateEntry(
   patch: Partial<Pick<MonthlyBillEntry, 'date' | 'elementLabel' | 'quantity' | 'unitPrice'>>
 ) {
   if (!draft.value) return
+  invalidateExportState()
   draft.value = updateMonthlyBillEntry(draft.value, entryId, patch)
 }
 
@@ -278,6 +326,7 @@ function commitEmptyEntry(rowId: string, date: string, groupIndex: number) {
   const key = getEmptyCellKey(rowId, groupIndex)
   const elementLabel = (emptyElementDrafts.value[key] || '').trim()
   if (!elementLabel) return
+  invalidateExportState()
   draft.value = addMonthlyBillManualEntry(draft.value, date, elementLabel, 0)
   const nextDrafts = { ...emptyElementDrafts.value }
   delete nextDrafts[key]
@@ -302,24 +351,124 @@ async function exportPng() {
   }
 
   exporting.value = true
+  const operation = ++exportVersion
   try {
+    if (props.mobile) {
+      await exportMobilePng(operation, draft.value)
+      return
+    }
     const exported = await downloadMonthlyBillAsPng(draft.value)
+    if (!isExportCurrent(operation, false)) return
     if (exported) {
       ElMessage.success('账单图片已保存')
     } else {
       ElMessage.error('账单图片生成失败，请重试')
     }
   } catch {
-    ElMessage.error('账单图片生成失败，请重试')
+    if (isExportCurrent(operation, props.mobile)) ElMessage.error('账单图片生成失败，请重试')
   } finally {
-    exporting.value = false
+    if (operation === exportVersion) exporting.value = false
   }
+}
+
+async function exportMobilePng(operation: number, currentDraft: MonthlyBillDraft) {
+  mobileShareStatus.value = ''
+  const blob = await createMonthlyBillPngBlob(currentDraft)
+  if (!isExportCurrent(operation, true)) return
+  if (!blob) {
+    ElMessage.error('账单图片生成失败，请重试')
+    return
+  }
+
+  releaseMobilePreview()
+  try {
+    mobilePreviewUrl.value = URL.createObjectURL(blob)
+  } catch {
+    ElMessage.error('账单图片预览生成失败，请重试')
+    return
+  }
+
+  const file = new File([blob], createMonthlyBillFilename(currentDraft), { type: 'image/png' })
+  if (!supportsFileShare(file)) {
+    mobileShareStatus.value = '当前设备不支持系统文件分享，请长按保存图片'
+    return
+  }
+
+  try {
+    await navigator.share({ files: [file], title: currentDraft.title })
+    if (isExportCurrent(operation, true)) mobileShareStatus.value = '系统分享已完成，图片预览仍可长按保存'
+  } catch (error) {
+    if (!isExportCurrent(operation, true)) return
+    mobileShareStatus.value = isShareCancellation(error)
+      ? '已取消系统分享，图片预览仍可长按保存'
+      : '系统分享失败，图片预览仍可长按保存'
+  }
+}
+
+function supportsFileShare(file: File) {
+  if (typeof navigator === 'undefined' || typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function') return false
+  try {
+    return navigator.canShare({ files: [file] })
+  } catch {
+    return false
+  }
+}
+
+function isShareCancellation(error: unknown) {
+  return error instanceof DOMException
+    ? error.name === 'AbortError'
+    : Boolean(error && typeof error === 'object' && 'name' in error && error.name === 'AbortError')
+}
+
+function isExportCurrent(operation: number, mobile: boolean) {
+  return !disposed && operation === exportVersion && props.visible && props.mobile === mobile
 }
 </script>
 
 <style scoped lang="scss">
 :deep(.monthly-bill-export-dialog) {
   max-width: calc(100vw - 32px);
+}
+
+:global(.monthly-bill-export-dialog--mobile) {
+  box-sizing: border-box;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100dvh;
+  max-height: none;
+  margin: 0 !important;
+  padding-top: max(16px, env(safe-area-inset-top));
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  border-radius: 0 !important;
+}
+
+:global(.monthly-bill-export-dialog--mobile .el-dialog__body) {
+  min-height: 0;
+  overflow: auto;
+}
+
+:global(.monthly-bill-export-dialog--mobile .el-select__wrapper),
+:global(.monthly-bill-export-dialog--mobile .el-input__wrapper),
+:global(.monthly-bill-export-dialog--mobile .el-input__inner),
+:global(.monthly-bill-export-dialog--mobile .el-button),
+:global(.monthly-bill-export-dialog--mobile .el-dialog__headerbtn) {
+  min-height: 44px !important;
+}
+
+:global(.monthly-bill-export-dialog--mobile .bill-export-settings),
+:global(.monthly-bill-export-dialog--mobile .bill-price-grid),
+:global(.monthly-bill-export-dialog--mobile .bill-price-grid label) {
+  min-width: 0;
+}
+
+:global(.monthly-bill-export-dialog--mobile .bill-export-settings .el-select),
+:global(.monthly-bill-export-dialog--mobile .bill-price-grid .el-input-number) {
+  width: 100%;
+  max-width: 100%;
+}
+
+:global(.monthly-bill-export-dialog--mobile .bill-price-grid) {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .bill-export-settings {
@@ -346,6 +495,30 @@ async function exportPng() {
 
 .bill-export-status {
   margin-top: 16px;
+}
+
+.bill-mobile-preview {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #d8e1eb;
+  border-radius: 10px;
+  text-align: center;
+}
+
+.bill-mobile-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 52dvh;
+  object-fit: contain;
+}
+
+.bill-mobile-preview p {
+  margin: 0;
 }
 
 .monthly-bill-preview {

@@ -11,6 +11,7 @@ const store = reactive({
   monthlySettlementMonth: '2026-08',
   monthlySettlementReport: null as MonthlySettlementReport | null,
   loadMonthlySettlementReport: vi.fn(),
+  cancelMonthlySettlementLoads: vi.fn(),
   saveMonthlySettlementRow: vi.fn()
 })
 
@@ -111,7 +112,7 @@ function mountPageWithReport(input: {
 }
 
 beforeEach(() => {
-  store.loadMonthlySettlementReport.mockReset()
+  store.loadMonthlySettlementReport.mockReset().mockResolvedValue(true)
   store.saveMonthlySettlementRow.mockReset()
 })
 

@@ -54,9 +54,11 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   const prepaidDeletingId = ref('')
   let incomeLoadVersion = 0
   let unsettledLoadVersion = 0
+  let monthlySettlementLoadVersion = 0
   let unsettledMutationVersion = 0
   let activeIncomeLoad: ActiveLoad | null = null
   let activeUnsettledLoad: ActiveLoad | null = null
+  let activeMonthlySettlementLoad: ActiveLoad | null = null
 
   async function loadIncomeReport(nextMonth = month.value, options: ScopedLoadOptions = {}) {
     activeIncomeLoad?.controller.abort()
@@ -130,14 +132,38 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     loading.value = false
   }
 
-  async function loadMonthlySettlementReport(nextMonth = monthlySettlementMonth.value) {
+  async function loadMonthlySettlementReport(nextMonth = monthlySettlementMonth.value, options: ScopedLoadOptions = {}) {
+    activeMonthlySettlementLoad?.controller.abort()
+    const requestVersion = ++monthlySettlementLoadVersion
+    const activeLoad: ActiveLoad = {
+      controller: new AbortController(),
+      scope: options.scope ?? Symbol('finance-monthly-settlement-load')
+    }
+    activeMonthlySettlementLoad = activeLoad
     loading.value = true
     try {
+      const nextReport = await getMonthlySettlementReport(nextMonth, { signal: activeLoad.controller.signal })
+      if (requestVersion !== monthlySettlementLoadVersion || activeLoad.controller.signal.aborted) return false
       monthlySettlementMonth.value = nextMonth
-      monthlySettlementReport.value = await getMonthlySettlementReport(nextMonth)
+      monthlySettlementReport.value = nextReport
+      return true
+    } catch (error) {
+      if (requestVersion !== monthlySettlementLoadVersion || activeLoad.controller.signal.aborted) return false
+      throw error
     } finally {
-      loading.value = false
+      if (activeMonthlySettlementLoad === activeLoad) {
+        activeMonthlySettlementLoad = null
+        loading.value = false
+      }
     }
+  }
+
+  function cancelMonthlySettlementLoads(scope?: symbol) {
+    if (scope && activeMonthlySettlementLoad?.scope !== scope) return
+    activeMonthlySettlementLoad?.controller.abort()
+    activeMonthlySettlementLoad = null
+    monthlySettlementLoadVersion += 1
+    loading.value = false
   }
 
   async function settleRow(row: UnsettledSampleRow) {
@@ -275,6 +301,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     loadUnsettledRows,
     cancelUnsettledLoads,
     loadMonthlySettlementReport,
+    cancelMonthlySettlementLoads,
     settleRow,
     settleRows,
     saveMonthlySettlementRow,

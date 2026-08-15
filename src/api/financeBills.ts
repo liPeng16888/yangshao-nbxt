@@ -98,9 +98,11 @@ export async function markSamplesAsPaid(rows: UnsettledSampleRow[]): Promise<Sam
   return savedBlocks
 }
 
-export async function getMonthlySettlementReport(month: string): Promise<MonthlySettlementReport> {
-  if (!useMocks) return request.get('/finance/monthly-settlements', { params: { month } })
+export async function getMonthlySettlementReport(month: string, options: FinanceLoadOptions = {}): Promise<MonthlySettlementReport> {
+  if (!useMocks) return request.get('/finance/monthly-settlements', { params: { month }, signal: options.signal })
+  throwIfAborted(options.signal)
   const dailyRows = await Promise.all(getMonthDates(month).map(async (date) => getMonthlySettlementDailyRowsFromSheet(await getLabSheetByDate(date))))
+  throwIfAborted(options.signal)
   return summarizeMonthlySettlementReport(month, dailyRows.flat(), loadMonthlySettlementRows().filter((row) => row.month === month))
 }
 

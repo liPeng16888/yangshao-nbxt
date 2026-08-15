@@ -299,6 +299,49 @@ describe('finance bills store', () => {
     expect(store.loading).toBe(false)
   })
 
+  it('commits only the latest monthly settlement month and aborts the stale request', async () => {
+    const older = deferred<any>()
+    const latest = deferred<any>()
+    let olderSignal: AbortSignal | undefined
+    apiMocks.getMonthlySettlementReport
+      .mockImplementationOnce((_month, options) => {
+        olderSignal = options?.signal
+        return older.promise
+      })
+      .mockImplementationOnce(() => latest.promise)
+    const store = useFinanceBillsStore()
+
+    const olderLoad = store.loadMonthlySettlementReport('2026-07')
+    const latestLoad = store.loadMonthlySettlementReport('2026-06')
+    expect(olderSignal?.aborted).toBe(true)
+    latest.resolve({ month: '2026-06', totalSamples: 0, totalAmount: 0, dailyRows: [], summaryRows: [] })
+    await expect(latestLoad).resolves.toBe(true)
+    older.resolve({ month: '2026-07', totalSamples: 1, totalAmount: 1, dailyRows: [], summaryRows: [] })
+    await expect(olderLoad).resolves.toBe(false)
+
+    expect(store.monthlySettlementMonth).toBe('2026-06')
+    expect(store.monthlySettlementReport?.month).toBe('2026-06')
+  })
+
+  it('cancels and absorbs an owned monthly settlement rejection after unmount', async () => {
+    const pending = deferred<any>()
+    let signal: AbortSignal | undefined
+    apiMocks.getMonthlySettlementReport.mockImplementationOnce((_month, options) => {
+      signal = options?.signal
+      return pending.promise
+    })
+    const store = useFinanceBillsStore()
+    const scope = Symbol('monthly-page')
+    const load = store.loadMonthlySettlementReport('2026-07', { scope })
+
+    store.cancelMonthlySettlementLoads(scope)
+    expect(signal?.aborted).toBe(true)
+    pending.reject(new Error('late monthly rejection'))
+    await expect(load).resolves.toBe(false)
+    expect(store.monthlySettlementReport).toBeNull()
+    expect(store.loading).toBe(false)
+  })
+
   it('syncs paid status back into the loaded lab sheet cache', async () => {
     const labSheetStore = useLabSheetStore()
     labSheetStore.sheet = makeSheet()

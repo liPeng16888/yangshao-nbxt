@@ -5,16 +5,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import MonthlySettlementBillExportDialog from './MonthlySettlementBillExportDialog.vue'
 import dialogSource from './MonthlySettlementBillExportDialog.vue?raw'
 import type { MonthlySettlementDailyRow } from '@/types/financeBills'
-import { downloadMonthlyBillAsPng } from '@/utils/monthlySettlementBillPng'
+import { createMonthlyBillPngBlob, downloadMonthlyBillAsPng } from '@/utils/monthlySettlementBillPng'
 
 vi.mock('@/utils/monthlySettlementBillPng', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/utils/monthlySettlementBillPng')>(),
+  createMonthlyBillPngBlob: vi.fn(),
   downloadMonthlyBillAsPng: vi.fn()
 }))
 
 const DialogStub = defineComponent({
   name: 'ElDialog',
-  props: { modelValue: Boolean, width: String },
+  props: { modelValue: Boolean, width: String, fullscreen: Boolean },
   template: '<section v-if="modelValue"><slot /><slot name="footer" /></section>'
 })
 
@@ -48,12 +49,14 @@ function mountDialog(overrides: Partial<{
   visible: boolean
   month: string
   rows: MonthlySettlementDailyRow[]
+  mobile: boolean
 }> = {}) {
   return mount(MonthlySettlementBillExportDialog, {
     props: {
       visible: true,
       month: '2026-08',
       rows: makeRowsForTwoCustomers(),
+      mobile: false,
       ...overrides
     },
     global: {
@@ -83,6 +86,7 @@ function mockMessages() {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('MonthlySettlementBillExportDialog', () => {
@@ -100,6 +104,31 @@ describe('MonthlySettlementBillExportDialog', () => {
     const wrapper = mountDialog()
 
     expect(wrapper.findComponent(DialogStub).props('width')).toBe('min(1180px, calc(100vw - 32px))')
+  })
+
+  it('uses a full-screen dialog on mobile without changing the desktop width contract', () => {
+    const mobile = mountDialog({ mobile: true })
+    const desktop = mountDialog({ mobile: false })
+
+    expect(mobile.findComponent(DialogStub).props()).toMatchObject({
+      fullscreen: true,
+      width: 'min(1180px, calc(100vw - 32px))'
+    })
+    expect(desktop.findComponent(DialogStub).props()).toMatchObject({
+      fullscreen: false,
+      width: 'min(1180px, calc(100vw - 32px))'
+    })
+  })
+
+  it('applies the mobile safe-area and 44px interaction contract to the full export dialog', async () => {
+    const wrapper = mountDialog({ mobile: true })
+    await selectCustomer(wrapper, '客户甲')
+
+    expect(wrapper.findComponent(DialogStub).classes()).toContain('monthly-bill-export-dialog--mobile')
+    expect(dialogSource).toContain(':global(.monthly-bill-export-dialog--mobile)')
+    expect(dialogSource).toContain('padding-top: max(16px, env(safe-area-inset-top))')
+    expect(dialogSource).toContain('padding-bottom: max(12px, env(safe-area-inset-bottom))')
+    expect(dialogSource).toContain('min-height: 44px !important')
   })
 
   it('applies a temporary element price without mutating source rows', async () => {
@@ -314,5 +343,124 @@ describe('MonthlySettlementBillExportDialog', () => {
     await flushPromises()
 
     expect(download).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a mobile PNG preview mounted for long-press fallback and revokes its URL exactly once on close', async () => {
+    const blob = new Blob(['png'], { type: 'image/png' })
+    vi.mocked(createMonthlyBillPngBlob).mockResolvedValue(blob)
+    const createUrl = vi.fn(() => 'blob:mobile-preview')
+    const revokeUrl = vi.fn()
+    vi.stubGlobal('URL', { createObjectURL: createUrl, revokeObjectURL: revokeUrl })
+    vi.stubGlobal('navigator', { canShare: vi.fn(() => false), share: vi.fn() })
+    const wrapper = mountDialog({ mobile: true })
+    await selectCustomer(wrapper, '客户甲')
+    await setElementPrice(wrapper, 'aluminumSiliconRatio', 60)
+    await setElementPrice(wrapper, 'sulfur', 10)
+
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+
+    expect(createMonthlyBillPngBlob).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="bill-mobile-image-preview"]').attributes('src')).toBe('blob:mobile-preview')
+    expect(wrapper.get('[data-testid="bill-mobile-save-hint"]').text()).toContain('长按保存图片')
+    expect(navigator.share).not.toHaveBeenCalled()
+
+    await wrapper.setProps({ visible: false })
+    expect(revokeUrl).toHaveBeenCalledTimes(1)
+    expect(revokeUrl).toHaveBeenCalledWith('blob:mobile-preview')
+    wrapper.unmount()
+    expect(revokeUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalidates and revokes a mobile preview when the visible bill draft changes', async () => {
+    vi.mocked(createMonthlyBillPngBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+    const createUrl = vi.fn()
+      .mockReturnValueOnce('blob:first-preview')
+      .mockReturnValueOnce('blob:second-preview')
+      .mockReturnValueOnce('blob:third-preview')
+    const revokeUrl = vi.fn()
+    vi.stubGlobal('URL', { createObjectURL: createUrl, revokeObjectURL: revokeUrl })
+    vi.stubGlobal('navigator', { canShare: vi.fn(() => false), share: vi.fn() })
+    const wrapper = mountDialog({ mobile: true })
+    await selectCustomer(wrapper, '客户甲')
+    await setElementPrice(wrapper, 'aluminumSiliconRatio', 60)
+    await setElementPrice(wrapper, 'sulfur', 10)
+
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    await setElementPrice(wrapper, 'aluminumSiliconRatio', 61)
+    expect(wrapper.find('[data-testid="bill-mobile-image-preview"]').exists()).toBe(false)
+    expect(revokeUrl).toHaveBeenNthCalledWith(1, 'blob:first-preview')
+
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="bill-preview-title-input"]').setValue('新标题')
+    expect(wrapper.find('[data-testid="bill-mobile-image-preview"]').exists()).toBe(false)
+    expect(revokeUrl).toHaveBeenNthCalledWith(2, 'blob:second-preview')
+
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    await selectCustomer(wrapper, '客户乙')
+    expect(wrapper.find('[data-testid="bill-mobile-image-preview"]').exists()).toBe(false)
+    expect(revokeUrl).toHaveBeenNthCalledWith(3, 'blob:third-preview')
+  })
+
+  it('shares only when files are supported and guards duplicate async triggers and layout cleanup', async () => {
+    const blob = new Blob(['png'], { type: 'image/png' })
+    vi.mocked(createMonthlyBillPngBlob).mockResolvedValue(blob)
+    let finishShare!: () => void
+    const share = vi.fn(() => new Promise<void>((resolve) => { finishShare = resolve }))
+    const canShare = vi.fn(() => true)
+    const createUrl = vi.fn(() => 'blob:shared-preview')
+    const revokeUrl = vi.fn()
+    vi.stubGlobal('URL', { createObjectURL: createUrl, revokeObjectURL: revokeUrl })
+    vi.stubGlobal('navigator', { canShare, share })
+    const wrapper = mountDialog({ mobile: true })
+    await selectCustomer(wrapper, '客户甲')
+    await setElementPrice(wrapper, 'aluminumSiliconRatio', 60)
+    await setElementPrice(wrapper, 'sulfur', 10)
+
+    const button = wrapper.get('button.el-button--primary')
+    await button.trigger('click')
+    await flushPromises()
+    await button.trigger('click')
+
+    expect(createMonthlyBillPngBlob).toHaveBeenCalledTimes(1)
+    expect(canShare).toHaveBeenCalledWith({ files: [expect.any(File)] })
+    expect(share).toHaveBeenCalledTimes(1)
+
+    await wrapper.setProps({ mobile: false })
+    expect(revokeUrl).toHaveBeenCalledTimes(1)
+    finishShare()
+    await flushPromises()
+    wrapper.unmount()
+    expect(revokeUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it('distinguishes a cancelled share from a rejected share while preserving the preview fallback', async () => {
+    vi.mocked(createMonthlyBillPngBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+    const createUrl = vi.fn(() => 'blob:cancel-preview')
+    const revokeUrl = vi.fn()
+    vi.stubGlobal('URL', { createObjectURL: createUrl, revokeObjectURL: revokeUrl })
+    const canShare = vi.fn(() => true)
+    const share = vi.fn().mockRejectedValueOnce(new DOMException('cancelled', 'AbortError')).mockRejectedValueOnce(new Error('share failed'))
+    vi.stubGlobal('navigator', { canShare, share })
+    const wrapper = mountDialog({ mobile: true })
+    await selectCustomer(wrapper, '客户甲')
+    await setElementPrice(wrapper, 'aluminumSiliconRatio', 60)
+    await setElementPrice(wrapper, 'sulfur', 10)
+
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="bill-mobile-share-status"]').text()).toContain('已取消系统分享')
+    expect(wrapper.get('[data-testid="bill-mobile-save-hint"]').text()).toContain('长按保存图片')
+
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="bill-mobile-share-status"]').text()).toContain('系统分享失败')
+    wrapper.get('[data-testid="bill-mobile-image-preview"]')
+    expect(revokeUrl).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    expect(revokeUrl).toHaveBeenCalledTimes(2)
   })
 })
