@@ -173,6 +173,15 @@ describe('MobileLabSampleList', () => {
     expect(wrapper.emitted('selectionChange')).toContainEqual(['block-1', true])
   })
 
+  it('keeps selected lab elements visible in collapsed sample headers', async () => {
+    const wrapper = mountList()
+
+    await wrapper.findAll('.mobile-sample-card__toggle')[0].trigger('click')
+
+    expect(wrapper.get('[data-block-id="block-1"] .mobile-sample-card__elements').text()).toBe('化验元素：铁、硅、铝')
+    expect(wrapper.get('[data-block-id="block-2"] .mobile-sample-card__elements').text()).toBe('化验元素：未选择')
+  })
+
   it('independently expands multiple samples and allows every sample to collapse', async () => {
     const wrapper = mountList({ selectionMode: true })
     const toggles = wrapper.findAll('.mobile-sample-card__toggle')

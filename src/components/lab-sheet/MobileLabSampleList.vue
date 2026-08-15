@@ -32,6 +32,7 @@
           <span class="mobile-sample-card__summary">
             <strong>{{ block.inputs.sampleNumber || '未填写样品名称' }}</strong>
             <small>{{ block.inputs.customerText || '未选择付款客户' }}</small>
+            <small class="mobile-sample-card__elements">化验元素：{{ block.inputs.elementNote || '未选择' }}</small>
           </span>
           <span class="mobile-sample-card__badges">
             <i v-if="block.inputs.completed">已完成</i>
@@ -565,7 +566,7 @@ async function scrollToBlock(blockId: string) {
 .mobile-sample-card__header {
   display: flex;
   align-items: stretch;
-  min-height: 64px;
+  min-height: 74px;
   background: linear-gradient(180deg, #ffffff, #f8fbff);
 }
 
@@ -573,7 +574,8 @@ async function scrollToBlock(blockId: string) {
   flex: 0 0 auto;
   width: 22px;
   height: 22px;
-  margin: 21px 0 0 12px;
+  align-self: center;
+  margin: 0 0 0 12px;
   accent-color: #b32c20;
 }
 
@@ -584,7 +586,7 @@ async function scrollToBlock(blockId: string) {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  min-height: 64px;
+  min-height: 74px;
   padding: 8px 12px;
   color: #1f2937;
   background: transparent;
@@ -606,7 +608,7 @@ async function scrollToBlock(blockId: string) {
 
 .mobile-sample-card__summary {
   display: grid;
-  gap: 3px;
+  gap: 1px;
   min-width: 0;
 
   strong,
@@ -624,6 +626,11 @@ async function scrollToBlock(blockId: string) {
     color: #64748b;
     font-size: 12px;
   }
+}
+
+.mobile-sample-card__summary .mobile-sample-card__elements {
+  color: #3f6f99;
+  font-weight: 500;
 }
 
 .mobile-sample-card__badges {
