@@ -1,5 +1,10 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common'
-import type { FrontendCalculationDraft, Prisma } from '@prisma/client'
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  ServiceUnavailableException
+} from '@nestjs/common'
+import { Prisma, type FrontendCalculationDraft } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import type {
   CalculationDraftKind,
@@ -19,6 +24,9 @@ type StoredDraft = Pick<
   'id' | 'frontendUserId' | 'kind' | 'payload' | 'revision' | 'updatedAt'
 >
 
+const calculationDraftUniqueConstraint = 'FrontendCalculationDraft_frontendUserId_kind_key'
+const calculationDraftUnavailableMessage = '计算草稿暂时无法读取，请稍后重试'
+
 @Injectable()
 export class CalculationDraftService {
   constructor(private readonly prisma: PrismaService) {}
@@ -27,8 +35,8 @@ export class CalculationDraftService {
     frontendUserId: string,
     kind: K
   ): Promise<CalculationDraftDto<K>> {
-    const row = await this.loadOwned(frontendUserId, kind)
-    return row ? this.toDto(kind, row) : this.defaultDto(kind)
+    const draft = await this.loadAuthoritative(frontendUserId, kind)
+    return draft ?? this.defaultDto(kind)
   }
 
   async save<K extends CalculationDraftKind>(
@@ -59,10 +67,10 @@ export class CalculationDraftService {
           updatedAt: created.updatedAt
         }
       } catch (error) {
-        if (this.isUniqueConstraintViolation(error)) {
+        if (this.isDraftUniqueConstraintViolation(error)) {
           throw await this.conflict(frontendUserId, kind)
         }
-        throw error
+        throw this.unavailable()
       }
     }
 
@@ -81,19 +89,8 @@ export class CalculationDraftService {
     })
     if (updated.count !== 1) throw await this.conflict(frontendUserId, kind)
 
-    let saved: StoredDraft | null
-    try {
-      saved = await this.loadOwned(frontendUserId, kind)
-    } catch {
-      throw await this.conflict(frontendUserId, kind)
-    }
-    if (!saved) throw this.conflictWith(this.defaultDto(kind))
-    let serverDraft: CalculationDraftDto<K>
-    try {
-      serverDraft = this.toDto(kind, saved)
-    } catch {
-      throw await this.conflict(frontendUserId, kind)
-    }
+    const serverDraft = await this.loadAuthoritative(frontendUserId, kind)
+    if (!serverDraft) throw this.unavailable()
     if (serverDraft.revision !== baseRevision + 1) {
       throw this.conflictWith(serverDraft)
     }
@@ -117,6 +114,24 @@ export class CalculationDraftService {
     }
   }
 
+  private async loadAuthoritative<K extends CalculationDraftKind>(
+    frontendUserId: string,
+    kind: K
+  ): Promise<CalculationDraftDto<K> | null> {
+    let row: StoredDraft | null
+    try {
+      row = await this.loadOwned(frontendUserId, kind)
+    } catch {
+      throw this.unavailable()
+    }
+    if (!row) return null
+    try {
+      return this.toDto(kind, row)
+    } catch {
+      throw this.unavailable()
+    }
+  }
+
   private defaultDto<K extends CalculationDraftKind>(kind: K): CalculationDraftDto<K> {
     return {
       kind,
@@ -127,13 +142,8 @@ export class CalculationDraftService {
   }
 
   private async conflict<K extends CalculationDraftKind>(frontendUserId: string, kind: K) {
-    let serverDraft = this.defaultDto(kind)
-    try {
-      const row = await this.loadOwned(frontendUserId, kind)
-      if (row) serverDraft = this.toDto(kind, row)
-    } catch {
-      // A conflict response must not expose a failed Prisma reload or malformed stored JSON.
-    }
+    const serverDraft = await this.loadAuthoritative(frontendUserId, kind)
+    if (!serverDraft) throw this.unavailable()
     return this.conflictWith(serverDraft)
   }
 
@@ -150,8 +160,17 @@ export class CalculationDraftService {
     }
   }
 
-  private isUniqueConstraintViolation(error: unknown) {
-    return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'P2002')
+  private unavailable() {
+    return new ServiceUnavailableException(calculationDraftUnavailableMessage)
+  }
+
+  private isDraftUniqueConstraintViolation(error: unknown) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') return false
+    const target = error.meta?.target
+    if (Array.isArray(target)) {
+      return target.length === 2 && target.includes('frontendUserId') && target.includes('kind')
+    }
+    return target === calculationDraftUniqueConstraint
   }
 }
 

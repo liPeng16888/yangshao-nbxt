@@ -1,5 +1,5 @@
-import { BadRequestException, ConflictException } from '@nestjs/common'
-import { CalculationDraftKind } from '@prisma/client'
+import { BadRequestException, ConflictException, ServiceUnavailableException } from '@nestjs/common'
+import { CalculationDraftKind, Prisma } from '@prisma/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CalculationDraftService } from './calculation-draft.service'
 
@@ -78,6 +78,14 @@ function draftRow(overrides: Record<string, unknown> = {}) {
     updatedAt,
     ...overrides
   }
+}
+
+function uniqueConstraintError(target?: unknown) {
+  return new Prisma.PrismaClientKnownRequestError('database duplicate details', {
+    code: 'P2002',
+    clientVersion: 'test',
+    ...(target === undefined ? {} : { meta: { target } })
+  })
 }
 
 describe('CalculationDraftService', () => {
@@ -190,7 +198,10 @@ describe('CalculationDraftService', () => {
     expect(result).toEqual({ kind: 'STANDARD_SAMPLE', payload: validStandard, revision: 1, updatedAt })
   })
 
-  it('converts a duplicate-create race to the canonical account-scoped conflict', async () => {
+  it.each([
+    { label: 'field array', target: ['frontendUserId', 'kind'] },
+    { label: 'Postgres constraint name', target: 'FrontendCalculationDraft_frontendUserId_kind_key' }
+  ])('converts a duplicate-create race with the exact $label target to the canonical conflict', async ({ target }) => {
     const serverRow = draftRow({
       kind: CalculationDraftKind.COEFFICIENT,
       payload: validCoefficient,
@@ -199,7 +210,7 @@ describe('CalculationDraftService', () => {
     prisma.frontendCalculationDraft.findUnique
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(serverRow)
-    prisma.frontendCalculationDraft.create.mockRejectedValue({ code: 'P2002', meta: { target: 'secret' } })
+    prisma.frontendCalculationDraft.create.mockRejectedValue(uniqueConstraintError(target))
 
     const error = await service.save('front-a', 'COEFFICIENT', 0, validCoefficient).catch((caught) => caught)
 
@@ -212,6 +223,42 @@ describe('CalculationDraftService', () => {
     expect(prisma.frontendCalculationDraft.findUnique).toHaveBeenLastCalledWith({
       where: { frontendUserId_kind: { frontendUserId: 'front-a', kind: 'COEFFICIENT' } }
     })
+  })
+
+  it.each([
+    { label: 'wrong target', error: uniqueConstraintError(['id']) },
+    { label: 'missing target', error: uniqueConstraintError() },
+    {
+      label: 'fake object',
+      error: { code: 'P2002', meta: { target: ['frontendUserId', 'kind'] }, message: 'fake details' }
+    }
+  ])('does not map a $label P2002-like create error to a draft conflict', async ({ error: createError }) => {
+    prisma.frontendCalculationDraft.findUnique.mockResolvedValue(null)
+    prisma.frontendCalculationDraft.create.mockRejectedValue(createError)
+
+    const error = await service.save('front-a', 'STANDARD_SAMPLE', 0, validStandard).catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException)
+    expect(error.getStatus?.()).toBe(503)
+    expect(error.getStatus?.()).not.toBe(409)
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('serverDraft')
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('details')
+  })
+
+  it('returns a retryable server error when an exact duplicate-create race cannot reload authority', async () => {
+    prisma.frontendCalculationDraft.findUnique
+      .mockResolvedValueOnce(null)
+      .mockRejectedValue(new Error('database details'))
+    prisma.frontendCalculationDraft.create.mockRejectedValue(
+      uniqueConstraintError(['frontendUserId', 'kind'])
+    )
+
+    const error = await service.save('front-a', 'STANDARD_SAMPLE', 0, validStandard).catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException)
+    expect(error.getStatus?.()).toBe(503)
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('serverDraft')
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('database details')
   })
 
   it('updates with an atomic account-kind-revision selector and returns the stored next revision', async () => {
@@ -293,7 +340,7 @@ describe('CalculationDraftService', () => {
     })
   })
 
-  it('returns a safe canonical conflict if the reload after a successful update fails', async () => {
+  it('returns a retryable server error if the reload after a successful update fails', async () => {
     const current = draftRow({ kind: CalculationDraftKind.COEFFICIENT, payload: validCoefficient, revision: 3 })
     prisma.frontendCalculationDraft.findUnique
       .mockResolvedValueOnce(current)
@@ -302,15 +349,13 @@ describe('CalculationDraftService', () => {
 
     const error = await service.save('front-a', 'COEFFICIENT', 3, validCoefficient).catch((caught) => caught)
 
-    expect(error).toBeInstanceOf(ConflictException)
-    expect(error.getResponse()).toMatchObject({
-      code: 'CALCULATION_DRAFT_CONFLICT',
-      serverDraft: { kind: 'COEFFICIENT', revision: 0, updatedAt: null }
-    })
+    expect(error).toBeInstanceOf(ServiceUnavailableException)
+    expect(error.getStatus?.()).toBe(503)
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('serverDraft')
     expect(JSON.stringify(error.getResponse())).not.toContain('database details')
   })
 
-  it('returns a safe canonical conflict if a successful update reload contains malformed JSON', async () => {
+  it('returns a retryable server error if a successful update reload contains malformed JSON', async () => {
     const current = draftRow({ kind: CalculationDraftKind.COEFFICIENT, payload: validCoefficient, revision: 3 })
     const malformed = draftRow({
       kind: CalculationDraftKind.COEFFICIENT,
@@ -324,18 +369,16 @@ describe('CalculationDraftService', () => {
 
     const error = await service.save('front-a', 'COEFFICIENT', 3, validCoefficient).catch((caught) => caught)
 
-    expect(error).toBeInstanceOf(ConflictException)
-    expect(error.getResponse()).toMatchObject({
-      code: 'CALCULATION_DRAFT_CONFLICT',
-      serverDraft: { kind: 'COEFFICIENT', revision: 0, updatedAt: null }
-    })
+    expect(error).toBeInstanceOf(ServiceUnavailableException)
+    expect(error.getStatus?.()).toBe(503)
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('serverDraft')
     expect(JSON.stringify(error.getResponse())).not.toContain('frontendUserId')
   })
 
   it.each([
     ['missing', null],
     ['failed', new Error('database details')]
-  ] as const)('uses a safe default when a conflict reload is %s', async (_label, reloadResult) => {
+  ] as const)('returns a retryable server error when an update conflict reload is %s', async (_label, reloadResult) => {
     const current = draftRow({ kind: CalculationDraftKind.COEFFICIENT, payload: validCoefficient, revision: 3 })
     prisma.frontendCalculationDraft.findUnique.mockResolvedValueOnce(current)
     if (reloadResult instanceof Error) prisma.frontendCalculationDraft.findUnique.mockRejectedValueOnce(reloadResult)
@@ -344,11 +387,43 @@ describe('CalculationDraftService', () => {
 
     const error = await service.save('front-a', 'COEFFICIENT', 3, validCoefficient).catch((caught) => caught)
 
-    expect(error).toBeInstanceOf(ConflictException)
-    expect(error.getResponse()).toMatchObject({
-      code: 'CALCULATION_DRAFT_CONFLICT',
-      serverDraft: { kind: 'COEFFICIENT', revision: 0, updatedAt: null }
-    })
+    expect(error).toBeInstanceOf(ServiceUnavailableException)
+    expect(error.getStatus?.()).toBe(503)
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('serverDraft')
     expect(JSON.stringify(error.getResponse())).not.toContain('database details')
+  })
+
+  it('returns a retryable server error when an update conflict reload contains malformed JSON', async () => {
+    const current = draftRow({ kind: CalculationDraftKind.COEFFICIENT, payload: validCoefficient, revision: 3 })
+    const malformed = draftRow({
+      kind: CalculationDraftKind.COEFFICIENT,
+      payload: { frontendUserId: 'front-b' },
+      revision: 4
+    })
+    prisma.frontendCalculationDraft.findUnique
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(malformed)
+    prisma.frontendCalculationDraft.updateMany.mockResolvedValue({ count: 0 })
+
+    const error = await service.save('front-a', 'COEFFICIENT', 3, validCoefficient).catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException)
+    expect(error.getStatus?.()).toBe(503)
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('serverDraft')
+    expect(JSON.stringify(error.getResponse())).not.toContain('frontendUserId')
+  })
+
+  it('returns a retryable server error rather than a client validation error for malformed stored JSON on GET', async () => {
+    prisma.frontendCalculationDraft.findUnique.mockResolvedValue(draftRow({
+      payload: { frontendUserId: 'front-b', validationDetails: 'secret' }
+    }))
+
+    const error = await service.get('front-a', 'STANDARD_SAMPLE').catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException)
+    expect(error.getStatus?.()).toBe(503)
+    expect(error).not.toBeInstanceOf(BadRequestException)
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('frontendUserId')
+    expect(JSON.stringify(error.getResponse?.() ?? {})).not.toContain('validationDetails')
   })
 })
