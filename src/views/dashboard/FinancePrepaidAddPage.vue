@@ -21,6 +21,7 @@
 
       <section class="panel mobile-prepaid-records">
         <header class="mobile-prepaid-header"><div><h2>添加的数据信息</h2><p class="muted">这里记录每一次预存款添加明细。</p></div><button data-testid="mobile-prepaid-recharges-refresh" class="mobile-touch-target" type="button" :disabled="store.loading" @click="requestPrepaidRecharges">{{ store.loading ? '刷新中…' : '刷新' }}</button></header>
+        <div v-if="postSaveReportError" data-testid="mobile-prepaid-post-save-report-error" class="mobile-prepaid-error" role="alert"><span>{{ postSaveReportError }}</span><button data-testid="mobile-prepaid-post-save-report-retry" class="mobile-touch-target" type="button" @click="retryPostSaveReport">仅刷新汇总</button></div>
         <div v-if="loadError" data-testid="mobile-prepaid-recharges-error" class="mobile-prepaid-error" role="alert"><span>{{ loadError }}</span><button data-testid="mobile-prepaid-recharges-retry" class="mobile-touch-target" type="button" @click="retryPrepaidRecharges">重试</button></div>
         <MobilePrepaidList v-else kind="recharge" :rows="store.prepaidRecharges" :loading="store.loading" :deleting-id="deletePendingId || store.prepaidDeletingId" @delete-request="handleDeleteRequest" />
       </section>
@@ -77,9 +78,10 @@ import MobilePrepaidList from '@/components/finance/MobilePrepaidList.vue'
 import MobileFullscreenDialog from '@/components/mobile/MobileFullscreenDialog.vue'
 import { useMobileLayout } from '@/composables/useMobileLayout'
 import type { Customer } from '@/types/customer'
-import type { PrepaidRechargePayload, PrepaidRechargeRow } from '@/types/financeBills'
+import type { PrepaidRechargeRow } from '@/types/financeBills'
 import { useFinanceBillsStore } from '@/stores/financeBills'
 import { todayInBeijing } from '@/utils/date'
+import { buildPrepaidRechargePayload, validatePrepaidAmount, validatePrepaidRechargeDate, validatePrepaidUsableTimes } from '@/utils/prepaidRecharge'
 
 const router = useRouter()
 const store = useFinanceBillsStore()
@@ -92,7 +94,9 @@ const customerKeyword = ref('')
 const submitPending = ref(false)
 const deletePendingId = ref('')
 const loadError = ref('')
+const postSaveReportError = ref('')
 const rechargeLoadScope = Symbol('finance-prepaid-add-page')
+const postSaveReportScope = Symbol('finance-prepaid-add-page-report')
 let pageActive = true
 let lifecycleEpoch = 0
 let rechargeLoadVersion = 0
@@ -100,14 +104,14 @@ let customerLoadVersion = 0
 
 const form = reactive({ rechargeDate: todayInBeijing(), customer: '', amount: undefined as number | undefined, usableTimes: undefined as number | undefined, remark: '' })
 const rules: FormRules = {
-  rechargeDate: [{ required: true, message: '请选择充值日期', trigger: 'change' }],
+  rechargeDate: [{ validator: (_rule, value, callback) => { const message = validatePrepaidRechargeDate(value); message ? callback(new Error(message)) : callback() }, trigger: 'change' }],
   customer: [{ required: true, message: '请选择或输入客户名称', trigger: 'change' }],
-  amount: [{ required: true, type: 'number', message: '请输入预存金额', trigger: 'change' }, { type: 'number', min: 0.01, message: '预存金额必须大于 0', trigger: 'change' }],
-  usableTimes: [{ required: true, type: 'number', message: '请输入可使用次数', trigger: 'change' }, { type: 'number', min: 1, message: '可使用次数必须大于 0', trigger: 'change' }]
+  amount: [{ validator: (_rule, value, callback) => { const message = validatePrepaidAmount(value); message ? callback(new Error(message)) : callback() }, trigger: 'change' }],
+  usableTimes: [{ validator: (_rule, value, callback) => { const message = validatePrepaidUsableTimes(value); message ? callback(new Error(message)) : callback() }, trigger: 'change' }]
 }
 
 onMounted(() => { void requestPrepaidRecharges(); void loadCustomerOptions('') })
-onBeforeUnmount(() => { pageActive = false; lifecycleEpoch += 1; rechargeLoadVersion += 1; customerLoadVersion += 1; store.cancelPrepaidRechargeLoads(rechargeLoadScope) })
+onBeforeUnmount(() => { pageActive = false; lifecycleEpoch += 1; rechargeLoadVersion += 1; customerLoadVersion += 1; store.cancelPrepaidRechargeLoads(rechargeLoadScope); store.cancelPrepaidReportLoads(postSaveReportScope) })
 
 async function requestPrepaidRecharges() {
   const requestVersion = ++rechargeLoadVersion
@@ -133,15 +137,31 @@ async function loadCustomerOptions(keyword: string) {
 function openCustomerSelector() { customerKeyword.value = form.customer; customerSelectorVisible.value = true; void loadCustomerOptions(customerKeyword.value) }
 function selectCustomer(customer: string) { const value = customer.trim(); if (!value) return; form.customer = value; customerSelectorVisible.value = false }
 
+async function refreshPostSaveReport(retry = false) {
+  const lifecycleToken = lifecycleEpoch
+  postSaveReportError.value = ''
+  try {
+    if (retry) await store.retryPrepaidReport({ scope: postSaveReportScope })
+    else await store.loadPrepaidReport({ scope: postSaveReportScope })
+  } catch {
+    if (isLifecycleCurrent(lifecycleToken)) postSaveReportError.value = '预存款汇总刷新失败，充值已保存，请仅重试汇总刷新。'
+  }
+}
+
+function retryPostSaveReport() { void refreshPostSaveReport(true) }
+
 async function handleSubmit() {
   if (submitPending.value) return
   const lifecycleToken = lifecycleEpoch
   const snapshot = snapshotForm()
   submitPending.value = true
   try {
-    const valid = isMobileLayout.value ? validateMobile(snapshot) : await formRef.value?.validate().then(() => true).catch(() => false)
+    const validation = buildPrepaidRechargePayload(snapshot)
+    if (isMobileLayout.value && validation.error) ElMessage.warning(validation.error)
+    const valid = isMobileLayout.value ? !validation.error : await formRef.value?.validate().then(() => true).catch(() => false)
     if (!valid || !isLifecycleCurrent(lifecycleToken)) return
-    const payload = payloadFromSnapshot(snapshot)
+    const payload = validation.payload
+    if (!payload) return
     const existing = store.prepaidRecharges.filter((row) => row.customer === payload.customer)
     const existingTimes = existing.reduce((sum, row) => sum + row.usableTimes, 0)
     const existingAmount = existing.reduce((sum, row) => sum + row.amount, 0)
@@ -152,6 +172,7 @@ async function handleSubmit() {
     if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('预存款客户信息已添加')
     if (formMatches(snapshot)) resetForm()
+    void refreshPostSaveReport()
   } catch { /* The request layer owns failures; keeping the draft is intentional. */ }
   finally { if (isLifecycleCurrent(lifecycleToken)) submitPending.value = false }
 }
@@ -170,15 +191,6 @@ async function handleDeleteRequest(row: PrepaidRechargeRow) {
 }
 
 function snapshotForm() { return { rechargeDate: form.rechargeDate, customer: form.customer, amount: form.amount, usableTimes: form.usableTimes, remark: form.remark } }
-function payloadFromSnapshot(snapshot: ReturnType<typeof snapshotForm>): PrepaidRechargePayload { return { rechargeDate: snapshot.rechargeDate, customer: snapshot.customer.trim(), amount: Number(snapshot.amount), usableTimes: Math.trunc(Number(snapshot.usableTimes)), remark: snapshot.remark } }
-function validateMobile(snapshot: ReturnType<typeof snapshotForm>) {
-  const payload = payloadFromSnapshot(snapshot)
-  if (!payload.rechargeDate) { ElMessage.warning('请选择充值日期'); return false }
-  if (!payload.customer) { ElMessage.warning('请选择或输入客户名称'); return false }
-  if (!Number.isFinite(payload.amount) || payload.amount <= 0) { ElMessage.warning('预存金额必须大于 0'); return false }
-  if (!Number.isInteger(Number(snapshot.usableTimes)) || payload.usableTimes < 1) { ElMessage.warning('可使用次数必须是大于 0 的整数'); return false }
-  return true
-}
 function formMatches(snapshot: ReturnType<typeof snapshotForm>) { return form.rechargeDate === snapshot.rechargeDate && form.customer === snapshot.customer && Number(form.amount) === Number(snapshot.amount) && Number(form.usableTimes) === Number(snapshot.usableTimes) && form.remark === snapshot.remark }
 function resetForm() { form.rechargeDate = todayInBeijing(); form.customer = ''; form.amount = undefined; form.usableTimes = undefined; form.remark = ''; formRef.value?.clearValidate() }
 function isLifecycleCurrent(token: number) { return pageActive && token === lifecycleEpoch }

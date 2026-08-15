@@ -85,15 +85,17 @@ async function retryPrepaidReport() {
 }
 
 function openUsage(row: PrepaidCustomerRow) { selectedCustomer.value = row.customer; usageVisible.value = true }
-function handleCustomerRemarkCommit(row: PrepaidCustomerRow | PrepaidDailyUsageRow, remark: string) { if ('totalAmount' in row) void saveRemark(`customer__${row.customer}`, () => store.savePrepaidCustomerRemark(row.customer, remark)) }
-function handleUsageRemarkCommit(row: PrepaidCustomerRow | PrepaidDailyUsageRow, remark: string) { if (!('totalAmount' in row)) void saveRemark(row.id, () => store.savePrepaidUsageRemark(row.id, remark)) }
+type RemarkCompletion = (result: 'success' | 'failure') => void
 
-async function saveRemark(key: string, save: () => Promise<unknown>) {
-  if (remarkSavingIds.value.includes(key)) return
+function handleCustomerRemarkCommit(row: PrepaidCustomerRow | PrepaidDailyUsageRow, remark: string, complete: RemarkCompletion) { if ('totalAmount' in row) void saveRemark(`customer__${row.customer}`, () => store.savePrepaidCustomerRemark(row.customer, remark), complete) }
+function handleUsageRemarkCommit(row: PrepaidCustomerRow | PrepaidDailyUsageRow, remark: string, complete: RemarkCompletion) { if (!('totalAmount' in row)) void saveRemark(row.id, () => store.savePrepaidUsageRemark(row.id, remark), complete) }
+
+async function saveRemark(key: string, save: () => Promise<unknown>, complete: RemarkCompletion) {
+  if (remarkSavingIds.value.includes(key)) { complete('failure'); return }
   const lifecycleToken = lifecycleEpoch
   remarkSavingIds.value = [...remarkSavingIds.value, key]
-  try { await save() }
-  catch { /* The request layer owns errors; local drafts remain available for retry. */ }
+  try { await save(); if (pageActive && lifecycleToken === lifecycleEpoch) complete('success') }
+  catch { if (pageActive && lifecycleToken === lifecycleEpoch) complete('failure') }
   finally { if (pageActive && lifecycleToken === lifecycleEpoch) remarkSavingIds.value = remarkSavingIds.value.filter((item) => item !== key) }
 }
 

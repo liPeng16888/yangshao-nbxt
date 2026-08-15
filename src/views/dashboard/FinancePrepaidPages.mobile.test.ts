@@ -155,6 +155,24 @@ describe('Finance prepaid mobile pages', () => {
     expect((wrapper.get('[data-testid="mobile-prepaid-customer-value"]').element as HTMLInputElement).value).toBe('新客户')
   })
 
+  it.each([
+    ['amount', '1.234'],
+    ['amount', '0.001'],
+    ['times', String(Number.MAX_SAFE_INTEGER + 1)],
+    ['times', '1.5']
+  ] as const)('rejects unsupported mobile prepaid %s value %s before confirmation', async (field, value) => {
+    const wrapper = mountPage(FinancePrepaidAddPage)
+    await flushPromises()
+    await fillMobileRecharge(wrapper)
+    await wrapper.get(field === 'amount' ? '[data-testid="mobile-prepaid-amount"]' : '[data-testid="mobile-prepaid-times"]').setValue(value)
+
+    await wrapper.get('[data-testid="mobile-prepaid-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(mocks.store.addPrepaidRecharge).not.toHaveBeenCalled()
+  })
+
   it('confirms duplicate-customer accumulated totals, blocks duplicates, and resets only an unchanged successful draft', async () => {
     const save = deferred<void>()
     mocks.store.addPrepaidRecharge.mockReturnValueOnce(save.promise)
@@ -295,7 +313,8 @@ describe('MobilePrepaidList remark reconciliation', () => {
 
     expect((remarkA.element as HTMLTextAreaElement).value).toBe('甲继续编辑')
     expect((remarkB.element as HTMLTextAreaElement).value).toBe('乙服务端更新')
-    expect(wrapper.emitted('remarkCommit')?.[0]).toEqual([customerRows[0], '甲已提交'])
+    expect(wrapper.emitted('remarkCommit')?.[0]?.slice(0, 2)).toEqual([customerRows[0], '甲已提交'])
+    expect(wrapper.emitted('remarkCommit')?.[0]?.[2]).toBeTypeOf('function')
   })
 
   it('does not erase a dirty customer remark when only authoritative balance totals change', async () => {
@@ -310,5 +329,62 @@ describe('MobilePrepaidList remark reconciliation', () => {
     })
 
     expect((remark.element as HTMLTextAreaElement).value).toBe('余额刷新期间的草稿')
+  })
+
+  it('keeps a rejected customer snapshot and newer typing retryable through authoritative refreshes', async () => {
+    const wrapper = mount(MobilePrepaidList, {
+      props: { kind: 'customer', rows: [{ ...customerRows[0] }], savingId: '' }
+    })
+    const remark = wrapper.get('[data-testid="mobile-prepaid-customer-remark-customer-a"]')
+    await remark.setValue('失败的提交快照')
+    await remark.trigger('blur')
+    const complete = wrapper.emitted('remarkCommit')?.[0]?.[2] as ((result: 'success' | 'failure') => void) | undefined
+    await remark.setValue('失败后继续输入')
+
+    complete?.('failure')
+    await wrapper.setProps({ rows: [{ ...customerRows[0], remark: '失败的提交快照', totalAmount: 450 }] })
+
+    expect(complete).toBeTypeOf('function')
+    expect((remark.element as HTMLTextAreaElement).value).toBe('失败后继续输入')
+  })
+
+  it.each([
+    { kind: 'customer' as const, row: customerRows[0], testId: 'mobile-prepaid-customer-remark-customer-a' },
+    { kind: 'usage' as const, row: usageRows[0], testId: 'mobile-prepaid-usage-remark-usage-a' }
+  ])('keeps the exact rejected $kind draft retryable across matching and later authoritative values', async ({ kind, row, testId }) => {
+    const typedRows = [{ ...row }] as PrepaidCustomerRow[] | PrepaidDailyUsageRow[]
+    const wrapper = mount(MobilePrepaidList, {
+      props: { kind, rows: typedRows, savingId: '' }
+    })
+    const remark = wrapper.get(`[data-testid="${testId}"]`)
+    await remark.setValue('精确失败稿')
+    await remark.trigger('blur')
+    const complete = wrapper.emitted('remarkCommit')?.[0]?.[2] as ((result: 'success' | 'failure') => void)
+
+    complete('failure')
+    await wrapper.setProps({ rows: [{ ...row, remark: '精确失败稿' }] as PrepaidCustomerRow[] | PrepaidDailyUsageRow[] })
+    await wrapper.setProps({ rows: [{ ...row, remark: '后续外部值' }] as PrepaidCustomerRow[] | PrepaidDailyUsageRow[] })
+
+    expect((remark.element as HTMLTextAreaElement).value).toBe('精确失败稿')
+  })
+
+  it('reconciles only a successful usage snapshot, preserves newer typing, and resets re-added row identity', async () => {
+    const wrapper = mount(MobilePrepaidList, {
+      props: { kind: 'usage', rows: [{ ...usageRows[0] }], savingId: '' }
+    })
+    const remark = wrapper.get('[data-testid="mobile-prepaid-usage-remark-usage-a"]')
+    await remark.setValue('使用明细已提交')
+    await remark.trigger('blur')
+    const complete = wrapper.emitted('remarkCommit')?.[0]?.[2] as ((result: 'success' | 'failure') => void) | undefined
+    await remark.setValue('提交后继续输入')
+
+    complete?.('success')
+    await wrapper.setProps({ rows: [{ ...usageRows[0], remark: '使用明细已提交' }] })
+    expect(complete).toBeTypeOf('function')
+    expect((remark.element as HTMLTextAreaElement).value).toBe('提交后继续输入')
+
+    await wrapper.setProps({ rows: [] })
+    await wrapper.setProps({ rows: [{ ...usageRows[0], remark: '重新加入的权威值' }] })
+    expect((wrapper.get('[data-testid="mobile-prepaid-usage-remark-usage-a"]').element as HTMLTextAreaElement).value).toBe('重新加入的权威值')
   })
 })

@@ -481,27 +481,97 @@ describe('finance bills store', () => {
     expect(store.loading).toBe(false)
   })
 
-  it('does not let a delayed post-recharge report overwrite a newer saved remark', async () => {
-    const delayedReport = deferred<any>()
+  it('commits a successful recharge without coupling it to a report refresh', async () => {
     const savedRecharge = { id: 'prepaid-new', rechargeDate: '2026-08-16', customer: '客户甲', amount: 25, usableTimes: 2, remark: '' }
     apiMocks.createPrepaidRecharge.mockResolvedValueOnce(savedRecharge)
-    apiMocks.getPrepaidReport.mockReturnValueOnce(delayedReport.promise)
-    apiMocks.updatePrepaidCustomerRemark.mockResolvedValueOnce({ customer: '客户甲', remark: '最新备注' })
+    const store = useFinanceBillsStore()
+
+    await expect(store.addPrepaidRecharge(savedRecharge)).resolves.toEqual(savedRecharge)
+
+    expect(store.prepaidRecharges).toEqual([savedRecharge])
+    expect(apiMocks.getPrepaidReport).not.toHaveBeenCalled()
+  })
+
+  it('keeps report requests independently abortable by scope while only the globally latest response may commit', async () => {
+    const addPage = deferred<any>()
+    const customerPage = deferred<any>()
+    let addSignal: AbortSignal | undefined
+    let customerSignal: AbortSignal | undefined
+    apiMocks.getPrepaidReport
+      .mockImplementationOnce((options) => {
+        addSignal = options?.signal
+        return addPage.promise
+      })
+      .mockImplementationOnce((options) => {
+        customerSignal = options?.signal
+        return customerPage.promise
+      })
+    const store = useFinanceBillsStore()
+    const addScope = Symbol('add-page-report')
+    const customerScope = Symbol('customer-page-report')
+
+    const olderLoad = store.loadPrepaidReport({ scope: addScope })
+    const newerLoad = store.loadPrepaidReport({ scope: customerScope })
+    expect(addSignal?.aborted).toBe(false)
+    expect(customerSignal?.aborted).toBe(false)
+
+    customerPage.resolve({ customerRows: [{ id: 'latest', customer: '最新客户', totalAmount: 1, totalUsableTimes: 1, usedTimes: 0, availableTimes: 1 }], dailyRows: [] })
+    await expect(newerLoad).resolves.toBe(true)
+    addPage.resolve({ customerRows: [{ id: 'older', customer: '旧客户', totalAmount: 1, totalUsableTimes: 1, usedTimes: 0, availableTimes: 1 }], dailyRows: [] })
+    await expect(olderLoad).resolves.toBe(false)
+
+    expect(store.prepaidReport?.customerRows[0].id).toBe('latest')
+  })
+
+  it('absorbs an older recharge load rejection after a successful deletion request mutation', async () => {
+    const oldLoad = deferred<any[]>()
+    const prepaidRow = { id: 'prepaid-row', rechargeDate: '2026-08-15', customer: '客户甲', amount: 100, usableTimes: 5, remark: '' }
+    apiMocks.getPrepaidRecharges.mockReturnValueOnce(oldLoad.promise)
+    apiMocks.requestPrepaidRechargeDeletion.mockResolvedValueOnce({ id: 'delete-request', status: 'PENDING' })
+    const store = useFinanceBillsStore()
+    store.prepaidRecharges = [prepaidRow]
+
+    const loading = store.loadPrepaidRecharges({ scope: Symbol('add-page') })
+    await store.requestPrepaidDeletion(prepaidRow, '重复记录')
+    oldLoad.reject(new Error('obsolete recharge transport failed'))
+
+    await expect(loading).resolves.toBe(false)
+    expect(store.prepaidRecharges[0]).toMatchObject({ id: 'prepaid-row', deleteRequestId: 'delete-request', deleteRequestStatus: 'PENDING' })
+  })
+
+  it('absorbs an older report rejection after a successful customer remark mutation', async () => {
+    const oldLoad = deferred<any>()
+    apiMocks.getPrepaidReport.mockReturnValueOnce(oldLoad.promise)
+    apiMocks.updatePrepaidCustomerRemark.mockResolvedValueOnce(undefined)
     const store = useFinanceBillsStore()
     store.prepaidReport = {
-      customerRows: [{ id: 'customer-a', customer: '客户甲', totalAmount: 100, totalUsableTimes: 5, usedTimes: 1, availableTimes: 4, remark: '旧备注' }],
+      customerRows: [{ id: 'customer-row', customer: '客户甲', totalAmount: 100, totalUsableTimes: 5, usedTimes: 1, availableTimes: 4, remark: '旧备注' }],
       dailyRows: []
     }
 
-    const add = store.addPrepaidRecharge(savedRecharge)
-    await Promise.resolve()
-    await store.savePrepaidCustomerRemark('客户甲', '最新备注')
-    delayedReport.resolve({
-      customerRows: [{ id: 'customer-a', customer: '客户甲', totalAmount: 125, totalUsableTimes: 7, usedTimes: 1, availableTimes: 6, remark: '旧备注' }],
-      dailyRows: []
-    })
-    await add
+    const loading = store.loadPrepaidReport({ scope: Symbol('customers-page') })
+    await store.savePrepaidCustomerRemark('客户甲', '新客户备注')
+    oldLoad.reject(new Error('obsolete report transport failed'))
 
-    expect(store.prepaidReport?.customerRows[0].remark).toBe('最新备注')
+    await expect(loading).resolves.toBe(false)
+    expect(store.prepaidReport.customerRows[0].remark).toBe('新客户备注')
+  })
+
+  it('absorbs an older report rejection after a successful usage remark mutation', async () => {
+    const oldLoad = deferred<any>()
+    apiMocks.getPrepaidReport.mockReturnValueOnce(oldLoad.promise)
+    apiMocks.updatePrepaidUsageRemark.mockResolvedValueOnce(undefined)
+    const store = useFinanceBillsStore()
+    store.prepaidReport = {
+      customerRows: [],
+      dailyRows: [{ id: 'usage-row', date: '2026-08-15', customer: '客户甲', sampleCount: 2, remark: '旧备注' }]
+    }
+
+    const loading = store.loadPrepaidReport({ scope: Symbol('usage-page') })
+    await store.savePrepaidUsageRemark('usage-row', '新使用备注')
+    oldLoad.reject(new Error('obsolete report transport failed'))
+
+    await expect(loading).resolves.toBe(false)
+    expect(store.prepaidReport.dailyRows[0].remark).toBe('新使用备注')
   })
 })

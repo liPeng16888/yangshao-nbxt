@@ -63,7 +63,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   let activeUnsettledLoad: ActiveLoad | null = null
   let activeMonthlySettlementLoad: ActiveLoad | null = null
   let activePrepaidRechargeLoad: ActiveLoad | null = null
-  let activePrepaidReportLoad: ActiveLoad | null = null
+  const activePrepaidReportLoads = new Map<symbol, ActiveLoad>()
 
   async function loadIncomeReport(nextMonth = month.value, options: ScopedLoadOptions = {}) {
     activeIncomeLoad?.controller.abort()
@@ -244,7 +244,11 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
       prepaidRecharges.value = rows
       return true
     } catch (error) {
-      if (requestVersion !== prepaidRechargeLoadVersion || activeLoad.controller.signal.aborted) return false
+      if (
+        requestVersion !== prepaidRechargeLoadVersion ||
+        mutationAtStart !== prepaidMutationVersion ||
+        activeLoad.controller.signal.aborted
+      ) return false
       throw error
     } finally {
       if (activePrepaidRechargeLoad === activeLoad) {
@@ -271,10 +275,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     try {
       const row = await createPrepaidRecharge(payload)
       prepaidMutationVersion += 1
-      const mutationVersion = prepaidMutationVersion
       prepaidRecharges.value = [row, ...prepaidRecharges.value.filter((item) => item.id !== row.id)]
-      const report = await getPrepaidReport()
-      if (mutationVersion === prepaidMutationVersion) prepaidReport.value = report
       return row
     } finally {
       prepaidSaving.value = false
@@ -296,14 +297,15 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   }
 
   async function loadPrepaidReport(options: ScopedLoadOptions = {}) {
-    activePrepaidReportLoad?.controller.abort()
+    const scope = options.scope ?? Symbol('finance-prepaid-report-load')
+    activePrepaidReportLoads.get(scope)?.controller.abort()
     const requestVersion = ++prepaidReportLoadVersion
     const mutationAtStart = prepaidMutationVersion
     const activeLoad: ActiveLoad = {
       controller: new AbortController(),
-      scope: options.scope ?? Symbol('finance-prepaid-report-load')
+      scope
     }
-    activePrepaidReportLoad = activeLoad
+    activePrepaidReportLoads.set(scope, activeLoad)
     loading.value = true
     try {
       const report = await getPrepaidReport({ signal: activeLoad.controller.signal })
@@ -315,12 +317,16 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
       prepaidReport.value = report
       return true
     } catch (error) {
-      if (requestVersion !== prepaidReportLoadVersion || activeLoad.controller.signal.aborted) return false
+      if (
+        requestVersion !== prepaidReportLoadVersion ||
+        mutationAtStart !== prepaidMutationVersion ||
+        activeLoad.controller.signal.aborted
+      ) return false
       throw error
     } finally {
-      if (activePrepaidReportLoad === activeLoad) {
-        activePrepaidReportLoad = null
-        loading.value = false
+      if (activePrepaidReportLoads.get(scope) === activeLoad) {
+        activePrepaidReportLoads.delete(scope)
+        if (!activePrepaidReportLoads.size) loading.value = false
       }
     }
   }
@@ -330,11 +336,16 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   }
 
   function cancelPrepaidReportLoads(scope?: symbol) {
-    if (scope && activePrepaidReportLoad?.scope !== scope) return
-    activePrepaidReportLoad?.controller.abort()
-    activePrepaidReportLoad = null
-    prepaidReportLoadVersion += 1
-    loading.value = false
+    if (scope) {
+      const activeLoad = activePrepaidReportLoads.get(scope)
+      activeLoad?.controller.abort()
+      activePrepaidReportLoads.delete(scope)
+    } else {
+      activePrepaidReportLoads.forEach((activeLoad) => activeLoad.controller.abort())
+      activePrepaidReportLoads.clear()
+      prepaidReportLoadVersion += 1
+    }
+    if (!activePrepaidReportLoads.size) loading.value = false
   }
 
   async function savePrepaidCustomerRemark(customer: string, remark: string) {

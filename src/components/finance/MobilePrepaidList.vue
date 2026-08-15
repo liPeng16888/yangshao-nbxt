@@ -4,6 +4,8 @@ import type { PrepaidCustomerRow, PrepaidDailyUsageRow, PrepaidRechargeRow } fro
 
 type PrepaidKind = 'recharge' | 'customer' | 'usage'
 type RemarkRow = PrepaidCustomerRow | PrepaidDailyUsageRow
+type RemarkSaveResult = 'success' | 'failure'
+type RemarkCompletion = (result: RemarkSaveResult) => void
 
 const props = withDefaults(defineProps<{
   kind: PrepaidKind
@@ -21,7 +23,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   deleteRequest: [row: PrepaidRechargeRow]
-  remarkCommit: [row: RemarkRow, remark: string]
+  remarkCommit: [row: RemarkRow, remark: string, complete: RemarkCompletion]
   openUsage: [row: PrepaidCustomerRow]
 }>()
 
@@ -29,10 +31,13 @@ interface RemarkDraftState {
   identity: string
   base: string
   value: string
-  submitted?: string
+  pending?: { token: number; value: string }
+  confirmed?: string
+  failed?: string
 }
 
 const remarkDrafts = ref<Record<string, RemarkDraftState>>({})
+let remarkAttemptSequence = 0
 const rechargeRows = computed(() => props.kind === 'recharge' ? props.rows as PrepaidRechargeRow[] : [])
 const customerRows = computed(() => props.kind === 'customer' ? props.rows as PrepaidCustomerRow[] : [])
 const usageRows = computed(() => props.kind === 'usage' ? props.rows as PrepaidDailyUsageRow[] : [])
@@ -52,13 +57,26 @@ watch(() => [props.kind, props.rows] as const, () => {
       next[key] = { identity, base: authoritative, value: authoritative }
       return
     }
-    if (current.submitted !== undefined && authoritative !== current.base) {
-      const canResync = current.value === current.submitted || current.value === authoritative
-      next[key] = { identity, base: authoritative, value: canResync ? authoritative : current.value }
-      return
-    }
-    if (current.submitted === undefined && current.value === current.base) {
-      next[key] = { identity, base: authoritative, value: authoritative }
+    if (authoritative !== current.base) {
+      if (current.failed !== undefined) {
+        next[key] = { ...current, base: authoritative }
+        return
+      }
+      if (current.confirmed !== undefined && authoritative === current.confirmed) {
+        next[key] = {
+          identity,
+          base: authoritative,
+          value: current.value === current.confirmed ? authoritative : current.value,
+          pending: current.pending
+        }
+        return
+      }
+      const wasClean = !current.pending && current.confirmed === undefined && current.failed === undefined && current.value === current.base
+      next[key] = {
+        ...current,
+        base: authoritative,
+        value: wasClean ? authoritative : current.value
+      }
       return
     }
     next[key] = current
@@ -90,9 +108,25 @@ function updateRemark(row: RemarkRow, value: string) {
 function commitRemark(row: RemarkRow) {
   const key = remarkKey(row)
   const current = remarkDrafts.value[key]
+  if (!current || current.pending) return
   const submitted = current?.value || ''
-  if (current) remarkDrafts.value = { ...remarkDrafts.value, [key]: { ...current, submitted } }
-  emit('remarkCommit', row, submitted)
+  const token = ++remarkAttemptSequence
+  remarkDrafts.value = { ...remarkDrafts.value, [key]: { ...current, pending: { token, value: submitted }, confirmed: undefined, failed: undefined } }
+  emit('remarkCommit', row, submitted, (result) => settleRemark(key, current.identity, token, submitted, result))
+}
+
+function settleRemark(key: string, identity: string, token: number, submitted: string, result: RemarkSaveResult) {
+  const current = remarkDrafts.value[key]
+  if (!current || current.identity !== identity || current.pending?.token !== token) return
+  remarkDrafts.value = {
+    ...remarkDrafts.value,
+    [key]: {
+      ...current,
+      pending: undefined,
+      confirmed: result === 'success' && current.base !== submitted ? submitted : undefined,
+      failed: result === 'failure' ? submitted : undefined
+    }
+  }
 }
 
 function remarkValue(row: RemarkRow) {
