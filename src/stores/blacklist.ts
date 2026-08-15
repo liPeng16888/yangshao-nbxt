@@ -9,15 +9,23 @@ export const useBlacklistStore = defineStore('blacklist', () => {
   const loading = ref(false)
   const deletingId = ref('')
   const updatingId = ref('')
+  let loadVersion = 0
 
   async function loadRecords(nextKeyword = keyword.value) {
+    const currentLoad = ++loadVersion
     loading.value = true
+    keyword.value = nextKeyword
     try {
-      keyword.value = nextKeyword
-      records.value = await searchBlacklist(nextKeyword)
+      const nextRecords = await searchBlacklist(nextKeyword)
+      if (currentLoad === loadVersion) records.value = nextRecords
     } finally {
-      loading.value = false
+      if (currentLoad === loadVersion) loading.value = false
     }
+  }
+
+  function cancelPendingLoads() {
+    loadVersion += 1
+    loading.value = false
   }
 
   async function addRecord(payload: BlacklistPayload) {
@@ -48,5 +56,5 @@ export const useBlacklistStore = defineStore('blacklist', () => {
     }
   }
 
-  return { keyword, records, loading, deletingId, updatingId, loadRecords, addRecord, deleteRecord, updateRecord }
+  return { keyword, records, loading, deletingId, updatingId, loadRecords, cancelPendingLoads, addRecord, deleteRecord, updateRecord }
 })

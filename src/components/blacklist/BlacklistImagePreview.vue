@@ -1,11 +1,11 @@
 <template>
   <div class="image-list">
-    <template v-if="images.length">
+    <template v-if="safeImages.length">
       <el-image
-        v-for="image in images"
+        v-for="image in safeImages"
         :key="image"
         :src="image"
-        :preview-src-list="images"
+        :preview-src-list="safeImages"
         fit="cover"
         class="image-thumb"
       />
@@ -15,9 +15,26 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{
+import { computed } from 'vue'
+
+const props = defineProps<{
   images: string[]
 }>()
+
+const safeImages = computed(() => props.images.filter(isSafeImageUrl))
+
+function isSafeImageUrl(value: string) {
+  const source = value.trim()
+  if (!source) return false
+  if (source.startsWith('blob:')) return true
+  if (/^data:image\/(?:png|jpe?g|webp|gif);base64,/i.test(source)) return true
+  try {
+    const parsed = new URL(source, 'https://local.invalid')
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
 </script>
 
 <style scoped lang="scss">

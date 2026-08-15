@@ -1,5 +1,5 @@
 <template>
-  <section class="panel">
+  <section class="panel blacklist-table">
     <div class="panel__header">
       <h2>黑名单列表</h2>
       <div class="table-search">

@@ -73,6 +73,14 @@ function mountTable() {
 }
 
 describe('BlacklistTable', () => {
+  it('retains the desktop table root and exact search payload contract', async () => {
+    const wrapper = mountTable()
+
+    expect(wrapper.classes()).toContain('blacklist-table')
+    await wrapper.find('.table-search button').trigger('click')
+    expect(wrapper.emitted('search')).toContainEqual([''])
+  })
+
   it('allows deleting only records uploaded by the current user', async () => {
     const wrapper = mountTable()
 
