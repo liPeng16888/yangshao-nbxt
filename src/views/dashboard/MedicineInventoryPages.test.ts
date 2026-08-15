@@ -101,6 +101,41 @@ function componentByTestId(wrapper: VueWrapper, testId: string): VueWrapper<any>
   return wrapper.getComponent(`[data-testid="${testId}"]`) as VueWrapper<any>
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+type MedicineFlowKind = 'inbound' | 'outbound'
+
+async function prepareMedicineSubmission(wrapper: VueWrapper, kind: MedicineFlowKind) {
+  if (kind === 'inbound') {
+    ;(wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>).vm.$emit('select', { value: '阿莫西林', item: items[0] })
+  } else {
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+  }
+  await wrapper.get(`[data-testid="${kind}-quantity"]`).setValue('2')
+  await nextTick()
+}
+
+function deferMedicineFormValidation(wrapper: VueWrapper) {
+  const validation = deferred<boolean>()
+  const form = wrapper.findAllComponents({ name: 'ElForm' })[0]
+  vi.spyOn((form.vm.$ as { exposed: { validate: () => Promise<boolean> } }).exposed, 'validate').mockReturnValue(validation.promise)
+  return validation
+}
+
+function medicineRemarkField(wrapper: VueWrapper, kind: MedicineFlowKind) {
+  return kind === 'inbound'
+    ? wrapper.get('input[placeholder="可填写入库备注"]')
+    : wrapper.get('[data-testid="outbound-remark"]')
+}
+
 beforeEach(() => {
   layout.isMobileLayout = ref(false)
   vi.restoreAllMocks()
@@ -286,6 +321,41 @@ describe('MedicineInventoryInboundPage', () => {
     expect(api.createMedicineCommonName).toHaveBeenCalledWith({ name: '盐酸' })
   })
 
+  it('silently ignores late inbound bootstrap and common-name save work after unmount', async () => {
+    const itemsRequest = deferred<typeof items>()
+    const namesRequest = deferred<typeof commonNames>()
+    const historyRequest = deferred<typeof inboundMovement[]>()
+    api.getMedicineItems.mockReturnValueOnce(itemsRequest.promise)
+    api.getMedicineCommonNames.mockReturnValueOnce(namesRequest.promise)
+    api.getMedicineMovements.mockReturnValueOnce(historyRequest.promise)
+    const errorSpy = vi.spyOn(ElMessage, 'error')
+    const successSpy = vi.spyOn(ElMessage, 'success')
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await nextTick()
+
+    wrapper.unmount()
+    itemsRequest.reject(new Error('late items'))
+    namesRequest.reject(new Error('late names'))
+    historyRequest.reject(new Error('late history'))
+    await flushPromises()
+    expect(errorSpy).not.toHaveBeenCalled()
+
+    const saveRequest = deferred<unknown>()
+    api.createMedicineCommonName.mockReturnValueOnce(saveRequest.promise)
+    const mounted = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+    await mounted.get('[data-testid="common-name-input"]').setValue('盐酸')
+    await mounted.get('[data-testid="common-name-submit"]').trigger('click')
+    await flushPromises()
+    const nameLoads = api.getMedicineCommonNames.mock.calls.length
+    mounted.unmount()
+    saveRequest.resolve(commonNames[0])
+    await flushPromises()
+
+    expect(api.getMedicineCommonNames).toHaveBeenCalledTimes(nameLoads)
+    expect(successSpy).not.toHaveBeenCalled()
+  })
+
   it('marks quantity as required and blocks an empty inbound submission', async () => {
     const wrapper = mountPage(MedicineInventoryInboundPage)
     await flushPromises()
@@ -396,6 +466,61 @@ describe('MedicineInventoryInboundPage', () => {
     })
     expect(api.getMedicineItems.mock.calls.length).toBeGreaterThan(initialItemLoads)
     expect(api.getMedicineMovements.mock.calls.length).toBeGreaterThan(initialHistoryLoads)
+  })
+
+  it('preserves a newer inbound draft when an earlier successful request settles and still refreshes data', async () => {
+    let resolveInbound!: (value: unknown) => void
+    api.createMedicineInbound.mockReturnValueOnce(new Promise((resolve) => { resolveInbound = resolve }))
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+
+    ;(wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>).vm.$emit('select', { value: '阿莫西林', item: items[0] })
+    await wrapper.get('[data-testid="inbound-quantity"]').setValue('2')
+    await wrapper.get('input[placeholder="可填写入库备注"]').setValue('A 入库')
+    await nextTick()
+    await wrapper.get('[data-testid="inbound-submit"]').trigger('click')
+    await flushPromises()
+    expect(api.createMedicineInbound).toHaveBeenCalledWith(expect.objectContaining({ name: '阿莫西林' }))
+
+    const datePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[0] as VueWrapper<any>
+    datePicker.vm.$emit('update:modelValue', '2026-08-13')
+    const nameInput = wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>
+    nameInput.vm.$emit('update:modelValue', '葡萄糖')
+    nameInput.vm.$emit('input', '葡萄糖')
+    componentByTestId(wrapper, 'inbound-unit').vm.$emit('update:modelValue', 'MILLILITER')
+    await wrapper.get('[data-testid="inbound-quantity"]').setValue('1.25')
+    await wrapper.get('input[placeholder="可填写入库备注"]').setValue('B 草稿')
+    resolveInbound({ item: items[0], movement: inboundMovement })
+    await flushPromises()
+
+    expect(datePicker.props('modelValue')).toBe('2026-08-13')
+    expect(nameInput.props('modelValue')).toBe('葡萄糖')
+    expect(componentByTestId(wrapper, 'inbound-unit').props('modelValue')).toBe('MILLILITER')
+    expect((wrapper.get('[data-testid="inbound-quantity"]').element as HTMLInputElement).value).toBe('1.25')
+    expect((wrapper.get('input[placeholder="可填写入库备注"]').element as HTMLInputElement).value).toBe('B 草稿')
+    expect(api.getMedicineItems).toHaveBeenCalledTimes(2)
+    expect(api.getMedicineMovements).toHaveBeenCalledTimes(2)
+  })
+
+  it('resets unchanged inbound medicine fields after a successful request while retaining the selected date', async () => {
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+
+    const datePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[0] as VueWrapper<any>
+    datePicker.vm.$emit('update:modelValue', '2026-08-13')
+    const nameInput = wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>
+    nameInput.vm.$emit('select', { value: '阿莫西林', item: items[0] })
+    await wrapper.get('[data-testid="inbound-quantity"]').setValue('2')
+    await wrapper.get('input[placeholder="可填写入库备注"]').setValue('A 入库')
+    await nextTick()
+    await wrapper.get('[data-testid="inbound-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(datePicker.props('modelValue')).toBe('2026-08-13')
+    expect(nameInput.props('modelValue')).toBe('')
+    expect(componentByTestId(wrapper, 'inbound-unit').props('modelValue')).toBe('')
+    expect((wrapper.get('[data-testid="inbound-quantity"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.get('input[placeholder="可填写入库备注"]').element as HTMLInputElement).value).toBe('')
   })
 
   it('requires a correction reason and asks for a second confirmation before creating it', async () => {
@@ -618,6 +743,55 @@ describe('MedicineInventoryOutboundPage', () => {
     expect((wrapper.get('[data-testid="outbound-remark"]').element as HTMLInputElement).value).toBe('紧急出库')
   })
 
+  it('preserves a newer outbound draft when an earlier successful request settles and still refreshes data', async () => {
+    let resolveOutbound!: (value: unknown) => void
+    api.createMedicineOutbound.mockReturnValueOnce(new Promise((resolve) => { resolveOutbound = resolve }))
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('2')
+    await wrapper.get('[data-testid="outbound-remark"]').setValue('A 出库')
+    await nextTick()
+    await wrapper.get('[data-testid="outbound-submit"]').trigger('click')
+    await flushPromises()
+    expect(api.createMedicineOutbound).toHaveBeenCalledWith(expect.objectContaining({ medicineItemId: 'item-amoxicillin' }))
+
+    const datePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[0] as VueWrapper<any>
+    datePicker.vm.$emit('update:modelValue', '2026-08-13')
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-saline')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('1.25')
+    await wrapper.get('[data-testid="outbound-remark"]').setValue('B 草稿')
+    resolveOutbound({ item: items[0], movement: inboundMovement })
+    await flushPromises()
+
+    expect(datePicker.props('modelValue')).toBe('2026-08-13')
+    expect(componentByTestId(wrapper, 'outbound-item').props('modelValue')).toBe('item-saline')
+    expect((wrapper.get('[data-testid="outbound-quantity"]').element as HTMLInputElement).value).toBe('1.25')
+    expect((wrapper.get('[data-testid="outbound-remark"]').element as HTMLInputElement).value).toBe('B 草稿')
+    expect(api.getMedicineItems).toHaveBeenCalledTimes(2)
+    expect(api.getMedicineMovements).toHaveBeenCalledTimes(2)
+  })
+
+  it('resets unchanged outbound medicine fields after a successful request while retaining the selected date', async () => {
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    const datePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[0] as VueWrapper<any>
+    datePicker.vm.$emit('update:modelValue', '2026-08-13')
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('2')
+    await wrapper.get('[data-testid="outbound-remark"]').setValue('A 出库')
+    await nextTick()
+    await wrapper.get('[data-testid="outbound-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(datePicker.props('modelValue')).toBe('2026-08-13')
+    expect(componentByTestId(wrapper, 'outbound-item').props('modelValue')).toBe('')
+    expect((wrapper.get('[data-testid="outbound-quantity"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.get('[data-testid="outbound-remark"]').element as HTMLInputElement).value).toBe('')
+  })
+
   it('applies a delayed 409 only to the submitted item while preserving a newly selected item and inputs', async () => {
     let rejectOutbound!: (error: unknown) => void
     api.createMedicineOutbound.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectOutbound = reject }))
@@ -836,5 +1010,196 @@ describe('MedicineInventoryOutboundPage', () => {
     expect(api.correctMedicineMovement).toHaveBeenCalledTimes(1)
     resolveCorrection({ item: items[0], movement: inboundMovement })
     await flushPromises()
+  })
+})
+
+describe.each([
+  { kind: 'inbound' as const, component: MedicineInventoryInboundPage, movementId: 'movement-inbound-1' },
+  { kind: 'outbound' as const, component: MedicineInventoryOutboundPage, movementId: 'movement-outbound-1' }
+])('medicine $kind lifecycle guards', ({ kind, component, movementId }) => {
+  beforeEach(() => {
+    if (kind === 'outbound') {
+      api.getMedicineMovements.mockResolvedValue([{ ...inboundMovement, id: movementId, type: 'OUTBOUND' }])
+    }
+  })
+
+  it('does not open confirmation after validation settles on an unmounted page', async () => {
+    const wrapper = mountPage(component)
+    await flushPromises()
+    await prepareMedicineSubmission(wrapper, kind)
+    const validation = deferMedicineFormValidation(wrapper)
+
+    await wrapper.get(`[data-testid="${kind}-submit"]`).trigger('click')
+    wrapper.unmount()
+    validation.resolve(true)
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(kind === 'inbound' ? api.createMedicineInbound : api.createMedicineOutbound).not.toHaveBeenCalled()
+  })
+
+  it('submits the original snapshot and preserves a newer draft edited during validation', async () => {
+    const wrapper = mountPage(component)
+    await flushPromises()
+    await prepareMedicineSubmission(wrapper, kind)
+    const validation = deferMedicineFormValidation(wrapper)
+    const datePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[0] as VueWrapper<any>
+
+    await wrapper.get(`[data-testid="${kind}-submit"]`).trigger('click')
+    datePicker.vm.$emit('update:modelValue', '2026-08-12')
+    if (kind === 'inbound') {
+      const nameInput = wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>
+      nameInput.vm.$emit('update:modelValue', '葡萄糖')
+      nameInput.vm.$emit('input', '葡萄糖')
+      componentByTestId(wrapper, 'inbound-unit').vm.$emit('update:modelValue', 'MILLILITER')
+    } else {
+      componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-saline')
+    }
+    await wrapper.get(`[data-testid="${kind}-quantity"]`).setValue('1.25')
+    await medicineRemarkField(wrapper, kind).setValue('B 校验期草稿')
+    validation.resolve(true)
+    await flushPromises()
+
+    const createApi = kind === 'inbound' ? api.createMedicineInbound : api.createMedicineOutbound
+    expect(createApi).toHaveBeenCalledWith(expect.objectContaining(kind === 'inbound'
+      ? { name: '阿莫西林', unit: 'BOTTLE', quantity: '2' }
+      : { medicineItemId: 'item-amoxicillin', quantity: '2' }))
+    expect(datePicker.props('modelValue')).toBe('2026-08-12')
+    if (kind === 'inbound') {
+      expect((wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>).props('modelValue')).toBe('葡萄糖')
+      expect(componentByTestId(wrapper, 'inbound-unit').props('modelValue')).toBe('MILLILITER')
+    } else {
+      expect(componentByTestId(wrapper, 'outbound-item').props('modelValue')).toBe('item-saline')
+    }
+    expect((wrapper.get(`[data-testid="${kind}-quantity"]`).element as HTMLInputElement).value).toBe('1.25')
+    expect((medicineRemarkField(wrapper, kind).element as HTMLInputElement).value).toBe('B 校验期草稿')
+  })
+
+  it('submits the original snapshot and preserves a newer draft edited during confirmation', async () => {
+    const confirmation = deferred<unknown>()
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValueOnce(confirmation.promise as ReturnType<typeof ElMessageBox.confirm>)
+    const wrapper = mountPage(component)
+    await flushPromises()
+    await prepareMedicineSubmission(wrapper, kind)
+    const datePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[0] as VueWrapper<any>
+
+    await wrapper.get(`[data-testid="${kind}-submit"]`).trigger('click')
+    await flushPromises()
+    datePicker.vm.$emit('update:modelValue', '2026-08-11')
+    if (kind === 'inbound') {
+      const nameInput = wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>
+      nameInput.vm.$emit('update:modelValue', '葡萄糖')
+      nameInput.vm.$emit('input', '葡萄糖')
+      componentByTestId(wrapper, 'inbound-unit').vm.$emit('update:modelValue', 'MILLILITER')
+    } else {
+      componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-saline')
+    }
+    await wrapper.get(`[data-testid="${kind}-quantity"]`).setValue('1.25')
+    await medicineRemarkField(wrapper, kind).setValue('B 确认期草稿')
+    confirmation.resolve(undefined)
+    await flushPromises()
+
+    const createApi = kind === 'inbound' ? api.createMedicineInbound : api.createMedicineOutbound
+    expect(createApi).toHaveBeenCalledWith(expect.objectContaining(kind === 'inbound'
+      ? { name: '阿莫西林', unit: 'BOTTLE', quantity: '2' }
+      : { medicineItemId: 'item-amoxicillin', quantity: '2' }))
+    expect(datePicker.props('modelValue')).toBe('2026-08-11')
+    if (kind === 'inbound') {
+      expect((wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>).props('modelValue')).toBe('葡萄糖')
+      expect(componentByTestId(wrapper, 'inbound-unit').props('modelValue')).toBe('MILLILITER')
+    } else {
+      expect(componentByTestId(wrapper, 'outbound-item').props('modelValue')).toBe('item-saline')
+    }
+    expect((wrapper.get(`[data-testid="${kind}-quantity"]`).element as HTMLInputElement).value).toBe('1.25')
+    expect((medicineRemarkField(wrapper, kind).element as HTMLInputElement).value).toBe('B 确认期草稿')
+  })
+
+  it.each(['resolve', 'reject'] as const)('does not call the submit API after confirmation %s on an unmounted page', async (outcome) => {
+    const confirmation = deferred<unknown>()
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValueOnce(confirmation.promise as ReturnType<typeof ElMessageBox.confirm>)
+    const wrapper = mountPage(component)
+    await flushPromises()
+    await prepareMedicineSubmission(wrapper, kind)
+
+    await wrapper.get(`[data-testid="${kind}-submit"]`).trigger('click')
+    await flushPromises()
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    if (outcome === 'resolve') confirmation.resolve(undefined)
+    else confirmation.reject(new Error('dialog removed'))
+    await flushPromises()
+
+    expect(kind === 'inbound' ? api.createMedicineInbound : api.createMedicineOutbound).not.toHaveBeenCalled()
+  })
+
+  it.each(['success', 'error'] as const)('silently ignores a late submit API %s without reloads', async (outcome) => {
+    const request = deferred<unknown>()
+    const createApi = kind === 'inbound' ? api.createMedicineInbound : api.createMedicineOutbound
+    createApi.mockReturnValueOnce(request.promise)
+    const successSpy = vi.spyOn(ElMessage, 'success')
+    const errorSpy = vi.spyOn(ElMessage, 'error')
+    const wrapper = mountPage(component)
+    await flushPromises()
+    const itemLoads = api.getMedicineItems.mock.calls.length
+    const historyLoads = api.getMedicineMovements.mock.calls.length
+    await prepareMedicineSubmission(wrapper, kind)
+    await wrapper.get(`[data-testid="${kind}-submit"]`).trigger('click')
+    await flushPromises()
+    expect(createApi).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    if (outcome === 'success') request.resolve({ item: items[0], movement: inboundMovement })
+    else request.reject(new Error('late submit failure'))
+    await flushPromises()
+
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    expect(api.getMedicineItems).toHaveBeenCalledTimes(itemLoads)
+    expect(api.getMedicineMovements).toHaveBeenCalledTimes(historyLoads)
+  })
+
+  it.each(['resolve', 'reject'] as const)('does not call the correction API after confirmation %s on an unmounted page', async (outcome) => {
+    const confirmation = deferred<unknown>()
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValueOnce(confirmation.promise as ReturnType<typeof ElMessageBox.confirm>)
+    const wrapper = mountPage(component)
+    await flushPromises()
+
+    await wrapper.get(`[data-testid="correct-${movementId}"]`).trigger('click')
+    await wrapper.get('[data-testid="correction-reason"]').setValue('生命周期检查')
+    await wrapper.get('[data-testid="correction-submit"]').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    if (outcome === 'resolve') confirmation.resolve(undefined)
+    else confirmation.reject(new Error('dialog removed'))
+    await flushPromises()
+
+    expect(api.correctMedicineMovement).not.toHaveBeenCalled()
+  })
+
+  it.each(['success', 'error'] as const)('silently ignores a late correction API %s without closing or reloads', async (outcome) => {
+    const request = deferred<unknown>()
+    api.correctMedicineMovement.mockReturnValueOnce(request.promise)
+    const successSpy = vi.spyOn(ElMessage, 'success')
+    const errorSpy = vi.spyOn(ElMessage, 'error')
+    const wrapper = mountPage(component)
+    await flushPromises()
+    const itemLoads = api.getMedicineItems.mock.calls.length
+    const historyLoads = api.getMedicineMovements.mock.calls.length
+
+    await wrapper.get(`[data-testid="correct-${movementId}"]`).trigger('click')
+    await wrapper.get('[data-testid="correction-reason"]').setValue('生命周期检查')
+    await wrapper.get('[data-testid="correction-submit"]').trigger('click')
+    await flushPromises()
+    expect(api.correctMedicineMovement).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    if (outcome === 'success') request.resolve({ item: items[0], movement: inboundMovement })
+    else request.reject(new Error('late correction failure'))
+    await flushPromises()
+
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    expect(api.getMedicineItems).toHaveBeenCalledTimes(itemLoads)
+    expect(api.getMedicineMovements).toHaveBeenCalledTimes(historyLoads)
   })
 })

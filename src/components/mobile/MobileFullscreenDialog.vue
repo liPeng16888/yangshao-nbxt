@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+
 const props = withDefaults(defineProps<{
   modelValue: boolean
   title: string
@@ -21,6 +23,22 @@ const fullscreenStyles = {
   paddingBottom: 'max(12px, env(safe-area-inset-bottom))'
 }
 
+const narrowViewport = ref(typeof window !== 'undefined' && window.innerWidth < 768)
+const fullscreenActive = computed(() => props.fullscreen || narrowViewport.value)
+
+function syncNarrowViewport() {
+  narrowViewport.value = window.innerWidth < 768
+}
+
+onMounted(() => {
+  syncNarrowViewport()
+  window.addEventListener('resize', syncNarrowViewport)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', syncNarrowViewport)
+})
+
 function close() {
   emit('update:modelValue', false)
 }
@@ -29,8 +47,8 @@ function close() {
 <template>
   <el-dialog
     class="mobile-fullscreen-dialog"
-    :class="{ 'mobile-fullscreen-dialog--active': fullscreen }"
-    :style="fullscreen ? fullscreenStyles : undefined"
+    :class="{ 'mobile-fullscreen-dialog--active': fullscreenActive }"
+    :style="fullscreenActive ? fullscreenStyles : undefined"
     :model-value="props.modelValue"
     :title="title"
     :show-close="!saving"

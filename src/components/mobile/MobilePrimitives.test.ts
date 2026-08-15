@@ -117,8 +117,24 @@ describe('mobile interaction primitives', () => {
     expect(dialog.get('[aria-label="备注"]').element).toBeInstanceOf(HTMLInputElement)
   })
 
-  it.each([390, 844])('applies prop-driven fullscreen and safe-area geometry at %ipx mobile layouts', (width) => {
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+  it('retains automatic fullscreen and safe-area geometry at a 390px narrow layout when the prop is omitted', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    const dialog = mount(MobileFullscreenDialog, {
+      props: { modelValue: true, title: '窄屏编辑' },
+      global: { stubs: mobileStubs }
+    })
+    const root = dialog.get('.mobile-fullscreen-dialog')
+    const styles = getComputedStyle(root.element)
+
+    expect(root.classes()).toContain('mobile-fullscreen-dialog--active')
+    expect(styles.width).toBe('100%')
+    expect(styles.height).toBe('100dvh')
+    expect(styles.paddingTop).toContain('safe-area-inset-top')
+    expect(styles.paddingBottom).toContain('safe-area-inset-bottom')
+  })
+
+  it('forces fullscreen and safe-area geometry at an 844px coarse-layout consumer', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 844 })
     const dialog = mount(MobileFullscreenDialog, {
       props: { modelValue: true, title: '移动编辑', fullscreen: true },
       global: { stubs: mobileStubs }
@@ -131,6 +147,18 @@ describe('mobile interaction primitives', () => {
     expect(styles.height).toBe('100dvh')
     expect(styles.paddingTop).toContain('safe-area-inset-top')
     expect(styles.paddingBottom).toContain('safe-area-inset-bottom')
+  })
+
+  it('keeps an 844px nonmobile default consumer on normal dialog geometry', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 844 })
+    const dialog = mount(MobileFullscreenDialog, {
+      props: { modelValue: true, title: '桌面编辑' },
+      global: { stubs: mobileStubs }
+    })
+    const root = dialog.get('.mobile-fullscreen-dialog')
+
+    expect(root.classes()).not.toContain('mobile-fullscreen-dialog--active')
+    expect(root.attributes('style')).toBeUndefined()
   })
 
   it('renders a fixed action-bar container for page-owned actions', () => {

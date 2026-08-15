@@ -206,6 +206,7 @@ let historyRequestId = 0
 let submitPending = false
 let correctionSubmitPending = false
 let pageActive = true
+let lifecycleEpoch = 0
 
 const form = reactive({
   occurredOn: todayInBeijing(),
@@ -246,29 +247,32 @@ onMounted(() => {
 
 onUnmounted(() => {
   pageActive = false
+  lifecycleEpoch += 1
   itemsRequestId += 1
   historyRequestId += 1
 })
 
 async function loadItems() {
+  const lifecycleToken = lifecycleEpoch
   const requestId = ++itemsRequestId
   loading.value = true
   itemsError.value = ''
   try {
     const result = await getMedicineItems()
-    if (requestId !== itemsRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== itemsRequestId) return
     items.value = result
   } catch (error) {
-    if (requestId !== itemsRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== itemsRequestId) return
     items.value = []
     itemsError.value = errorMessage(error, '药品库存加载失败，请稍后重试')
     ElMessage.error(itemsError.value)
   } finally {
-    if (requestId === itemsRequestId) loading.value = false
+    if (isLifecycleCurrent(lifecycleToken) && requestId === itemsRequestId) loading.value = false
   }
 }
 
 async function loadHistory() {
+  const lifecycleToken = lifecycleEpoch
   const requestId = ++historyRequestId
   const [startDate, endDate] = historyDateRange.value || []
   historyLoading.value = true
@@ -280,15 +284,15 @@ async function loadHistory() {
       ...(startDate ? { startDate } : {}),
       ...(endDate ? { endDate } : {})
     })
-    if (requestId !== historyRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== historyRequestId) return
     movements.value = result
   } catch (error) {
-    if (requestId !== historyRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== historyRequestId) return
     movements.value = []
     historyError.value = errorMessage(error, '出库明细加载失败，请稍后重试')
     ElMessage.error(historyError.value)
   } finally {
-    if (requestId === historyRequestId) historyLoading.value = false
+    if (isLifecycleCurrent(lifecycleToken) && requestId === historyRequestId) historyLoading.value = false
   }
 }
 
@@ -305,6 +309,7 @@ function applyMobileHistoryFilter(value: { medicineItemIds: string[]; dateRange?
 
 async function handleSubmit() {
   if (!canSubmit.value || submitPending) return
+  const lifecycleToken = lifecycleEpoch
   const item = selectedItem.value
   const validatedQuantity = quantityValidation.value
   const remaining = remainingQuantity.value
@@ -318,8 +323,13 @@ async function handleSubmit() {
     quantity: validatedQuantity.value,
     remark: form.remark.trim()
   }
+  const submittedDraft = { ...form }
   submitPending = true
   const valid = await formRef.value?.validate().catch(() => false)
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    submitPending = false
+    return
+  }
   if (!valid) {
     submitPending = false
     return
@@ -335,7 +345,7 @@ async function handleSubmit() {
     submitPending = false
     return
   }
-  if (!pageActive) {
+  if (!isLifecycleCurrent(lifecycleToken)) {
     submitPending = false
     return
   }
@@ -348,12 +358,12 @@ async function handleSubmit() {
       quantity: submission.quantity,
       remark: submission.remark
     })
-    if (!pageActive) return
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('药品已出库')
-    resetForm()
+    if (matchesOutboundDraft(submittedDraft)) resetForm()
     await Promise.all([loadItems(), loadHistory()])
   } catch (error) {
-    if (!pageActive) return
+    if (!isLifecycleCurrent(lifecycleToken)) return
     if (isConflict(error)) {
       if (applyConflictQuantity(submission.medicineItemId, submission.unit, error)) {
         ElMessage.error(errorMessage(error, '库存已发生变化，请核对当前库存后重新提交'))
@@ -365,9 +375,16 @@ async function handleSubmit() {
     }
     ElMessage.error(errorMessage(error, '药品出库失败，请稍后重试'))
   } finally {
-    if (pageActive) saving.value = false
+    if (isLifecycleCurrent(lifecycleToken)) saving.value = false
     submitPending = false
   }
+}
+
+function matchesOutboundDraft(submission: typeof form) {
+  return form.occurredOn === submission.occurredOn
+    && form.medicineItemId === submission.medicineItemId
+    && form.quantity === submission.quantity
+    && form.remark === submission.remark
 }
 
 function resetForm() {
@@ -402,6 +419,8 @@ async function submitCorrection() {
     ElMessage.warning('请填写更正原因')
     return
   }
+  const lifecycleToken = lifecycleEpoch
+  const movementId = correctionMovementId.value
   correctionSubmitPending = true
   try {
     await ElMessageBox.confirm('确认创建反向更正流水？原出库记录不会被修改。', '二次确认更正', {
@@ -413,19 +432,29 @@ async function submitCorrection() {
     correctionSubmitPending = false
     return
   }
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    correctionSubmitPending = false
+    return
+  }
 
   correctionSaving.value = true
   try {
-    await correctMedicineMovement(correctionMovementId.value, { reason })
+    await correctMedicineMovement(movementId, { reason })
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('更正流水已创建')
     correctionVisible.value = false
     await Promise.all([loadItems(), loadHistory()])
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '更正失败，请稍后重试'))
   } finally {
-    correctionSaving.value = false
+    if (isLifecycleCurrent(lifecycleToken)) correctionSaving.value = false
     correctionSubmitPending = false
   }
+}
+
+function isLifecycleCurrent(token: number) {
+  return pageActive && token === lifecycleEpoch
 }
 
 function resetCorrection() {

@@ -206,7 +206,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { correctMedicineMovement, createMedicineCommonName, createMedicineInbound, deleteMedicineCommonName, getMedicineCommonNames, getMedicineItems, getMedicineMovements } from '@/api/medicineInventory'
 import MobileMedicineMovementList from '@/components/medicine/MobileMedicineMovementList.vue'
@@ -238,9 +238,12 @@ const historyDateRange = ref<string[] | undefined>()
 const mobileFormExpanded = ref(false)
 const { isMobileLayout } = useMobileLayout()
 let itemsRequestId = 0
+let commonNamesRequestId = 0
 let historyRequestId = 0
 let submitPending = false
 let correctionSubmitPending = false
+let lifecycleEpoch = 0
+let pageActive = true
 
 const form = reactive<{
   occurredOn: string
@@ -282,34 +285,49 @@ onMounted(() => {
   void Promise.all([loadItems(), loadCommonNames(), loadHistory()])
 })
 
+onUnmounted(() => {
+  pageActive = false
+  lifecycleEpoch += 1
+  itemsRequestId += 1
+  commonNamesRequestId += 1
+  historyRequestId += 1
+})
+
 async function loadItems() {
+  const lifecycleToken = lifecycleEpoch
   const requestId = ++itemsRequestId
   loading.value = true
   itemsError.value = ''
   try {
     const result = await getMedicineItems()
-    if (requestId !== itemsRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== itemsRequestId) return
     items.value = result
   } catch (error) {
-    if (requestId !== itemsRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== itemsRequestId) return
     items.value = []
     itemsError.value = errorMessage(error, '药品库存加载失败，请稍后重试')
     ElMessage.error(itemsError.value)
   } finally {
-    if (requestId === itemsRequestId) loading.value = false
+    if (isLifecycleCurrent(lifecycleToken) && requestId === itemsRequestId) loading.value = false
   }
 }
 
 async function loadCommonNames() {
+  const lifecycleToken = lifecycleEpoch
+  const requestId = ++commonNamesRequestId
   try {
-    commonNames.value = await getMedicineCommonNames()
+    const result = await getMedicineCommonNames()
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== commonNamesRequestId) return
+    commonNames.value = result
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== commonNamesRequestId) return
     commonNames.value = []
     ElMessage.error(errorMessage(error, '常用药品名称加载失败，请稍后重试'))
   }
 }
 
 async function loadHistory() {
+  const lifecycleToken = lifecycleEpoch
   const requestId = ++historyRequestId
   const [startDate, endDate] = historyDateRange.value || []
   historyLoading.value = true
@@ -321,15 +339,15 @@ async function loadHistory() {
       ...(startDate ? { startDate } : {}),
       ...(endDate ? { endDate } : {})
     })
-    if (requestId !== historyRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== historyRequestId) return
     movements.value = result
   } catch (error) {
-    if (requestId !== historyRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== historyRequestId) return
     movements.value = []
     historyError.value = errorMessage(error, '入库明细加载失败，请稍后重试')
     ElMessage.error(historyError.value)
   } finally {
-    if (requestId === historyRequestId) historyLoading.value = false
+    if (isLifecycleCurrent(lifecycleToken) && requestId === historyRequestId) historyLoading.value = false
   }
 }
 
@@ -362,6 +380,7 @@ function handleMedicineSuggestion(suggestion: { value: string; item?: MedicineIn
 }
 
 async function saveCommonName() {
+  const lifecycleToken = lifecycleEpoch
   const name = commonNameInput.value.trim()
   if (!name) {
     ElMessage.warning('请填写常用药品名称')
@@ -370,43 +389,62 @@ async function saveCommonName() {
   commonNamesSaving.value = true
   try {
     await createMedicineCommonName({ name })
+    if (!isLifecycleCurrent(lifecycleToken)) return
     commonNameInput.value = ''
     await loadCommonNames()
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('常用药品名称已添加')
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '常用药品名称添加失败，请稍后重试'))
   } finally {
-    commonNamesSaving.value = false
+    if (isLifecycleCurrent(lifecycleToken)) commonNamesSaving.value = false
   }
 }
 
 async function removeCommonName(commonNameId: string) {
+  const lifecycleToken = lifecycleEpoch
   try {
     await deleteMedicineCommonName(commonNameId)
+    if (!isLifecycleCurrent(lifecycleToken)) return
     commonNames.value = commonNames.value.filter((commonName) => commonName.id !== commonNameId)
     ElMessage.success('常用药品名称已移除')
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '常用药品名称移除失败，请稍后重试'))
   }
 }
 
 async function handleSubmit() {
   if (submitPending) return
+  const lifecycleToken = lifecycleEpoch
+  const submission = {
+    occurredOn: form.occurredOn,
+    name: form.name,
+    unit: form.unit,
+    quantity: form.quantity,
+    remark: form.remark,
+    selectedExistingItemId: selectedExistingItemId.value
+  }
   submitPending = true
   const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid || !form.unit) {
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    submitPending = false
+    return
+  }
+  if (!valid || !submission.unit) {
     submitPending = false
     return
   }
 
-  const quantity = validateMedicineQuantity(form.unit, form.quantity)
+  const quantity = validateMedicineQuantity(submission.unit, submission.quantity)
   if (!quantity.ok) {
     submitPending = false
     return
   }
 
   try {
-    await ElMessageBox.confirm(`确认入库 ${quantity.value} ${unitLabel(form.unit)} 的“${form.name}”？`, '确认入库', {
+    await ElMessageBox.confirm(`确认入库 ${quantity.value} ${unitLabel(submission.unit)} 的“${submission.name}”？`, '确认入库', {
       confirmButtonText: '确认入库',
       cancelButtonText: '取消',
       type: 'warning'
@@ -415,25 +453,47 @@ async function handleSubmit() {
     submitPending = false
     return
   }
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    submitPending = false
+    return
+  }
 
   saving.value = true
   try {
     await createMedicineInbound({
-      occurredOn: form.occurredOn,
-      name: form.name.trim(),
-      unit: form.unit,
+      occurredOn: submission.occurredOn,
+      name: submission.name.trim(),
+      unit: submission.unit,
       quantity: quantity.value,
-      remark: form.remark.trim()
+      remark: submission.remark.trim()
     })
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('药品已入库')
-    resetForm()
+    if (matchesInboundDraft(submission)) resetForm()
     await Promise.all([loadItems(), loadHistory()])
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '药品入库失败，请稍后重试'))
   } finally {
-    saving.value = false
+    if (isLifecycleCurrent(lifecycleToken)) saving.value = false
     submitPending = false
   }
+}
+
+function matchesInboundDraft(submission: {
+  occurredOn: string
+  name: string
+  unit: MedicineUnit | ''
+  quantity: string
+  remark: string
+  selectedExistingItemId: string
+}) {
+  return form.occurredOn === submission.occurredOn
+    && form.name === submission.name
+    && form.unit === submission.unit
+    && form.quantity === submission.quantity
+    && form.remark === submission.remark
+    && selectedExistingItemId.value === submission.selectedExistingItemId
 }
 
 function resetForm() {
@@ -462,6 +522,8 @@ async function submitCorrection() {
     ElMessage.warning('请填写更正原因')
     return
   }
+  const lifecycleToken = lifecycleEpoch
+  const movementId = correctionMovementId.value
   correctionSubmitPending = true
   try {
     await ElMessageBox.confirm('确认创建反向更正流水？原入库记录不会被修改。', '二次确认更正', {
@@ -473,19 +535,29 @@ async function submitCorrection() {
     correctionSubmitPending = false
     return
   }
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    correctionSubmitPending = false
+    return
+  }
 
   correctionSaving.value = true
   try {
-    await correctMedicineMovement(correctionMovementId.value, { reason })
+    await correctMedicineMovement(movementId, { reason })
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('更正流水已创建')
     correctionVisible.value = false
     await Promise.all([loadItems(), loadHistory()])
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '更正失败，请稍后重试'))
   } finally {
-    correctionSaving.value = false
+    if (isLifecycleCurrent(lifecycleToken)) correctionSaving.value = false
     correctionSubmitPending = false
   }
+}
+
+function isLifecycleCurrent(token: number) {
+  return pageActive && token === lifecycleEpoch
 }
 
 function resetCorrection() {
