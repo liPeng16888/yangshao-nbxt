@@ -6,7 +6,7 @@
           <h2>客户总览</h2>
           <p class="muted">汇总本账号所有已检测样品的客户、数量、金额和检测时间。</p>
         </div>
-        <button data-testid="mobile-customer-refresh" class="mobile-touch-target mobile-customer-overview__refresh" type="button" :disabled="loading" @click="loadRows">
+        <button data-testid="mobile-customer-refresh" class="mobile-touch-target mobile-customer-overview__refresh" type="button" @click="loadRows">
           刷新
         </button>
       </div>
@@ -26,6 +26,7 @@
               <el-select
                 v-model="draftCustomerKeys"
                 class="mobile-customer-overview__select"
+                popper-class="mobile-customer-overview-popper"
                 multiple
                 filterable
                 clearable
@@ -54,9 +55,9 @@
 
       <div v-if="loadError" class="mobile-customer-overview__error" data-testid="mobile-customer-load-error" role="alert">
         <span>{{ loadError }}</span>
-        <button data-testid="mobile-customer-retry" class="mobile-touch-target" type="button" :disabled="loading" @click="loadRows">重试</button>
+        <button data-testid="mobile-customer-retry" class="mobile-touch-target" type="button" @click="loadRows">重试</button>
       </div>
-      <MobileCustomerOverviewList :rows="displayRows" :summary="summary" :loading="loading" @show-details="showDetails" />
+      <MobileCustomerOverviewList v-if="!loadError" :rows="displayRows" :summary="summary" :loading="loading" @show-details="showDetails" />
     </section>
 
     <section v-else class="panel">
@@ -132,7 +133,7 @@
       </el-table>
     </section>
 
-    <MobileFullscreenDialog v-model="detailsOpen" title="客户检测详情" fullscreen>
+    <MobileFullscreenDialog v-if="isMobileLayout && detailsOpen && detailRow" v-model="detailsOpen" title="客户检测详情" fullscreen>
       <dl v-if="detailRow" class="mobile-customer-overview__detail-list">
         <div><dt>客户</dt><dd>{{ detailCustomerName }}</dd></div>
         <div><dt>联系方式</dt><dd>{{ detailContact }}</dd></div>
@@ -169,7 +170,7 @@ const filterOpen = ref(false)
 const draftCustomerKeys = ref<string[]>([])
 const draftSortField = ref<CustomerOverviewSortField>('lastDetectionDate')
 const draftSortDirection = ref<SortDirection>('desc')
-const detailRow = ref<CustomerOverviewRow | null>(null)
+const detailCustomerKey = ref<string | null>(null)
 const detailsOpen = ref(false)
 const { isMobileLayout } = useMobileLayout()
 let requestVersion = 0
@@ -190,6 +191,10 @@ const customerOptions = computed(() =>
 const displayRows = computed(() =>
   filterAndSortCustomerRows(rows.value, selectedCustomerKeys.value, sortField.value, sortDirection.value)
 )
+const detailRow = computed(() => detailCustomerKey.value
+  ? displayRows.value.find((row) => row.customerKey === detailCustomerKey.value) || null
+  : null
+)
 const summary = computed(() => ({
   customerCount: displayRows.value.length,
   sampleCount: displayRows.value.reduce((sum, row) => sum + row.sampleCount, 0),
@@ -207,7 +212,11 @@ const detailFirstDate = computed(() => detailRow.value?.firstDetectionDate || '�
 const detailLastDate = computed(() => detailRow.value?.lastDetectionDate || '暂无')
 
 onMounted(loadRows)
-onBeforeUnmount(() => { requestVersion += 1 })
+onBeforeUnmount(() => {
+  requestVersion += 1
+  detailsOpen.value = false
+  detailCustomerKey.value = null
+})
 
 watch(filterOpen, (open) => {
   if (!open) return
@@ -215,6 +224,16 @@ watch(filterOpen, (open) => {
   draftSortField.value = sortField.value
   draftSortDirection.value = sortDirection.value
 })
+
+watch([isMobileLayout, detailRow], ([mobile, row]) => {
+  if (mobile && row) return
+  detailsOpen.value = false
+  detailCustomerKey.value = null
+}, { flush: 'sync' })
+
+watch(detailsOpen, (open) => {
+  if (!open) detailCustomerKey.value = null
+}, { flush: 'sync' })
 
 async function loadRows() {
   const currentRequest = ++requestVersion
@@ -247,7 +266,7 @@ function resetMobileFilter() {
 }
 
 function showDetails(row: CustomerOverviewRow) {
-  detailRow.value = row
+  detailCustomerKey.value = row.customerKey
   detailsOpen.value = true
 }
 
@@ -356,6 +375,28 @@ function contact(row: CustomerOverviewRow | null) {
 .mobile-customer-overview__select :deep(.el-select__input),
 .mobile-customer-overview__direction :deep(.el-radio-button__inner) {
   min-height: 44px;
+}
+
+.mobile-customer-overview__select :deep(.el-tag__close) {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+}
+
+:global(.mobile-customer-overview-popper .el-select-dropdown__item) {
+  height: auto;
+  min-height: 44px;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 44px;
+}
+
+@media (pointer: coarse) {
+  :global(.mobile-customer-overview-popper .el-select-dropdown__item) {
+    min-height: 44px;
+    line-height: 44px;
+  }
 }
 
 .mobile-customer-overview__error {

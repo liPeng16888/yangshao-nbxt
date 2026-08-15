@@ -108,4 +108,13 @@ describe('AppMobileShell', () => {
     expect(scrollIntoView.mock.contexts).toContain(prepaid.element)
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'center' })
   })
+
+  it('keeps the customer overview a single-page mobile route without a secondary rail', () => {
+    mocks.route.path = '/customers-overview'
+    mocks.route.meta.title = '客户总览'
+    const wrapper = mountShell()
+
+    expect(wrapper.get('.mobile-app-header').text()).toContain('客户总览')
+    expect(wrapper.find('.mobile-secondary-nav').exists()).toBe(false)
+  })
 })

@@ -41,6 +41,38 @@ describe('mobile interaction primitives', () => {
     expect(filter.emitted('update:modelValue')).toEqual([[true]])
   })
 
+  it('uses fullscreen geometry and the mobile drawer class when a mobile consumer requests it', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    const narrow = mount(MobileFilterDrawer, {
+      props: { modelValue: true, title: '筛选客户', summary: '全部客户', fullscreen: true },
+      global: { stubs: mobileStubs }
+    })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 844 })
+    const coarse = mount(MobileFilterDrawer, {
+      props: { modelValue: true, title: '筛选客户', summary: '全部客户', fullscreen: true },
+      global: { stubs: mobileStubs }
+    })
+
+    for (const filter of [narrow, coarse]) {
+      const drawer = filter.get('.mobile-filter-drawer__panel')
+      expect(drawer.classes()).toContain('mobile-filter-drawer__panel--fullscreen')
+      expect(drawer.attributes('style')).toContain('height: 100dvh')
+      expect(drawer.attributes('style')).toContain('width: 100%')
+    }
+  })
+
+  it('leaves non-fullscreen drawer geometry unchanged for desktop consumers', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 844 })
+    const filter = mount(MobileFilterDrawer, {
+      props: { modelValue: true, title: '筛选客户', summary: '全部客户' },
+      global: { stubs: mobileStubs }
+    })
+    const drawer = filter.get('.mobile-filter-drawer__panel')
+
+    expect(drawer.classes()).not.toContain('mobile-filter-drawer__panel--fullscreen')
+    expect(drawer.attributes('style')).toBeUndefined()
+  })
+
   it('keeps record details unmounted while collapsed and exposes selected state', async () => {
     const card = mount(MobileRecordCard, {
       props: {

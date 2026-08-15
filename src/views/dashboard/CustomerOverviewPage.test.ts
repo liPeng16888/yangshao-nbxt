@@ -2,7 +2,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus, { ElSelect } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent, ref } from 'vue'
+import { defineComponent, nextTick, ref } from 'vue'
 import CustomerOverviewPage from './CustomerOverviewPage.vue'
 
 const mocks = vi.hoisted(() => ({
@@ -61,6 +61,22 @@ function mountPage() {
   })
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function customerCard(wrapper: ReturnType<typeof mountPage>, customer: string) {
+  const card = wrapper.findAll('[data-testid="mobile-customer-card"]').find((candidate) => candidate.text().includes(customer))
+  if (!card) throw new Error(`Missing card for ${customer}`)
+  return card
+}
+
 describe('CustomerOverviewPage', () => {
   beforeEach(() => {
     mocks.getCustomerOverview.mockReset()
@@ -94,6 +110,7 @@ describe('CustomerOverviewPage', () => {
     expect(wrapper.find('[data-summary="customers"]').text()).toContain('2')
     expect(wrapper.find('[data-summary="samples"]').text()).toContain('4')
     expect(wrapper.find('[data-summary="amount"]').text()).toContain('160.00')
+    expect(wrapper.find('[data-testid="mobile-customer-filter-summary"]').exists()).toBe(false)
   })
 
   it('uses cards rather than the desktop table in the mobile layout', async () => {
@@ -116,6 +133,38 @@ describe('CustomerOverviewPage', () => {
     expect(wrapper.find('.mobile-secondary-nav').exists()).toBe(false)
   })
 
+  it('stages customer filters until apply, resets only selections, and keeps the selected sort in the mobile summary', async () => {
+    mocks.mobileLayout.value = true
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="mobile-customer-filter-summary"] .mobile-filter-summary').trigger('click')
+    const [customerSelect, sortSelect] = wrapper.findAllComponents(ElSelect)
+    customerSelect.vm.$emit('update:modelValue', ['a'])
+    sortSelect.vm.$emit('update:modelValue', 'sampleCount')
+    wrapper.findAllComponents({ name: 'ElRadioGroup' })[0].vm.$emit('update:modelValue', 'asc')
+    wrapper.findComponent(DrawerStub).vm.$emit('update:modelValue', false)
+    await nextTick()
+
+    expect(wrapper.findAll('[data-testid="mobile-customer-card"]')).toHaveLength(2)
+    expect(wrapper.get('[data-testid="mobile-customer-filter-summary"]').text()).toContain('最后检测时间')
+
+    await wrapper.get('[data-testid="mobile-customer-filter-summary"] .mobile-filter-summary').trigger('click')
+    const [draftCustomerSelect, draftSortSelect] = wrapper.findAllComponents(ElSelect)
+    draftCustomerSelect.vm.$emit('update:modelValue', ['a'])
+    draftSortSelect.vm.$emit('update:modelValue', 'sampleCount')
+    wrapper.findAllComponents({ name: 'ElRadioGroup' })[0].vm.$emit('update:modelValue', 'asc')
+    await wrapper.findAll('.mobile-filter-drawer__actions button')[1].trigger('click')
+
+    expect(wrapper.findAll('[data-testid="mobile-customer-card"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="mobile-customer-filter-summary"]').text()).toContain('样品数量 · 升序')
+
+    await wrapper.get('[data-testid="mobile-customer-filter-summary"] .mobile-filter-summary').trigger('click')
+    await wrapper.findAll('.mobile-filter-drawer__actions button')[0].trigger('click')
+    expect(wrapper.findAll('[data-testid="mobile-customer-card"]')).toHaveLength(2)
+    expect(wrapper.get('[data-testid="mobile-customer-filter-summary"]').text()).toContain('样品数量 · 升序')
+  })
+
   it('keeps selected customer keys after a failed mobile refresh and offers retry', async () => {
     mocks.mobileLayout.value = true
     mocks.getCustomerOverview.mockResolvedValueOnce(rows).mockRejectedValueOnce(new Error('network unavailable')).mockResolvedValueOnce(rows)
@@ -123,17 +172,121 @@ describe('CustomerOverviewPage', () => {
     await flushPromises()
 
     await wrapper.get('[data-testid="mobile-customer-filter-summary"] .mobile-filter-summary').trigger('click')
-    const customerSelect = wrapper.findAllComponents(ElSelect)[0]
+    const [customerSelect, sortSelect] = wrapper.findAllComponents(ElSelect)
     customerSelect.vm.$emit('update:modelValue', ['a'])
+    sortSelect.vm.$emit('update:modelValue', 'sampleCount')
+    wrapper.findAllComponents({ name: 'ElRadioGroup' })[0].vm.$emit('update:modelValue', 'asc')
     await wrapper.findAll('.mobile-filter-drawer__actions button')[1].trigger('click')
     await wrapper.get('[data-testid="mobile-customer-refresh"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('[data-testid="mobile-customer-load-error"]').text()).toContain('加载失败')
-    expect(wrapper.findAll('[data-testid="mobile-customer-card"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="mobile-customer-card"]')).toHaveLength(0)
+    expect(wrapper.get('[data-testid="mobile-customer-filter-summary"]').text()).toContain('样品数量 · 升序')
     await wrapper.get('[data-testid="mobile-customer-retry"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-testid="mobile-customer-load-error"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-testid="mobile-customer-card"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="mobile-customer-filter-summary"]').text()).toContain('样品数量 · 升序')
+  })
+
+  it('renders mobile card contact, dates, sample count, and exact money precision', async () => {
+    mocks.mobileLayout.value = true
+    const wrapper = mountPage()
+    await flushPromises()
+
+    const card = customerCard(wrapper, '客户甲')
+    expect(card.text()).toContain('13800000001 wx-a')
+    expect(card.text()).toContain('3 个样品')
+    expect(card.text()).toContain('2026-07-01')
+    expect(card.text()).toContain('2026-07-03')
+    expect(card.text()).toContain('¥60.00')
+  })
+
+  it('uses the mobile contact fallback when a customer row has no display contact', async () => {
+    mocks.mobileLayout.value = true
+    mocks.getCustomerOverview.mockResolvedValueOnce([
+      { ...rows[0], customerDisplay: '' }
+    ])
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(customerCard(wrapper, '客户甲').text()).toContain('暂无联系方式')
+  })
+
+  it('keeps an open detail tied to its customer key so a refresh shows current values and filtering it out closes it', async () => {
+    mocks.mobileLayout.value = true
+    const refreshedRows = rows.map((row) => row.customerKey === 'a'
+      ? { ...row, totalAmount: 61.25, lastDetectionDate: '2026-07-05' }
+      : row
+    )
+    mocks.getCustomerOverview.mockResolvedValueOnce(rows).mockResolvedValueOnce(refreshedRows)
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await customerCard(wrapper, '客户甲').get('button').trigger('click')
+    expect(wrapper.get('.mobile-fullscreen-dialog').text()).toContain('¥60.00')
+
+    await wrapper.get('[data-testid="mobile-customer-refresh"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.mobile-fullscreen-dialog').text()).toContain('¥61.25')
+    expect(wrapper.get('.mobile-fullscreen-dialog').text()).toContain('2026-07-05')
+
+    await wrapper.get('[data-testid="mobile-customer-filter-summary"] .mobile-filter-summary').trigger('click')
+    wrapper.findAllComponents(ElSelect)[0].vm.$emit('update:modelValue', ['b'])
+    await wrapper.findAll('.mobile-filter-drawer__actions button')[1].trigger('click')
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+  })
+
+  it('closes a detail removed by reload or a mobile-to-desktop layout switch and can reopen a current row', async () => {
+    mocks.mobileLayout.value = true
+    mocks.getCustomerOverview.mockResolvedValueOnce(rows).mockResolvedValueOnce([rows[1]])
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await customerCard(wrapper, '客户甲').get('button').trigger('click')
+    await wrapper.get('[data-testid="mobile-customer-refresh"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+
+    await customerCard(wrapper, '客户乙').get('button').trigger('click')
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(true)
+    mocks.mobileLayout.value = false
+    await nextTick()
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+
+    mocks.mobileLayout.value = true
+    await nextTick()
+    await customerCard(wrapper, '客户乙').get('button').trigger('click')
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(true)
+  })
+
+  it('does not render the empty status behind an initial mobile load failure', async () => {
+    mocks.mobileLayout.value = true
+    mocks.getCustomerOverview.mockRejectedValueOnce(new Error('offline'))
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="mobile-customer-load-error"]').attributes('role')).toBe('alert')
+    expect(wrapper.find('.mobile-customer-overview-state.empty-text').exists()).toBe(false)
+  })
+
+  it('keeps only the newest customer request state and ignores completions after unmount', async () => {
+    mocks.mobileLayout.value = true
+    const first = deferred<typeof rows>()
+    const second = deferred<typeof rows>()
+    mocks.getCustomerOverview.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+    const wrapper = mountPage()
+    await nextTick()
+    await wrapper.get('[data-testid="mobile-customer-refresh"]').trigger('click')
+    second.resolve([rows[0]])
+    await flushPromises()
+    first.reject(new Error('old failure'))
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="mobile-customer-card"]')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="mobile-customer-load-error"]').exists()).toBe(false)
+    wrapper.unmount()
+    await flushPromises()
   })
 })
