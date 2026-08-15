@@ -8,9 +8,11 @@
 - Added 44px touch tabs, controls, and card actions; safe-area spacing; `100dvh` full-screen create/edit dialogs; textual status in addition to color; semantic labels and tab roles; and long-text wrapping.
 - Employee, approval-status, and date filters live in a full-screen draft drawer. Draft changes do not affect applied Store state until Apply; Reset returns to the current month/all employees/all statuses. Existing Store request sequencing keeps only the latest list/type response, retains the applied filter on failure, and retries the exact current query from the page error action.
 - Leave create/edit and leave-type create/edit reuse the existing Store/API payloads. Failed active saves keep the exact form; duplicate submits are blocked; successful creates adopt only the returned ID when the same open form has newer edits so the next save updates that ID without overwriting the newer draft.
-- Approve requires the exact mobile confirmation, reject retains the existing reason prompt with nonblank validation, and leave/type delete-or-deactivate operations require explicit mobile confirmation. Processed or payroll-locked leave cards keep all mutation controls visibly disabled.
-- Save, review, delete, and type mutations use mounted-state, layout, page-session, editor-session, operation-token, editing-context, and form-revision guards. Stale results cannot close/reload/error a newer form or continue after layout change/unmount, and same-row duplicate actions are ignored.
-- No Store, API adapter, mock, server, admin, route, navigation, payroll/quota calculation, database, migration, production, or Task 21+ file changed.
+- Approve requires the exact mobile confirmation, mobile reject uses the exact reason prompt and nonblank validation, and leave/type delete-or-deactivate operations require explicit mobile confirmation. The legacy desktop reject path still submits an empty prompt result exactly as before. Processed or payroll-locked leave cards keep all mutation controls visibly disabled.
+- Save, review, delete, and type mutations use mounted-state, layout, page-session, editor-session, operation-token, editing-context, and form-revision guards. Stale results cannot close/reload/error a newer form or continue after layout change/unmount, and duplicate actions are ignored.
+- Page-owned leave loads now use a scoped Store cancellation signal. Layout changes and actual unmount release that page's loading ownership immediately; late resolve/reject settlements cannot publish rows, types, loading, or errors. Cancelling an owned load does not cancel a newer Store consumer, while an active latest failure remains visible and retries the exact applied filter.
+- Leave-type save and delete/deactivate operations share one local/global operation lock on both desktop and mobile, retaining the prior `store.saving` serialization while confirmation, API work, or save is pending.
+- No API endpoint or payload, API adapter, mock, server, admin, route, navigation, payroll/quota calculation, database, migration, production, or Task 21+ file changed.
 
 ## TDD evidence
 
@@ -26,6 +28,14 @@ Observed result: the new Task 20 mobile tests failed because mobile leave/type c
 
 The filter latest-response/retry case also received an explicit mutation check: disabling the `MobileLeaveList` mount made that focused test fail because the integration boundary was absent; restoring the mount made it pass.
 
+Review-fix RED command:
+
+```bash
+pnpm exec vitest run src/views/dashboard/EmployeeAttendancePages.test.ts src/stores/employeeAttendance.test.ts --reporter=verbose
+```
+
+Observed result before the fix: 16 failures. The failures directly reproduced scoped leave loads retaining `loading` after cancellation, post-mutation refreshes surviving actual unmount for leave save/review/delete and type save/delete, the desktop empty-reason rejection regression, and overlapping leave-type operations. Existing create-ID tests already characterized the implementation; the added leave-type cases confirm same-session newer-edit ID adoption and stale-session non-adoption.
+
 Server authority check during RED:
 
 ```bash
@@ -38,14 +48,16 @@ Result: 1 file passed, 9 tests passed.
 
 - Card tests cover exclusive desktop/mobile rendering, all requested leave fields, status text, type active/rest-quota flags, referenced state, and locked/processed disabled actions.
 - Filter tests cover draft isolation, applied employee/status/date values, exact API query, latest-only out-of-order settlement, visible latest failure, and exact retry.
-- Form tests cover mobile `100dvh` editors, failure retention, duplicate save prevention, newer-draft preservation, successful-create ID adoption, subsequent update, layout invalidation, and unchanged desktop failure behavior.
-- Action tests cover exact approve confirmation, exact reject-reason prompt and API remark, exact leave delete confirmation, and duplicate review blocking.
+- Form tests cover mobile `100dvh` editors, active same-session/same-revision failure retention of every leave/type field and local error, duplicate save prevention, newer-draft preservation, successful leave/type create-ID adoption, subsequent update, stale-session non-adoption, layout invalidation, and unchanged desktop failure behavior.
+- Action tests cover exact approve confirmation, exact reject-reason prompt and API remark, legacy desktop blank rejection, exact leave and type delete/deactivate confirmations, referenced-type edit disabled/no emit, and duplicate/overlap blocking.
+- Lifecycle tests unmount the actual page after each successful leave save, review, leave delete, type save, and type delete has started its refresh; both late resolve and late reject are silent and cannot retain loading or publish rows/errors.
 
 ## Verification
 
-- Focused leave/page suite: `pnpm exec vitest run src/views/dashboard/EmployeeAttendancePages.test.ts --reporter=dot` -> 1 file passed, 76 tests passed.
+- Focused page/Store suite: `pnpm exec vitest run src/views/dashboard/EmployeeAttendancePages.test.ts src/stores/employeeAttendance.test.ts --reporter=dot` -> 2 files passed, 101 tests passed (94 page, 7 Store).
+- Focused API read-only verification: `pnpm exec vitest run src/api/employeeAttendance.adapters.test.ts src/api/employeeAttendance.mock.test.ts --reporter=dot` -> 2 files passed, 58 tests passed.
 - Server payroll/quota read-only suite: `pnpm --filter yangshao-server exec vitest run src/employee-attendance/payroll-calculator.test.ts src/employee-attendance/payroll.service.test.ts --reporter=dot` -> 2 files passed, 51 tests passed.
-- Controlled-clock full frontend/root suite: `pnpm exec vitest run --config /private/tmp/task16-vitest.config.ts --reporter=dot` -> 125 files passed, 1,363 tests passed.
+- Controlled-clock full frontend/root suite: `pnpm exec vitest run --config /private/tmp/task16-vitest.config.ts --reporter=dot` -> 125 files passed, 1,383 tests passed.
 - Type check: `pnpm exec vue-tsc --noEmit` -> exit 0.
 - Production frontend build: `pnpm build` -> exit 0; Vite bundle and PWA service worker generated.
 - Diff validation: `git diff --check` -> exit 0.
@@ -56,4 +68,6 @@ Result: 1 file passed, 9 tests passed.
 - `src/views/dashboard/employee-attendance/MobileLeaveList.vue`
 - `src/views/dashboard/employee-attendance/EmployeeLeavePage.vue`
 - `src/views/dashboard/EmployeeAttendancePages.test.ts`
+- `src/stores/employeeAttendance.ts`
+- `src/stores/employeeAttendance.test.ts`
 - `.superpowers/sdd/2026-08-15-mobile-frontend-full-adaptation/task-20-report.md`

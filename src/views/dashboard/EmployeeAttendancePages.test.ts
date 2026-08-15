@@ -21,6 +21,13 @@ import EmployeePayrollPage from './employee-attendance/EmployeePayrollPage.vue'
 
 const attendanceLayout = vi.hoisted(() => ({ mobile: undefined as unknown as ReturnType<typeof ref<boolean>> }))
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise })
+  return { promise, resolve, reject }
+}
+
 vi.mock('@/composables/useMobileLayout', () => ({
   useMobileLayout: () => ({ isMobileLayout: attendanceLayout.mobile })
 }))
@@ -1727,6 +1734,106 @@ describe('employee attendance navigation', () => {
     wrapper.unmount(); confirm.mockRestore(); prompt.mockRestore(); review.mockRestore(); remove.mockRestore()
   })
 
+  it('keeps the legacy desktop blank rejection remark while mobile requires a nonblank reason', async () => {
+    const prompt = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '' } as any)
+    const review = vi.spyOn(attendanceApi, 'reviewLeave').mockImplementation(async (id, action, reviewRemark) => ({
+      ...(await attendanceApi.getLeaves({})).find((row) => row.id === id)!, status: action === 'approve' ? 'APPROVED' as const : 'REJECTED' as const, reviewRemark: reviewRemark ?? ''
+    }))
+    const desktop = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await desktop.findAll('button').find((node) => node.text() === '驳回')!.trigger('click')
+    await flushPromises()
+    expect(prompt).toHaveBeenNthCalledWith(1, '请填写驳回原因', '驳回请假')
+    expect(review).toHaveBeenCalledWith('leave-1', 'reject', '')
+    desktop.unmount()
+
+    attendanceLayout.mobile.value = true
+    prompt.mockResolvedValue({ value: '   ' } as any)
+    review.mockClear()
+    const mobile = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await mobile.get('[data-testid="mobile-reject-leave-leave-1"]').trigger('click')
+    await flushPromises()
+    expect(prompt).toHaveBeenLastCalledWith('请填写驳回原因', '驳回请假', { inputPattern: /\S+/, inputErrorMessage: '请填写驳回原因' })
+    expect(review).not.toHaveBeenCalled()
+    mobile.unmount(); prompt.mockRestore(); review.mockRestore()
+  })
+
+  it('confirms mobile leave-type deletion or deactivation exactly and never edits a referenced type', async () => {
+    attendanceLayout.mobile.value = true
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const remove = vi.spyOn(attendanceApi, 'deleteLeaveType').mockResolvedValue(undefined as any)
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-leave-tab-types"]').trigger('click')
+
+    const edit = wrapper.get('[data-testid="mobile-edit-leave-type-leave-type-rest"]')
+    expect(edit.attributes('disabled')).toBeDefined()
+    await edit.trigger('click')
+    expect(wrapper.find('[data-testid="mobile-leave-type-editor"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="mobile-remove-leave-type-leave-type-rest"]').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledWith('删除或停用后需重新编辑才能恢复，是否继续？', '确认删除或停用请假类型', { type: 'warning' })
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledWith('leave-type-rest')
+    wrapper.unmount(); confirm.mockRestore(); remove.mockRestore()
+  })
+
+  it('retains every leave field and exposes an active same-revision save failure', async () => {
+    attendanceLayout.mobile.value = true
+    const pending = deferred<Awaited<ReturnType<typeof attendanceApi.saveLeave>>>()
+    const save = vi.spyOn(attendanceApi, 'saveLeave').mockReturnValue(pending.promise)
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-create-leave"]').trigger('click')
+    const editor = wrapper.get('[data-testid="mobile-leave-editor"]')
+    const selects = editor.findAllComponents({ name: 'ElSelect' })
+    selects[0]!.vm.$emit('update:modelValue', 'emp-1')
+    selects[1]!.vm.$emit('update:modelValue', 'leave-type-sick')
+    selects[2]!.vm.$emit('update:modelValue', 'HOUR')
+    await nextTick()
+    const dates = editor.findAllComponents({ name: 'ElDatePicker' })
+    dates[0]!.vm.$emit('update:modelValue', '2026-08-18')
+    dates[1]!.vm.$emit('update:modelValue', '2026-08-18')
+    const hours = editor.getComponent({ name: 'ElInputNumber' })
+    hours.vm.$emit('update:modelValue', 3.5)
+    await wrapper.get('[data-testid="leave-reason"]').setValue('同版本失败草稿')
+    await wrapper.get('[data-testid="leave-save"]').trigger('click')
+    pending.reject(new Error('请假保存冲突'))
+    await flushPromises()
+
+    expect(selects.map((node: any) => node.props('modelValue'))).toEqual(['emp-1', 'leave-type-sick', 'HOUR'])
+    expect(dates.map((node: any) => node.props('modelValue'))).toEqual(['2026-08-18', '2026-08-18'])
+    expect(hours.props('modelValue')).toBe(3.5)
+    expect((wrapper.get('[data-testid="leave-reason"]').element as HTMLTextAreaElement).value).toBe('同版本失败草稿')
+    expect(wrapper.text()).toContain('请假保存冲突')
+    wrapper.unmount(); save.mockRestore()
+  })
+
+  it('retains every leave-type field and exposes an active same-revision save failure', async () => {
+    attendanceLayout.mobile.value = true
+    const pending = deferred<Awaited<ReturnType<typeof attendanceApi.saveLeaveType>>>()
+    const save = vi.spyOn(attendanceApi, 'saveLeaveType').mockReturnValue(pending.promise)
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-leave-tab-types"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-create-leave-type"]').trigger('click')
+    await wrapper.get('[data-testid="leave-type-name"]').setValue('同版本类型草稿')
+    const switches = wrapper.get('[data-testid="mobile-leave-type-editor"]').findAllComponents({ name: 'ElSwitch' })
+    switches[0]!.vm.$emit('update:modelValue', false)
+    switches[1]!.vm.$emit('update:modelValue', false)
+    await nextTick()
+    await wrapper.get('[data-testid="leave-type-save"]').trigger('click')
+    pending.reject(new Error('类型保存冲突'))
+    await flushPromises()
+
+    expect((wrapper.get('[data-testid="leave-type-name"]').element as HTMLInputElement).value).toBe('同版本类型草稿')
+    expect(switches.map((node: any) => node.props('modelValue'))).toEqual([false, false])
+    expect(wrapper.text()).toContain('类型保存冲突')
+    wrapper.unmount(); save.mockRestore()
+  })
+
   it('retains a newer leave draft after an older failure and adopts a successful create id for the next save', async () => {
     attendanceLayout.mobile.value = true
     let rejectFirst!: (error: Error) => void
@@ -1794,6 +1901,170 @@ describe('employee attendance navigation', () => {
     expect((wrapper.get('[data-testid="leave-type-name"]').element as HTMLInputElement).value).toBe('陪护假新草稿')
     expect(wrapper.text()).not.toContain('旧类型保存失败')
     wrapper.unmount(); save.mockRestore()
+  })
+
+  it('adopts a created leave-type id for a newer edit and uses it on the next save', async () => {
+    attendanceLayout.mobile.value = true
+    const pending = deferred<Awaited<ReturnType<typeof attendanceApi.saveLeaveType>>>()
+    const created = { id: 'leave-type-created-during-edit', name: '服务端名称', active: true, countsTowardRestQuota: true, referenced: false }
+    const save = vi.spyOn(attendanceApi, 'saveLeaveType')
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(created)
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-leave-tab-types"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-create-leave-type"]').trigger('click')
+    await wrapper.get('[data-testid="leave-type-name"]').setValue('类型提交版本')
+    await wrapper.get('[data-testid="leave-type-save"]').trigger('click')
+    await wrapper.get('[data-testid="leave-type-name"]').setValue('类型保存期间的新草稿')
+    pending.resolve(created)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="mobile-leave-type-editor"]').text()).toContain('编辑请假类型')
+    expect((wrapper.get('[data-testid="leave-type-name"]').element as HTMLInputElement).value).toBe('类型保存期间的新草稿')
+    await wrapper.get('[data-testid="leave-type-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenNthCalledWith(2, expect.objectContaining({ name: '类型保存期间的新草稿' }), 'leave-type-created-during-edit')
+    wrapper.unmount(); save.mockRestore()
+  })
+
+  it('never adopts a created leave-type id after that editor session is closed', async () => {
+    attendanceLayout.mobile.value = true
+    const pending = deferred<Awaited<ReturnType<typeof attendanceApi.saveLeaveType>>>()
+    const created = { id: 'stale-created-type', name: '旧会话服务端名称', active: true, countsTowardRestQuota: true, referenced: false }
+    const save = vi.spyOn(attendanceApi, 'saveLeaveType')
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(created)
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-leave-tab-types"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-create-leave-type"]').trigger('click')
+    await wrapper.get('[data-testid="leave-type-name"]').setValue('将关闭的类型会话')
+    await wrapper.get('[data-testid="leave-type-save"]').trigger('click')
+    wrapper.getComponent({ name: 'MobileFullscreenDialog' }).vm.$emit('update:modelValue', false)
+    await nextTick()
+    pending.resolve(created)
+    await flushPromises()
+
+    await wrapper.get('[data-testid="mobile-create-leave-type"]').trigger('click')
+    await wrapper.get('[data-testid="leave-type-name"]').setValue('全新类型会话')
+    await wrapper.get('[data-testid="leave-type-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenNthCalledWith(2, expect.objectContaining({ name: '全新类型会话' }), undefined)
+    wrapper.unmount(); save.mockRestore()
+  })
+
+  it('serializes desktop leave-type saves against delete or deactivate operations in both directions', async () => {
+    const firstSave = deferred<Awaited<ReturnType<typeof attendanceApi.saveLeaveType>>>()
+    const save = vi.spyOn(attendanceApi, 'saveLeaveType').mockReturnValue(firstSave.promise)
+    const remove = vi.spyOn(attendanceApi, 'deleteLeaveType').mockResolvedValue(undefined as any)
+    const first = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    const name = first.get('input[placeholder="类型名称"]')
+    await name.setValue('串行保存类型')
+    await first.findAll('button').find((node) => node.text() === '新增类型')!.trigger('click')
+    await first.findAll('button').find((node) => node.text() === '删除/停用')!.trigger('click')
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(remove).not.toHaveBeenCalled()
+    firstSave.resolve({ id: 'serialized-type', name: '串行保存类型', active: true, countsTowardRestQuota: true, referenced: false })
+    await flushPromises()
+    first.unmount()
+
+    save.mockReset()
+    const pendingRemove = deferred<void>()
+    remove.mockReturnValue(pendingRemove.promise)
+    const second = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await second.findAll('button').find((node) => node.text() === '删除/停用')!.trigger('click')
+    await second.get('input[placeholder="类型名称"]').setValue('删除期间不可保存')
+    await second.findAll('button').find((node) => node.text() === '新增类型')!.trigger('click')
+    await second.findAll('button').find((node) => node.text() === '删除/停用')!.trigger('click')
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(save).not.toHaveBeenCalled()
+    pendingRemove.resolve()
+    await flushPromises()
+    second.unmount(); save.mockRestore(); remove.mockRestore()
+  })
+
+  it('serializes mobile leave-type delete confirmation against create and save actions', async () => {
+    attendanceLayout.mobile.value = true
+    const confirmation = deferred<any>()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(confirmation.promise)
+    const remove = vi.spyOn(attendanceApi, 'deleteLeaveType').mockResolvedValue(undefined as any)
+    const save = vi.spyOn(attendanceApi, 'saveLeaveType')
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-leave-tab-types"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-remove-leave-type-leave-type-rest"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-remove-leave-type-leave-type-rest"]').trigger('click')
+    expect(wrapper.get('[data-testid="mobile-create-leave-type"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="mobile-create-leave-type"]').trigger('click')
+    expect(wrapper.find('[data-testid="mobile-leave-type-editor"]').exists()).toBe(false)
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(save).not.toHaveBeenCalled()
+    confirmation.resolve('confirm')
+    await flushPromises()
+    expect(remove).toHaveBeenCalledTimes(1)
+    wrapper.unmount(); confirm.mockRestore(); remove.mockRestore(); save.mockRestore()
+  })
+
+  it.each([
+    ['leave save', 'resolve'], ['leave save', 'reject'],
+    ['leave review', 'resolve'], ['leave review', 'reject'],
+    ['leave delete', 'resolve'], ['leave delete', 'reject'],
+    ['type save', 'resolve'], ['type save', 'reject'],
+    ['type delete', 'resolve'], ['type delete', 'reject']
+  ] as const)('silences a post-%s refresh after actual unmount and late %s', async (mutation, settlement) => {
+    attendanceLayout.mobile.value = true
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    const store = useEmployeeAttendanceStore(pinia)
+    const originalIds = store.leaves.map((row) => row.id)
+    const refresh = deferred<Awaited<ReturnType<typeof attendanceApi.getLeaves>>>()
+    const request = vi.spyOn(attendanceApi, 'getLeaves').mockReturnValue(refresh.promise)
+    const leave = store.leaves.find((row) => row.status === 'PENDING')!
+    const type = store.leaveTypes[0]!
+    const saveLeave = vi.spyOn(attendanceApi, 'saveLeave').mockResolvedValue({ ...leave, reason: '已保存' })
+    const reviewLeave = vi.spyOn(attendanceApi, 'reviewLeave').mockResolvedValue({ ...leave, status: 'APPROVED' })
+    const deleteLeave = vi.spyOn(attendanceApi, 'deleteLeave').mockResolvedValue(undefined as any)
+    const saveType = vi.spyOn(attendanceApi, 'saveLeaveType').mockResolvedValue({ id: 'created-type', name: '卸载刷新类型', active: true, countsTowardRestQuota: true, referenced: false })
+    const deleteType = vi.spyOn(attendanceApi, 'deleteLeaveType').mockResolvedValue(undefined as any)
+    let settled = false
+    try {
+      if (mutation === 'leave save') {
+        await wrapper.get(`[data-testid="mobile-edit-leave-${leave.id}"]`).trigger('click')
+        await wrapper.get('[data-testid="leave-save"]').trigger('click')
+      } else if (mutation === 'leave review') {
+        await wrapper.get(`[data-testid="mobile-approve-leave-${leave.id}"]`).trigger('click')
+      } else if (mutation === 'leave delete') {
+        await wrapper.get(`[data-testid="mobile-remove-leave-${leave.id}"]`).trigger('click')
+      } else if (mutation === 'type save') {
+        await wrapper.get('[data-testid="mobile-leave-tab-types"]').trigger('click')
+        await wrapper.get('[data-testid="mobile-create-leave-type"]').trigger('click')
+        await wrapper.get('[data-testid="leave-type-name"]').setValue('卸载刷新类型')
+        await wrapper.get('[data-testid="leave-type-save"]').trigger('click')
+      } else {
+        await wrapper.get('[data-testid="mobile-leave-tab-types"]').trigger('click')
+        await wrapper.get(`[data-testid="mobile-remove-leave-type-${type.id}"]`).trigger('click')
+      }
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+      expect(store.loading).toBe(true)
+      wrapper.unmount()
+      expect(store.loading).toBe(false)
+      if (settlement === 'resolve') refresh.resolve([{ ...leave, id: `late-${mutation}` }])
+      else refresh.reject(new Error(`late ${mutation} refresh failure`))
+      settled = true
+      await flushPromises()
+      expect(store.leaves.map((row) => row.id)).toEqual(originalIds)
+      expect(store.error).toBe('')
+      expect(store.loading).toBe(false)
+    } finally {
+      if (!settled) refresh.resolve([])
+      if (wrapper.exists()) wrapper.unmount()
+      confirm.mockRestore(); request.mockRestore(); saveLeave.mockRestore(); reviewLeave.mockRestore(); deleteLeave.mockRestore(); saveType.mockRestore(); deleteType.mockRestore()
+    }
   })
 
   it('ignores leave save settlement after layout change or unmount', async () => {

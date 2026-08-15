@@ -1,6 +1,6 @@
 <template>
   <PageShell class="employee-leave-page" title="请假管理" description="自定义请假类型及是否占用月休额度，录入并审批整天、半天或小时请假。" employee-mode="leave-multiple" @refresh="load">
-    <MobileLeaveList v-if="isMobileLayout" :tab="tab" :rows="store.leaves" :types="store.leaveTypes" :employees="store.employees" :filters="mobileFilters" :month="store.month" :busy="leaveSaving || typeSaving" :pending-leave-ids="pendingLeaveIds" :pending-type-ids="pendingTypeIds" @change-tab="tab = $event" @apply-filters="applyMobileFilters" @create="openLeave()" @edit="openLeave" @approve="review($event, 'approve')" @reject="review($event, 'reject')" @remove="removeLeave" @create-type="openTypeCreate" @edit-type="editType" @remove-type="removeType" />
+    <MobileLeaveList v-if="isMobileLayout" :tab="tab" :rows="store.leaves" :types="store.leaveTypes" :employees="store.employees" :filters="mobileFilters" :month="store.month" :busy="leaveSaving || typeOperationBusy" :pending-leave-ids="pendingLeaveIds" :pending-type-ids="pendingTypeIds" @change-tab="tab = $event" @apply-filters="applyMobileFilters" @create="openLeave()" @edit="openLeave" @approve="review($event, 'approve')" @reject="review($event, 'reject')" @remove="removeLeave" @create-type="openTypeCreate" @edit-type="editType" @remove-type="removeType" />
 
     <el-tabs v-else v-model="tab">
       <el-tab-pane label="请假记录" name="records">
@@ -8,8 +8,8 @@
         <el-table :data="store.leaves" empty-text="暂无请假记录"><el-table-column label="员工"><template #default="{row}">{{nameOf(row.employeeId)}}</template></el-table-column><el-table-column label="类型"><template #default="{row}">{{typeName(row.leaveTypeId)}}</template></el-table-column><el-table-column label="日期"><template #default="{row}">{{row.startDate}} 至 {{row.endDate}}</template></el-table-column><el-table-column label="单位"><template #default="{row}">{{unitLabel[row.unit]}}{{row.unit==='HOUR'?` ${row.hours}小时`:''}}</template></el-table-column><el-table-column prop="reason" label="原因"/><el-table-column label="状态"><template #default="{row}"><el-tag :type="row.status==='APPROVED'?'success':row.status==='REJECTED'?'danger':'warning'">{{statusLabel[row.status]}}</el-tag></template></el-table-column><el-table-column label="操作" width="255"><template #default="{row}"><template v-if="row.status==='PENDING' && !row.lockedAt"><el-button link type="primary" @click="openLeave(row)">编辑</el-button><el-button link type="success" @click="review(row,'approve')">批准</el-button><el-button link type="danger" @click="review(row,'reject')">驳回</el-button><el-button link @click="removeLeave(row)">删除</el-button></template><span v-else class="muted">{{row.lockedAt?'工资已锁定':'已处理'}}</span></template></el-table-column></el-table>
       </el-tab-pane>
       <el-tab-pane label="请假类型" name="types">
-        <div class="toolbar"><el-input v-model="typeForm.name" placeholder="类型名称" style="width:180px"/><el-switch v-model="typeForm.countsTowardRestQuota" active-text="占月休额度"/><el-switch v-model="typeForm.active" active-text="启用" inactive-text="停用"/><el-button type="primary" :loading="typeSaving" :disabled="typeSaving" @click="saveType">{{typeEditingId?'保存修改':'新增类型'}}</el-button><el-button v-if="typeEditingId" :disabled="typeSaving" @click="resetType">取消编辑</el-button></div>
-        <el-table :data="store.leaveTypes"><el-table-column prop="name" label="类型"/><el-table-column label="占月休"><template #default="{row}">{{row.countsTowardRestQuota?'是':'否'}}</template></el-table-column><el-table-column label="状态"><template #default="{row}">{{row.active?'启用':'停用'}} <el-tag v-if="row.referenced" size="small" type="warning">已使用，仅可停用</el-tag></template></el-table-column><el-table-column label="操作"><template #default="{row}"><el-button link type="primary" :disabled="row.referenced" @click="editType(row)">编辑</el-button><el-button link type="danger" @click="removeType(row)">删除/停用</el-button></template></el-table-column></el-table>
+        <div class="toolbar"><el-input v-model="typeForm.name" placeholder="类型名称" style="width:180px"/><el-switch v-model="typeForm.countsTowardRestQuota" active-text="占月休额度"/><el-switch v-model="typeForm.active" active-text="启用" inactive-text="停用"/><el-button type="primary" :loading="typeSaving || store.saving" :disabled="typeOperationBusy" @click="saveType">{{typeEditingId?'保存修改':'新增类型'}}</el-button><el-button v-if="typeEditingId" :disabled="typeOperationBusy" @click="resetType">取消编辑</el-button></div>
+        <el-table :data="store.leaveTypes"><el-table-column prop="name" label="类型"/><el-table-column label="占月休"><template #default="{row}">{{row.countsTowardRestQuota?'是':'否'}}</template></el-table-column><el-table-column label="状态"><template #default="{row}">{{row.active?'启用':'停用'}} <el-tag v-if="row.referenced" size="small" type="warning">已使用，仅可停用</el-tag></template></el-table-column><el-table-column label="操作"><template #default="{row}"><el-button link type="primary" :disabled="typeOperationBusy || row.referenced" @click="editType(row)">编辑</el-button><el-button link type="danger" :disabled="typeOperationBusy" @click="removeType(row)">删除/停用</el-button></template></el-table-column></el-table>
       </el-tab-pane>
     </el-tabs>
   </PageShell>
@@ -21,7 +21,7 @@
 
   <MobileFullscreenDialog v-if="isMobileLayout" v-model="typeVisible" data-testid="mobile-leave-type-editor" class="leave-type-editor-dialog" :title="typeEditingId?'编辑请假类型':'新增请假类型'" :saving="typeSaving" fullscreen>
     <el-alert v-if="typeFormError" :title="typeFormError" type="error" :closable="false"/><el-form label-position="top" class="leave-type-editor-form"><el-form-item label="类型名称" required><el-input v-model="typeForm.name" data-testid="leave-type-name"/></el-form-item><el-form-item label="月休额度"><el-switch v-model="typeForm.countsTowardRestQuota" active-text="占用月休额度" inactive-text="不占用月休额度"/></el-form-item><el-form-item label="状态"><el-switch v-model="typeForm.active" active-text="启用" inactive-text="停用"/></el-form-item></el-form>
-    <template #footer><div class="leave-editor-actions"><el-button :disabled="typeSaving" @click="typeVisible=false">取消</el-button><el-button data-testid="leave-type-save" type="primary" :loading="typeSaving" :disabled="typeSaving" @click="saveType">保存</el-button></div></template>
+    <template #footer><div class="leave-editor-actions"><el-button :disabled="typeOperationBusy" @click="typeVisible=false">取消</el-button><el-button data-testid="leave-type-save" type="primary" :loading="typeSaving || store.saving" :disabled="typeOperationBusy" @click="saveType">保存</el-button></div></template>
   </MobileFullscreenDialog>
 </template>
 
@@ -43,6 +43,7 @@ const formError = ref(''), typeFormError = ref(''), leaveEditingId = ref(''), ty
 const reviewTokens = reactive(new Map<string, number>()), removeTokens = reactive(new Map<string, number>()), typeRemoveTokens = reactive(new Map<string, number>())
 const pendingLeaveIds = computed(() => Array.from(new Set([...reviewTokens.keys(), ...removeTokens.keys()])))
 const pendingTypeIds = computed(() => [...typeRemoveTokens.keys()])
+const typeOperationBusy = computed(() => typeSaving.value || typeRemoveTokens.size > 0 || store.saving)
 const unitLabel: Record<string, string> = { FULL_DAY: '整天', HALF_DAY: '半天', HOUR: '小时' }, statusLabel: Record<string, string> = { PENDING: '待审批', APPROVED: '已批准', REJECTED: '已驳回' }
 const typeForm = reactive({ name: '', active: true, countsTowardRestQuota: true })
 const blank = (): LeaveRequestPayload => ({ employeeId: store.employeeId || store.activeEmployees[0]?.id || '', leaveTypeId: store.leaveTypes.find(row => row.active)?.id || '', startDate: dayjs().format('YYYY-MM-DD'), endDate: dayjs().format('YYYY-MM-DD'), unit: 'FULL_DAY', hours: undefined, reason: '' })
@@ -53,12 +54,13 @@ const leaveEditorProps = computed(() => isMobileLayout.value ? { saving: leaveSa
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 const isCancel = (error: unknown) => error === 'cancel' || error === 'close' || (error instanceof Error && ['cancel', 'close'].includes(error.message))
 let pageActive = true, pageSession = 0, leaveEditorSession = 0, leaveFormRevision = 0, leaveSaveOperation = 0, typeEditorSession = 0, typeFormRevision = 0, typeSaveOperation = 0, mutationOperation = 0
+const leaveLoadControllers = new Set<AbortController>()
 
 watch(form, () => { leaveFormRevision += 1 }, { deep: true, flush: 'sync' })
 watch(typeForm, () => { typeFormRevision += 1 }, { deep: true, flush: 'sync' })
 watch(visible, (open, previous) => { if (previous && !open) { leaveEditorSession += 1; formError.value = '' } })
 watch(typeVisible, (open, previous) => { if (previous && !open) { typeEditorSession += 1; typeFormError.value = '' } })
-watch(isMobileLayout, () => { pageSession += 1; leaveEditorSession += 1; typeEditorSession += 1; leaveSaveOperation += 1; typeSaveOperation += 1; visible.value = false; typeVisible.value = false; leaveSaving.value = false; typeSaving.value = false; reviewTokens.clear(); removeTokens.clear(); typeRemoveTokens.clear() })
+watch(isMobileLayout, () => { pageSession += 1; cancelOwnedLoads(); leaveEditorSession += 1; typeEditorSession += 1; leaveSaveOperation += 1; typeSaveOperation += 1; visible.value = false; typeVisible.value = false; leaveSaving.value = false; typeSaving.value = false; reviewTokens.clear(); removeTokens.clear(); typeRemoveTokens.clear() })
 
 function nameOf(id: string) { return store.employees.find(row => row.id === id)?.name || '-' }
 function typeName(id: string) { return store.leaveTypes.find(row => row.id === id)?.name || '-' }
@@ -66,7 +68,15 @@ function contextCurrent(context: { session: number; mobile: boolean }) { return 
 function leaveEditorCurrent(context: { operation: number; session: number; editorSession: number; editingId: string; mobile: boolean }) { return contextCurrent(context) && visible.value && context.operation === leaveSaveOperation && context.editorSession === leaveEditorSession && context.editingId === leaveEditingId.value }
 function typeEditorCurrent(context: { operation: number; session: number; editorSession: number; editingId: string; mobile: boolean }) { const editorOpen = context.mobile ? typeVisible.value : !isMobileLayout.value; return contextCurrent(context) && editorOpen && context.operation === typeSaveOperation && context.editorSession === typeEditorSession && context.editingId === typeEditingId.value }
 function actionableLeave(id: string) { const row = store.leaves.find((item) => item.id === id); return row?.status === 'PENDING' && !row.lockedAt }
-async function load() { if (pageActive) await store.loadLeaves().catch(() => undefined) }
+function cancelOwnedLoads() { for (const controller of leaveLoadControllers) controller.abort(); leaveLoadControllers.clear() }
+async function load() {
+  const context = { session: pageSession, mobile: isMobileLayout.value }
+  if (!contextCurrent(context)) return
+  const controller = new AbortController()
+  leaveLoadControllers.add(controller)
+  try { await store.loadLeaves({ signal: controller.signal, isCurrent: () => contextCurrent(context) }).catch(() => undefined) }
+  finally { leaveLoadControllers.delete(controller) }
+}
 async function changeStartDate(value: unknown) { store.selectDateRange(typeof value === 'string' ? value : '', store.endDate); await load() }
 async function changeEndDate(value: unknown) { store.selectDateRange(store.startDate, typeof value === 'string' ? value : ''); await load() }
 async function applyMobileFilters(filters: MobileLeaveFilters) { store.leaveEmployeeIds = [...filters.employeeIds]; store.leaveStatus = filters.status; if (filters.startDate || filters.endDate) store.selectDateRange(filters.startDate, filters.endDate); else store.restoreMonthMode(); await load() }
@@ -86,7 +96,7 @@ async function review(row: LeaveRequest, action: 'approve' | 'reject') {
   try {
     let remark = ''
     if (context.mobile && action === 'approve') await ElMessageBox.confirm('批准后将按现有服务端规则计入排班与工资，是否继续？', '确认批准请假', { type: 'warning' })
-    if (action === 'reject') { const result = context.mobile ? await ElMessageBox.prompt('请填写驳回原因', '驳回请假', { inputPattern: /\S+/, inputErrorMessage: '请填写驳回原因' }) : await ElMessageBox.prompt('请填写驳回原因', '驳回请假'); remark = result.value.trim(); if (!remark) return }
+    if (action === 'reject') { const result = context.mobile ? await ElMessageBox.prompt('请填写驳回原因', '驳回请假', { inputPattern: /\S+/, inputErrorMessage: '请填写驳回原因' }) : await ElMessageBox.prompt('请填写驳回原因', '驳回请假'); remark = context.mobile ? result.value.trim() : result.value; if (context.mobile && !remark) return }
     if (!contextCurrent(context) || reviewTokens.get(row.id) !== token || !actionableLeave(row.id)) return
     await store.runQuiet(() => api.reviewLeave(row.id, action, remark), true); if (contextCurrent(context) && reviewTokens.get(row.id) === token) await load()
   } catch (error) { if (contextCurrent(context) && reviewTokens.get(row.id) === token && !isCancel(error)) store.setError(errorText(error, '请假审批失败')) }
@@ -103,7 +113,7 @@ function resetType() { typeEditorSession += 1; typeEditingId.value = ''; typeFor
 function openTypeCreate() { typeEditorSession += 1; typeEditingId.value = ''; Object.assign(typeForm, { name: '', active: true, countsTowardRestQuota: true }); typeFormError.value = ''; typeVisible.value = true }
 function editType(row: LeaveType) { if (row.referenced) return; typeEditorSession += 1; typeEditingId.value = row.id; Object.assign(typeForm, { name: row.name, active: row.active, countsTowardRestQuota: row.countsTowardRestQuota }); typeFormError.value = ''; if (isMobileLayout.value) typeVisible.value = true }
 async function saveType() {
-  if (typeSaving.value) return
+  if (typeOperationBusy.value) return
   if (!typeForm.name.trim()) { if (isMobileLayout.value) typeFormError.value = '请填写类型名称'; else store.setError('请填写类型名称'); return }
   const context = { operation: ++typeSaveOperation, session: pageSession, editorSession: typeEditorSession, revision: typeFormRevision, editingId: typeEditingId.value, mobile: isMobileLayout.value }
   const payload = { ...typeForm }; typeSaving.value = true; typeFormError.value = ''; store.clearError()
@@ -112,14 +122,14 @@ async function saveType() {
   finally { if (pageActive && context.operation === typeSaveOperation) typeSaving.value = false }
 }
 async function removeType(row: LeaveType) {
-  if (typeRemoveTokens.has(row.id)) return
+  if (typeOperationBusy.value) return
   const token = ++mutationOperation, context = { session: pageSession, mobile: isMobileLayout.value }; typeRemoveTokens.set(row.id, token)
   try { if (context.mobile) await ElMessageBox.confirm('删除或停用后需重新编辑才能恢复，是否继续？', '确认删除或停用请假类型', { type: 'warning' }); if (!contextCurrent(context) || typeRemoveTokens.get(row.id) !== token) return; await store.runQuiet(() => api.deleteLeaveType(row.id), true); if (contextCurrent(context) && typeRemoveTokens.get(row.id) === token) await load() }
   catch (error) { if (contextCurrent(context) && typeRemoveTokens.get(row.id) === token && !isCancel(error)) store.setError(errorText(error, '请假类型删除或停用失败')) }
   finally { if (typeRemoveTokens.get(row.id) === token) typeRemoveTokens.delete(row.id) }
 }
 onMounted(load)
-onBeforeUnmount(() => { pageActive = false; pageSession += 1; leaveSaveOperation += 1; typeSaveOperation += 1; reviewTokens.clear(); removeTokens.clear(); typeRemoveTokens.clear() })
+onBeforeUnmount(() => { pageActive = false; pageSession += 1; cancelOwnedLoads(); leaveSaveOperation += 1; typeSaveOperation += 1; reviewTokens.clear(); removeTokens.clear(); typeRemoveTokens.clear() })
 </script>
 
 <style scoped>
