@@ -1,11 +1,11 @@
 <template>
-  <PageShell title="排班考勤概览" description="按自然月编辑排班，并查看服务端统一计算的每日考勤状态和当月概览。" :employee-change-refresh="false" :month-change-refresh="false" @refresh="load()">
+  <PageShell title="排班考勤概览" description="按自然月编辑排班，并查看服务端统一计算的每日考勤状态和当月概览。" :class="{ 'schedule-page--mobile': isMobileLayout, 'schedule-page--mobile-batch': isMobileLayout && batchMode }" :employee-change-refresh="false" :month-change-refresh="false" @refresh="load()">
     <template #actions>
-      <el-button data-testid="copy-previous-month" :disabled="!store.employeeId" @click="openCopy">复制上月排班</el-button>
+      <el-button v-if="!isMobileLayout || !batchMode" data-testid="copy-previous-month" :disabled="!store.employeeId" @click="openCopy">复制上月排班</el-button>
       <el-button data-testid="batch-mode" :disabled="!store.employeeId" :type="batchMode ? 'primary' : 'default'" @click="toggleBatchMode">
         {{ batchMode ? '退出批量选择' : '批量选择日期' }}
       </el-button>
-      <el-button v-if="batchMode" data-testid="apply-batch" type="primary" :disabled="!selectedDates.length" @click="batchVisible = true">应用到 {{ selectedDates.length }} 天</el-button>
+      <el-button v-if="batchMode && !isMobileLayout" data-testid="apply-batch" type="primary" :disabled="!selectedDates.length" @click="batchVisible = true">应用到 {{ selectedDates.length }} 天</el-button>
     </template>
 
     <template v-if="store.employeeId">
@@ -18,7 +18,17 @@
           <el-button type="primary" :loading="store.saving" @click="saveMonthSetting">保存</el-button>
         </div>
       </section>
+      <MobileAttendanceCalendar
+        v-if="isMobileLayout"
+        :month="store.month"
+        :days="store.scheduleAttendanceOverview?.days || []"
+        :selected-dates="selectedDates"
+        :batch-mode="batchMode"
+        @select-date="openDay"
+        @toggle-date="toggleDate"
+      />
       <MonthlyScheduleCalendar
+        v-else
         :month="store.month"
         :days="store.scheduleAttendanceOverview?.days || []"
         :selected-dates="selectedDates"
@@ -31,6 +41,11 @@
     <el-empty v-else description="请先选择需要排班的员工" />
     <AttendanceOverviewPanel :overview="store.overview" />
   </PageShell>
+
+  <MobileActionBar v-if="isMobileLayout && batchMode" data-testid="mobile-schedule-action-bar" class="mobile-schedule-action-bar">
+    <span>已选择 {{ selectedDates.length }} 天</span>
+    <el-button data-testid="apply-batch" type="primary" :disabled="!selectedDates.length" @click="batchVisible = true">应用并覆盖</el-button>
+  </MobileActionBar>
 
   <ScheduleDayDrawer
     v-model:visible="drawerVisible"
@@ -51,7 +66,7 @@
     :error="batchError"
     @save="saveBatch"
   />
-  <el-dialog v-model="copyVisible" title="复制上月排班" width="440px" :close-on-click-modal="false">
+  <el-dialog v-model="copyVisible" title="复制上月排班" :width="isMobileLayout ? '100%' : '440px'" :fullscreen="isMobileLayout" :close-on-click-modal="false">
     <p>将上月同日日期的排班复制到 {{ store.month }}。{{ store.monthlySchedules.length ? '覆盖当前月已有排班后，当前月原有排班会被完整替换。' : '当前月尚未有排班记录。' }}</p>
     <el-alert v-if="copyError" :title="copyError" type="error" :closable="false" show-icon />
     <template #footer>
@@ -67,14 +82,18 @@ import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import PageShell from './EmployeeAttendancePageShell.vue'
 import MonthlyScheduleCalendar from './MonthlyScheduleCalendar.vue'
+import MobileAttendanceCalendar from './MobileAttendanceCalendar.vue'
 import ScheduleDayDrawer from './ScheduleDayDrawer.vue'
 import ScheduleBatchDialog from './ScheduleBatchDialog.vue'
 import AttendanceOverviewPanel from './AttendanceOverviewPanel.vue'
+import MobileActionBar from '@/components/mobile/MobileActionBar.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useEmployeeAttendanceStore } from '@/stores/employeeAttendance'
 import * as api from '@/api/employeeAttendance'
 import type { BatchMonthlySchedulePayload, MonthlyScheduleDay, MonthlySchedulePayload } from '@/types/employeeAttendance'
 
 const store = useEmployeeAttendanceStore()
+const { isMobileLayout } = useMobileLayout()
 const batchMode = ref(false)
 const batchVisible = ref(false)
 const copyVisible = ref(false)
@@ -141,20 +160,30 @@ function toggleBatchMode() {
   batchVisible.value = false
 }
 async function saveDay(payload: MonthlySchedulePayload) {
+  const context = { date: payload.date, employeeId: payload.employeeId, month: payload.date.slice(0, 7) }
   drawerError.value = ''
   try {
     await store.run(() => api.saveMonthlyScheduleDay(payload), true)
-    drawerVisible.value = false
-    await load({ force: true })
-  } catch (error) { drawerError.value = errorText(error, '当天排班保存失败') }
+    if (drawerVisible.value && editingDate.value === context.date) drawerVisible.value = false
+    if (store.employeeId === context.employeeId && store.month === context.month) await load({ force: true })
+  } catch (error) {
+    if (drawerVisible.value && editingDate.value === context.date && store.employeeId === context.employeeId && store.month === context.month) {
+      drawerError.value = errorText(error, '当天排班保存失败')
+    }
+  }
 }
 async function deleteDay(id: string) {
+  const context = { date: editingDate.value, employeeId: store.employeeId, month: store.month }
   drawerError.value = ''
   try {
     await store.run(() => api.deleteMonthlyScheduleDay(id), true)
-    drawerVisible.value = false
-    await load({ force: true })
-  } catch (error) { drawerError.value = errorText(error, '当天排班删除失败') }
+    if (drawerVisible.value && editingDate.value === context.date) drawerVisible.value = false
+    if (store.employeeId === context.employeeId && store.month === context.month) await load({ force: true })
+  } catch (error) {
+    if (drawerVisible.value && editingDate.value === context.date && store.employeeId === context.employeeId && store.month === context.month) {
+      drawerError.value = errorText(error, '当天排班删除失败')
+    }
+  }
 }
 async function saveBatch(payload: BatchMonthlySchedulePayload) {
   batchError.value = ''
@@ -190,5 +219,5 @@ onMounted(() => { store.restoreMonthMode(); void load() })
 </script>
 
 <style scoped>
-.schedule-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px;padding:14px 16px;border:1px solid #dbe5f0;border-radius:8px;background:#f8fbff}.schedule-summary>div:first-child{display:flex;align-items:baseline;gap:10px}.schedule-summary strong{font-size:20px}.schedule-summary small{color:#64748b}.schedule-summary__quota{display:flex;align-items:center;gap:8px}.schedule-summary__quota :deep(.el-input-number){width:120px}.batch-tip{margin:12px 0 0;color:#2563eb;font-size:13px}@media(max-width:900px){.schedule-summary{align-items:flex-start;flex-direction:column}.schedule-summary__quota{flex-wrap:wrap}}
+.schedule-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px;padding:14px 16px;border:1px solid #dbe5f0;border-radius:8px;background:#f8fbff}.schedule-summary>div:first-child{display:flex;align-items:baseline;gap:10px}.schedule-summary strong{font-size:20px}.schedule-summary small{color:#64748b}.schedule-summary__quota{display:flex;align-items:center;gap:8px}.schedule-summary__quota :deep(.el-input-number){width:120px}.batch-tip{margin:12px 0 0;color:#2563eb;font-size:13px}.mobile-schedule-action-bar{align-items:center;justify-content:space-between;padding-bottom:max(10px,env(safe-area-inset-bottom))}.mobile-schedule-action-bar span{min-width:0;color:#334155;font-size:14px;font-weight:600}.mobile-schedule-action-bar :deep(.el-button){min-height:44px;margin:0}.schedule-page--mobile-batch :deep(.attendance-body){padding-bottom:76px}@media(max-width:900px){.schedule-summary{align-items:flex-start;flex-direction:column}.schedule-summary__quota{flex-wrap:wrap}.schedule-page--mobile .schedule-summary{padding:12px}.schedule-page--mobile .schedule-summary>div:first-child{flex-wrap:wrap}.schedule-page--mobile .schedule-summary small{width:100%;line-height:1.45}.schedule-page--mobile .schedule-summary__quota{width:100%}.schedule-page--mobile .schedule-summary__quota :deep(.el-input-number){width:min(120px,40vw)}}
 </style>

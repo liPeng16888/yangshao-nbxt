@@ -1,5 +1,15 @@
 <template>
-  <el-dialog :model-value="visible" title="批量设置月度排班" width="640px" :close-on-click-modal="false" @update:model-value="emit('update:visible', $event)">
+  <el-dialog
+    :model-value="visible"
+    title="批量设置月度排班"
+    :width="isMobileLayout ? '100%' : '640px'"
+    :fullscreen="isMobileLayout"
+    class="schedule-batch-dialog"
+    :class="{ 'schedule-batch-dialog--fullscreen': isMobileLayout }"
+    data-testid="schedule-batch-dialog"
+    :close-on-click-modal="false"
+    @update:model-value="emit('update:visible', $event)"
+  >
     <el-alert :title="`已选择 ${selectedDates.length} 个日期；保存时将完整覆盖 ${selectedDates.length} 个日期，其中 ${overwrittenCount} 天已有排班。`" type="warning" :closable="false" show-icon />
     <el-alert v-if="displayError" class="batch-error" :title="displayError" type="error" :closable="false" show-icon />
     <el-form label-position="top" class="batch-form">
@@ -10,16 +20,16 @@
           <el-time-select v-model="segment.startTime" start="00:00" step="00:30" end="23:30" placeholder="上班" />
           <span>至</span>
           <el-time-select v-model="segment.endTime" start="00:30" step="00:30" end="24:00" placeholder="下班" />
-          <el-button link type="danger" :disabled="form.segments.length === 1" @click="removeInterval(index)">删除</el-button>
+          <el-button :class="{ 'mobile-touch-target': isMobileLayout }" link type="danger" :disabled="form.segments.length === 1" @click="removeInterval(index)">删除</el-button>
         </div>
-        <el-button plain @click="addInterval">添加工作时段</el-button>
+        <el-button :class="{ 'mobile-touch-target': isMobileLayout }" plain @click="addInterval">添加工作时段</el-button>
         <p class="batch-summary">休息 {{ rest }} 分钟 · 工作 {{ workHours }} 小时</p>
       </template>
       <el-form-item label="备注"><el-input v-model="form.remark" maxlength="200" show-word-limit /></el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="emit('update:visible', false)">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="confirmSave">确认批量覆盖</el-button>
+      <el-button :class="{ 'mobile-touch-target': isMobileLayout }" @click="emit('update:visible', false)">取消</el-button>
+      <el-button :class="{ 'mobile-touch-target': isMobileLayout }" type="primary" :loading="saving" @click="confirmSave">确认批量覆盖</el-button>
     </template>
   </el-dialog>
 </template>
@@ -27,6 +37,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { breakMinutes, normalizeClockIntervals, scheduledMinutes } from '@/utils/attendanceIntervals'
 import type { BatchMonthlySchedulePayload, MonthlyScheduleDay, ScheduleSegment } from '@/types/employeeAttendance'
 
@@ -34,6 +45,7 @@ type EditableSegment = Pick<ScheduleSegment, 'startTime' | 'endTime'> & { key: n
 type EditablePayload = Omit<BatchMonthlySchedulePayload, 'employeeId' | 'dates' | 'segments'> & { segments: EditableSegment[] }
 const props = withDefaults(defineProps<{ visible: boolean; employeeId: string; selectedDates: string[]; rows: MonthlyScheduleDay[]; saving?: boolean; error?: string }>(), { saving: false, error: '' })
 const emit = defineEmits<{ 'update:visible': [visible: boolean]; save: [payload: BatchMonthlySchedulePayload] }>()
+const { isMobileLayout } = useMobileLayout()
 const form = ref<EditablePayload>({ isWorkday: true, segments: [], remark: '' })
 const localError = ref('')
 let nextSegmentKey = 0
@@ -78,5 +90,5 @@ async function confirmSave() {
 </script>
 
 <style scoped>
-.batch-error{margin-top:12px}.batch-form{margin-top:16px}.batch-interval{display:grid;grid-template-columns:58px minmax(0,1fr) 20px minmax(0,1fr) auto;gap:8px;align-items:center;margin-bottom:10px}.batch-summary{margin:14px 0 20px;padding:10px 12px;background:#f8fafc;border-radius:6px;color:#334155}@media(max-width:640px){.batch-interval{grid-template-columns:1fr 18px 1fr}.batch-interval>span:first-child,.batch-interval .el-button{grid-column:1/-1}}
+.batch-error{margin-top:12px}.batch-form{margin-top:16px}.batch-interval{display:grid;grid-template-columns:58px minmax(0,1fr) 20px minmax(0,1fr) auto;gap:8px;align-items:center;margin-bottom:10px}.batch-summary{margin:14px 0 20px;padding:10px 12px;background:#f8fafc;border-radius:6px;color:#334155}:global(.schedule-batch-dialog--fullscreen){height:100dvh;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom))}:global(.schedule-batch-dialog--fullscreen .el-dialog__body){min-height:0;overflow:auto}@media(max-width:640px){.batch-interval{grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr)}.batch-interval>span:first-child,.batch-interval .el-button{grid-column:1/-1}}
 </style>

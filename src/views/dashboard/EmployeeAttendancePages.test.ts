@@ -1,4 +1,4 @@
-import { defineComponent, nextTick } from 'vue'
+import { defineComponent, nextTick, ref } from 'vue'
 import dayjs from 'dayjs'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox } from 'element-plus'
@@ -19,7 +19,14 @@ import EmployeeLeavePage from './employee-attendance/EmployeeLeavePage.vue'
 import EmployeeCompensationPage from './employee-attendance/EmployeeCompensationPage.vue'
 import EmployeePayrollPage from './employee-attendance/EmployeePayrollPage.vue'
 
+const attendanceLayout = vi.hoisted(() => ({ mobile: undefined as unknown as ReturnType<typeof ref<boolean>> }))
+
+vi.mock('@/composables/useMobileLayout', () => ({
+  useMobileLayout: () => ({ isMobileLayout: attendanceLayout.mobile })
+}))
+
 beforeEach(() => {
+  attendanceLayout.mobile = ref(false)
   const values = new Map<string, string>()
   Object.defineProperty(window, 'localStorage', { configurable: true, value: {
     clear: () => values.clear(), getItem: (key: string) => values.get(key) ?? null,
@@ -153,7 +160,124 @@ describe('employee attendance navigation', () => {
     expect(wrapper.findAll('[data-testid="planned-interval"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('休息 60 分钟')
     expect(wrapper.text()).toContain('工作 8.5 小时')
+    await wrapper.findAll('[data-testid="planned-interval"]')[1]!.findAll('button').find((node) => node.text() === '删除')!.trigger('click')
+    expect(wrapper.findAll('[data-testid="planned-interval"]')).toHaveLength(1)
     wrapper.unmount()
+  })
+
+  it('renders the mobile attendance filter, exclusive calendar, overview cards and batch action bar', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    await flushPromises()
+    store.employeeId = 'emp-1'
+    await flushPromises()
+
+    const filter = wrapper.get('[data-testid="mobile-attendance-filter"]')
+    expect(filter.text()).toContain('2026-08')
+    expect(filter.text()).toContain('YG001 张三')
+    expect(wrapper.find('[data-testid="monthly-schedule-calendar"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="mobile-calendar-day"]')).toHaveLength(31)
+    expect(wrapper.findAll('[data-testid="attendance-overview-card"]')).toHaveLength(8)
+    expect(wrapper.get('[data-testid="attendance-overview-cards"]').classes()).toContain('overview-grid--mobile')
+    expect(wrapper.findAll('[data-testid="attendance-issue-card"]').length).toBeGreaterThan(0)
+    expect(wrapper.find('[data-testid="month-rest-quota"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="batch-mode"]').trigger('click')
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    expect(wrapper.get('[data-testid="mobile-schedule-action-bar"]').text()).toContain('已选择 1 天')
+    expect(wrapper.get('[data-testid="mobile-schedule-action-bar"]').text()).toContain('应用并覆盖')
+    wrapper.unmount()
+  })
+
+  it('opens mobile day and batch editors fullscreen while preserving a newer edit after save failure', async () => {
+    attendanceLayout.mobile.value = true
+    let rejectSave!: (error: Error) => void
+    const save = vi.spyOn(attendanceApi, 'saveMonthlyScheduleDay').mockReturnValue(new Promise((_resolve, reject) => { rejectSave = reject }))
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    const drawer = wrapper.get('[data-testid="schedule-day-drawer"]')
+    expect(drawer.classes()).toContain('schedule-day-drawer--fullscreen')
+    const timeControls = drawer.findAllComponents({ name: 'ElTimeSelect' })
+    timeControls[0]!.vm.$emit('update:modelValue', '09:00')
+    await nextTick()
+    await drawer.findAll('button').find((node) => node.text() === '保存')!.trigger('click')
+    timeControls[0]!.vm.$emit('update:modelValue', '09:30')
+    await nextTick()
+    rejectSave(new Error('版本冲突'))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="schedule-day-drawer"]').text()).toContain('版本冲突')
+    expect((timeControls[0]!.vm as any).modelValue).toBe('09:30')
+
+    await wrapper.get('[data-testid="schedule-day-drawer"]').findAll('button').find((node) => node.text() === '关闭')!.trigger('click')
+    await wrapper.get('[data-testid="batch-mode"]').trigger('click')
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    await wrapper.get('[data-testid="apply-batch"]').trigger('click')
+    const batchDialog = wrapper.findAllComponents({ name: 'ElDialog' }).find((node) => node.props('title') === '批量设置月度排班')!
+    expect(batchDialog.props('fullscreen')).toBe(true)
+    expect(wrapper.text()).toContain('将完整覆盖 1 个日期')
+    wrapper.unmount()
+    save.mockRestore()
+  })
+
+  it('does not surface an older day save failure in a newer day editor', async () => {
+    attendanceLayout.mobile.value = true
+    let rejectSave!: (error: Error) => void
+    const save = vi.spyOn(attendanceApi, 'saveMonthlyScheduleDay').mockReturnValue(new Promise((_resolve, reject) => { rejectSave = reject }))
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    await wrapper.get('[data-testid="schedule-day-drawer"]').findAll('button').find((node) => node.text() === '保存')!.trigger('click')
+    await wrapper.get('[data-testid="schedule-day-drawer"]').findAll('button').find((node) => node.text() === '关闭')!.trigger('click')
+    await wrapper.get('[data-date="2026-08-04"]').trigger('click')
+    const newerControls = wrapper.get('[data-testid="schedule-day-drawer"]').findAllComponents({ name: 'ElTimeSelect' })
+    newerControls[0]!.vm.$emit('update:modelValue', '10:00')
+    await nextTick()
+    rejectSave(new Error('旧日期保存失败'))
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="schedule-day-drawer"]').text()).toContain('2026-08-04')
+    expect(wrapper.get('[data-testid="schedule-day-drawer"]').text()).not.toContain('旧日期保存失败')
+    expect((newerControls[0]!.vm as any).modelValue).toBe('10:00')
+    wrapper.unmount()
+    save.mockRestore()
+  })
+
+  it('asks for confirmation before deleting a day schedule', async () => {
+    attendanceLayout.mobile.value = true
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const remove = vi.spyOn(attendanceApi, 'deleteMonthlyScheduleDay').mockResolvedValue()
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeSchedulesPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    store.selectMonth('2026-08')
+    store.employeeId = 'emp-1'
+    await flushPromises()
+
+    await wrapper.get('[data-date="2026-08-03"]').trigger('click')
+    await wrapper.get('[data-testid="schedule-day-drawer"]').findAll('button').find((node) => node.text() === '删除当天排班')!.trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledWith(
+      '确认删除 2026-08-03 的排班？',
+      '删除当天排班',
+      expect.objectContaining({ type: 'warning' })
+    )
+    expect(remove).toHaveBeenCalledWith('monthly-emp-1-2026-08-03')
+    wrapper.unmount()
+    confirm.mockRestore(); remove.mockRestore()
   })
 
   it('confirms the count before fully overwriting selected dates', async () => {

@@ -1,0 +1,66 @@
+# Task 18 Report: Mobile Attendance Shell, Calendar and Schedule Editing
+
+## Scope delivered
+
+- `EmployeeAttendancePageShell` now uses `useMobileLayout()` as the only layout selector. Desktop keeps its inline Element Plus month/employee filters; mobile gets a full-screen `MobileFilterDrawer`, selected month/employee summary, 44px native controls, refresh action, and existing action slot.
+- `EmployeeSchedulesPage` mounts exactly one editable calendar: `MobileAttendanceCalendar` on mobile and the unchanged `MonthlyScheduleCalendar` on desktop. Existing Store/API payloads, monthly quota endpoint, batch endpoint, copy endpoint, and server-owned overview contract are unchanged.
+- `MobileAttendanceCalendar` renders the selected month as a seven-column, 31-day (for August 2026) touch grid. Every day retains server-provided status/tone and exposes textual planned, actual, approved-leave, overtime, and exception summaries. It only formats authoritative fields; it does not reimplement attendance or payroll calculations.
+- Mobile overview metrics render as eight two-column cards and issues render as readable issue cards. Desktop overview alerts remain unchanged.
+- Mobile batch mode uses `MobileActionBar` at `--mobile-page-action-bottom`, so the apply action remains above the employee-attendance secondary rail. It shows the selected-day count and retains the exact overwrite-count warning and confirmation.
+- The day editor is a safe-area-aware `100dvh` bottom drawer only on mobile. Existing multiple-interval add/remove, `24:00` end, derived break/work display, validation, payload shape, and failed-save input retention remain. Mobile deletion now requires explicit confirmation; desktop deletion behavior is unchanged.
+- The batch editor and copy-previous-month confirmation are full-screen only on mobile. Existing exact overwrite count, `ElMessageBox` confirmation, failure retention, and copy overwrite flag remain unchanged.
+- Day save/delete completion is context guarded. A late failure from an older date does not contaminate a newer open editor, and newer unsaved values remain intact. Existing latest employee/month load protection remains unchanged.
+- Mobile controls use 44px targets, safe-area padding, constrained width, wrapping text, scrollable full-screen bodies, and a landscape calendar adjustment. No server, admin, router, navigation configuration, business calculation, database, migration, deployment, or Task 19+ file changed.
+
+## TDD evidence
+
+### Initial RED
+
+Command:
+
+```bash
+pnpm exec vitest run \
+  src/views/dashboard/employee-attendance/MobileAttendanceCalendar.test.ts \
+  src/views/dashboard/employee-attendance/MonthlyScheduleCalendar.test.ts \
+  src/views/dashboard/EmployeeAttendancePages.test.ts
+```
+
+Observed failures were requirement-specific:
+
+- `MobileAttendanceCalendar.vue` did not exist.
+- Mobile attendance filter and exclusive mobile calendar were absent.
+- The day drawer was not full-screen on mobile.
+- Day deletion did not request confirmation.
+- Desktop `MonthlyScheduleCalendar` remained green.
+
+An additional lifecycle RED reproduced an older day-save failure appearing inside a newer date editor. The context guard then made this case green without changing the payload or Store/API contract.
+
+### Final GREEN
+
+- Focused Task 18 suite:
+  - Command: `pnpm exec vitest run src/views/dashboard/employee-attendance/MobileAttendanceCalendar.test.ts src/views/dashboard/employee-attendance/MonthlyScheduleCalendar.test.ts src/views/dashboard/EmployeeAttendancePages.test.ts src/stores/employeeAttendance.test.ts --reporter=dot`
+  - Result: 4 files passed, 42 tests passed.
+- Type check:
+  - Command: `pnpm exec vue-tsc --noEmit`
+  - Result: exit 0.
+- Production frontend build:
+  - Command: `pnpm build`
+  - Result: exit 0; Vue type check, Vite production bundle, and PWA service-worker generation completed. Existing dependency annotation and bundle-size warnings remained non-fatal.
+- Controlled-clock full suite at the 2026-08-15 acceptance date:
+  - Command: `pnpm exec vitest run --config /private/tmp/task16-vitest.config.ts --reporter=dot`
+  - Result: 124 files passed, 1317 tests passed.
+- Diff validation:
+  - Command: `git diff --check`
+  - Result: exit 0.
+
+## Files changed
+
+- `src/views/dashboard/employee-attendance/MobileAttendanceCalendar.vue`
+- `src/views/dashboard/employee-attendance/MobileAttendanceCalendar.test.ts`
+- `src/views/dashboard/employee-attendance/EmployeeAttendancePageShell.vue`
+- `src/views/dashboard/employee-attendance/EmployeeSchedulesPage.vue`
+- `src/views/dashboard/employee-attendance/AttendanceOverviewPanel.vue`
+- `src/views/dashboard/employee-attendance/ScheduleDayDrawer.vue`
+- `src/views/dashboard/employee-attendance/ScheduleBatchDialog.vue`
+- `src/views/dashboard/EmployeeAttendancePages.test.ts`
+- `.superpowers/sdd/2026-08-15-mobile-frontend-full-adaptation/task-18-report.md`
