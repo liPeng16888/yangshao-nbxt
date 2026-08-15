@@ -33,7 +33,7 @@
         <label><span>备注</span><textarea v-model.trim="supplementForm.note" :disabled="supplementSaving" data-testid="blacklist-supplement-note" rows="3" /></label>
         <label class="mobile-blacklist-supplement__images">
           <span>图片（最多 2 张）</span>
-          <el-upload v-model:file-list="supplementImageFiles" :auto-upload="false" :disabled="supplementSaving" :limit="2" accept="image/png,image/jpeg,image/webp,image/gif" list-type="picture-card"
+          <el-upload ref="mobileSupplementUploadRef" v-model:file-list="supplementImageFiles" :auto-upload="false" :disabled="supplementSaving" :limit="2" accept="image/png,image/jpeg,image/webp,image/gif" list-type="picture-card"
             :on-change="handleSupplementImageChange" :on-remove="handleSupplementImageRemove" :on-exceed="handleSupplementExceed">
             <el-icon aria-hidden="true"><Plus /></el-icon>
             <span class="blacklist-upload-trigger-label">选择黑名单补充图片</span>
@@ -52,7 +52,7 @@
           <el-form-item label="金额"><el-input-number v-model="supplementForm.amount" :disabled="supplementSaving" :precision="2" :min="0" controls-position="right" /></el-form-item>
         </div>
         <el-form-item label="图片">
-          <el-upload v-model:file-list="supplementImageFiles" :auto-upload="false" :disabled="supplementSaving" :limit="2" accept="image/png,image/jpeg,image/webp,image/gif" list-type="picture-card"
+          <el-upload ref="desktopSupplementUploadRef" v-model:file-list="supplementImageFiles" :auto-upload="false" :disabled="supplementSaving" :limit="2" accept="image/png,image/jpeg,image/webp,image/gif" list-type="picture-card"
             :on-change="handleSupplementImageChange" :on-remove="handleSupplementImageRemove" :on-exceed="handleSupplementExceed">
             <el-icon aria-hidden="true"><Plus /></el-icon>
             <span class="blacklist-upload-trigger-label">选择黑名单补充图片</span>
@@ -72,7 +72,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import type { UploadFile, UploadFiles, UploadUserFile } from 'element-plus'
+import type { UploadFile, UploadFiles, UploadInstance, UploadUserFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { uploadImages } from '@/api/upload'
@@ -100,6 +100,8 @@ const loadError = ref('')
 const supplementVisible = ref(false)
 const supplementRecord = ref<BlacklistRecord | null>(null)
 const supplementImageFiles = ref<UploadUserFile[]>([])
+const mobileSupplementUploadRef = ref<UploadInstance>()
+const desktopSupplementUploadRef = ref<UploadInstance>()
 const supplementSaving = ref(false)
 const supplementOwnedUrls = new Set<string>()
 let supplementUploadedUrls = new WeakMap<File, string>()
@@ -130,7 +132,7 @@ watch(isMobileLayout, () => {
   if (!retainSupplementAcrossLayout) supplementVisible.value = false
 })
 watch(supplementVisible, (visible) => {
-  if (!visible) { retainSupplementAcrossLayout = false; resetSupplementForm(false) }
+  if (!visible) { retainSupplementAcrossLayout = false; resetSupplementForm() }
 })
 
 async function loadRecords(keyword = highlightId.value ? '' : blacklistStore.keyword) {
@@ -190,10 +192,11 @@ function openSupplement(row: BlacklistRecord) {
   supplementVisible.value = true
 }
 
-function resetSupplementForm(revokeUrls = true) {
+function resetSupplementForm() {
   supplementPreviewLayoutVersion += 1
-  if (revokeUrls) releaseSupplementUrls()
-  else forgetSupplementUrls()
+  mobileSupplementUploadRef.value?.clearFiles()
+  desktopSupplementUploadRef.value?.clearFiles()
+  releaseSupplementUrls()
   supplementRecord.value = null
   supplementImageFiles.value = []
   supplementUploadedUrls = new WeakMap<File, string>()

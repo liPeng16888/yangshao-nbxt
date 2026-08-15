@@ -2,7 +2,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox, ElUpload } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
-import { defineComponent, nextTick, reactive, ref } from 'vue'
+import { defineComponent, nextTick, reactive, ref, watch } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAuthStore } from '@/stores/auth'
 import BlacklistPage from './BlacklistPage.vue'
@@ -74,9 +74,17 @@ const DrawerStub = defineComponent({
 
 const DialogStub = defineComponent({
   inheritAttrs: false,
-  props: { modelValue: Boolean, title: String },
+  props: { modelValue: Boolean, title: String, destroyOnClose: Boolean },
   emits: ['update:modelValue', 'closed'],
-  template: '<section v-if="modelValue" v-bind="$attrs" class="dialog-stub"><h2>{{ title }}</h2><slot /><slot name="footer" /></section>'
+  setup(props) {
+    const rendered = ref(props.modelValue)
+    watch(() => props.modelValue, (visible) => {
+      if (visible) rendered.value = true
+      else if (props.destroyOnClose) rendered.value = false
+    })
+    return { rendered }
+  },
+  template: '<section v-if="rendered" v-show="modelValue" v-bind="$attrs" class="dialog-stub"><h2>{{ title }}</h2><slot /><slot name="footer" /></section>'
 })
 
 function mountPage(mobile = true) {
@@ -432,7 +440,7 @@ describe('BlacklistPage mobile', () => {
     await dialog.get('.mobile-fullscreen-dialog__confirm').trigger('click')
     await flushPromises()
     expect(mocks.updateBlacklist).toHaveBeenLastCalledWith('blacklist-own', expect.objectContaining({ phone: '13700000000', note: '补充备注' }))
-    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+    expect(wrapper.get('.mobile-fullscreen-dialog').isVisible()).toBe(false)
   })
 
   it('enforces two supplement images across existing and new files and locks duplicate saves without losing the draft', async () => {
@@ -478,7 +486,7 @@ describe('BlacklistPage mobile', () => {
     await dialog.get('.mobile-fullscreen-dialog__confirm').trigger('click')
     await flushPromises()
     expect(mocks.uploadImages).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+    expect(wrapper.get('.mobile-fullscreen-dialog').isVisible()).toBe(false)
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:blacklist-image')
   })
@@ -504,19 +512,64 @@ describe('BlacklistPage mobile', () => {
   })
 
   it('resets supplement edits on cancel and closes the active dialog when the layout changes', async () => {
+    vi.mocked(URL.createObjectURL).mockReturnValueOnce('blob:supplement-cancel').mockReturnValueOnce('blob:supplement-layout-close')
     const wrapper = mountPage()
     await flushPromises()
     await card(wrapper, 'blacklist-own').get('[data-testid="supplement-blacklist-own"]').trigger('click')
     await wrapper.get('[data-testid="blacklist-supplement-phone"]').setValue('10086')
+    const cancelImage = new File(['png'], 'cancel.png', { type: 'image/png' })
+    await selectRealUploadFile(wrapper.get('.mobile-fullscreen-dialog'), cancelImage)
     await wrapper.get('.mobile-fullscreen-dialog__cancel').trigger('click')
     await nextTick()
-    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+    expect(wrapper.get('.mobile-fullscreen-dialog').isVisible()).toBe(false)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:supplement-cancel')
 
     await card(wrapper, 'blacklist-own').get('[data-testid="supplement-blacklist-own"]').trigger('click')
     expect((wrapper.get('[data-testid="blacklist-supplement-phone"]').element as HTMLInputElement).value).toBe('13800000001')
+    await selectRealUploadFile(wrapper.get('.mobile-fullscreen-dialog'), new File(['png'], 'layout-close.png', { type: 'image/png' }))
     mocks.mobileLayout.value = false
     await nextTick()
     expect(wrapper.find('.dialog-stub').exists()).toBe(false)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
+    expect(URL.revokeObjectURL).toHaveBeenLastCalledWith('blob:supplement-layout-close')
+  })
+
+  it('revokes desktop supplement blobs exactly once on retained-dialog success, cancel, and unmount', async () => {
+    vi.mocked(URL.createObjectURL)
+      .mockReturnValueOnce('blob:desktop-supplement-success')
+      .mockReturnValueOnce('blob:desktop-supplement-cancel')
+      .mockReturnValueOnce('blob:desktop-supplement-unmount')
+    mocks.updateBlacklist.mockResolvedValueOnce(records[0])
+    const wrapper = mountPage(false)
+    await flushPromises()
+    const table = wrapper.findComponent({ name: 'BlacklistTable' })
+
+    table.vm.$emit('supplement', records[0])
+    await nextTick()
+    const dialog = wrapper.get('.dialog-stub')
+    await selectRealUploadFile(dialog, new File(['png'], 'success.png', { type: 'image/png' }))
+    await dialog.findAll('button').find((button) => button.text() === '确认补充')!.trigger('click')
+    await flushPromises()
+    expect(dialog.isVisible()).toBe(false)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenLastCalledWith('blob:desktop-supplement-success')
+
+    table.vm.$emit('supplement', { ...records[0], images: ['blob:unowned-supplement'] })
+    await nextTick()
+    await selectRealUploadFile(dialog, new File(['png'], 'cancel.png', { type: 'image/png' }))
+    await dialog.findAll('button').find((button) => button.text() === '取消')!.trigger('click')
+    await nextTick()
+    expect(dialog.isVisible()).toBe(false)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
+    expect(URL.revokeObjectURL).toHaveBeenLastCalledWith('blob:desktop-supplement-cancel')
+
+    table.vm.$emit('supplement', records[0])
+    await nextTick()
+    await selectRealUploadFile(dialog, new File(['png'], 'unmount.png', { type: 'image/png' }))
+    wrapper.unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(3)
+    expect(URL.revokeObjectURL).toHaveBeenLastCalledWith('blob:desktop-supplement-unmount')
   })
 
   it('retains an in-flight create draft and raw image when the layout changes before rejection', async () => {
@@ -585,7 +638,7 @@ describe('BlacklistPage mobile', () => {
     await wrapper.get('.mobile-fullscreen-dialog__confirm').trigger('click')
     await flushPromises()
     expect(mocks.uploadImages).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+    expect(wrapper.get('.mobile-fullscreen-dialog').isVisible()).toBe(false)
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(3)
     expect(URL.revokeObjectURL).toHaveBeenNthCalledWith(3, 'blob:supplement-mobile-restored')
   })
