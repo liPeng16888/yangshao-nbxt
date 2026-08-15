@@ -234,6 +234,19 @@ textarea {
   transition: width 0.18s ease, margin-left 0.18s ease;
 }
 
+.app-shell--mobile {
+  min-height: 100dvh;
+
+  .app-main {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .app-content {
+    padding: calc(68px + env(safe-area-inset-top)) 12px calc(76px + env(safe-area-inset-bottom));
+  }
+}
+
 .app-topbar {
   position: sticky;
   top: 0;
