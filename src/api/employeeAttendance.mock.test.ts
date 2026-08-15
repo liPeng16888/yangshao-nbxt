@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import dayjs from 'dayjs'
 import { readEmployeePhoto, uploadEmployeePhoto } from '@/api/employeeAttendance'
 import {
@@ -54,6 +54,8 @@ describe('employee attendance mock repository', () => {
   }
 
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-11T10:00:00+08:00'))
     const values = new Map<string, string>()
     Object.defineProperty(window, 'localStorage', { configurable: true, value: {
       clear: () => values.clear(),
@@ -65,6 +67,10 @@ describe('employee attendance mock repository', () => {
     } satisfies Storage })
     window.localStorage.clear()
     resetEmployeeAttendanceMock()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('ships persisted sample employees for an immediately demonstrable frontend', async () => {
