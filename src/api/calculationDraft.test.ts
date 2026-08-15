@@ -69,7 +69,7 @@ const coefficientPayload = {
 const coefficientDraft = {
   kind: 'COEFFICIENT' as const,
   payload: coefficientPayload,
-  revision: 2,
+  revision: 3,
   updatedAt: '2026-08-15T08:00:00.000Z'
 }
 
@@ -97,6 +97,15 @@ describe('calculation draft transport', () => {
     expect(request.put).toHaveBeenCalledWith('/calculation-drafts/coefficient', body)
   })
 
+  it.each([
+    ['revision zero with a timestamp', { ...standardDraft, revision: 0 }],
+    ['a positive revision with null updatedAt', { ...standardDraft, updatedAt: null }]
+  ])('rejects a general draft response with %s', async (_label, malformed) => {
+    vi.mocked(request.get).mockResolvedValueOnce(malformed)
+
+    await expect(getCalculationDraft('standard-sample')).rejects.toThrow(TypeError)
+  })
+
   it('maps only a structurally valid authoritative 409 into a typed conflict', async () => {
     const transportError = axiosResponseError(409, {
       code: 'CALCULATION_DRAFT_CONFLICT',
@@ -111,6 +120,41 @@ describe('calculation draft transport', () => {
 
     expect(failure).toBeInstanceOf(CalculationDraftConflictError)
     expect(failure).toMatchObject({ serverDraft: standardDraft, cause: transportError })
+  })
+
+  it('preserves a revision-zero conflict response as the original request error', async () => {
+    const transportError = axiosResponseError(409, {
+      code: 'CALCULATION_DRAFT_CONFLICT',
+      serverDraft: { ...standardDraft, revision: 0, updatedAt: null }
+    })
+    vi.mocked(request.put).mockRejectedValueOnce(transportError)
+
+    await expect(saveCalculationDraft('standard-sample', {
+      baseRevision: 0,
+      payload: standardPayload
+    })).rejects.toBe(transportError)
+  })
+
+  it('rejects a successful save response that is not exactly baseRevision plus one', async () => {
+    vi.mocked(request.put).mockResolvedValueOnce(standardDraft)
+
+    await expect(saveCalculationDraft('standard-sample', {
+      baseRevision: 1,
+      payload: standardPayload
+    })).rejects.toThrow(TypeError)
+  })
+
+  it('preserves a 409 whose server revision still equals the submitted base revision', async () => {
+    const transportError = axiosResponseError(409, {
+      code: 'CALCULATION_DRAFT_CONFLICT',
+      serverDraft: standardDraft
+    })
+    vi.mocked(request.put).mockRejectedValueOnce(transportError)
+
+    await expect(saveCalculationDraft('standard-sample', {
+      baseRevision: 4,
+      payload: standardPayload
+    })).rejects.toBe(transportError)
   })
 
   it('deep-clones and freezes an authoritative conflict before exposing it', async () => {

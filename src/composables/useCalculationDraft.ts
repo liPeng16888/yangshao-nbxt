@@ -29,6 +29,21 @@ interface SaveAttempt<T> {
   importsLegacy: boolean
 }
 
+interface DirtyRecoveryCache<T> {
+  version: 1
+  state: 'dirty'
+  baseRevision: number
+  payload: T
+}
+
+interface ResolvedRecoveryCache {
+  version: 1
+  state: 'resolved'
+  revision: number
+}
+
+type RecoveryCache<T> = DirtyRecoveryCache<T> | ResolvedRecoveryCache
+
 export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
   const status = ref<CalculationDraftSyncStatus>('loading')
   const revision = ref(0)
@@ -36,9 +51,12 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
   const conflict = shallowRef<CalculationDraftConflict<T> | null>(null)
 
   let disposed = false
+  let hasAuthoritativeRevision = false
   let editVersion = 0
   let timer: ReturnType<typeof setTimeout> | null = null
   let pendingSnapshot: T | null = null
+  let pendingBaseRevision: number | null = null
+  let pendingBaseKnown = false
   let pendingDueAt = 0
   let failedAttempt: SaveAttempt<T> | null = null
   let snapshotCaptureFailed = false
@@ -54,16 +72,24 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     } catch {
       editVersion += 1
       pendingSnapshot = null
+      pendingBaseRevision = null
+      pendingBaseKnown = false
       snapshotCaptureFailed = true
       clearTimer()
       status.value = 'error'
       return
     }
+    const hadPendingSnapshot = pendingSnapshot !== null
+    const originatingRevision = hadPendingSnapshot && pendingBaseRevision !== null
+      ? pendingBaseRevision
+      : revision.value
     snapshotCaptureFailed = false
     editVersion += 1
     pendingSnapshot = snapshot
+    pendingBaseRevision = originatingRevision
+    if (!hadPendingSnapshot) pendingBaseKnown = hasAuthoritativeRevision
     pendingDueAt = Date.now() + SAVE_DEBOUNCE_MS
-    writeCache(snapshot)
+    writeDirtyCache(snapshot, originatingRevision)
     clearTimer()
     if (status.value === 'conflict' || status.value === 'error' || loadPromise || activeSave) return
     armPendingSave()
@@ -75,6 +101,7 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
 
     const task = (async () => {
       if (!await drainSavesBeforeLoad()) return
+      restoreRecoveryCache()
       const versionAtStart = editVersion
       status.value = 'loading'
       loadFailed = false
@@ -84,9 +111,20 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
         const serverSnapshot = normalizedSnapshot(serverDraft.payload)
         revision.value = serverDraft.revision
         updatedAt.value = serverDraft.updatedAt
+        hasAuthoritativeRevision = true
 
-        if (editVersion !== versionAtStart || pendingSnapshot) return
-        removeRecoveryCache()
+        if (pendingSnapshot) {
+          if (pendingBaseKnown) {
+            reconcilePendingSnapshot(serverDraft, serverSnapshot)
+          } else {
+            pendingBaseRevision = serverDraft.revision
+            pendingBaseKnown = true
+            writeDirtyCache(pendingSnapshot, serverDraft.revision)
+          }
+          return
+        }
+        if (editVersion !== versionAtStart) return
+        markRecoveryResolved(serverDraft.revision)
 
         if (serverDraft.revision === 0) {
           const legacy = readLegacySnapshot()
@@ -103,7 +141,6 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
         status.value = 'idle'
       } catch {
         if (!disposed) {
-          restoreRecoveryCache(versionAtStart)
           loadFailed = true
           status.value = 'error'
         }
@@ -132,10 +169,13 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
       if (pendingSnapshot && !loadFailed) {
         clearTimer()
         const queuedSnapshot = pendingSnapshot
+        const queuedBaseRevision = pendingBaseRevision ?? revision.value
         pendingSnapshot = null
+        pendingBaseRevision = null
+        pendingBaseKnown = false
         await executeSave({
           payload: queuedSnapshot,
-          baseRevision: revision.value,
+          baseRevision: queuedBaseRevision,
           importsLegacy: false
         }, 'saving')
         continue
@@ -163,7 +203,7 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
         return
       }
       snapshotCaptureFailed = false
-      writeCache(snapshot)
+      writeDirtyCache(snapshot, revision.value)
       await executeSave({ payload: snapshot, baseRevision: revision.value, importsLegacy: false }, 'retrying')
       return
     }
@@ -173,10 +213,13 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     }
     if (pendingSnapshot) {
       const correctedSnapshot = pendingSnapshot
+      const correctedBaseRevision = pendingBaseRevision ?? revision.value
       pendingSnapshot = null
+      pendingBaseRevision = null
+      pendingBaseKnown = false
       await executeSave({
         payload: correctedSnapshot,
-        baseRevision: revision.value,
+        baseRevision: correctedBaseRevision,
         importsLegacy: false
       }, 'retrying')
     }
@@ -189,8 +232,11 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     applySnapshot(serverDraft.payload)
     revision.value = serverDraft.revision
     updatedAt.value = serverDraft.updatedAt
-    removeRecoveryCache()
+    hasAuthoritativeRevision = true
+    markRecoveryResolved(serverDraft.revision)
     pendingSnapshot = null
+    pendingBaseRevision = null
+    pendingBaseKnown = false
     failedAttempt = null
     snapshotCaptureFailed = false
     loadFailed = false
@@ -228,7 +274,14 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
         normalizedSnapshot(savedDraft.payload)
         revision.value = savedDraft.revision
         updatedAt.value = savedDraft.updatedAt
-        if (!pendingSnapshot) removeRecoveryCache()
+        hasAuthoritativeRevision = true
+        if (pendingSnapshot) {
+          pendingBaseRevision = savedDraft.revision
+          pendingBaseKnown = true
+          writeDirtyCache(pendingSnapshot, savedDraft.revision)
+        } else {
+          markRecoveryResolved(savedDraft.revision)
+        }
         if (exactAttempt.importsLegacy) removeLegacy()
         failedAttempt = null
         loadFailed = false
@@ -269,7 +322,7 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
 
   function validatedConflictDraft(serverDraft: CalculationDraft<unknown>): CalculationDraft<T> | null {
     try {
-      return { ...serverDraft, payload: normalizedSnapshot(serverDraft.payload) }
+      return deepFreeze({ ...serverDraft, payload: normalizedSnapshot(serverDraft.payload) })
     } catch {
       return null
     }
@@ -287,8 +340,11 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
       return
     }
     const snapshot = pendingSnapshot
+    const baseRevision = pendingBaseRevision ?? revision.value
     pendingSnapshot = null
-    await executeSave({ payload: snapshot, baseRevision: revision.value, importsLegacy: false }, 'saving')
+    pendingBaseRevision = null
+    pendingBaseKnown = false
+    await executeSave({ payload: snapshot, baseRevision, importsLegacy: false }, 'saving')
   }
 
   async function resumePendingSave() {
@@ -320,9 +376,8 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     }
   }
 
-  function restoreRecoveryCache(versionAtStart: number) {
+  function restoreRecoveryCache() {
     if (
-      editVersion !== versionAtStart ||
       pendingSnapshot ||
       failedAttempt ||
       snapshotCaptureFailed ||
@@ -330,17 +385,62 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     ) {
       return
     }
-    const raw = safeStorageGet(adapter.cacheStorageKey)
-    if (raw === null) return
+    const cached = readRecoveryCache()
+    if (!cached || cached.state === 'resolved') return
     try {
-      const cached = normalizedSnapshot(JSON.parse(raw))
-      applySnapshot(cached)
-      pendingSnapshot = cached
+      applySnapshot(cached.payload)
+      pendingSnapshot = cached.payload
+      pendingBaseRevision = cached.baseRevision
+      pendingBaseKnown = true
       pendingDueAt = Date.now()
       editVersion += 1
     } catch {
       // Recovery storage is best effort and never blocks authoritative retry.
     }
+  }
+
+  function reconcilePendingSnapshot(serverDraft: CalculationDraft<T>, serverSnapshot: T) {
+    if (!pendingSnapshot || pendingBaseRevision === null) return
+    const localSnapshot = pendingSnapshot
+    if (serverDraft.revision < pendingBaseRevision) {
+      enterReconciliationConflict(serverDraft, serverSnapshot, localSnapshot)
+      return
+    }
+    if (draftValuesEqual(localSnapshot, serverSnapshot)) {
+      applySnapshot(serverSnapshot)
+      pendingSnapshot = null
+      pendingBaseRevision = null
+      pendingBaseKnown = false
+      failedAttempt = null
+      conflict.value = null
+      loadFailed = false
+      markRecoveryResolved(serverDraft.revision)
+      status.value = 'idle'
+      return
+    }
+    if (serverDraft.revision !== pendingBaseRevision) {
+      enterReconciliationConflict(serverDraft, serverSnapshot, localSnapshot)
+      return
+    }
+    pendingDueAt = Date.now()
+  }
+
+  function enterReconciliationConflict(
+    serverDraft: CalculationDraft<T>,
+    serverSnapshot: T,
+    localSnapshot: T
+  ) {
+    clearTimer()
+    pendingSnapshot = null
+    pendingBaseRevision = null
+    pendingBaseKnown = false
+    failedAttempt = null
+    loadFailed = false
+    conflict.value = {
+      serverDraft: deepFreeze({ ...serverDraft, payload: serverSnapshot }),
+      localSnapshot
+    }
+    status.value = 'conflict'
   }
 
   function applySnapshot(snapshot: T) {
@@ -351,16 +451,61 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     return deepFreeze(cloneDraftValue(adapter.normalize(cloneDraftValue(value))))
   }
 
-  function writeCache(snapshot: T) {
-    safeStorageSet(adapter.cacheStorageKey, JSON.stringify(snapshot))
+  function readRecoveryCache(): RecoveryCache<T> | null {
+    const raw = safeStorageGet(adapter.cacheStorageKey)
+    if (raw === null) return null
+    try {
+      const value = JSON.parse(raw) as unknown
+      if (!isPlainDraftObject(value) || value.version !== 1) return null
+      if (value.state === 'dirty') {
+        if (
+          !hasExactDraftKeys(value, ['version', 'state', 'baseRevision', 'payload']) ||
+          !isSafeRevision(value.baseRevision)
+        ) {
+          return null
+        }
+        return deepFreeze({
+          version: 1,
+          state: 'dirty',
+          baseRevision: value.baseRevision,
+          payload: normalizedSnapshot(value.payload)
+        })
+      }
+      if (
+        value.state === 'resolved' &&
+        hasExactDraftKeys(value, ['version', 'state', 'revision']) &&
+        isSafeRevision(value.revision)
+      ) {
+        return deepFreeze({ version: 1, state: 'resolved', revision: value.revision })
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  function writeDirtyCache(snapshot: T, baseRevision: number) {
+    const value: DirtyRecoveryCache<T> = {
+      version: 1,
+      state: 'dirty',
+      baseRevision,
+      payload: snapshot
+    }
+    safeStorageSet(adapter.cacheStorageKey, JSON.stringify(value))
   }
 
   function removeLegacy() {
     safeStorageRemove(adapter.legacyStorageKey)
   }
 
-  function removeRecoveryCache() {
-    safeStorageRemove(adapter.cacheStorageKey)
+  function markRecoveryResolved(resolvedRevision: number) {
+    if (safeStorageRemove(adapter.cacheStorageKey)) return
+    const tombstone: ResolvedRecoveryCache = {
+      version: 1,
+      state: 'resolved',
+      revision: resolvedRevision
+    }
+    safeStorageSet(adapter.cacheStorageKey, JSON.stringify(tombstone))
   }
 
   function clearTimer() {
@@ -372,6 +517,7 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     disposed = true
     clearTimer()
     pendingSnapshot = null
+    pendingBaseRevision = null
   }
 
   // Validate the adapter's default boundary early, without making it authoritative.
@@ -416,6 +562,36 @@ function safeStorageRemove(key: string) {
   } catch {
     return false
   }
+}
+
+function isPlainDraftObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function hasExactDraftKeys(value: Record<string, unknown>, expected: readonly string[]) {
+  const keys = Reflect.ownKeys(value)
+  return keys.length === expected.length &&
+    keys.every((key) => typeof key === 'string' && expected.includes(key)) &&
+    expected.every((key) => Object.hasOwn(value, key))
+}
+
+function isSafeRevision(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+}
+
+function draftValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((value, index) => draftValuesEqual(value, right[index]))
+  }
+  if (!isPlainDraftObject(left) || !isPlainDraftObject(right)) return false
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) => Object.hasOwn(right, key) && draftValuesEqual(left[key], right[key]))
 }
 
 function cloneDraftValue<T>(value: T, seen = new WeakSet<object>()): T {

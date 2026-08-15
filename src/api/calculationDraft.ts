@@ -50,20 +50,25 @@ export async function saveCalculationDraft<T>(
 ): Promise<CalculationDraft<T>> {
   try {
     const value = await request.put<unknown, unknown>(`/calculation-drafts/${kind}`, body)
-    return requireDraft<T>(value, kind)
+    const draft = requireDraft<T>(value, kind)
+    if (!hasExpectedSaveRevision(body.baseRevision, draft.revision)) {
+      throw new TypeError('计算草稿保存响应版本无效')
+    }
+    return draft
   } catch (error) {
-    const serverDraft = authoritativeConflict<T>(error, kind)
+    const serverDraft = authoritativeConflict<T>(error, kind, body.baseRevision)
     if (serverDraft) throw new CalculationDraftConflictError(serverDraft, error)
     throw error
   }
 }
 
-function authoritativeConflict<T>(error: unknown, kind: CalculationDraftKind) {
+function authoritativeConflict<T>(error: unknown, kind: CalculationDraftKind, baseRevision: number) {
   if (!axios.isAxiosError(error) || error.response?.status !== 409) return null
   try {
     const data = error.response.data
     if (!isPlainObject(data) || data.code !== 'CALCULATION_DRAFT_CONFLICT') return null
-    return parseDraft<T>(data.serverDraft, kind)
+    const draft = parseDraft<T>(data.serverDraft, kind, true)
+    return isSafeRevision(baseRevision) && draft?.revision !== baseRevision ? draft : null
   } catch {
     return null
   }
@@ -75,7 +80,11 @@ function requireDraft<T>(value: unknown, kind: CalculationDraftKind): Calculatio
   return draft
 }
 
-function parseDraft<T>(value: unknown, kind: CalculationDraftKind): CalculationDraft<T> | null {
+function parseDraft<T>(
+  value: unknown,
+  kind: CalculationDraftKind,
+  requireConflictAuthority = false
+): CalculationDraft<T> | null {
   if (!isPlainObject(value)) return null
   const expectedKind = serverKind(kind)
   const payload = normalizePayload(kind, value.payload)
@@ -85,7 +94,8 @@ function parseDraft<T>(value: unknown, kind: CalculationDraftKind): CalculationD
     payload === null ||
     !Number.isSafeInteger(value.revision) ||
     (value.revision as number) < 0 ||
-    !isValidUpdatedAt(value.updatedAt)
+    !hasValidRevisionTimestamp(value.revision as number, value.updatedAt) ||
+    (requireConflictAuthority && (value.revision as number) === 0)
   ) {
     return null
   }
@@ -229,6 +239,20 @@ function isValidUpdatedAt(value: unknown) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false
   const timestamp = Date.parse(value)
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+}
+
+function hasValidRevisionTimestamp(revision: number, updatedAt: unknown) {
+  return revision === 0 ? updatedAt === null : updatedAt !== null && isValidUpdatedAt(updatedAt)
+}
+
+function isSafeRevision(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+}
+
+function hasExpectedSaveRevision(baseRevision: number, savedRevision: number) {
+  return isSafeRevision(baseRevision) &&
+    baseRevision < Number.MAX_SAFE_INTEGER &&
+    savedRevision === baseRevision + 1
 }
 
 function cloneJsonValue<T>(value: T, seen = new WeakSet<object>()): T {
