@@ -184,7 +184,7 @@
     </section>
     </template>
 
-    <MobileFullscreenDialog v-if="isMobileLayout" v-model="correctionVisible" title="更正入库记录" :saving="correctionSaving" @confirm="submitCorrection">
+    <MobileFullscreenDialog v-if="isMobileLayout" v-model="correctionVisible" title="更正入库记录" :saving="correctionSaving" fullscreen @confirm="submitCorrection">
       <p class="muted">将创建一条反向更正流水，原记录不会被修改。</p>
       <el-input v-model="correctionReason" data-testid="correction-reason" type="textarea" :rows="3" maxlength="120" show-word-limit placeholder="填写更正原因" />
       <template #footer="{ cancel }">

@@ -93,10 +93,27 @@ function currentQuantity(row: MedicineInventoryMovement) {
 
     <MobileFilterDrawer v-model="filterOpen" :title="`${kind === 'inbound' ? '入库' : '出库'}明细筛选`" :summary="selectedSummary" @apply="applyFilter" @reset="resetFilter">
       <div class="mobile-medicine-movements__filters">
-        <el-select v-model="draftMedicineItemIds" data-testid="mobile-medicine-history-item-filter" multiple clearable collapse-tags placeholder="筛选药品">
+        <el-select
+          v-model="draftMedicineItemIds"
+          class="mobile-medicine-movement-filter-control"
+          style="width: 100%; min-width: 0; max-width: 100%; --el-component-size: 44px"
+          data-testid="mobile-medicine-history-item-filter"
+          multiple
+          clearable
+          collapse-tags
+          placeholder="筛选药品"
+        >
           <el-option v-for="item in items" :key="item.id" :label="`${item.name}（${item.unitLabel}）`" :value="item.id" />
         </el-select>
-        <el-date-picker v-model="draftDateRange" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" />
+        <el-date-picker
+          v-model="draftDateRange"
+          class="mobile-medicine-movement-date-control"
+          style="width: 100%; min-width: 0; max-width: 100%; --el-component-size: 44px; --el-date-editor-width: 100%"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+        />
       </div>
     </MobileFilterDrawer>
 
@@ -178,6 +195,26 @@ function currentQuantity(row: MedicineInventoryMovement) {
 
 .mobile-medicine-movements__filters > * {
   width: 100%;
+}
+
+.mobile-medicine-movement-filter-control,
+.mobile-medicine-movement-date-control {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mobile-medicine-movement-filter-control :deep(.el-select__wrapper),
+.mobile-medicine-movement-filter-control :deep(.el-select__input),
+.mobile-medicine-movement-date-control,
+.mobile-medicine-movement-date-control :deep(.el-range-input) {
+  min-height: 44px;
+}
+
+.mobile-medicine-movement-filter-control :deep(.el-select__wrapper),
+.mobile-medicine-movement-date-control :deep(.el-range-input) {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .mobile-medicine-movements__error {

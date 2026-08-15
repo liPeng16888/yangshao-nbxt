@@ -549,29 +549,6 @@ textarea {
     padding: 12px !important;
   }
 
-  .el-dialog.mobile-fullscreen-dialog {
-    display: flex;
-    flex-direction: column;
-    width: 100% !important;
-    max-width: none !important;
-    height: 100dvh;
-    max-height: none;
-    margin: 0 !important;
-    padding-top: max(16px, env(safe-area-inset-top));
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
-    border-radius: 0 !important;
-  }
-
-  .el-dialog.mobile-fullscreen-dialog .el-dialog__body {
-    flex: 1;
-    max-height: none;
-    overflow: auto;
-  }
-
-  .el-dialog.mobile-fullscreen-dialog .el-dialog__footer {
-    padding-bottom: 0;
-  }
-
   .customer-select-popper,
   .lab-element-selector-popper {
     right: 8px !important;

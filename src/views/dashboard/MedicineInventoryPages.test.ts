@@ -1,6 +1,6 @@
 import { defineComponent, nextTick, ref, type Component, type Ref } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import ElementPlus, { ElAutocomplete, ElMessageBox, ElSelect } from 'element-plus'
+import ElementPlus, { ElAutocomplete, ElMessage, ElMessageBox, ElSelect } from 'element-plus'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
@@ -244,6 +244,24 @@ describe('MedicineInventoryStockPage', () => {
     expect(wrapper.find('.inventory-control-band').exists()).toBe(false)
     expect(wrapper.find('[data-testid="mobile-medicine-stock-list"]').exists()).toBe(true)
   })
+
+  it('gives the mobile stock filter full-width 44px select controls', async () => {
+    layout.isMobileLayout.value = true
+    const wrapper = mountPage(MedicineInventoryStockPage)
+    await flushPromises()
+    await wrapper.get('.mobile-filter-summary').trigger('click')
+    await nextTick()
+    const select = wrapper.getComponent(ElSelect)
+    const selectRoot = select.element as HTMLElement
+    const selectWrapper = select.get('.el-select__wrapper').element
+    const selectInput = select.get('.el-select__input').element
+
+    expect(getComputedStyle(selectRoot).width).toBe('100%')
+    expect(getComputedStyle(selectRoot).maxWidth).toBe('100%')
+    expect(getComputedStyle(selectRoot).getPropertyValue('--el-component-size').trim()).toBe('44px')
+    expect(selectWrapper.classList).toContain('el-select__wrapper')
+    expect(selectInput.classList).toContain('el-select__input')
+  })
 })
 
 describe('MedicineInventoryInboundPage', () => {
@@ -386,6 +404,8 @@ describe('MedicineInventoryInboundPage', () => {
 
     await wrapper.get('[data-testid="correct-movement-inbound-1"]').trigger('click')
     expect(wrapper.find('[data-testid="correction-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+    expect(wrapper.find('.mobile-fullscreen-dialog--active').exists()).toBe(false)
 
     await wrapper.get('[data-testid="correction-submit"]').trigger('click')
     expect(api.correctMedicineMovement).not.toHaveBeenCalled()
@@ -472,6 +492,7 @@ describe('MedicineInventoryInboundPage', () => {
     await flushPromises()
     await wrapper.get('[data-testid="correct-movement-inbound-1"]').trigger('click')
     expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(true)
+    expect(wrapper.find('.mobile-fullscreen-dialog--active').exists()).toBe(true)
     await wrapper.get('[data-testid="correction-submit"]').trigger('click')
     expect(api.correctMedicineMovement).not.toHaveBeenCalled()
 
@@ -481,6 +502,26 @@ describe('MedicineInventoryInboundPage', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="correction-dialog"]').exists()).toBe(true)
     expect((wrapper.get('[data-testid="correction-reason"]').element as HTMLTextAreaElement).value).toBe('录入数量有误')
+  })
+
+  it('gives mobile movement filters full-width 44px select and date-range controls', async () => {
+    layout.isMobileLayout.value = true
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+    await wrapper.get('.mobile-filter-summary').trigger('click')
+    await nextTick()
+    const select = componentByTestId(wrapper, 'mobile-medicine-history-item-filter')
+    const dateRange = wrapper.get('.mobile-medicine-movements__filters .el-date-editor--daterange')
+
+    expect(getComputedStyle(select.element).width).toBe('100%')
+    expect(getComputedStyle(select.element).maxWidth).toBe('100%')
+    expect(getComputedStyle(select.element).getPropertyValue('--el-component-size').trim()).toBe('44px')
+    expect(select.get('.el-select__wrapper').classes()).toContain('el-select__wrapper')
+    expect(select.get('.el-select__input').classes()).toContain('el-select__input')
+    expect(getComputedStyle(dateRange.element).width).toBe('100%')
+    expect(getComputedStyle(dateRange.element).maxWidth).toBe('100%')
+    expect(getComputedStyle(dateRange.element).getPropertyValue('--el-component-size').trim()).toBe('44px')
+    expect(dateRange.findAll('.el-range-input')).toHaveLength(2)
   })
 })
 
@@ -559,7 +600,7 @@ describe('MedicineInventoryOutboundPage', () => {
 
   it('preserves the outbound form after a 409 and updates the displayed current stock', async () => {
     api.createMedicineOutbound.mockRejectedValueOnce({
-      response: { status: 409, data: { message: '库存不足，当前库存为 2 瓶' } }
+      response: { status: 409, data: { item: { currentQuantity: 2 }, message: '库存不足，当前库存为 2 瓶' } }
     })
     const wrapper = mountPage(MedicineInventoryOutboundPage)
     await flushPromises()
@@ -575,6 +616,114 @@ describe('MedicineInventoryOutboundPage', () => {
     expect(componentByTestId(wrapper, 'outbound-item').props('modelValue')).toBe('item-amoxicillin')
     expect((wrapper.get('[data-testid="outbound-quantity"]').element as HTMLInputElement).value).toBe('8')
     expect((wrapper.get('[data-testid="outbound-remark"]').element as HTMLInputElement).value).toBe('紧急出库')
+  })
+
+  it('applies a delayed 409 only to the submitted item while preserving a newly selected item and inputs', async () => {
+    let rejectOutbound!: (error: unknown) => void
+    api.createMedicineOutbound.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectOutbound = reject }))
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('8')
+    await wrapper.get('[data-testid="outbound-remark"]').setValue('A 请求')
+    await nextTick()
+    await wrapper.get('[data-testid="outbound-submit"]').trigger('click')
+    await flushPromises()
+    expect(api.createMedicineOutbound).toHaveBeenCalledWith(expect.objectContaining({ medicineItemId: 'item-amoxicillin' }))
+
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-saline')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('1.25')
+    await wrapper.get('[data-testid="outbound-remark"]').setValue('B 保留')
+    await nextTick()
+    rejectOutbound({ response: { status: 409, data: { item: { currentQuantity: 2 }, message: 'A 库存不足' } } })
+    await flushPromises()
+
+    expect(componentByTestId(wrapper, 'outbound-item').props('modelValue')).toBe('item-saline')
+    expect((wrapper.get('[data-testid="outbound-quantity"]').element as HTMLInputElement).value).toBe('1.25')
+    expect((wrapper.get('[data-testid="outbound-remark"]').element as HTMLInputElement).value).toBe('B 保留')
+    expect(wrapper.text()).toContain('当前库存 250.5 毫升')
+
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await nextTick()
+    expect(wrapper.text()).toContain('当前库存 2 瓶')
+  })
+
+  it('captures the outbound request context before asynchronous form validation settles', async () => {
+    let resolveValidation!: (valid: boolean) => void
+    const validation = new Promise<boolean>((resolve) => { resolveValidation = resolve })
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('2')
+    await wrapper.get('[data-testid="outbound-remark"]').setValue('A 提交快照')
+    await nextTick()
+    const form = wrapper.findAllComponents({ name: 'ElForm' })[0]
+    vi.spyOn((form.vm.$ as { exposed: { validate: () => Promise<boolean> } }).exposed, 'validate').mockReturnValue(validation)
+
+    await wrapper.get('[data-testid="outbound-submit"]').trigger('click')
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-saline')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('1.25')
+    await wrapper.get('[data-testid="outbound-remark"]').setValue('B 未提交')
+    resolveValidation(true)
+    await flushPromises()
+
+    expect(api.createMedicineOutbound).toHaveBeenCalledWith({
+      occurredOn: '2026-08-15',
+      medicineItemId: 'item-amoxicillin',
+      quantity: '2',
+      remark: 'A 提交快照'
+    })
+  })
+
+  it.each([
+    ['blank string', ''],
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['object', { value: 2 }],
+    ['excess precision', 1.2345],
+    ['out of range', 100000000000]
+  ])('rejects an invalid explicit conflict quantity (%s), preserves stock, and authoritatively reloads', async (_label, currentQuantity) => {
+    api.createMedicineOutbound.mockRejectedValueOnce({
+      response: { status: 409, data: { item: { currentQuantity }, message: '库存冲突' } }
+    })
+    const errorSpy = vi.spyOn(ElMessage, 'error')
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('8')
+    await nextTick()
+    await wrapper.get('[data-testid="outbound-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.getMedicineItems).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('当前库存 10 瓶')
+    expect(errorSpy).toHaveBeenCalledWith('库存数据无效，已刷新库存，请核对后重试')
+  })
+
+  it('ignores an outbound 409 that settles after unmount without refreshing or notifying', async () => {
+    let rejectOutbound!: (error: unknown) => void
+    api.createMedicineOutbound.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectOutbound = reject }))
+    const errorSpy = vi.spyOn(ElMessage, 'error')
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('8')
+    await nextTick()
+    await wrapper.get('[data-testid="outbound-submit"]').trigger('click')
+    await flushPromises()
+    expect(api.createMedicineOutbound).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    rejectOutbound({ response: { status: 409, data: { item: { currentQuantity: '' }, message: 'late conflict' } } })
+    await flushPromises()
+
+    expect(api.getMedicineItems).toHaveBeenCalledTimes(1)
+    expect(errorSpy).not.toHaveBeenCalled()
   })
 
   it('uses a collapsed mobile outbound form and complete movement cards without desktop tables', async () => {

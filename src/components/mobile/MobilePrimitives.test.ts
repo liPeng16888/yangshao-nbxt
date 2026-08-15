@@ -117,6 +117,22 @@ describe('mobile interaction primitives', () => {
     expect(dialog.get('[aria-label="备注"]').element).toBeInstanceOf(HTMLInputElement)
   })
 
+  it.each([390, 844])('applies prop-driven fullscreen and safe-area geometry at %ipx mobile layouts', (width) => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+    const dialog = mount(MobileFullscreenDialog, {
+      props: { modelValue: true, title: '移动编辑', fullscreen: true },
+      global: { stubs: mobileStubs }
+    })
+    const root = dialog.get('.mobile-fullscreen-dialog')
+    const styles = getComputedStyle(root.element)
+
+    expect(root.classes()).toContain('mobile-fullscreen-dialog--active')
+    expect(styles.width).toBe('100%')
+    expect(styles.height).toBe('100dvh')
+    expect(styles.paddingTop).toContain('safe-area-inset-top')
+    expect(styles.paddingBottom).toContain('safe-area-inset-bottom')
+  })
+
   it('renders a fixed action-bar container for page-owned actions', () => {
     const actionBar = mount(MobileActionBar, { slots: { default: '<button>保存</button>' } })
     expect(actionBar.classes()).toContain('mobile-action-bar')

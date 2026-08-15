@@ -152,7 +152,7 @@
     </section>
     </template>
 
-    <MobileFullscreenDialog v-if="isMobileLayout" v-model="correctionVisible" title="更正出库记录" :saving="correctionSaving" @confirm="submitCorrection">
+    <MobileFullscreenDialog v-if="isMobileLayout" v-model="correctionVisible" title="更正出库记录" :saving="correctionSaving" fullscreen @confirm="submitCorrection">
       <p class="muted">将创建一条反向更正流水，原记录不会被修改。</p>
       <el-input v-model="correctionReason" data-testid="correction-reason" type="textarea" :rows="3" maxlength="120" show-word-limit placeholder="填写更正原因" />
       <template #footer="{ cancel }">
@@ -174,7 +174,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { correctMedicineMovement, createMedicineOutbound, getMedicineItems, getMedicineMovements } from '@/api/medicineInventory'
 import MobileMedicineMovementList from '@/components/medicine/MobileMedicineMovementList.vue'
@@ -205,6 +205,7 @@ let itemsRequestId = 0
 let historyRequestId = 0
 let submitPending = false
 let correctionSubmitPending = false
+let pageActive = true
 
 const form = reactive({
   occurredOn: todayInBeijing(),
@@ -241,6 +242,12 @@ const rules: FormRules<typeof form> = {
 
 onMounted(() => {
   void Promise.all([loadItems(), loadHistory()])
+})
+
+onUnmounted(() => {
+  pageActive = false
+  itemsRequestId += 1
+  historyRequestId += 1
 })
 
 async function loadItems() {
@@ -298,15 +305,28 @@ function applyMobileHistoryFilter(value: { medicineItemIds: string[]; dateRange?
 
 async function handleSubmit() {
   if (!canSubmit.value || submitPending) return
+  const item = selectedItem.value
+  const validatedQuantity = quantityValidation.value
+  const remaining = remainingQuantity.value
+  if (!item || !validatedQuantity?.ok || remaining === null || remaining < 0) return
+  const submission = {
+    occurredOn: form.occurredOn,
+    medicineItemId: item.id,
+    medicineName: item.name,
+    unit: item.unit,
+    unitLabel: item.unitLabel,
+    quantity: validatedQuantity.value,
+    remark: form.remark.trim()
+  }
   submitPending = true
   const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid || !selectedItem.value || !quantityValidation.value?.ok || remainingQuantity.value === null || remainingQuantity.value < 0) {
+  if (!valid) {
     submitPending = false
     return
   }
 
   try {
-    await ElMessageBox.confirm(`确认出库 ${quantityValidation.value.value} ${selectedItem.value.unitLabel} 的“${selectedItem.value.name}”？`, '确认出库', {
+    await ElMessageBox.confirm(`确认出库 ${submission.quantity} ${submission.unitLabel} 的“${submission.medicineName}”？`, '确认出库', {
       confirmButtonText: '确认出库',
       cancelButtonText: '取消',
       type: 'warning'
@@ -315,27 +335,37 @@ async function handleSubmit() {
     submitPending = false
     return
   }
+  if (!pageActive) {
+    submitPending = false
+    return
+  }
 
   saving.value = true
   try {
     await createMedicineOutbound({
-      occurredOn: form.occurredOn,
-      medicineItemId: selectedItem.value.id,
-      quantity: quantityValidation.value.value,
-      remark: form.remark.trim()
+      occurredOn: submission.occurredOn,
+      medicineItemId: submission.medicineItemId,
+      quantity: submission.quantity,
+      remark: submission.remark
     })
+    if (!pageActive) return
     ElMessage.success('药品已出库')
     resetForm()
     await Promise.all([loadItems(), loadHistory()])
   } catch (error) {
+    if (!pageActive) return
     if (isConflict(error)) {
-      applyConflictQuantity(error)
-      ElMessage.error(errorMessage(error, '库存已发生变化，请核对当前库存后重新提交'))
+      if (applyConflictQuantity(submission.medicineItemId, submission.unit, error)) {
+        ElMessage.error(errorMessage(error, '库存已发生变化，请核对当前库存后重新提交'))
+      } else {
+        ElMessage.error('库存数据无效，已刷新库存，请核对后重试')
+        await loadItems()
+      }
       return
     }
     ElMessage.error(errorMessage(error, '药品出库失败，请稍后重试'))
   } finally {
-    saving.value = false
+    if (pageActive) saving.value = false
     submitPending = false
   }
 }
@@ -347,11 +377,12 @@ function resetForm() {
   formRef.value?.clearValidate()
 }
 
-function applyConflictQuantity(error: unknown) {
-  const item = selectedItem.value
-  const latestQuantity = conflictQuantity(error)
-  if (!item || latestQuantity === null) return
+function applyConflictQuantity(medicineItemId: string, unit: MedicineInventoryItem['unit'], error: unknown) {
+  const item = items.value.find((candidate) => candidate.id === medicineItemId)
+  const latestQuantity = conflictQuantity(error, unit)
+  if (!item || latestQuantity === null) return false
   item.currentQuantity = latestQuantity
+  return true
 }
 
 function isCorrectable(movement: MedicineInventoryMovement) {
@@ -431,15 +462,13 @@ function isConflict(error: unknown) {
   return (error as { response?: { status?: number } })?.response?.status === 409
 }
 
-function conflictQuantity(error: unknown) {
+function conflictQuantity(error: unknown, unit: MedicineInventoryItem['unit']) {
   const data = (error as { response?: { data?: { currentQuantity?: unknown; item?: { currentQuantity?: unknown }; message?: string | string[] } } })?.response?.data
   const explicitQuantity = data?.item?.currentQuantity ?? data?.currentQuantity
-  if (typeof explicitQuantity === 'number' && Number.isFinite(explicitQuantity)) return explicitQuantity
-  if (typeof explicitQuantity === 'string' && Number.isFinite(Number(explicitQuantity))) return Number(explicitQuantity)
-
-  const message = Array.isArray(data?.message) ? data.message.join('；') : data?.message
-  const match = message?.match(/当前库存为\s*([0-9]+(?:\.[0-9]{1,3})?)/)
-  return match ? Number(match[1]) : null
+  if (typeof explicitQuantity !== 'number' || !Number.isFinite(explicitQuantity) || explicitQuantity < 0) return null
+  if (explicitQuantity === 0) return 0
+  const validated = validateMedicineQuantity(unit, explicitQuantity)
+  return validated.ok ? Number(validated.value) : null
 }
 
 function errorMessage(error: unknown, fallback: string) {

@@ -56,7 +56,15 @@ function resetFilter() {
       @apply="applyFilter"
       @reset="resetFilter"
     >
-      <el-select v-model="draftMedicineItemIds" multiple clearable collapse-tags placeholder="筛选药品">
+      <el-select
+        v-model="draftMedicineItemIds"
+        class="mobile-medicine-stock-filter-control"
+        style="width: 100%; min-width: 0; max-width: 100%; --el-component-size: 44px"
+        multiple
+        clearable
+        collapse-tags
+        placeholder="筛选药品"
+      >
         <el-option v-for="item in filterItems" :key="item.id" :label="`${item.name}（${item.unitLabel}）`" :value="item.id" />
       </el-select>
     </MobileFilterDrawer>
@@ -113,6 +121,22 @@ function resetFilter() {
   background: #ffffff;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
+}
+
+.mobile-medicine-stock-filter-control {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mobile-medicine-stock-filter-control :deep(.el-select__wrapper),
+.mobile-medicine-stock-filter-control :deep(.el-select__input) {
+  min-height: 44px;
+}
+
+.mobile-medicine-stock-filter-control :deep(.el-select__wrapper) {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .mobile-medicine-list__error {
