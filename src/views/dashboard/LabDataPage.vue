@@ -133,6 +133,7 @@
       :blocks="labStore.sampleBlocks"
       :selected-block-ids="selectedReportBlockIds"
       :template="smsTemplate"
+      :mobile="isMobileLayout"
       @close="smsDialogVisible = false"
     />
   </div>

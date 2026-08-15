@@ -54,6 +54,11 @@ describe('useMobileLayout', () => {
     vi.unstubAllGlobals()
   })
 
+  it('matches 767px narrow and up-to-1024px coarse layouts without affecting mouse desktops', () => {
+    expect(MOBILE_NARROW_QUERY).toBe('(max-width: 767px)')
+    expect(MOBILE_TOUCH_QUERY).toBe('(pointer: coarse) and (max-width: 1024px)')
+  })
+
   it('keeps a regular desktop on the existing desktop layout', () => {
     const scope = effectScope()
     const state = scope.run(() => useMobileLayout())

@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import LabReportDialog from './LabReportDialog.vue'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
@@ -9,6 +9,16 @@ const reportMocks = vi.hoisted(() => ({
   createPngBlob: vi.fn(),
   downloadPng: vi.fn()
 }))
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 vi.mock('@/utils/labReport', async () => {
   const actual = await vi.importActual<typeof import('@/utils/labReport')>('@/utils/labReport')
@@ -187,6 +197,24 @@ describe('mobile lab report sharing', () => {
     wrapper.unmount()
   })
 
+  it('falls back to the actual PNG when live system sharing fails', async () => {
+    const share = vi.fn().mockRejectedValue(new Error('share transport failed'))
+    vi.stubGlobal('navigator', { share, canShare: vi.fn().mockReturnValue(true) })
+    const createObjectURL = vi.fn().mockReturnValue('blob:failed-share-png')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+
+    expect(share).toHaveBeenCalledOnce()
+    expect(createObjectURL).toHaveBeenCalledWith(expect.objectContaining({ type: 'image/png' }))
+    expect(wrapper.find('.mobile-report-share-preview img').attributes('src')).toBe('blob:failed-share-png')
+    expect(wrapper.text()).toContain('长按保存图片')
+    wrapper.unmount()
+  })
+
   it('replaces and revokes fallback object URLs across retries and dialog close', async () => {
     vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(false) })
     const createObjectURL = vi.fn()
@@ -207,5 +235,207 @@ describe('mobile lab report sharing', () => {
     await wrapper.setProps({ visible: false })
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:second-report')
     wrapper.unmount()
+  })
+
+  it('clears and revokes an earlier fallback when a later system share succeeds', async () => {
+    const canShare = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+    const share = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { canShare, share })
+    const createObjectURL = vi.fn().mockReturnValue('blob:stale-fallback')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+    expect(wrapper.find('.mobile-report-share-preview').exists()).toBe(true)
+
+    await clickMobileExport(wrapper)
+    await flushPromises()
+
+    expect(share).toHaveBeenCalledOnce()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:stale-fallback')
+    expect(wrapper.find('.mobile-report-share-preview').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('does nothing when the dialog closes while PNG generation is pending', async () => {
+    const png = deferred<Blob | null>()
+    reportMocks.createPngBlob.mockReturnValueOnce(png.promise)
+    const share = vi.fn()
+    vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(true), share })
+    const createObjectURL = vi.fn().mockReturnValue('blob:late-close')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+    await wrapper.setProps({ visible: false })
+    png.resolve(new Blob(['png'], { type: 'image/png' }))
+    await flushPromises()
+
+    expect(share).not.toHaveBeenCalled()
+    expect(createObjectURL).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('does nothing when the component unmounts while PNG generation is pending', async () => {
+    const png = deferred<Blob | null>()
+    reportMocks.createPngBlob.mockReturnValueOnce(png.promise)
+    const share = vi.fn()
+    vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(true), share })
+    const createObjectURL = vi.fn().mockReturnValue('blob:late-unmount')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+    wrapper.unmount()
+    png.resolve(new Blob(['png'], { type: 'image/png' }))
+    await flushPromises()
+
+    expect(share).not.toHaveBeenCalled()
+    expect(createObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('does not show a fallback after the dialog closes during failed sharing', async () => {
+    const pendingShare = deferred<void>()
+    const share = vi.fn().mockReturnValue(pendingShare.promise)
+    vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(true), share })
+    const createObjectURL = vi.fn().mockReturnValue('blob:late-share')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+    expect(share).toHaveBeenCalledOnce()
+    await wrapper.setProps({ visible: false })
+    pendingShare.reject(new Error('late share failure'))
+    await flushPromises()
+
+    expect(createObjectURL).not.toHaveBeenCalled()
+    expect(wrapper.find('.mobile-report-share-preview').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('ignores an old PNG result after closing and reopening the dialog', async () => {
+    const oldPng = deferred<Blob | null>()
+    reportMocks.createPngBlob.mockReturnValueOnce(oldPng.promise)
+    vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(false) })
+    const createObjectURL = vi.fn().mockReturnValue('blob:old-reopen')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+    await wrapper.setProps({ visible: false })
+    await wrapper.setProps({ visible: true })
+    oldPng.resolve(new Blob(['old'], { type: 'image/png' }))
+    await flushPromises()
+
+    expect(createObjectURL).not.toHaveBeenCalled()
+    expect(wrapper.find('.mobile-report-share-preview').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('invalidates mobile export when the layout flips to desktop', async () => {
+    const png = deferred<Blob | null>()
+    reportMocks.createPngBlob.mockReturnValueOnce(png.promise)
+    const share = vi.fn()
+    vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(true), share })
+    const createObjectURL = vi.fn().mockReturnValue('blob:late-layout')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+    await wrapper.setProps({ mobile: false })
+    png.resolve(new Blob(['png'], { type: 'image/png' }))
+    await flushPromises()
+
+    expect(share).not.toHaveBeenCalled()
+    expect(createObjectURL).not.toHaveBeenCalled()
+    expect(reportMocks.downloadPng).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('prevents concurrent exports while the first PNG is pending', async () => {
+    const png = deferred<Blob | null>()
+    reportMocks.createPngBlob.mockReturnValueOnce(png.promise)
+    vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(false) })
+    Object.defineProperty(URL, 'createObjectURL', { value: vi.fn().mockReturnValue('blob:once'), configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+    await clickMobileExport(wrapper)
+
+    expect(reportMocks.createPngBlob).toHaveBeenCalledOnce()
+    png.resolve(null)
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('does not start a second system share after close and reopen while the first share is pending', async () => {
+    const firstShare = deferred<void>()
+    const share = vi.fn()
+      .mockReturnValueOnce(firstShare.promise)
+      .mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(true), share })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+    expect(share).toHaveBeenCalledOnce()
+
+    await wrapper.setProps({ visible: false })
+    await wrapper.setProps({ visible: true })
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+
+    expect(reportMocks.createPngBlob).toHaveBeenCalledOnce()
+    expect(share).toHaveBeenCalledOnce()
+
+    firstShare.resolve()
+    await flushPromises()
+    await clickMobileExport(wrapper)
+    await flushPromises()
+
+    expect(reportMocks.createPngBlob).toHaveBeenCalledTimes(2)
+    expect(share).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('does not start a second system share from a new instance while an unmounted instance share is pending', async () => {
+    const firstShare = deferred<void>()
+    const share = vi.fn()
+      .mockReturnValueOnce(firstShare.promise)
+      .mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(true), share })
+    const firstWrapper = mountMobileReport()
+
+    await openPreview(firstWrapper)
+    await clickMobileExport(firstWrapper)
+    expect(share).toHaveBeenCalledOnce()
+    firstWrapper.unmount()
+
+    const nextWrapper = mountMobileReport()
+    await openPreview(nextWrapper)
+    await clickMobileExport(nextWrapper)
+
+    expect(reportMocks.createPngBlob).toHaveBeenCalledOnce()
+    expect(share).toHaveBeenCalledOnce()
+
+    firstShare.resolve()
+    await flushPromises()
+    await clickMobileExport(nextWrapper)
+    await flushPromises()
+
+    expect(reportMocks.createPngBlob).toHaveBeenCalledTimes(2)
+    expect(share).toHaveBeenCalledTimes(2)
+    nextWrapper.unmount()
   })
 })

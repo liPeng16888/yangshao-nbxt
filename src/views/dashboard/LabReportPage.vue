@@ -1,6 +1,12 @@
 <template>
-  <div class="page-stack lab-report-page">
-    <div v-if="saveError" class="template-save-error" data-testid="template-save-error" role="alert">
+  <div class="page-stack lab-report-page" :class="{ 'lab-report-page--mobile': isMobileLayout }">
+    <div
+      v-if="saveErrors[activeSection]"
+      class="template-save-error"
+      data-testid="template-save-error"
+      :data-section="activeSection"
+      role="alert"
+    >
       <span>模板自动保存失败，当前输入已保留，请重试。</span>
       <el-button data-testid="retry-template-save" @click="retryTemplateSave">重试保存</el-button>
     </div>
@@ -47,7 +53,7 @@ const router = useRouter()
 const { isMobileLayout } = useMobileLayout()
 const reportTemplate = ref<LabReportTemplate>(loadLabReportTemplate())
 const smsTemplate = ref<LabReportSmsTemplate>(loadLabReportSmsTemplate())
-const saveError = ref<ReportSection | null>(null)
+const saveErrors = ref<Record<ReportSection, boolean>>({ image: false, sms: false })
 
 const sections: { label: string; value: ReportSection; path: string }[] = [
   { label: '化验报告图片模板', value: 'image', path: '/lab-report/image-template' },
@@ -80,15 +86,15 @@ function persistTemplate(section: ReportSection, template: LabReportTemplate | L
   try {
     if (section === 'image') saveLabReportTemplate(template as LabReportTemplate)
     else saveLabReportSmsTemplate(template as LabReportSmsTemplate)
-    if (saveError.value === section) saveError.value = null
+    saveErrors.value[section] = false
   } catch {
-    saveError.value = section
+    saveErrors.value[section] = true
   }
 }
 
 function retryTemplateSave() {
-  if (saveError.value === 'image') persistTemplate('image', reportTemplate.value)
-  if (saveError.value === 'sms') persistTemplate('sms', smsTemplate.value)
+  if (activeSection.value === 'image' && saveErrors.value.image) persistTemplate('image', reportTemplate.value)
+  if (activeSection.value === 'sms' && saveErrors.value.sms) persistTemplate('sms', smsTemplate.value)
 }
 
 function switchSection(section: ReportSection) {
@@ -145,10 +151,8 @@ function switchSection(section: ReportSection) {
   }
 }
 
-@media (max-width: 760px) {
-  .lab-report-page {
-    padding-bottom: calc(20px + var(--mobile-page-action-bottom, env(safe-area-inset-bottom)));
-  }
+.lab-report-page--mobile {
+  padding-bottom: calc(20px + var(--mobile-page-action-bottom, env(safe-area-inset-bottom)));
 
   .template-save-error {
     align-items: stretch;

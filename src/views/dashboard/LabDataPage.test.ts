@@ -171,6 +171,14 @@ function mountPage() {
     }
   })
 
+  const LabSmsDialogStub = defineComponent({
+    name: 'LabSmsDialog',
+    props: {
+      mobile: { type: Boolean, default: false }
+    },
+    template: '<div class="lab-sms-dialog-stub" :data-mobile="String(mobile)" />'
+  })
+
   return mount(LabDataPage, {
     global: {
       plugins: [createPinia()],
@@ -182,7 +190,7 @@ function mountPage() {
         MobileLabSampleList: MobileLabSampleListStub,
         LabParameterPanel: true,
         LabReportDialog: true,
-        LabSmsDialog: true,
+        LabSmsDialog: LabSmsDialogStub,
         BulkSampleFillDialog: BulkSampleFillDialogStub,
         SampleCompletionDialog: SampleCompletionDialogStub,
         BlacklistHitDialog: true,
@@ -376,6 +384,7 @@ describe('LabDataPage table layout', () => {
     await settleMountedPage()
     expect(desktop.find('.lab-grid-stub').exists()).toBe(true)
     expect(desktop.find('.mobile-lab-list-stub').exists()).toBe(false)
+    expect(desktop.get('.lab-sms-dialog-stub').attributes('data-mobile')).toBe('false')
     desktop.unmount()
 
     mocks.mobileLayout.isMobileLayout.value = true
@@ -384,6 +393,7 @@ describe('LabDataPage table layout', () => {
     expect(mobile.find('.mobile-lab-list-stub').exists()).toBe(true)
     expect(mobile.find('.lab-grid-stub').exists()).toBe(false)
     expect(mobile.find('.append-submit').exists()).toBe(true)
+    expect(mobile.get('.lab-sms-dialog-stub').attributes('data-mobile')).toBe('true')
     mobile.unmount()
   })
 

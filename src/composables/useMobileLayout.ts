@@ -1,7 +1,7 @@
 import { onScopeDispose, readonly, ref } from 'vue'
 
 export const MOBILE_NARROW_QUERY = '(max-width: 767px)'
-export const MOBILE_TOUCH_QUERY = '(hover: none) and (pointer: coarse) and (max-width: 1024px)'
+export const MOBILE_TOUCH_QUERY = '(pointer: coarse) and (max-width: 1024px)'
 
 export function useMobileLayout() {
   const isMobileLayout = ref(false)

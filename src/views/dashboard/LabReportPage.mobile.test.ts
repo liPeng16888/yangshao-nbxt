@@ -137,6 +137,15 @@ describe('mobile lab report template routes', () => {
     expect(getComputedStyle(wrapper.get('[data-testid="mobile-report-preview"]').element).maxWidth).toBe('100%')
   })
 
+  it('previews the inspector and reviewer under their own report labels', () => {
+    const wrapper = mountPage('/lab-report/image-template', true)
+    const previewRows = wrapper.get('[data-testid="mobile-report-preview"]').findAll('dl > div')
+      .map((row) => [row.get('dt').text(), row.get('dd').text()])
+
+    expect(previewRows).toContainEqual(['检验员', '检验员'])
+    expect(previewRows).toContainEqual(['审核/签名', '张文'])
+  })
+
   it('keeps the edited report model and offers retry when local saving fails', async () => {
     mocks.saveReport.mockImplementation(() => { throw new Error('quota exceeded') })
     const wrapper = mountPage('/lab-report/image-template', true)
@@ -218,5 +227,39 @@ describe('mobile SMS template', () => {
     mocks.saveSms.mockImplementation(() => undefined)
     await wrapper.get('[data-testid="retry-template-save"]').trigger('click')
     expect(mocks.saveSms).toHaveBeenLastCalledWith(expect.objectContaining({ prefix: '保留此前缀' }))
+  })
+
+  it('keeps image and SMS save failures independent and retries each latest live model', async () => {
+    mocks.saveReport.mockImplementation(() => { throw new Error('image storage unavailable') })
+    mocks.saveSms.mockImplementation(() => { throw new Error('sms storage unavailable') })
+    const wrapper = mountPage('/lab-report/image-template', true)
+
+    await setInput(wrapper, 'mobile-report-title', '图片失败时的旧标题')
+    expect(wrapper.find('[data-testid="template-save-error"]').exists()).toBe(true)
+
+    mocks.route.path = '/lab-report/sms-template'
+    await wrapper.vm.$nextTick()
+    await setInput(wrapper, 'mobile-sms-prefix', '短信失败时的前缀')
+    expect(wrapper.find('[data-testid="template-save-error"]').exists()).toBe(true)
+
+    mocks.saveSms.mockImplementation(() => undefined)
+    await wrapper.get('[data-testid="retry-template-save"]').trigger('click')
+    expect(mocks.saveSms).toHaveBeenLastCalledWith(expect.objectContaining({ prefix: '短信失败时的前缀' }))
+    expect(wrapper.find('[data-testid="template-save-error"]').exists()).toBe(false)
+
+    mocks.route.path = '/lab-report/image-template'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="template-save-error"]').exists()).toBe(true)
+
+    await setInput(wrapper, 'mobile-report-title', '图片失败后继续编辑的新标题')
+    mocks.saveReport.mockImplementation(() => undefined)
+    await wrapper.get('[data-testid="retry-template-save"]').trigger('click')
+
+    expect(mocks.saveReport).toHaveBeenLastCalledWith(expect.objectContaining({ title: '图片失败后继续编辑的新标题' }))
+    expect(wrapper.find('[data-testid="template-save-error"]').exists()).toBe(false)
+
+    mocks.route.path = '/lab-report/sms-template'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="template-save-error"]').exists()).toBe(false)
   })
 })

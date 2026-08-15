@@ -86,7 +86,8 @@
       <strong>{{ modelValue.title }}</strong>
       <dl>
         <div><dt>来样单位</dt><dd>{{ modelValue.sampleUnit || '按样品客户自动填写' }}</dd></div>
-        <div><dt>检验员</dt><dd>{{ modelValue.reviewer }}</dd></div>
+        <div><dt>检验员</dt><dd>{{ modelValue.inspector }}</dd></div>
+        <div><dt>审核/签名</dt><dd>{{ modelValue.reviewer }}</dd></div>
         <div><dt>地址</dt><dd>{{ modelValue.address }}</dd></div>
         <div><dt>联系电话</dt><dd>{{ modelValue.phone }}</dd></div>
       </dl>
