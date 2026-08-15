@@ -14,13 +14,13 @@ export class BlacklistController {
   constructor(private readonly blacklist: BlacklistService) {}
 
   @Get()
-  search(@Query('keyword') keyword?: string) {
-    return this.blacklist.search(keyword)
+  search(@CurrentUserInfo() user: CurrentUser, @Query('keyword') keyword?: string) {
+    return this.blacklist.search(user.id, keyword)
   }
 
   @Get('check')
-  check(@Query('keyword') keyword = '') {
-    return this.blacklist.check(keyword)
+  check(@CurrentUserInfo() user: CurrentUser, @Query('keyword') keyword = '') {
+    return this.blacklist.check(user.id, keyword)
   }
 
   @Post()

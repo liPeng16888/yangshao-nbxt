@@ -3,7 +3,9 @@ import { onBeforeUnmount, reactive, ref } from 'vue'
 import type { UploadFile, UploadFiles, UploadUserFile } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import { uploadImages } from '@/api/upload'
 import type { BlacklistPayload } from '@/types/blacklist'
+import { createOwnedImagePreview, revokeOwnedImagePreview, validateBlacklistImage } from '@/utils/blacklistImages'
 import { validateBlacklistPayload } from '@/utils/validators'
 
 const props = defineProps<{
@@ -21,6 +23,7 @@ const form = reactive({
 const imageFiles = ref<UploadUserFile[]>([])
 const ownedImageUrls = new Set<string>()
 const submitting = ref(false)
+let uploadedUrlsByFile = new WeakMap<File, string>()
 let disposed = false
 
 onBeforeUnmount(() => {
@@ -28,22 +31,21 @@ onBeforeUnmount(() => {
   releaseOwnedUrls()
 })
 
-function isImageFile(file?: File) {
-  return Boolean(file?.type && file.type.startsWith('image/'))
-}
-
 function syncImageFiles(files: UploadFiles) {
   const next: UploadUserFile[] = []
   for (const item of files) {
     if (next.length >= 2) break
-    if (item.raw && !isImageFile(item.raw)) {
-      ElMessage.error('只能选择图片文件')
-      continue
+    if (item.raw) {
+      const error = validateBlacklistImage(item.raw)
+      if (error) {
+        ElMessage.error(error)
+        continue
+      }
     }
     let url = item.url || ''
     if (!url && item.raw) {
       try {
-        url = URL.createObjectURL(item.raw)
+        url = createOwnedImagePreview(item.raw)
         ownedImageUrls.add(url)
       } catch {
         ElMessage.error('图片预览失败，请重新选择')
@@ -55,7 +57,7 @@ function syncImageFiles(files: UploadFiles) {
   const activeUrls = new Set(next.map((item) => item.url).filter((url): url is string => Boolean(url)))
   for (const url of [...ownedImageUrls]) {
     if (!activeUrls.has(url)) {
-      URL.revokeObjectURL(url)
+      revokeOwnedImagePreview(url)
       ownedImageUrls.delete(url)
     }
   }
@@ -75,7 +77,7 @@ function handleExceed() {
 }
 
 function releaseOwnedUrls() {
-  for (const url of ownedImageUrls) URL.revokeObjectURL(url)
+  for (const url of ownedImageUrls) revokeOwnedImagePreview(url)
   ownedImageUrls.clear()
 }
 
@@ -83,6 +85,20 @@ function reset() {
   releaseOwnedUrls()
   Object.assign(form, { phone: '', wechat: '', wechatNickname: '', amount: '', other: '', note: '' })
   imageFiles.value = []
+  uploadedUrlsByFile = new WeakMap<File, string>()
+}
+
+async function persistFiles(files: File[]) {
+  const missing = files.filter((file) => !uploadedUrlsByFile.has(file))
+  if (missing.length) {
+    const urls = await uploadImages(missing)
+    missing.forEach((file, index) => uploadedUrlsByFile.set(file, urls[index]))
+  }
+  return files.map((file) => uploadedUrlsByFile.get(file)).filter((url): url is string => Boolean(url))
+}
+
+function draftSignature() {
+  return JSON.stringify({ ...form, images: imageFiles.value.map((item) => [item.name, item.url, item.raw?.size, item.raw?.lastModified]) })
 }
 
 async function submit() {
@@ -103,9 +119,12 @@ async function submit() {
     return
   }
   submitting.value = true
+  const submittedDraft = draftSignature()
   try {
-    await props.save(payload)
-    if (!disposed) reset()
+    const localFiles = imageFiles.value.flatMap((item) => item.raw ? [item.raw] : [])
+    const uploadedUrls = await persistFiles(localFiles)
+    await props.save({ ...payload, images: uploadedUrls })
+    if (!disposed && draftSignature() === submittedDraft) reset()
   } catch {
     // The request layer owns error presentation. Keeping the draft is intentional.
   } finally {
@@ -121,20 +140,22 @@ async function submit() {
       <p class="muted">至少填写一项非图片信息。</p>
     </header>
     <div class="mobile-blacklist-form__fields">
-      <label><span>电话号</span><input v-model="form.phone" data-testid="blacklist-create-phone" class="mobile-touch-target" type="tel" autocomplete="tel" /></label>
-      <label><span>微信号</span><input v-model="form.wechat" data-testid="blacklist-create-wechat" class="mobile-touch-target" type="text" autocomplete="off" /></label>
-      <label><span>微信昵称</span><input v-model="form.wechatNickname" data-testid="blacklist-create-nickname" class="mobile-touch-target" type="text" autocomplete="off" /></label>
-      <label><span>金额</span><input v-model="form.amount" data-testid="blacklist-create-amount" class="mobile-touch-target" type="number" inputmode="decimal" min="0" step="0.01" /></label>
-      <label><span>其他</span><input v-model="form.other" data-testid="blacklist-create-other" class="mobile-touch-target" type="text" autocomplete="off" /></label>
-      <label><span>备注</span><textarea v-model="form.note" data-testid="blacklist-create-note" rows="3" /></label>
+      <label><span>电话号</span><input v-model="form.phone" :disabled="submitting" data-testid="blacklist-create-phone" class="mobile-touch-target" type="tel" autocomplete="tel" /></label>
+      <label><span>微信号</span><input v-model="form.wechat" :disabled="submitting" data-testid="blacklist-create-wechat" class="mobile-touch-target" type="text" autocomplete="off" /></label>
+      <label><span>微信昵称</span><input v-model="form.wechatNickname" :disabled="submitting" data-testid="blacklist-create-nickname" class="mobile-touch-target" type="text" autocomplete="off" /></label>
+      <label><span>金额</span><input v-model="form.amount" :disabled="submitting" data-testid="blacklist-create-amount" class="mobile-touch-target" type="number" inputmode="decimal" min="0" step="0.01" /></label>
+      <label><span>其他</span><input v-model="form.other" :disabled="submitting" data-testid="blacklist-create-other" class="mobile-touch-target" type="text" autocomplete="off" /></label>
+      <label><span>备注</span><textarea v-model="form.note" :disabled="submitting" data-testid="blacklist-create-note" rows="3" /></label>
       <label class="mobile-blacklist-form__images">
         <span>图片（最多 2 张）</span>
         <el-upload
           v-model:file-list="imageFiles"
           data-testid="blacklist-create-images"
           :auto-upload="false"
+          :disabled="submitting"
+          aria-label="选择黑名单图片"
           :limit="2"
-          accept="image/*"
+          accept="image/png,image/jpeg,image/webp,image/gif"
           list-type="picture-card"
           :on-change="handleImageChange"
           :on-remove="handleImageRemove"

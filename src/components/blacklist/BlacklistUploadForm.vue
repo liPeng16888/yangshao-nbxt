@@ -7,22 +7,26 @@
       <el-form label-position="top">
         <div class="blacklist-form-grid">
           <el-form-item label="电话号">
-            <el-input v-model.trim="form.phone" />
+            <el-input v-model.trim="form.phone" :disabled="submitting" />
           </el-form-item>
           <el-form-item label="微信号">
-            <el-input v-model.trim="form.wechat" />
+            <el-input v-model.trim="form.wechat" :disabled="submitting" />
           </el-form-item>
           <el-form-item label="微信昵称">
-            <el-input v-model.trim="form.wechatNickname" />
+            <el-input v-model.trim="form.wechatNickname" :disabled="submitting" />
           </el-form-item>
           <el-form-item label="金额">
-            <el-input-number v-model="form.amount" :precision="2" :min="0" controls-position="right" />
+            <el-input-number v-model="form.amount" :disabled="submitting" :precision="2" :min="0" controls-position="right" />
           </el-form-item>
         </div>
         <el-form-item label="图片">
           <el-upload
+            v-model:file-list="imageFiles"
             :auto-upload="false"
+            :disabled="submitting"
             :limit="2"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            aria-label="选择黑名单图片"
             list-type="picture-card"
             :on-change="handleImageChange"
             :on-remove="handleImageRemove"
@@ -32,10 +36,10 @@
           </el-upload>
         </el-form-item>
         <el-form-item label="其他">
-          <el-input v-model.trim="form.other" />
+          <el-input v-model.trim="form.other" :disabled="submitting" />
         </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model.trim="form.note" type="textarea" :rows="3" />
+          <el-input v-model.trim="form.note" :disabled="submitting" type="textarea" :rows="3" />
         </el-form-item>
         <el-button type="danger" :loading="submitting" @click="submit">保存黑名单</el-button>
       </el-form>
@@ -44,18 +48,23 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
-import type { UploadFile, UploadFiles } from 'element-plus'
+import { onBeforeUnmount, reactive, ref } from 'vue'
+import type { UploadFile, UploadFiles, UploadUserFile } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import { uploadImages } from '@/api/upload'
 import type { BlacklistPayload } from '@/types/blacklist'
+import { createOwnedImagePreview, revokeOwnedImagePreview, validateBlacklistImage } from '@/utils/blacklistImages'
 import { validateBlacklistPayload } from '@/utils/validators'
 
-const emit = defineEmits<{
-  submit: [payload: BlacklistPayload]
+const props = defineProps<{
+  save: (payload: BlacklistPayload) => Promise<void>
 }>()
 
 const submitting = ref(false)
+const imageFiles = ref<UploadUserFile[]>([])
+const ownedUrls = new Set<string>()
+let uploadedUrlsByFile = new WeakMap<File, string>()
 const form = reactive<BlacklistPayload>({
   phone: '',
   wechat: '',
@@ -66,39 +75,83 @@ const form = reactive<BlacklistPayload>({
   note: ''
 })
 
-function handleImageChange(_file: UploadFile, files: UploadFiles) {
-  form.images = files.map((item) => (item.raw ? URL.createObjectURL(item.raw) : item.url || '')).filter(Boolean)
+onBeforeUnmount(releaseUrls)
+
+function syncImages(files: UploadFiles) {
+  const next: UploadUserFile[] = []
+  for (const item of files) {
+    if (next.length >= 2) break
+    if (item.raw) {
+      const error = validateBlacklistImage(item.raw)
+      if (error) { ElMessage.error(error); continue }
+    }
+    let url = item.url || ''
+    if (!url && item.raw) {
+      try {
+        url = createOwnedImagePreview(item.raw)
+        ownedUrls.add(url)
+      } catch {
+        ElMessage.error('图片预览失败，请重新选择')
+        continue
+      }
+    }
+    if (url) next.push({ ...item, url })
+  }
+  const active = new Set(next.map((item) => item.url).filter((url): url is string => Boolean(url)))
+  for (const url of [...ownedUrls]) {
+    if (!active.has(url)) { revokeOwnedImagePreview(url); ownedUrls.delete(url) }
+  }
+  imageFiles.value = next
 }
 
-function handleImageRemove(_file: UploadFile, files: UploadFiles) {
-  form.images = files.map((item) => item.url || (item.raw ? URL.createObjectURL(item.raw) : '')).filter(Boolean)
-}
+function handleImageChange(_file: UploadFile, files: UploadFiles) { syncImages(files) }
+function handleImageRemove(_file: UploadFile, files: UploadFiles) { syncImages(files) }
 
 function handleExceed() {
   ElMessage.error('图片最多上传 2 张')
 }
 
 async function submit() {
-  const errors = validateBlacklistPayload(form)
+  if (submitting.value) return
+  const payload = { ...form, images: [] }
+  const errors = validateBlacklistPayload(payload)
   if (errors.length) {
     ElMessage.error(errors[0])
     return
   }
   submitting.value = true
+  const submittedDraft = draftSignature()
   try {
-    emit('submit', { ...form, images: [...form.images] })
-    Object.assign(form, {
-      phone: '',
-      wechat: '',
-      wechatNickname: '',
-      amount: null,
-      images: [],
-      other: '',
-      note: ''
-    })
+    const files = imageFiles.value.flatMap((item) => item.raw ? [item.raw] : [])
+    const missing = files.filter((file) => !uploadedUrlsByFile.has(file))
+    if (missing.length) {
+      const urls = await uploadImages(missing)
+      missing.forEach((file, index) => uploadedUrlsByFile.set(file, urls[index]))
+    }
+    const images = files.map((file) => uploadedUrlsByFile.get(file)).filter((url): url is string => Boolean(url))
+    await props.save({ ...payload, images })
+    if (draftSignature() === submittedDraft) reset()
+  } catch {
+    // Keep raw files and every draft field available for retry.
   } finally {
     submitting.value = false
   }
+}
+
+function draftSignature() {
+  return JSON.stringify({ ...form, images: imageFiles.value.map((item) => [item.name, item.url, item.raw?.size, item.raw?.lastModified]) })
+}
+
+function releaseUrls() {
+  for (const url of ownedUrls) revokeOwnedImagePreview(url)
+  ownedUrls.clear()
+}
+
+function reset() {
+  releaseUrls()
+  Object.assign(form, { phone: '', wechat: '', wechatNickname: '', amount: null, images: [], other: '', note: '' })
+  imageFiles.value = []
+  uploadedUrlsByFile = new WeakMap<File, string>()
 }
 </script>
 

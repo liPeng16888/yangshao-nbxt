@@ -13,6 +13,14 @@ export interface UploadedImageFile {
   buffer: Buffer
 }
 
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif'
+}
+
 @Injectable()
 export class UploadsService {
   constructor(
@@ -23,13 +31,16 @@ export class UploadsService {
   async saveImages(files: UploadedImageFile[]) {
     if (!files?.length) throw new BadRequestException('请选择要上传的图片')
     if (files.length > 10) throw new BadRequestException('单次最多上传 10 张图片')
+    for (const file of files) {
+      if (!IMAGE_EXTENSIONS[file.mimetype.toLowerCase()]) throw new BadRequestException('只能上传 PNG、JPEG、WebP 或 GIF 图片')
+      if (file.size > MAX_IMAGE_BYTES) throw new BadRequestException('单张图片不能超过 5 MB')
+    }
     const uploadRoot = this.config.get<string>('UPLOAD_DIR') || path.resolve(process.cwd(), '../uploads')
     const monthDir = currentMonthInBeijing()
     const targetDir = path.resolve(uploadRoot, monthDir)
     await mkdir(targetDir, { recursive: true })
     const urls: string[] = []
     for (const file of files) {
-      if (!file.mimetype.startsWith('image/')) throw new BadRequestException('只能上传图片文件')
       const ext = this.extFromFile(file)
       const fileName = `${Date.now()}-${randomBytes(6).toString('hex')}${ext}`
       const absolutePath = path.join(targetDir, fileName)
@@ -50,10 +61,6 @@ export class UploadsService {
   }
 
   private extFromFile(file: UploadedImageFile) {
-    const parsed = path.extname(file.originalname || '').toLowerCase()
-    if (parsed && /^[a-z0-9.]+$/.test(parsed)) return parsed
-    if (file.mimetype === 'image/png') return '.png'
-    if (file.mimetype === 'image/webp') return '.webp'
-    return '.jpg'
+    return IMAGE_EXTENSIONS[file.mimetype.toLowerCase()]
   }
 }

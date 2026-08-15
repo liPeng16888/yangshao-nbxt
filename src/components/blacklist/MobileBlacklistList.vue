@@ -11,7 +11,6 @@ const props = defineProps<{
   keyword: string
   loading?: boolean
   highlightId?: string
-  currentUsername: string
   deletingId?: string
   updatingId?: string
 }>()
@@ -29,6 +28,7 @@ const cardElements = new Map<string, HTMLElement>()
 type TemplateRefValue = Element | ComponentPublicInstance | null
 const cardElementSetters = new Map<string, (element: TemplateRefValue) => void>()
 let autoExpandedId = ''
+let lastScrolledId = ''
 let disposed = false
 
 watch(filterOpen, (open) => {
@@ -38,21 +38,30 @@ watch(filterOpen, (open) => {
 watch(
   () => [props.highlightId, props.records, props.loading] as const,
   async ([highlightId, rows, loading]) => {
+    const activeIds = new Set(rows.map((row) => row.id))
+    for (const id of cardElementSetters.keys()) {
+      if (!activeIds.has(id)) { cardElementSetters.delete(id); cardElements.delete(id) }
+    }
     const exactId = typeof highlightId === 'string' && rows.some((row) => row.id === highlightId) ? highlightId : ''
     const nextExpanded = new Set(expandedIds.value)
     if (autoExpandedId && autoExpandedId !== exactId) nextExpanded.delete(autoExpandedId)
     if (!exactId) {
       autoExpandedId = ''
+      lastScrolledId = ''
       expandedIds.value = nextExpanded
       return
     }
     autoExpandedId = exactId
     nextExpanded.add(exactId)
     expandedIds.value = nextExpanded
-    if (loading) return
+    if (loading || lastScrolledId === exactId) return
     await nextTick()
     if (!disposed && props.highlightId === exactId) {
-      cardElements.get(exactId)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      const element = cardElements.get(exactId)
+      if (element) {
+        element.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        lastScrolledId = exactId
+      }
     }
   },
   { immediate: true }
@@ -61,6 +70,7 @@ watch(
 onBeforeUnmount(() => {
   disposed = true
   cardElements.clear()
+  cardElementSetters.clear()
 })
 
 function cardElementRef(id: string) {
@@ -110,7 +120,7 @@ function money(value?: number) {
 }
 
 function canManage(row: BlacklistRecord) {
-  return Boolean(props.currentUsername && row.uploadedBy === props.currentUsername)
+  return row.canManage === true
 }
 </script>
 

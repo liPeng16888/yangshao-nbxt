@@ -13,7 +13,7 @@ export class UploadsController {
 
   @Post('images')
   @Roles(UserRole.FRONTEND_USER, UserRole.ROOT_ADMIN, UserRole.SUB_ADMIN)
-  @UseInterceptors(FilesInterceptor('images', 10))
+  @UseInterceptors(FilesInterceptor('images', 10, { limits: { fileSize: 5 * 1024 * 1024 } }))
   uploadImages(@UploadedFiles() files: UploadedImageFile[]) {
     return this.uploads.saveImages(files)
   }

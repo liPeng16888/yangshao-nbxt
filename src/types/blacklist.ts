@@ -2,6 +2,7 @@ export interface BlacklistRecord {
   id: string
   uploadedAt: string
   uploadedBy: string
+  canManage?: boolean
   phone?: string
   wechat?: string
   wechatNickname?: string

@@ -10,26 +10,24 @@ export const useBlacklistStore = defineStore('blacklist', () => {
   const deletingId = ref('')
   const updatingId = ref('')
   let loadVersion = 0
+  let mutationVersion = 0
 
-  async function loadRecords(nextKeyword = keyword.value) {
+  async function loadRecords(nextKeyword = keyword.value, options: { signal?: AbortSignal } = {}) {
     const currentLoad = ++loadVersion
+    const mutationAtStart = mutationVersion
     loading.value = true
     keyword.value = nextKeyword
     try {
-      const nextRecords = await searchBlacklist(nextKeyword)
-      if (currentLoad === loadVersion) records.value = nextRecords
+      const nextRecords = await searchBlacklist(nextKeyword, options)
+      if (!options.signal?.aborted && currentLoad === loadVersion && mutationAtStart === mutationVersion) records.value = nextRecords
     } finally {
       if (currentLoad === loadVersion) loading.value = false
     }
   }
 
-  function cancelPendingLoads() {
-    loadVersion += 1
-    loading.value = false
-  }
-
   async function addRecord(payload: BlacklistPayload) {
     const record = await createBlacklist(payload)
+    mutationVersion += 1
     records.value.unshift(record)
     return record
   }
@@ -38,6 +36,7 @@ export const useBlacklistStore = defineStore('blacklist', () => {
     deletingId.value = id
     try {
       await deleteBlacklist(id)
+      mutationVersion += 1
       records.value = records.value.filter((record) => record.id !== id)
     } finally {
       deletingId.value = ''
@@ -48,6 +47,7 @@ export const useBlacklistStore = defineStore('blacklist', () => {
     updatingId.value = id
     try {
       const record = await updateBlacklist(id, payload)
+      mutationVersion += 1
       const index = records.value.findIndex((item) => item.id === id)
       if (index >= 0) records.value[index] = record
       return record
@@ -56,5 +56,5 @@ export const useBlacklistStore = defineStore('blacklist', () => {
     }
   }
 
-  return { keyword, records, loading, deletingId, updatingId, loadRecords, cancelPendingLoads, addRecord, deleteRecord, updateRecord }
+  return { keyword, records, loading, deletingId, updatingId, loadRecords, addRecord, deleteRecord, updateRecord }
 })

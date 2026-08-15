@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   createBlacklist: vi.fn(),
   deleteBlacklist: vi.fn(),
   updateBlacklist: vi.fn(),
+  uploadImages: vi.fn(),
   mobileLayout: undefined as unknown as ReturnType<typeof ref<boolean>>,
   route: undefined as unknown as { query: { hit?: string | string[] } }
 }))
@@ -21,6 +22,10 @@ vi.mock('@/api/blacklist', () => ({
   createBlacklist: mocks.createBlacklist,
   deleteBlacklist: mocks.deleteBlacklist,
   updateBlacklist: mocks.updateBlacklist
+}))
+
+vi.mock('@/api/upload', () => ({
+  uploadImages: mocks.uploadImages
 }))
 
 vi.mock('@/composables/useMobileLayout', () => ({
@@ -36,6 +41,7 @@ const records = [
     id: 'blacklist-own',
     uploadedAt: '2026-08-15T08:30:00.000Z',
     uploadedBy: '当前账号',
+    canManage: true,
     phone: '13800000001',
     wechat: 'wechat-own',
     wechatNickname: '张三',
@@ -47,7 +53,8 @@ const records = [
   {
     id: 'blacklist-other',
     uploadedAt: '2026-08-14T07:20:00.000Z',
-    uploadedBy: '其他账号',
+    uploadedBy: '当前账号',
+    canManage: false,
     phone: '13800000002',
     wechat: 'wechat-other',
     wechatNickname: '李四',
@@ -134,6 +141,7 @@ describe('BlacklistPage mobile', () => {
     mocks.createBlacklist.mockReset()
     mocks.deleteBlacklist.mockReset()
     mocks.updateBlacklist.mockReset()
+    mocks.uploadImages.mockReset().mockResolvedValue(['/uploads/persisted-blacklist.png'])
     mocks.mobileLayout = ref(true)
     mocks.route = reactive({ query: {} })
     vi.spyOn(ElMessageBox, 'confirm').mockReset().mockResolvedValue('confirm' as never)
@@ -200,14 +208,19 @@ describe('BlacklistPage mobile', () => {
     await wrapper.findAll('.mobile-filter-drawer__actions button')[1].trigger('click')
     await flushPromises()
 
-    expect(mocks.searchBlacklist).toHaveBeenLastCalledWith('张三')
+    expect(mocks.searchBlacklist.mock.calls.at(-1)?.[0]).toBe('张三')
     expect(wrapper.get('[data-testid="mobile-blacklist-filter-summary"]').text()).toContain('张三')
     expect(wrapper.get('[data-testid="mobile-blacklist-load-error"]').text()).toContain('加载失败')
 
     await wrapper.get('[data-testid="mobile-blacklist-retry"]').trigger('click')
     await flushPromises()
-    expect(mocks.searchBlacklist).toHaveBeenLastCalledWith('张三')
+    expect(mocks.searchBlacklist.mock.calls.at(-1)?.[0]).toBe('张三')
     expect(wrapper.findAll('[data-testid="mobile-blacklist-card"]')).toHaveLength(1)
+
+    mocks.route.query.hit = 'blacklist-other'
+    await flushPromises()
+    expect(mocks.searchBlacklist.mock.calls.at(-1)?.[0]).toBe('')
+    expect(card(wrapper, 'blacklist-other').classes()).toContain('mobile-blacklist-card--highlight')
   })
 
   it('matches hit ids exactly, expands and scrolls the card after render, and handles route changes safely', async () => {
@@ -217,6 +230,11 @@ describe('BlacklistPage mobile', () => {
 
     expect(card(wrapper, 'blacklist-own').classes()).toContain('mobile-blacklist-card--highlight')
     expect(card(wrapper, 'blacklist-own').classes()).toContain('mobile-record-card--expanded')
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(1)
+
+    await wrapper.get('.mobile-filter-summary').trigger('click')
+    await wrapper.findAll('.mobile-filter-drawer__actions button')[1].trigger('click')
+    await flushPromises()
     expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(1)
 
     mocks.route.query.hit = 'blacklist-other'
@@ -229,6 +247,15 @@ describe('BlacklistPage mobile', () => {
     await flushPromises()
     expect(wrapper.find('.mobile-blacklist-card--highlight').exists()).toBe(false)
     expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(2)
+
+    mocks.mobileLayout.value = false
+    await nextTick()
+    mocks.route.query.hit = 'blacklist-own'
+    await flushPromises()
+    mocks.mobileLayout.value = true
+    await flushPromises()
+    expect(card(wrapper, 'blacklist-own').classes()).toContain('mobile-blacklist-card--highlight')
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(3)
 
     delete mocks.route.query.hit
     await flushPromises()
@@ -263,7 +290,7 @@ describe('BlacklistPage mobile', () => {
     expect(create.get('[data-testid="blacklist-create-image-count"]').text()).toContain('1')
 
     mocks.createBlacklist.mockResolvedValueOnce({
-      ...records[0], id: 'created', phone: '13900000001', images: ['blob:blacklist-image']
+      ...records[0], id: 'created', phone: '13900000001', images: ['/uploads/persisted-blacklist.png']
     })
     await create.get('[data-testid="blacklist-create-save"]').trigger('click')
     await flushPromises()
@@ -273,10 +300,12 @@ describe('BlacklistPage mobile', () => {
       wechat: 'new-wechat',
       wechatNickname: '王五',
       amount: 45.67,
-      images: ['blob:blacklist-image'],
+      images: ['/uploads/persisted-blacklist.png'],
       other: '新增原因',
       note: '新增备注'
     })
+    expect(mocks.uploadImages).toHaveBeenCalledTimes(1)
+    expect(mocks.uploadImages).toHaveBeenCalledWith([image])
     expect((create.get('[data-testid="blacklist-create-phone"]').element as HTMLInputElement).value).toBe('')
     expect(create.get('[data-testid="blacklist-create-image-count"]').text()).toContain('0')
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:blacklist-image')
@@ -293,8 +322,12 @@ describe('BlacklistPage mobile', () => {
     const onChange = upload.props('onChange') as Function
     const first = new File(['one'], 'one.png', { type: 'image/png' })
     const invalid = new File(['bad'], 'bad.txt', { type: 'text/plain' })
+    const svg = new File(['<svg/>'], 'unsafe.svg', { type: 'image/svg+xml' })
+    const oversized = new File([new Uint8Array(5 * 1024 * 1024 + 1)], 'huge.png', { type: 'image/png' })
     await onChange({ name: first.name, raw: first }, [{ name: first.name, raw: first }])
     await onChange({ name: invalid.name, raw: invalid }, [{ name: first.name, raw: first, url: 'blob:blacklist-image' }, { name: invalid.name, raw: invalid }])
+    await onChange({ name: svg.name, raw: svg }, [{ name: first.name, raw: first, url: 'blob:blacklist-image' }, { name: svg.name, raw: svg }])
+    await onChange({ name: oversized.name, raw: oversized }, [{ name: first.name, raw: first, url: 'blob:blacklist-image' }, { name: oversized.name, raw: oversized }])
     expect(create.get('[data-testid="blacklist-create-image-count"]').text()).toContain('1')
 
     const second = new File(['two'], 'two.png', { type: 'image/png' })
@@ -305,6 +338,18 @@ describe('BlacklistPage mobile', () => {
     ])
     await (upload.props('onExceed') as Function)([{ name: third.name, raw: third }], [])
     expect(create.get('[data-testid="blacklist-create-image-count"]').text()).toContain('2')
+  })
+
+  it.each(['-1', '1.999'])('rejects invalid create amount %s before upload or save', async (amountValue) => {
+    const wrapper = mountPage()
+    await flushPromises()
+    await wrapper.get('[data-testid="blacklist-create-phone"]').setValue('13900000001')
+    await wrapper.get('[data-testid="blacklist-create-amount"]').setValue(amountValue)
+    await wrapper.get('[data-testid="blacklist-create-save"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.uploadImages).not.toHaveBeenCalled()
+    expect(mocks.createBlacklist).not.toHaveBeenCalled()
   })
 
   it('uses one mobile fullscreen supplement form, retains failed edits, then resets after a successful save', async () => {
@@ -340,6 +385,17 @@ describe('BlacklistPage mobile', () => {
     await card(wrapper, 'blacklist-own').get('[data-testid="supplement-blacklist-own"]').trigger('click')
     const dialog = wrapper.get('.mobile-fullscreen-dialog')
     const upload = dialog.findComponent(ElUpload)
+    const svg = new File(['<svg/>'], 'unsafe.svg', { type: 'image/svg+xml' })
+    const oversized = new File([new Uint8Array(5 * 1024 * 1024 + 1)], 'huge.png', { type: 'image/png' })
+    await (upload.props('onChange') as Function)({ name: svg.name, raw: svg }, [
+      { name: 'existing', url: 'https://example.com/one.png' },
+      { name: svg.name, raw: svg }
+    ])
+    await (upload.props('onChange') as Function)({ name: oversized.name, raw: oversized }, [
+      { name: 'existing', url: 'https://example.com/one.png' },
+      { name: oversized.name, raw: oversized }
+    ])
+    expect(dialog.text()).toContain('已选 1 / 2 张')
     const added = new File(['new'], 'new.png', { type: 'image/png' })
     await (upload.props('onChange') as Function)({ name: added.name, raw: added }, [
       { name: 'existing', url: 'https://example.com/one.png' },
@@ -354,13 +410,20 @@ describe('BlacklistPage mobile', () => {
     await dialog.get('.mobile-fullscreen-dialog__confirm').trigger('click')
     expect(mocks.updateBlacklist).toHaveBeenCalledTimes(1)
     expect(mocks.updateBlacklist).toHaveBeenCalledWith('blacklist-own', expect.objectContaining({
-      images: ['https://example.com/one.png', 'blob:blacklist-image'], note: '在途保留'
+      images: ['https://example.com/one.png', '/uploads/persisted-blacklist.png'], note: '在途保留'
     }))
+    expect(mocks.uploadImages).toHaveBeenCalledWith([added])
     update.reject(new Error('update failed'))
     await flushPromises()
     expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(true)
     expect(dialog.text()).toContain('已选 2 / 2 张')
     expect((dialog.get('[data-testid="blacklist-supplement-note"]').element as HTMLTextAreaElement).value).toBe('在途保留')
+
+    mocks.updateBlacklist.mockResolvedValueOnce({ ...records[0], images: ['https://example.com/one.png', '/uploads/persisted-blacklist.png'], note: '在途保留' })
+    await dialog.get('.mobile-fullscreen-dialog__confirm').trigger('click')
+    await flushPromises()
+    expect(mocks.uploadImages).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
   })
 
   it('resets supplement edits on cancel and closes the active dialog when the layout changes', async () => {
@@ -379,6 +442,53 @@ describe('BlacklistPage mobile', () => {
     expect(wrapper.find('.dialog-stub').exists()).toBe(false)
   })
 
+  it('retains an in-flight create draft and raw image when the layout changes before rejection', async () => {
+    const request = deferred<(typeof records)[number]>()
+    mocks.createBlacklist.mockImplementationOnce(() => request.promise)
+    const wrapper = mountPage()
+    await flushPromises()
+    await wrapper.get('[data-testid="blacklist-create-phone"]').setValue('13900000009')
+    const create = wrapper.get('[data-testid="mobile-blacklist-create"]')
+    const upload = create.findComponent(ElUpload)
+    const image = new File(['png'], 'layout.png', { type: 'image/png' })
+    await (upload.props('onChange') as Function)({ name: image.name, raw: image }, [{ name: image.name, raw: image }])
+    await create.get('[data-testid="blacklist-create-save"]').trigger('click')
+    expect(create.get('[data-testid="blacklist-create-phone"]').attributes('disabled')).toBeDefined()
+
+    mocks.mobileLayout.value = false
+    await nextTick()
+    request.reject(new Error('offline'))
+    await flushPromises()
+    mocks.mobileLayout.value = true
+    await nextTick()
+
+    const restored = wrapper.get('[data-testid="mobile-blacklist-create"]')
+    expect((restored.get('[data-testid="blacklist-create-phone"]').element as HTMLInputElement).value).toBe('13900000009')
+    expect(restored.get('[data-testid="blacklist-create-image-count"]').text()).toContain('1')
+  })
+
+  it('keeps a pending supplement draft open across a layout change and rejection', async () => {
+    const request = deferred<(typeof records)[number]>()
+    mocks.updateBlacklist.mockImplementationOnce(() => request.promise)
+    const wrapper = mountPage()
+    await flushPromises()
+    await card(wrapper, 'blacklist-own').get('[data-testid="supplement-blacklist-own"]').trigger('click')
+    await wrapper.get('[data-testid="blacklist-supplement-note"]').setValue('跨布局保留')
+    await wrapper.get('.mobile-fullscreen-dialog__confirm').trigger('click')
+    await nextTick()
+
+    mocks.mobileLayout.value = false
+    await nextTick()
+    expect(wrapper.find('.dialog-stub').exists()).toBe(true)
+    request.reject(new Error('offline'))
+    await flushPromises()
+    mocks.mobileLayout.value = true
+    await nextTick()
+
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(true)
+    expect((wrapper.get('[data-testid="blacklist-supplement-note"]').element as HTMLTextAreaElement).value).toBe('跨布局保留')
+  })
+
   it('uses the same nullable decimal amount contract when a mobile supplement clears an existing amount', async () => {
     mocks.updateBlacklist.mockResolvedValueOnce({ ...records[0], amount: undefined })
     const wrapper = mountPage()
@@ -389,6 +499,18 @@ describe('BlacklistPage mobile', () => {
     await flushPromises()
 
     expect(mocks.updateBlacklist).toHaveBeenCalledWith('blacklist-own', expect.objectContaining({ amount: null }))
+  })
+
+  it.each(['-1', '1.999'])('rejects invalid supplement amount %s before upload or save', async (amountValue) => {
+    const wrapper = mountPage()
+    await flushPromises()
+    await card(wrapper, 'blacklist-own').get('[data-testid="supplement-blacklist-own"]').trigger('click')
+    await wrapper.get('[data-testid="blacklist-supplement-amount"]').setValue(amountValue)
+    await wrapper.get('.mobile-fullscreen-dialog__confirm').trigger('click')
+    await flushPromises()
+
+    expect(mocks.uploadImages).not.toHaveBeenCalled()
+    expect(mocks.updateBlacklist).not.toHaveBeenCalled()
   })
 
   it('does not apply or report a load that settles after the page is unmounted', async () => {

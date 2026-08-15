@@ -9,6 +9,7 @@ const records: BlacklistRecord[] = [
     id: 'b-own',
     uploadedAt: '2026-06-24T08:00:00.000Z',
     uploadedBy: '管理员',
+    canManage: true,
     phone: '13800000000',
     images: [],
     note: '自己的记录'
@@ -16,7 +17,8 @@ const records: BlacklistRecord[] = [
   {
     id: 'b-other',
     uploadedAt: '2026-06-24T09:00:00.000Z',
-    uploadedBy: '其他账号',
+    uploadedBy: '管理员',
+    canManage: false,
     wechat: 'other-client',
     images: [],
     note: '其他人的记录'
@@ -49,7 +51,6 @@ function mountTable() {
     props: {
       records,
       keyword: '',
-      currentUsername: '管理员',
       deletingId: ''
     },
     global: {

@@ -4,8 +4,8 @@
 
 - Base: `362116fa92eaf01f4707819662a1db2108a8f8a8`
 - Task: mobile blacklist cards, search, create, supplement, hit highlighting, and lifecycle safety only.
-- Preserved: desktop `BlacklistTable` rendering and `BlacklistUploadForm`; existing blacklist Store/API methods, validation, authorization ownership rule, confirmations, and router access-guard mapping.
-- Not added: batch import, new business APIs, backend changes, or secondary mobile navigation.
+- Preserved: desktop `BlacklistTable`/`BlacklistUploadForm` rendering, mutation authorization, confirmation text, router access-guard mapping, and the absence of secondary mobile navigation.
+- Correctness fix scope after independent review: existing upload, blacklist read DTO, and upload-validation contracts only; no new endpoint, database migration, batch import, or production release.
 
 ## TDD Evidence
 
@@ -26,6 +26,21 @@ Observed before implementation:
 
 A second RED cycle proved unsafe `javascript:` and SVG data image URLs were still rendered. A third RED cycle proved clearing a mobile supplement amount produced an invalid empty string instead of the existing nullable amount contract.
 
+### Independent review fix RED cycles
+
+The rejected review findings were reproduced before fixes:
+
+- Mobile create/supplement and desktop create saved `blob:` preview URLs and never called `uploadImages`; retry uploaded the same raw file again.
+- Client/server accepted SVG/BMP and files over 5 MB; the server trusted the original extension, and the Multer interceptor had no file-size limit.
+- Duplicate display usernames exposed actions because both mobile and desktop compared `uploadedBy` text.
+- `-1` and `1.999` reached create/update; the server rounded over-precision values.
+- A search started before delete/update could later resurrect stale data; global cancellation could invalidate another consumer.
+- A staged keyword prevented `?hit=` from loading the exact reminder record.
+- In-flight create/supplement drafts were lost across layout changes; retry re-uploaded raw files.
+- The same hit scrolled repeatedly after a reload; unowned blob previews were rendered.
+
+Each failure was observed in a focused Vitest run before the minimum corresponding production change.
+
 ### GREEN
 
 Focused command:
@@ -34,32 +49,53 @@ Focused command:
 pnpm exec vitest run src/components/blacklist/BlacklistImagePreview.test.ts src/views/dashboard/BlacklistPage.mobile.test.ts src/components/blacklist/BlacklistTable.test.ts src/stores/blacklist.test.ts src/utils/validators.test.ts src/router/guards.test.ts
 ```
 
-Result: 6 files, 27 tests passed.
+Initial result: 6 files, 27 tests passed.
+
+Review-fix focused frontend result:
+
+```bash
+pnpm exec vitest run src/views/dashboard/BlacklistPage.mobile.test.ts src/components/blacklist/BlacklistTable.test.ts src/components/blacklist/BlacklistUploadForm.test.ts src/components/blacklist/BlacklistImagePreview.test.ts src/stores/blacklist.test.ts src/utils/validators.test.ts src/api/upload.test.ts vite-proxy.test.ts
+# 8 files, 43 tests passed
+```
+
+Review-fix focused server result:
+
+```bash
+pnpm --dir server exec vitest run src/blacklist/blacklist.service.test.ts src/blacklist/blacklist.controller.test.ts src/uploads/uploads.service.test.ts src/uploads/uploads.controller.test.ts
+# 4 files, 14 tests passed
+```
 
 ## Acceptance Evidence
 
 - Layout: `useMobileLayout` exclusively selects one mobile panel or the unchanged desktop table/upload pair; no mobile secondary navigation is rendered.
 - Cards: show nickname/contact fallbacks, status, hit reason, phone, WeChat, nickname, exact two-decimal amount, safe image previews, other, note, uploader, and upload time.
-- Ownership/access: supplement/delete appear only when `uploadedBy` exactly matches the authenticated username; existing `/blacklist -> BLACKLIST` access-guard tests pass.
+- Ownership/access: server reads derive `canManage` from authenticated user ID versus `uploadedById`; duplicate or empty display usernames cannot expose actions. Mutation authorization still checks the same stable uploader ID, and `/blacklist -> BLACKLIST` access-guard tests pass.
 - Search: a 44px keyword drawer stages input, emits the same string payload, retains the keyword and prior records on failure, and retries with the same keyword.
-- Loading lifecycle: Store request versions prevent stale results from replacing newer searches; page unmount cancels pending loads and prevents late error/UI writes.
-- Hit route: string-only `?hit=` matching uses exact record IDs, element refs rather than selector interpolation, expands/highlights/scrolls after render, retries after loading, handles route reuse/change/clear, and safely ignores missing or injection-like values.
-- Create: `save(payload)` is awaited; duplicate submit is locked; rejection retains all text/money fields and selected images; success alone clears fields and revokes owned blob URLs.
-- Images: create and supplement accept images only, preserve valid selections after invalid/excess input, cap existing plus new images at two, revoke owned previews on removal/reset/unmount, and omit unsafe preview URL schemes.
-- Supplement: mobile uses forced `MobileFullscreenDialog`; desktop retains `el-dialog`; both share `supplementForm`, validation, Store update, confirmation text, image state, and ownership. Failure retains the draft; success or cancel resets; cleared money becomes `null`; duplicate saves are locked to the captured record ID.
+- Loading lifecycle: per-consumer AbortSignals replace global cancellation; search ordering remains latest-wins, while a mutation epoch prevents an older search from resurrecting a deleted or pre-supplement record. Unmount aborts only this page and prevents late error/UI writes.
+- Hit route: string-only `?hit=` forces an unfiltered load, uses exact record IDs and element refs rather than selector interpolation, expands/highlights/scrolls once after render, handles route reuse/layout change/clear, prunes cached refs, and safely ignores missing or injection-like values.
+- Create: mobile and desktop call and await `uploadImages` and then `save(payload)`; duplicate submit is locked; rejection retains all fields and raw Files, with successful upload URLs cached for retry; unchanged success alone clears and revokes owned previews. KeepAlive preserves an in-flight mobile create draft across layout changes.
+- Images: PNG/JPEG/WebP/GIF only, 5 MB per file, maximum two record images, MIME-derived server extensions, 5 MB Multer and service defenses, and persistent `/uploads/...` URLs. Absolute API bases resolve server URLs to their API origin; relative development uses the added `/uploads` proxy. Only locally registered blob URLs render as previews and they are revoked on removal/reset/unmount; mock uploads use persistent raster data URLs.
+- Money: both create and supplement reject negative, non-finite, and over-two-decimal amounts in the client and server; `0`, two-decimal values, and nullable clearing retain the established contract.
+- Supplement: mobile uses forced `MobileFullscreenDialog`; desktop retains `el-dialog`; both share `supplementForm`, validation, Store update, confirmation text, image state, and permission. Fields/uploads are locked while saving; failed saves and layout switches retain every field/raw image; retry reuses uploaded URLs; unchanged success or cancel resets; cleared money becomes `null`; duplicate saves remain tied to the captured record ID.
 - Delete: exact existing confirmation is preserved; in-flight duplicate clicks are ignored; failure leaves the record; success removes only the requested ID.
 
 ## Final Verification
 
 ```bash
 pnpm test
-# 107 files passed; 1123 tests passed
+# 113 files passed; 1157 tests passed
+
+pnpm --dir server test
+# 28 files passed; 352 tests passed
 
 pnpm exec vue-tsc --noEmit
 # exit 0
 
 pnpm build
 # vue-tsc --noEmit + Vite production build; exit 0
+
+pnpm --dir server build
+# Nest production build; exit 0
 
 git diff --check
 # exit 0

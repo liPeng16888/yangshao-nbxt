@@ -46,11 +46,14 @@ let customers: Customer[] = [
   { id: 'c-3', name: '渑池送样客户', phone: '13800000003', wechat: 'mianchi-lab', wechatNickname: '渑池样品' }
 ]
 
-let blacklist: BlacklistRecord[] = [
+type MockBlacklistRecord = BlacklistRecord & { uploadedById: string }
+
+let blacklist: MockBlacklistRecord[] = [
   {
     id: 'b-1',
     uploadedAt: dayjs().subtract(2, 'day').toISOString(),
     uploadedBy: '管理员',
+    uploadedById: 'u-admin',
     phone: '13800000002',
     wechat: 'smx-ore',
     wechatNickname: '三门峡客户',
@@ -63,6 +66,7 @@ let blacklist: BlacklistRecord[] = [
     id: 'b-2',
     uploadedAt: dayjs().subtract(8, 'day').toISOString(),
     uploadedBy: '管理员',
+    uploadedById: 'u-admin',
     phone: '13999999999',
     wechat: 'risk-client',
     wechatNickname: '风险客户',
@@ -343,12 +347,17 @@ export async function mockDeleteCustomer(id: string) {
   return delay({ id })
 }
 
+function mockBlacklistDto(record: MockBlacklistRecord): BlacklistRecord {
+  const { uploadedById, ...publicRecord } = record
+  return { ...publicRecord, canManage: uploadedById === currentUser.id }
+}
+
 export async function mockSearchBlacklist(keyword = '') {
   const query = keyword.trim().toLowerCase()
   const data = query
     ? blacklist.filter((item) => `${item.phone || ''}${item.wechat || ''}${item.wechatNickname || ''}${item.other || ''}${item.note || ''}`.toLowerCase().includes(query))
     : blacklist
-  return delay(data)
+  return delay(data.map(mockBlacklistDto))
 }
 
 export async function mockCheckBlacklist(keyword: string): Promise<BlacklistCheckResult> {
@@ -362,14 +371,15 @@ export async function mockCheckBlacklist(keyword: string): Promise<BlacklistChec
     const haystack = `${item.phone || ''} ${item.wechat || ''} ${item.wechatNickname || ''} ${item.other || ''} ${item.note || ''}`.toLowerCase()
     return tokens.some((token) => haystack.includes(token))
   })
-  return delay({ hit: records.length > 0, records })
+  return delay({ hit: records.length > 0, records: records.map(mockBlacklistDto) })
 }
 
 export async function mockCreateBlacklist(payload: BlacklistPayload) {
-  const record: BlacklistRecord = {
+  const record: MockBlacklistRecord = {
     id: `b-${Date.now()}`,
     uploadedAt: dayjs().toISOString(),
     uploadedBy: currentUser.username,
+    uploadedById: currentUser.id,
     phone: payload.phone,
     wechat: payload.wechat,
     wechatNickname: payload.wechatNickname,
@@ -379,26 +389,26 @@ export async function mockCreateBlacklist(payload: BlacklistPayload) {
     note: payload.note
   }
   blacklist = [record, ...blacklist]
-  return delay(record)
+  return delay(mockBlacklistDto(record))
 }
 
 export async function mockDeleteBlacklist(id: string) {
   const record = blacklist.find((item) => item.id === id)
   if (!record) throw new Error('黑名单记录不存在')
-  if (record.uploadedBy !== currentUser.username) {
+  if (record.uploadedById !== currentUser.id) {
     throw new Error('只能删除自己上传的黑名单')
   }
   blacklist = blacklist.filter((item) => item.id !== id)
-  return delay(record)
+  return delay(mockBlacklistDto(record))
 }
 
 export async function mockUpdateBlacklist(id: string, payload: BlacklistPayload) {
   const index = blacklist.findIndex((item) => item.id === id)
   if (index < 0) throw new Error('黑名单记录不存在')
-  if (blacklist[index].uploadedBy !== currentUser.username) {
+  if (blacklist[index].uploadedById !== currentUser.id) {
     throw new Error('只能补充自己上传的黑名单')
   }
-  const record: BlacklistRecord = {
+  const record: MockBlacklistRecord = {
     ...blacklist[index],
     phone: payload.phone?.trim() || undefined,
     wechat: payload.wechat?.trim() || undefined,
@@ -409,7 +419,7 @@ export async function mockUpdateBlacklist(id: string, payload: BlacklistPayload)
     note: payload.note?.trim() || undefined
   }
   blacklist[index] = record
-  return delay(record)
+  return delay(mockBlacklistDto(record))
 }
 
 export async function mockFinanceByMonth(month: string) {
@@ -695,5 +705,11 @@ export async function mockFinanceCategories() {
 }
 
 export async function mockUploadImages(files: File[]) {
-  return delay(files.map((file) => URL.createObjectURL(file)))
+  const urls = await Promise.all(files.map((file) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('图片读取失败'))
+    reader.readAsDataURL(file)
+  })))
+  return delay(urls)
 }
