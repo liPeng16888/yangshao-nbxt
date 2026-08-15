@@ -31,10 +31,10 @@
 
       <nav class="mobile-drawer-nav" aria-label="全部功能">
         <RouterLink
-          v-for="item in mobileNavItems"
+          v-for="item in customerNavigation"
           :key="item.path"
           :to="item.path"
-          :class="{ 'router-link-active': isActive(item.path) }"
+          :class="{ 'router-link-active': navigation?.section.key === item.key }"
           @click="menuVisible = false"
         >
           <component :is="item.icon" />
@@ -75,33 +75,17 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Box,
-  Calendar,
   DataAnalysis,
-  DocumentChecked,
   Lock,
   Memo,
   Menu,
-  Money,
   MoreFilled,
-  SwitchButton,
-  User,
-  Warning
+  SwitchButton
 } from '@element-plus/icons-vue'
+import { customerNavigation, findCustomerNavigation } from '@/config/customerNavigation'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { useLabSheetStore } from '@/stores/labSheet'
-
-const mobileNavItems = [
-  { path: '/data', label: '数据计算', icon: DataAnalysis },
-  { path: '/lab-report/image-template', label: '化验报告', icon: Memo },
-  { path: '/employee-attendance/schedules', label: '员工考勤', icon: Calendar },
-  { path: '/finance/expenses', label: '财务', icon: Money },
-  { path: '/reports', label: '报表', icon: DocumentChecked },
-  { path: '/medicine-inventory/stock', label: '药品库存', icon: Box },
-  { path: '/customers-overview', label: '客户总览', icon: User },
-  { path: '/blacklist', label: '黑名单', icon: Warning }
-]
 
 const route = useRoute()
 const router = useRouter()
@@ -110,12 +94,7 @@ const accessGuard = useAccessGuardStore()
 const labSheetStore = useLabSheetStore()
 const menuVisible = ref(false)
 const currentTitle = computed(() => String(route.meta.title || '工作台'))
-
-function isActive(path: string) {
-  if (path === '/data') return route.path === path
-  const section = path.split('/').slice(0, 2).join('/')
-  return route.path === path || route.path.startsWith(`${section}/`)
-}
+const navigation = computed(() => findCustomerNavigation(route.path))
 
 function openAccessSettings() {
   menuVisible.value = false

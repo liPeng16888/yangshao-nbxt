@@ -44,83 +44,14 @@
 </template>
 
 <script setup lang="ts">
-import type { Component } from 'vue'
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Box, Calendar, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, User, Warning } from '@element-plus/icons-vue'
-
-interface NavChild {
-  path: string
-  label: string
-}
-
-interface NavItem {
-  path: string
-  label: string
-  icon: Component
-  children?: NavChild[]
-}
-
-const navItems: NavItem[] = [
-  {
-    path: '/data',
-    label: '数据计算',
-    icon: DataAnalysis,
-    children: [
-      { path: '/data', label: '数据计算' },
-      { path: '/data/standard-sample', label: '标样计算' },
-      { path: '/data/coefficient', label: '系数计算' }
-    ]
-  },
-  {
-    path: '/lab-report',
-    label: '化验报告',
-    icon: Memo,
-    children: [
-      { path: '/lab-report/image-template', label: '化验报告图片模板' },
-      { path: '/lab-report/sms-template', label: '化验短信生成模板' }
-    ]
-  },
-  {
-    path: '/employee-attendance',
-    label: '员工考勤',
-    icon: Calendar,
-    children: [
-      { path: '/employee-attendance/schedules', label: '排班考勤概览' },
-      { path: '/employee-attendance/employees', label: '员工档案' },
-      { path: '/employee-attendance/records', label: '考勤记录' },
-      { path: '/employee-attendance/leave', label: '请假管理' },
-      { path: '/employee-attendance/compensation', label: '提成与奖金' },
-      { path: '/employee-attendance/payroll', label: '工资统计' }
-    ]
-  },
-  {
-    path: '/finance',
-    label: '财务',
-    icon: Money,
-    children: [
-      { path: '/finance/expenses', label: '支出账单' },
-      { path: '/finance/income', label: '收入账单' },
-      { path: '/finance/unsettled', label: '未结款' },
-      { path: '/finance/monthly-settlement', label: '月结款' },
-      { path: '/finance/prepaid', label: '预存款' }
-    ]
-  },
-  { path: '/reports', label: '报表', icon: DocumentChecked },
-  {
-    path: '/medicine-inventory',
-    label: '药品库存',
-    icon: Box,
-    children: [
-      { path: '/medicine-inventory/stock', label: '药品库存' },
-      { path: '/medicine-inventory/inbound', label: '药品入库' },
-      { path: '/medicine-inventory/outbound', label: '药品出库' }
-    ]
-  },
-  { path: '/customers-overview', label: '客户总览', icon: User },
-  { path: '/blacklist', label: '黑名单', icon: Warning }
-]
+import { Expand, Fold } from '@element-plus/icons-vue'
+import { customerNavigation, findCustomerNavigation, isCustomerNavChildActive, type CustomerNavChild, type CustomerNavSection } from '@/config/customerNavigation'
 
 const route = useRoute()
+const navItems: readonly CustomerNavSection[] = customerNavigation
+const navigation = computed(() => findCustomerNavigation(route.path))
 defineProps<{
   collapsed: boolean
 }>()
@@ -129,12 +60,11 @@ const emit = defineEmits<{
   toggle: []
 }>()
 
-function isActive(item: NavItem) {
-  return route.path === item.path || route.path.startsWith(`${item.path}/`) || Boolean(item.children?.some((child) => child.path === route.path))
+function isActive(item: CustomerNavSection) {
+  return navigation.value?.section.key === item.key
 }
 
-function isChildActive(child: NavChild) {
-  if (child.path === '/data') return route.path === child.path
-  return route.path === child.path || route.path.startsWith(`${child.path}/`)
+function isChildActive(child: CustomerNavChild) {
+  return isCustomerNavChildActive(route.path, child)
 }
 </script>

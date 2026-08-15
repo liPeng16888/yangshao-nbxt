@@ -67,6 +67,10 @@ describe('AppMobileShell', () => {
     expect(wrapper.get('.mobile-menu-drawer-stub').text()).toContain('数据计算')
     expect(wrapper.get('.mobile-menu-drawer-stub').text()).toContain('化验报告')
     expect(wrapper.get('.mobile-menu-drawer-stub').text()).toContain('财务')
+    expect(wrapper.findAll('.mobile-drawer-nav a').map((item) => item.attributes('href'))).toEqual([
+      '/data', '/lab-report', '/employee-attendance', '/finance',
+      '/reports', '/medicine-inventory', '/customers-overview', '/blacklist'
+    ])
   })
 
   it('keeps access settings and the existing account logout flow available on iPhone', async () => {

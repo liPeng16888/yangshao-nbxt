@@ -51,6 +51,10 @@ describe('employee attendance navigation', () => {
     expect(wrapper.findAll('.side-nav__child').map((node) => node.text())).toEqual([
       '排班考勤概览', '员工档案', '考勤记录', '请假管理', '提成与奖金', '工资统计'
     ])
+    expect(wrapper.findAll('.side-nav__child').map((node) => node.attributes('href'))).toEqual([
+      '/employee-attendance/schedules', '/employee-attendance/employees', '/employee-attendance/records',
+      '/employee-attendance/leave', '/employee-attendance/compensation', '/employee-attendance/payroll'
+    ])
     expect(wrapper.findAll('.side-nav__child').some((node) => node.text() === '考勤概览')).toBe(false)
     expect(wrapper.findAll('.side-nav__child').some((node) => node.text() === '排班管理')).toBe(false)
   })

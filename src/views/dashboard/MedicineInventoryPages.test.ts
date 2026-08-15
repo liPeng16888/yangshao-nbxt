@@ -134,6 +134,9 @@ describe('medicine inventory navigation', () => {
     expect(navigationText.indexOf('报表')).toBeLessThan(navigationText.indexOf('药品库存'))
     expect(navigationText.indexOf('药品库存')).toBeLessThan(navigationText.indexOf('客户总览'))
     expect(wrapper.findAll('.side-nav__child').map((child) => child.text())).toEqual(['药品库存', '药品入库', '药品出库'])
+    expect(wrapper.findAll('.side-nav__child').map((child) => child.attributes('href'))).toEqual([
+      '/medicine-inventory/stock', '/medicine-inventory/inbound', '/medicine-inventory/outbound'
+    ])
     expect(appRouter.getRoutes().map((route) => route.path)).toEqual(expect.arrayContaining([
       '/medicine-inventory/stock',
       '/medicine-inventory/inbound',
