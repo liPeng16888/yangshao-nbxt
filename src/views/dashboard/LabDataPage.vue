@@ -91,7 +91,7 @@
       <div class="panel__body append-body">
         <span>增加样品数量</span>
         <el-input v-model.trim="appendCount" placeholder="正整数" class="append-input" />
-        <el-button type="primary" :icon="Plus" :loading="labStore.adding" @click="appendBlocks">确认增加</el-button>
+        <el-button class="append-submit" type="primary" :icon="Plus" :loading="labStore.adding" @click="appendBlocks">确认增加</el-button>
       </div>
     </section>
 
@@ -603,7 +603,12 @@ function jumpToBlacklist(id?: string) {
 async function scrollToHighlightedBlock(blockId: string) {
   await nextTick()
   window.setTimeout(() => {
-    document.querySelector(`[data-block-id="${blockId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    const block = Array.from(document.querySelectorAll<HTMLElement>('[data-block-id]'))
+      .find((element) => element.dataset.blockId === blockId)
+    const target = isMobileLayout.value
+      ? block?.querySelector<HTMLElement>('.mobile-sample-card__header') || block
+      : block
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
   }, 120)
 }
 </script>
@@ -749,6 +754,10 @@ async function scrollToHighlightedBlock(blockId: string) {
 
   .append-input {
     width: 100%;
+  }
+
+  .append-submit {
+    min-height: 44px;
   }
 }
 

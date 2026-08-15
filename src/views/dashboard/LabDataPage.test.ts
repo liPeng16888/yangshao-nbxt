@@ -6,6 +6,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import LabDataPage from './LabDataPage.vue'
 
 const mocks = vi.hoisted(() => ({
+  route: {
+    query: {} as Record<string, string>
+  },
   routerPush: vi.fn(),
   accessGuard: {
     loadGroups: vi.fn(),
@@ -44,7 +47,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
+  useRoute: () => mocks.route,
   useRouter: () => ({ push: mocks.routerPush })
 }))
 
@@ -251,6 +254,7 @@ describe('LabDataPage table layout', () => {
       }
     ]
     mocks.mobileLayout.isMobileLayout.value = false
+    mocks.route.query = {}
   })
 
   afterEach(() => {
@@ -379,7 +383,30 @@ describe('LabDataPage table layout', () => {
     await settleMountedPage()
     expect(mobile.find('.mobile-lab-list-stub').exists()).toBe(true)
     expect(mobile.find('.lab-grid-stub').exists()).toBe(false)
+    expect(mobile.find('.append-submit').exists()).toBe(true)
     mobile.unmount()
+  })
+
+  it('scrolls a routed mobile sample header into view after expanding its card', async () => {
+    vi.useFakeTimers()
+    mocks.mobileLayout.isMobileLayout.value = true
+    mocks.route.query = { block: 'block-2' }
+    const card = document.createElement('article')
+    card.dataset.blockId = 'block-2'
+    const header = document.createElement('header')
+    header.className = 'mobile-sample-card__header'
+    const scrollIntoView = vi.fn()
+    header.scrollIntoView = scrollIntoView
+    card.appendChild(header)
+    document.body.appendChild(card)
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+    await vi.advanceTimersByTimeAsync(120)
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    wrapper.unmount()
+    card.remove()
   })
 
   it('moves mobile selection actions into a full-width bottom bar with the selected count', async () => {

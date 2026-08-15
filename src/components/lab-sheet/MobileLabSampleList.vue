@@ -70,6 +70,7 @@
             <div class="mobile-field mobile-field--wide" data-mobile-field="customerText">
               <span>付款客户</span>
               <CustomerCellEditor
+                class="mobile-customer-editor"
                 customer-role="payer"
                 :selection-limit="1"
                 :model-value="block.inputs.customerText"
@@ -83,6 +84,7 @@
             <div class="mobile-field mobile-field--wide" data-mobile-field="recipientCustomerText">
               <span>数据接收客户</span>
               <CustomerCellEditor
+                class="mobile-customer-editor"
                 customer-role="recipient"
                 :selection-limit="0"
                 :model-value="block.inputs.recipientCustomerText"
@@ -727,6 +729,16 @@ async function scrollToBlock(blockId: string) {
 :deep(.customer-editor .el-select),
 :deep(.lab-element-selector__trigger) {
   min-height: 44px;
+}
+
+:deep(.mobile-customer-editor .customer-actions .el-button) {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+}
+
+:deep(.mobile-customer-editor .customer-empty-label) {
+  right: 96px;
 }
 
 @media (max-width: 374px) {

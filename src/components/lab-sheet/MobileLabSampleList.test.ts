@@ -118,4 +118,10 @@ describe('MobileLabSampleList', () => {
 
     expect(wrapper.emitted('selectionChange')).toContainEqual(['block-1', true])
   })
+
+  it('marks customer controls for mobile-sized touch targets', () => {
+    const wrapper = mountList()
+
+    expect(wrapper.findAll('.mobile-customer-editor')).toHaveLength(2)
+  })
 })
