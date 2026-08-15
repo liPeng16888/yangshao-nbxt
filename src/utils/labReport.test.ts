@@ -3,6 +3,7 @@ import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import type { SampleBlock } from '@/types/labSheet'
 import {
   createLabReportFilename,
+  createLabReportPngBlob,
   createLabReportSmsText,
   createReportCanvasLayout,
   createReportDraft,
@@ -140,6 +141,38 @@ describe('lab report generation', () => {
 
     expect(createLabReportFilename([firstBlock], '2026-08-02')).toBe('王总-2026.8.2.png')
     expect(createLabReportFilename([firstBlock, secondBlock], '2026-08-02')).toBe('王总、李总-2026.8.2.png')
+  })
+
+  it('creates one reusable PNG blob for mobile sharing and desktop downloads', async () => {
+    const block = makeBlock()
+    const draft = createReportDraft(
+      [block],
+      [{ blockId: block.id, elementKeys: ['aluminum'] }],
+      defaultLabReportTemplate,
+      '2026-08-02'
+    )
+    const context = new Proxy(
+      {
+        measureText: vi.fn(() => ({ width: 10 }))
+      } as Record<string, unknown>,
+      {
+        get(target, key) {
+          if (key in target) return target[key as string]
+          const method = vi.fn()
+          target[key as string] = method
+          return method
+        },
+        set(target, key, value) {
+          target[key as string] = value
+          return true
+        }
+      }
+    ) as unknown as CanvasRenderingContext2D
+    const expectedBlob = new Blob(['png'], { type: 'image/png' })
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => callback(expectedBlob))
+
+    await expect(createLabReportPngBlob(draft)).resolves.toBe(expectedBlob)
   })
 
   it('expands the exported report result grid beyond five sample rows', () => {

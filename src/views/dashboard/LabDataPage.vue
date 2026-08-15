@@ -124,6 +124,7 @@
       :selected-block-ids="selectedReportBlockIds"
       :template="reportTemplate"
       :date="selectedDate"
+      :mobile="isMobileLayout"
       @close="reportDialogVisible = false"
     />
 

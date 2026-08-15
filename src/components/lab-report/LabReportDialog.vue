@@ -73,9 +73,17 @@
         </div>
         <div class="preview-actions__commands">
           <el-button @click="step = 'elements'">返回选择元素</el-button>
-          <el-button type="primary" :loading="exportingReport" @click="downloadCurrentReport">保存为图片</el-button>
+          <el-button type="primary" :loading="exportingReport" @click="downloadCurrentReport">{{ reportExportButtonText }}</el-button>
         </div>
       </div>
+
+      <section v-if="mobileReportPreviewUrl" class="mobile-report-share-preview">
+        <img :src="mobileReportPreviewUrl" alt="化验报告保存预览" />
+        <div>
+          <strong>长按图片保存</strong>
+          <p>当前浏览器不支持直接分享文件，请长按上方图片并选择“存储到照片”。</p>
+        </div>
+      </section>
 
       <div class="report-preview">
         <input v-model="draft.title" class="report-title-input" />
@@ -145,19 +153,20 @@
     <template #footer>
       <el-button @click="emit('close')">关闭</el-button>
       <el-button v-if="step === 'elements'" type="primary" @click="createPreview">生成预览</el-button>
-      <el-button v-else type="primary" :loading="exportingReport" @click="downloadCurrentReport">保存为图片</el-button>
+      <el-button v-else type="primary" :loading="exportingReport" @click="downloadCurrentReport">{{ reportExportButtonText }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { LabReportDraft, LabReportDraftRow, LabReportElementKey, LabReportTemplate } from '@/types/labReport'
 import type { SampleBlock } from '@/types/labSheet'
 import {
   createLabReportFilename,
+  createLabReportPngBlob,
   createReportDraft,
   downloadLabReportAsPng,
   getBlockCustomerName,
@@ -185,6 +194,7 @@ const props = defineProps<{
   selectedBlockIds: string[]
   template: LabReportTemplate
   date: string
+  mobile?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -197,9 +207,11 @@ const bulkElementKeys = ref<LabReportElementKey[]>([])
 const draft = ref<LabReportDraft | null>(null)
 const exportingReport = ref(false)
 const savedSampleUnits = ref<string[]>([])
+const mobileReportPreviewUrl = ref('')
 
 const selectedBlocks = computed(() => props.blocks.filter((block) => props.selectedBlockIds.includes(block.id)))
 const dialogTitle = computed(() => (step.value === 'elements' ? '选择化验报告检测元素' : '化验报告预览'))
+const reportExportButtonText = computed(() => (props.mobile ? '分享或保存图片' : '保存为图片'))
 const displayElements = computed<DisplayElement[]>(() => {
   if (!draft.value) return []
   const elements: DisplayElement[] = draft.value.elements.map((element, index) => ({
@@ -232,6 +244,7 @@ const paddedRows = computed(() => {
 watch(
   () => props.visible,
   (visible) => {
+    clearMobileReportPreview()
     if (!visible) return
     step.value = 'elements'
     draft.value = null
@@ -334,6 +347,15 @@ async function downloadCurrentReport() {
   ElMessage.info('正在生成化验报告图片')
   try {
     const filename = createLabReportFilename(selectedBlocks.value, draft.value.reportDate || props.date)
+    if (props.mobile) {
+      const blob = await createLabReportPngBlob(draft.value)
+      if (!blob) {
+        ElMessage.error('图片生成失败，请刷新页面后重试')
+        return
+      }
+      await shareOrPreviewMobileReport(blob, filename)
+      return
+    }
     const downloaded = await downloadLabReportAsPng(draft.value, filename)
     if (downloaded) {
       ElMessage.success('化验报告图片已开始下载')
@@ -345,6 +367,36 @@ async function downloadCurrentReport() {
   } finally {
     exportingReport.value = false
   }
+}
+
+async function shareOrPreviewMobileReport(blob: Blob, filename: string) {
+  const file = new File([blob], filename, { type: 'image/png' })
+  const shareData: ShareData = { files: [file], title: '化验报告' }
+  const supportsFileShare = typeof navigator.share === 'function'
+    && (typeof navigator.canShare !== 'function' || navigator.canShare(shareData))
+
+  if (supportsFileShare) {
+    try {
+      await navigator.share(shareData)
+      ElMessage.success('已打开系统分享')
+      return
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        ElMessage.info('已取消分享')
+        return
+      }
+    }
+  }
+
+  clearMobileReportPreview()
+  mobileReportPreviewUrl.value = URL.createObjectURL(blob)
+  ElMessage.info('请长按图片保存到手机')
+}
+
+function clearMobileReportPreview() {
+  if (!mobileReportPreviewUrl.value) return
+  URL.revokeObjectURL(mobileReportPreviewUrl.value)
+  mobileReportPreviewUrl.value = ''
 }
 
 function updateDisplayElement(element: DisplayElement, field: 'label' | 'symbol', event: Event) {
@@ -371,6 +423,8 @@ function contactInputWidth(value: string, minChars: number) {
   const length = Math.max(minChars, Array.from(value || '').length)
   return `${length + 1}em`
 }
+
+onBeforeUnmount(clearMobileReportPreview)
 
 </script>
 
@@ -536,6 +590,34 @@ function contactInputWidth(value: string, minChars: number) {
   background: #ffffff;
   border: 1px solid #111827;
   font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+}
+
+.mobile-report-share-preview {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #86b7fe;
+  border-radius: 10px;
+  background: #eff6ff;
+
+  img {
+    display: block;
+    width: min(100%, 430px);
+    max-height: 60dvh;
+    margin: 0 auto;
+    object-fit: contain;
+    background: #ffffff;
+  }
+
+  strong {
+    color: #10233f;
+  }
+
+  p {
+    margin: 4px 0 0;
+    color: #475569;
+    line-height: 1.6;
+  }
 }
 
 .report-title-input {
