@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UnsettledSampleRow } from '@/types/financeBills'
 
-const requestMock = vi.hoisted(() => ({ put: vi.fn() }))
+const requestMock = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }))
 
 vi.mock('@/utils/request', () => ({
   default: requestMock,
   useMocks: false
 }))
 
-import { markSamplesAsPaid } from './financeBills'
+import { getIncomeBillReport, getUnsettledSamples, markSamplesAsPaid } from './financeBills'
 
 const rows: UnsettledSampleRow[] = [
   {
@@ -32,7 +32,28 @@ const rows: UnsettledSampleRow[] = [
 ]
 
 describe('finance bills batch payment API', () => {
-  beforeEach(() => requestMock.put.mockReset())
+  beforeEach(() => {
+    requestMock.get.mockReset()
+    requestMock.put.mockReset()
+  })
+
+  it('forwards scoped abort signals without changing finance GET endpoints', async () => {
+    const incomeController = new AbortController()
+    const unsettledController = new AbortController()
+    requestMock.get.mockResolvedValueOnce({ month: '2026-08', totalSamples: 0, totalAmount: 0, statusSummaries: [], rows: [] })
+      .mockResolvedValueOnce([])
+
+    await getIncomeBillReport('2026-08', { signal: incomeController.signal })
+    await getUnsettledSamples({ signal: unsettledController.signal })
+
+    expect(requestMock.get).toHaveBeenNthCalledWith(1, '/finance/income-bills', {
+      params: { month: '2026-08' },
+      signal: incomeController.signal
+    })
+    expect(requestMock.get).toHaveBeenNthCalledWith(2, '/finance/unsettled-samples', {
+      signal: unsettledController.signal
+    })
+  })
 
   it('sends unique block ids to the batch payment endpoint', async () => {
     requestMock.put.mockResolvedValue([{ id: 'block-1' }, { id: 'block-2' }])

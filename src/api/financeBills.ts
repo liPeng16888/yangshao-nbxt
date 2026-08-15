@@ -27,17 +27,25 @@ const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
 const PREPAID_CUSTOMER_REMARK_STORAGE_KEY = 'ys_prepaid_customer_remarks'
 const PREPAID_USAGE_REMARK_STORAGE_KEY = 'ys_prepaid_usage_remarks'
 
-export async function getIncomeBillReport(month: string): Promise<IncomeBillReport> {
-  if (!useMocks) return request.get('/finance/income-bills', { params: { month } })
+export interface FinanceLoadOptions {
+  signal?: AbortSignal
+}
+
+export async function getIncomeBillReport(month: string, options: FinanceLoadOptions = {}): Promise<IncomeBillReport> {
+  if (!useMocks) return request.get('/finance/income-bills', { params: { month }, signal: options.signal })
+  throwIfAborted(options.signal)
   const rows = await Promise.all(getMonthDates(month).map(async (date) => summarizeIncomeSheet(await getLabSheetByDate(date))))
+  throwIfAborted(options.signal)
   return summarizeIncomeRows(month, rows, loadPrepaidRecharges())
 }
 
-export async function getUnsettledSamples(): Promise<UnsettledSampleRow[]> {
-  if (!useMocks) return request.get('/finance/unsettled-samples')
+export async function getUnsettledSamples(options: FinanceLoadOptions = {}): Promise<UnsettledSampleRow[]> {
+  if (!useMocks) return request.get('/finance/unsettled-samples', { signal: options.signal })
+  throwIfAborted(options.signal)
   await getLabSheetByDate(businessDateInBeijing())
   const history = await getLabSheetHistory()
   const rows = await Promise.all(history.map(async (sheet) => getUnsettledRowsFromSheet(await getLabSheetByDate(sheet.date))))
+  throwIfAborted(options.signal)
   return rows.flat().sort((a, b) => `${b.date}-${b.sequence}`.localeCompare(`${a.date}-${a.sequence}`))
 }
 
@@ -218,6 +226,13 @@ function loadRecord(key: string): Record<string, string> {
 function saveRecord(key: string, value: Record<string, string>) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(key, JSON.stringify(value))
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  const error = new Error('canceled')
+  error.name = 'AbortError'
+  throw error
 }
 
 function roundPayloadMoney(value: number) {

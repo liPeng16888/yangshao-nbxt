@@ -66,6 +66,7 @@ import { getStatusSummary, incomePaymentStatuses } from '@/utils/financeBills'
 
 const store = useFinanceBillsStore()
 const { isMobileLayout } = useMobileLayout()
+const incomeLoadScope = Symbol('finance-income-page')
 const report = computed(() => store.incomeReport)
 const visibleRows = computed(() => report.value?.rows.filter((row) => row.sampleCount > 0) || [])
 const visibleStatusSummaries = computed(() => report.value?.statusSummaries.filter((summary) => summary.count > 0 || summary.status !== '未选择') || [])
@@ -79,7 +80,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  store.cancelIncomeLoads()
+  store.cancelIncomeLoads(incomeLoadScope)
 })
 
 function handleMonthChange(value: string) {
@@ -87,7 +88,7 @@ function handleMonthChange(value: string) {
 }
 
 function requestIncomeReport(value?: string) {
-  void store.loadIncomeReport(value).catch(() => undefined)
+  void store.loadIncomeReport(value, { scope: incomeLoadScope }).catch(() => undefined)
 }
 
 function getSummary(row: IncomeDailyRow, status: IncomePaymentStatus) {

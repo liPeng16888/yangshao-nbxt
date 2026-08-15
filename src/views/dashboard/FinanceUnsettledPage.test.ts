@@ -117,7 +117,7 @@ describe('FinanceUnsettledPage batch payment', () => {
     storeMock.settlingId = ''
     storeMock.settlingBatch = false
     storeMock.isSettling = false
-    storeMock.loadUnsettledRows.mockResolvedValue(undefined)
+    storeMock.loadUnsettledRows.mockResolvedValue(true)
     storeMock.settleRow.mockResolvedValue(undefined)
     storeMock.settleRows.mockResolvedValue(undefined)
   })

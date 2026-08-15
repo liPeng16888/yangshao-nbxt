@@ -27,6 +27,15 @@ import type { SampleBlock } from '@/types/labSheet'
 import { currentMonth } from '@/utils/date'
 import { useLabSheetStore } from './labSheet'
 
+interface ScopedLoadOptions {
+  scope?: symbol
+}
+
+interface ActiveLoad {
+  controller: AbortController
+  scope: symbol
+}
+
 export const useFinanceBillsStore = defineStore('financeBills', () => {
   const month = ref(currentMonth())
   const monthlySettlementMonth = ref(currentMonth())
@@ -46,39 +55,77 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   let incomeLoadVersion = 0
   let unsettledLoadVersion = 0
   let unsettledMutationVersion = 0
+  let activeIncomeLoad: ActiveLoad | null = null
+  let activeUnsettledLoad: ActiveLoad | null = null
 
-  async function loadIncomeReport(nextMonth = month.value) {
+  async function loadIncomeReport(nextMonth = month.value, options: ScopedLoadOptions = {}) {
+    activeIncomeLoad?.controller.abort()
     const requestVersion = ++incomeLoadVersion
+    const activeLoad: ActiveLoad = {
+      controller: new AbortController(),
+      scope: options.scope ?? Symbol('finance-income-load')
+    }
+    activeIncomeLoad = activeLoad
     loading.value = true
     try {
-      const nextReport = await getIncomeBillReport(nextMonth)
-      if (requestVersion !== incomeLoadVersion) return
+      const nextReport = await getIncomeBillReport(nextMonth, { signal: activeLoad.controller.signal })
+      if (requestVersion !== incomeLoadVersion || activeLoad.controller.signal.aborted) return false
       month.value = nextMonth
       incomeReport.value = nextReport
+      return true
+    } catch (error) {
+      if (requestVersion !== incomeLoadVersion || activeLoad.controller.signal.aborted) return false
+      throw error
     } finally {
-      if (requestVersion === incomeLoadVersion) loading.value = false
+      if (activeIncomeLoad === activeLoad) {
+        activeIncomeLoad = null
+        loading.value = false
+      }
     }
   }
 
-  function cancelIncomeLoads() {
+  function cancelIncomeLoads(scope?: symbol) {
+    if (scope && activeIncomeLoad?.scope !== scope) return
+    activeIncomeLoad?.controller.abort()
+    activeIncomeLoad = null
     incomeLoadVersion += 1
     loading.value = false
   }
 
-  async function loadUnsettledRows() {
+  async function loadUnsettledRows(options: ScopedLoadOptions = {}) {
+    activeUnsettledLoad?.controller.abort()
     const requestVersion = ++unsettledLoadVersion
     const mutationAtStart = unsettledMutationVersion
+    const activeLoad: ActiveLoad = {
+      controller: new AbortController(),
+      scope: options.scope ?? Symbol('finance-unsettled-load')
+    }
+    activeUnsettledLoad = activeLoad
     loading.value = true
     try {
-      const nextRows = await getUnsettledSamples()
-      if (requestVersion !== unsettledLoadVersion || mutationAtStart !== unsettledMutationVersion) return
+      const nextRows = await getUnsettledSamples({ signal: activeLoad.controller.signal })
+      if (
+        requestVersion !== unsettledLoadVersion ||
+        mutationAtStart !== unsettledMutationVersion ||
+        activeLoad.controller.signal.aborted
+      ) return false
       unsettledRows.value = nextRows
+      return true
+    } catch (error) {
+      if (requestVersion !== unsettledLoadVersion || activeLoad.controller.signal.aborted) return false
+      throw error
     } finally {
-      if (requestVersion === unsettledLoadVersion) loading.value = false
+      if (activeUnsettledLoad === activeLoad) {
+        activeUnsettledLoad = null
+        loading.value = false
+      }
     }
   }
 
-  function cancelUnsettledLoads() {
+  function cancelUnsettledLoads(scope?: symbol) {
+    if (scope && activeUnsettledLoad?.scope !== scope) return
+    activeUnsettledLoad?.controller.abort()
+    activeUnsettledLoad = null
     unsettledLoadVersion += 1
     loading.value = false
   }

@@ -113,7 +113,10 @@ describe('FinanceIncomePage mobile', () => {
     await wrapper.get('[data-testid="mobile-income-month-input"]').setValue('2026-07')
     await wrapper.findAll('.mobile-filter-drawer__actions button')[1].trigger('click')
 
-    expect(mocks.store.loadIncomeReport).toHaveBeenLastCalledWith('2026-07')
+    expect(mocks.store.loadIncomeReport).toHaveBeenLastCalledWith(
+      '2026-07',
+      expect.objectContaining({ scope: expect.anything() })
+    )
   })
 
   it('keeps the existing desktop table mutually exclusive from the mobile cards', async () => {

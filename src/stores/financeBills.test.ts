@@ -115,6 +115,87 @@ describe('finance bills store', () => {
     expect(store.loading).toBe(false)
   })
 
+  it('aborts and absorbs an older income rejection when a newer scoped load starts', async () => {
+    const older = deferred<any>()
+    const latest = deferred<any>()
+    let olderSignal: AbortSignal | undefined
+    let latestSignal: AbortSignal | undefined
+    apiMocks.getIncomeBillReport
+      .mockImplementationOnce((_month, options) => {
+        olderSignal = options?.signal
+        return older.promise
+      })
+      .mockImplementationOnce((_month, options) => {
+        latestSignal = options?.signal
+        return latest.promise
+      })
+    const store = useFinanceBillsStore()
+    const firstScope = Symbol('first-income-page')
+    const latestScope = Symbol('latest-income-page')
+
+    const olderLoad = store.loadIncomeReport('2026-07', { scope: firstScope })
+    const latestLoad = store.loadIncomeReport('2026-06', { scope: latestScope })
+    expect(olderSignal?.aborted).toBe(true)
+    expect(latestSignal?.aborted).toBe(false)
+    older.reject(new Error('obsolete transport rejected'))
+    await expect(olderLoad).resolves.toBe(false)
+    latest.resolve({ month: '2026-06', totalSamples: 0, totalAmount: 0, statusSummaries: [], rows: [] })
+    await expect(latestLoad).resolves.toBe(true)
+
+    expect(store.month).toBe('2026-06')
+  })
+
+  it('absorbs a post-unmount income rejection and does not cancel another page scope', async () => {
+    const first = deferred<any>()
+    const latest = deferred<any>()
+    let latestSignal: AbortSignal | undefined
+    apiMocks.getIncomeBillReport
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce((_month, options) => {
+        latestSignal = options?.signal
+        return latest.promise
+      })
+    const store = useFinanceBillsStore()
+    const oldPage = Symbol('old-page')
+    const newPage = Symbol('new-page')
+    const oldLoad = store.loadIncomeReport('2026-07', { scope: oldPage })
+    const newLoad = store.loadIncomeReport('2026-06', { scope: newPage })
+
+    store.cancelIncomeLoads(oldPage)
+    expect(latestSignal?.aborted).toBe(false)
+    first.reject(new Error('late old-page rejection'))
+    await expect(oldLoad).resolves.toBe(false)
+    latest.resolve({ month: '2026-06', totalSamples: 0, totalAmount: 0, statusSummaries: [], rows: [] })
+    await expect(newLoad).resolves.toBe(true)
+    expect(store.month).toBe('2026-06')
+  })
+
+  it('aborts and absorbs an active income rejection after its owning page unmounts', async () => {
+    const pending = deferred<any>()
+    let signal: AbortSignal | undefined
+    apiMocks.getIncomeBillReport.mockImplementationOnce((_month, options) => {
+      signal = options?.signal
+      return pending.promise
+    })
+    const store = useFinanceBillsStore()
+    const pageScope = Symbol('unmounted-income-page')
+    const load = store.loadIncomeReport('2026-07', { scope: pageScope })
+
+    store.cancelIncomeLoads(pageScope)
+    expect(signal?.aborted).toBe(true)
+    pending.reject(new Error('adapter rejected after income unmount'))
+    await expect(load).resolves.toBe(false)
+    expect(store.incomeReport).toBeNull()
+  })
+
+  it('keeps a real latest income failure observable', async () => {
+    apiMocks.getIncomeBillReport.mockRejectedValueOnce(new Error('latest income failed'))
+    const store = useFinanceBillsStore()
+
+    await expect(store.loadIncomeReport('2026-07', { scope: Symbol('income-page') })).rejects.toThrow('latest income failed')
+    expect(store.loading).toBe(false)
+  })
+
   it('keeps only the latest unsettled refresh result', async () => {
     const older = deferred<UnsettledSampleRow[]>()
     const latest = deferred<UnsettledSampleRow[]>()
@@ -158,6 +239,63 @@ describe('finance bills store', () => {
     await load
 
     expect(store.unsettledRows).toEqual([])
+    expect(store.loading).toBe(false)
+  })
+
+  it('aborts and absorbs stale or post-unmount unsettled rejections within the owning scope', async () => {
+    const older = deferred<UnsettledSampleRow[]>()
+    const latest = deferred<UnsettledSampleRow[]>()
+    let olderSignal: AbortSignal | undefined
+    let latestSignal: AbortSignal | undefined
+    apiMocks.getUnsettledSamples
+      .mockImplementationOnce((options) => {
+        olderSignal = options?.signal
+        return older.promise
+      })
+      .mockImplementationOnce((options) => {
+        latestSignal = options?.signal
+        return latest.promise
+      })
+    const store = useFinanceBillsStore()
+    const oldPage = Symbol('old-unsettled-page')
+    const newPage = Symbol('new-unsettled-page')
+    const olderLoad = store.loadUnsettledRows({ scope: oldPage })
+    const latestLoad = store.loadUnsettledRows({ scope: newPage })
+    expect(olderSignal?.aborted).toBe(true)
+
+    store.cancelUnsettledLoads(oldPage)
+    expect(latestSignal?.aborted).toBe(false)
+    older.reject(new Error('late stale refresh rejection'))
+    await expect(olderLoad).resolves.toBe(false)
+    latest.resolve([row])
+    await expect(latestLoad).resolves.toBe(true)
+
+    expect(store.unsettledRows).toEqual([row])
+  })
+
+  it('aborts and absorbs an active unsettled rejection after its owning page unmounts', async () => {
+    const pending = deferred<UnsettledSampleRow[]>()
+    let signal: AbortSignal | undefined
+    apiMocks.getUnsettledSamples.mockImplementationOnce((options) => {
+      signal = options?.signal
+      return pending.promise
+    })
+    const store = useFinanceBillsStore()
+    const pageScope = Symbol('unmounted-unsettled-page')
+    const load = store.loadUnsettledRows({ scope: pageScope })
+
+    store.cancelUnsettledLoads(pageScope)
+    expect(signal?.aborted).toBe(true)
+    pending.reject(new Error('adapter rejected after unsettled unmount'))
+    await expect(load).resolves.toBe(false)
+    expect(store.unsettledRows).toEqual([])
+  })
+
+  it('keeps a real latest unsettled failure observable', async () => {
+    apiMocks.getUnsettledSamples.mockRejectedValueOnce(new Error('latest unsettled failed'))
+    const store = useFinanceBillsStore()
+
+    await expect(store.loadUnsettledRows({ scope: Symbol('unsettled-page') })).rejects.toThrow('latest unsettled failed')
     expect(store.loading).toBe(false)
   })
 

@@ -100,9 +100,9 @@
         class="mobile-touch-target"
         style="min-width: 44px; min-height: 44px"
         type="button"
-        :disabled="actionPending || store.isSettling"
-        @click="handleBatchSettle"
-      >{{ actionPending || store.settlingBatch ? '结款中…' : '批量确认已结款' }}</button>
+        :disabled="actionPending || store.isSettling || store.loading"
+        @click="hasPendingSelectedReconciliation ? refreshRows() : handleBatchSettle()"
+      >{{ mobileActionLabel }}</button>
     </MobileActionBar>
   </div>
 </template>
@@ -125,7 +125,8 @@ const selectedCustomers = ref<string[]>([])
 const selectedRows = ref<UnsettledSampleRow[]>([])
 const tableRef = ref<{ clearSelection: () => void }>()
 const actionPending = ref(false)
-let selectionVersion = 0
+const pendingSettledIds = ref<Set<string>>(new Set())
+const unsettledLoadScope = Symbol('finance-unsettled-page')
 let viewVersion = 0
 let actionId = 0
 let activeActionId = 0
@@ -138,6 +139,13 @@ const customerOptions = computed(() => {
 const filteredRows = computed(() => filterUnsettledRows(store.unsettledRows, selectedCustomers.value))
 const selectedIds = computed(() => selectedRows.value.map((row) => row.blockId))
 const selectedTotal = computed(() => selectedRows.value.reduce((sum, row) => sum + row.amount, 0))
+const hasPendingSelectedReconciliation = computed(() =>
+  selectedRows.value.some((row) => pendingSettledIds.value.has(row.blockId))
+)
+const mobileActionLabel = computed(() => {
+  if (hasPendingSelectedReconciliation.value) return store.loading ? '刷新中…' : '刷新对账'
+  return actionPending.value || store.settlingBatch ? '结款中…' : '批量确认已结款'
+})
 
 watch(selectedCustomers, async () => {
   await clearSelection()
@@ -155,7 +163,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true
   viewVersion += 1
-  store.cancelUnsettledLoads()
+  store.cancelUnsettledLoads(unsettledLoadScope)
 })
 
 async function handleSettle(row: UnsettledSampleRow, checked: string | number | boolean = true) {
@@ -172,8 +180,10 @@ async function handleSettle(row: UnsettledSampleRow, checked: string | number | 
     await store.settleRow(row)
     if (!isActionCurrent(action)) return
     if (action.mobile) {
-      await store.loadUnsettledRows()
+      pendingSettledIds.value = new Set([...pendingSettledIds.value, row.blockId])
+      const committed = await store.loadUnsettledRows({ scope: unsettledLoadScope })
       if (!isActionCurrent(action)) return
+      if (committed) await reconcilePendingSelection()
     }
     ElMessage.success('已同步为已结款')
   } catch {
@@ -185,13 +195,14 @@ async function handleSettle(row: UnsettledSampleRow, checked: string | number | 
 
 function handleSelectionChange(rows: UnsettledSampleRow[]) {
   selectedRows.value = rows
-  selectionVersion += 1
 }
 
 function handleMobileSelectionChange(ids: string[]) {
   const idSet = new Set(ids)
-  selectedRows.value = store.unsettledRows.filter((row) => idSet.has(row.blockId))
-  selectionVersion += 1
+  const detachedPendingRows = selectedRows.value.filter(
+    (row) => pendingSettledIds.value.has(row.blockId) && !store.unsettledRows.some((item) => item.blockId === row.blockId)
+  )
+  selectedRows.value = [...detachedPendingRows, ...store.unsettledRows.filter((row) => idSet.has(row.blockId))]
 }
 
 function handleMobileFilterChange(customers: string[]) {
@@ -203,7 +214,6 @@ async function handleBatchSettle() {
   const action = beginAction()
   if (!action) return
   const rows = [...selectedRows.value]
-  const selectedVersionAtStart = selectionVersion
   const total = rows.reduce((sum, row) => sum + row.amount, 0)
   try {
     await ElMessageBox.confirm(
@@ -219,10 +229,12 @@ async function handleBatchSettle() {
     await store.settleRows(rows)
     if (!isActionCurrent(action)) return
     if (action.mobile) {
-      await store.loadUnsettledRows()
+      pendingSettledIds.value = new Set([...pendingSettledIds.value, ...rows.map((row) => row.blockId)])
+      const committed = await store.loadUnsettledRows({ scope: unsettledLoadScope })
       if (!isActionCurrent(action)) return
+      if (committed) await reconcilePendingSelection()
     }
-    if (selectionVersion === selectedVersionAtStart && hasSameSelection(rows, selectedRows.value)) {
+    if (!action.mobile) {
       await clearSelection()
     }
     ElMessage.success(`已将 ${rows.length} 个样品同步为已结款`)
@@ -243,20 +255,28 @@ function refreshRows() {
 }
 
 function requestUnsettledRows() {
-  void store.loadUnsettledRows().catch(() => undefined)
+  void store.loadUnsettledRows({ scope: unsettledLoadScope })
+    .then((committed) => {
+      if (committed && !disposed) return reconcilePendingSelection()
+    })
+    .catch(() => undefined)
 }
 
 async function clearSelection() {
   selectedRows.value = []
-  selectionVersion += 1
+  pendingSettledIds.value = new Set()
   await nextTick()
   tableRef.value?.clearSelection()
 }
 
-function hasSameSelection(expected: UnsettledSampleRow[], current: UnsettledSampleRow[]) {
-  if (expected.length !== current.length) return false
-  const currentIds = new Set(current.map((row) => row.blockId))
-  return expected.every((row) => currentIds.has(row.blockId))
+async function reconcilePendingSelection() {
+  if (!pendingSettledIds.value.size) return
+  const settledIds = pendingSettledIds.value
+  const selectedIdSet = new Set(selectedRows.value.map((row) => row.blockId).filter((id) => !settledIds.has(id)))
+  selectedRows.value = store.unsettledRows.filter((row) => selectedIdSet.has(row.blockId))
+  pendingSettledIds.value = new Set()
+  await nextTick()
+  if (!isMobileLayout.value) tableRef.value?.clearSelection()
 }
 
 function beginAction() {
