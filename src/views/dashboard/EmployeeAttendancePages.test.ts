@@ -3018,4 +3018,111 @@ describe('employee attendance navigation', () => {
     wrapper.unmount()
     generate.mockRestore()
   })
+
+  it('commits exactly one new-month payroll load from the actual mobile PageShell apply flow', async () => {
+    attendanceLayout.mobile.value = true
+    const baseline = await attendanceApi.generatePayroll('2026-08')
+    const oldMonth = deferred<Awaited<ReturnType<typeof attendanceApi.getPayroll>>>()
+    const newMonth = deferred<Awaited<ReturnType<typeof attendanceApi.getPayroll>>>()
+    const getPayroll = vi.spyOn(attendanceApi, 'getPayroll').mockImplementation((month) => {
+      if (month === '2026-08') return oldMonth.promise
+      if (month === '2026-09') return newMonth.promise
+      throw new Error(`unexpected month ${month}`)
+    })
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await vi.waitFor(() => expect(getPayroll).toHaveBeenCalledTimes(1))
+
+    await wrapper.get('.mobile-filter-summary').trigger('click')
+    await wrapper.get('input[type="month"]').setValue('2026-09')
+    await wrapper.findAll('button').find((node) => node.text() === '应用筛选')!.trigger('click')
+    expect(getPayroll.mock.calls.map(([month]) => month)).toEqual(['2026-08', '2026-09'])
+
+    newMonth.resolve({ ...baseline, id: 'new-month-run', month: '2026-09' })
+    await flushPromises()
+    expect(store.month).toBe('2026-09')
+    expect(store.payroll?.id).toBe('new-month-run')
+
+    oldMonth.resolve({ ...baseline, id: 'late-old-month-run', month: '2026-08' })
+    await flushPromises()
+    expect(store.payroll?.id).toBe('new-month-run')
+    expect(getPayroll).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+    getPayroll.mockRestore()
+  })
+
+  it('commits only the latest rapid PageShell month and still refreshes the same month exactly once', async () => {
+    attendanceLayout.mobile.value = true
+    const baseline = await attendanceApi.generatePayroll('2026-08')
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = baseline
+    await nextTick()
+
+    const september = deferred<Awaited<ReturnType<typeof attendanceApi.getPayroll>>>()
+    const october = deferred<Awaited<ReturnType<typeof attendanceApi.getPayroll>>>()
+    const sameMonth = deferred<Awaited<ReturnType<typeof attendanceApi.getPayroll>>>()
+    const getPayroll = vi.spyOn(attendanceApi, 'getPayroll')
+      .mockReturnValueOnce(september.promise)
+      .mockReturnValueOnce(october.promise)
+      .mockReturnValueOnce(sameMonth.promise)
+    const applyMonth = async (month: string) => {
+      await wrapper.get('.mobile-filter-summary').trigger('click')
+      await wrapper.get('input[type="month"]').setValue(month)
+      await wrapper.findAll('button').find((node) => node.text() === '应用筛选')!.trigger('click')
+    }
+
+    await applyMonth('2026-09')
+    await applyMonth('2026-10')
+    expect(getPayroll.mock.calls.map(([month]) => month)).toEqual(['2026-09', '2026-10'])
+
+    september.resolve({ ...baseline, id: 'stale-september-run', month: '2026-09' })
+    await flushPromises()
+    expect(store.payroll?.id).not.toBe('stale-september-run')
+    october.resolve({ ...baseline, id: 'latest-october-run', month: '2026-10' })
+    await flushPromises()
+    expect(store.payroll?.id).toBe('latest-october-run')
+
+    await wrapper.get('.attendance-mobile-refresh').trigger('click')
+    expect(getPayroll.mock.calls.map(([month]) => month)).toEqual(['2026-09', '2026-10', '2026-10'])
+    sameMonth.resolve({ ...baseline, id: 'same-month-refreshed-run', month: '2026-10' })
+    await flushPromises()
+    expect(store.payroll?.id).toBe('same-month-refreshed-run')
+    wrapper.unmount()
+    getPayroll.mockRestore()
+  })
+
+  it('invalidates a payroll confirmation before the actual PageShell month refresh can mutate the old run', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    store.payroll.issueCount = 0
+    store.payroll.issues = []
+    await nextTick()
+    const confirmation = deferred<any>()
+    const confirmDialog = vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(confirmation.promise)
+    const confirmPayroll = vi.spyOn(attendanceApi, 'confirmPayroll')
+    const newMonthLoad = vi.spyOn(attendanceApi, 'getPayroll').mockResolvedValue(null)
+
+    await wrapper.get('[data-testid="mobile-confirm-payroll"]').trigger('click')
+    await wrapper.get('.mobile-filter-summary').trigger('click')
+    await wrapper.get('input[type="month"]').setValue('2026-09')
+    await wrapper.findAll('button').find((node) => node.text() === '应用筛选')!.trigger('click')
+    confirmation.resolve('confirm')
+    await flushPromises()
+
+    expect(newMonthLoad).toHaveBeenCalledTimes(1)
+    expect(newMonthLoad).toHaveBeenCalledWith('2026-09')
+    expect(confirmPayroll).not.toHaveBeenCalled()
+    wrapper.unmount()
+    confirmDialog.mockRestore()
+    confirmPayroll.mockRestore()
+    newMonthLoad.mockRestore()
+  })
 })

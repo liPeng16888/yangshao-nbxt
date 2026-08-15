@@ -85,7 +85,7 @@ watch(isMobileLayout, () => {
   invalidatePayrollSession()
   void load()
 })
-watch(() => store.month, () => { invalidatePayrollSession() })
+watch(() => store.month, () => { invalidatePayrollSession() }, { flush: 'sync' })
 watch(() => store.payroll?.id ?? null, (id, previous) => {
   if (id !== previous) invalidatePayrollSession()
 })
