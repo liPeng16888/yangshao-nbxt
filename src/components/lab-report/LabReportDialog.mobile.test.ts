@@ -114,12 +114,12 @@ describe('mobile lab report sharing', () => {
 
     expect(reportMocks.createPngBlob).toHaveBeenCalledOnce()
     expect(canShare).toHaveBeenCalledOnce()
-    expect(share).toHaveBeenCalledWith(
-      expect.objectContaining({
-        files: [expect.any(File)],
-        title: '化验报告'
-      })
-    )
+    const shareData = share.mock.calls[0][0]
+    expect(shareData.title).toBe('化验报告')
+    expect(shareData.files).toHaveLength(1)
+    expect(shareData.files[0]).toBeInstanceOf(File)
+    expect(shareData.files[0].name).toBe('王总-2026.8.15.png')
+    expect(shareData.files[0].type).toBe('image/png')
     wrapper.unmount()
   })
 
@@ -135,7 +135,77 @@ describe('mobile lab report sharing', () => {
 
     expect(createObjectURL).toHaveBeenCalledOnce()
     expect(wrapper.find('.mobile-report-share-preview img').attributes('src')).toBe('blob:mobile-report')
-    expect(wrapper.text()).toContain('长按图片保存')
+    expect(wrapper.text()).toContain('长按保存图片')
+    wrapper.unmount()
+  })
+
+  it('requires explicit file-share capability even when navigator.share exists', async () => {
+    const share = vi.fn()
+    vi.stubGlobal('navigator', { share })
+    const createObjectURL = vi.fn().mockReturnValue('blob:no-can-share')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+
+    expect(share).not.toHaveBeenCalled()
+    expect(wrapper.find('.mobile-report-share-preview img').attributes('src')).toBe('blob:no-can-share')
+    wrapper.unmount()
+  })
+
+  it('shows the PNG fallback when the browser has no File constructor', async () => {
+    vi.stubGlobal('File', undefined)
+    vi.stubGlobal('navigator', { share: vi.fn(), canShare: vi.fn() })
+    const createObjectURL = vi.fn().mockReturnValue('blob:no-file-constructor')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+
+    expect(wrapper.find('.mobile-report-share-preview img').attributes('src')).toBe('blob:no-file-constructor')
+    expect(wrapper.text()).toContain('长按保存图片')
+    wrapper.unmount()
+  })
+
+  it('treats AbortError as a cancellation without mounting a fallback preview', async () => {
+    const abortError = new DOMException('cancelled', 'AbortError')
+    const share = vi.fn().mockRejectedValue(abortError)
+    vi.stubGlobal('navigator', { share, canShare: vi.fn().mockReturnValue(true) })
+    const createObjectURL = vi.fn().mockReturnValue('blob:should-not-exist')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+
+    expect(createObjectURL).not.toHaveBeenCalled()
+    expect(wrapper.find('.mobile-report-share-preview').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('replaces and revokes fallback object URLs across retries and dialog close', async () => {
+    vi.stubGlobal('navigator', { canShare: vi.fn().mockReturnValue(false) })
+    const createObjectURL = vi.fn()
+      .mockReturnValueOnce('blob:first-report')
+      .mockReturnValueOnce('blob:second-report')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true })
+    const wrapper = mountMobileReport()
+
+    await openPreview(wrapper)
+    await clickMobileExport(wrapper)
+    await clickMobileExport(wrapper)
+
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:first-report')
+    expect(wrapper.find('.mobile-report-share-preview img').attributes('src')).toBe('blob:second-report')
+
+    await wrapper.setProps({ visible: false })
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:second-report')
     wrapper.unmount()
   })
 })

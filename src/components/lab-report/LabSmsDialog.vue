@@ -160,11 +160,36 @@ async function copySmsText() {
     ElMessage.warning('暂无短信内容可复制')
     return
   }
-  try {
-    await navigator.clipboard.writeText(text)
+  if (await copyText(text)) {
     ElMessage.success('短信内容已复制')
+    return
+  }
+  ElMessage.error('复制失败，请手动复制短信内容')
+}
+
+async function copyText(text: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
   } catch {
-    ElMessage.error('复制失败，请手动复制短信内容')
+    // Fall through for browsers that expose Clipboard API but reject the call.
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.readOnly = true
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    return typeof document.execCommand === 'function' && document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    textarea.remove()
   }
 }
 </script>

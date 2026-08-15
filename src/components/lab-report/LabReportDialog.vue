@@ -1,5 +1,5 @@
 <template>
-  <el-dialog :model-value="visible" width="1120px" class="lab-report-dialog" :title="dialogTitle" @close="emit('close')">
+  <el-dialog :model-value="visible" width="1120px" class="lab-report-dialog" :fullscreen="mobile" :title="dialogTitle" @close="emit('close')">
     <div v-if="step === 'elements'" class="element-step">
       <el-alert
         title="优先使用数据计算中已选择的化验元素；未填写的样品保持空白，可在这里手动选择。"
@@ -80,12 +80,13 @@
       <section v-if="mobileReportPreviewUrl" class="mobile-report-share-preview">
         <img :src="mobileReportPreviewUrl" alt="化验报告保存预览" />
         <div>
-          <strong>长按图片保存</strong>
+          <strong>长按保存图片</strong>
           <p>当前浏览器不支持直接分享文件，请长按上方图片并选择“存储到照片”。</p>
         </div>
       </section>
 
-      <div class="report-preview">
+      <div class="report-preview-viewport" aria-label="化验报告可滚动预览">
+        <div class="report-preview">
         <input v-model="draft.title" class="report-title-input" />
         <div class="meta-grid">
           <div class="report-cell report-cell--label">来样日期</div>
@@ -146,6 +147,7 @@
             <img v-if="draft.sealImage" :src="draft.sealImage" alt="电子公章" />
             <span v-else>电子公章</span>
           </div>
+        </div>
         </div>
       </div>
     </div>
@@ -370,10 +372,20 @@ async function downloadCurrentReport() {
 }
 
 async function shareOrPreviewMobileReport(blob: Blob, filename: string) {
+  if (typeof File !== 'function') {
+    showMobileReportPreview(blob)
+    return
+  }
   const file = new File([blob], filename, { type: 'image/png' })
   const shareData: ShareData = { files: [file], title: '化验报告' }
-  const supportsFileShare = typeof navigator.share === 'function'
-    && (typeof navigator.canShare !== 'function' || navigator.canShare(shareData))
+  let supportsFileShare = false
+  try {
+    supportsFileShare = typeof navigator.share === 'function'
+      && typeof navigator.canShare === 'function'
+      && navigator.canShare(shareData)
+  } catch {
+    supportsFileShare = false
+  }
 
   if (supportsFileShare) {
     try {
@@ -385,9 +397,14 @@ async function shareOrPreviewMobileReport(blob: Blob, filename: string) {
         ElMessage.info('已取消分享')
         return
       }
+      ElMessage.error('系统分享失败，已切换为长按保存图片')
     }
   }
 
+  showMobileReportPreview(blob)
+}
+
+function showMobileReportPreview(blob: Blob) {
   clearMobileReportPreview()
   mobileReportPreviewUrl.value = URL.createObjectURL(blob)
   ElMessage.info('请长按图片保存到手机')
@@ -590,6 +607,49 @@ onBeforeUnmount(clearMobileReportPreview)
   background: #ffffff;
   border: 1px solid #111827;
   font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+}
+
+.report-preview-viewport {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+@media (max-width: 760px) {
+  .element-step,
+  .preview-step {
+    min-width: 0;
+    max-width: 100%;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    overflow-x: clip;
+  }
+
+  .element-checkboxes {
+    grid-template-columns: 1fr;
+  }
+
+  .sample-unit-shortcuts,
+  .preview-actions__commands {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 1fr;
+  }
+
+  .sample-unit-shortcuts__select {
+    width: 100%;
+  }
+
+  .preview-actions :deep(.el-button),
+  .bulk-element-card__actions :deep(.el-button) {
+    min-height: 44px;
+    margin: 0;
+  }
+
+  .report-preview-viewport {
+    width: 100%;
+    border-radius: 8px;
+  }
 }
 
 .mobile-report-share-preview {
