@@ -1673,6 +1673,139 @@ describe('employee attendance navigation', () => {
     wrapper.unmount(); request.mockRestore()
   })
 
+  it('replaces an aborted initial leave load exactly once after a layout transition', async () => {
+    const baselineRows = await attendanceApi.getLeaves({})
+    const baselineTypes = await attendanceApi.getLeaveTypes()
+    const initialRows = deferred<typeof baselineRows>(), initialTypes = deferred<typeof baselineTypes>()
+    const successorRows = deferred<typeof baselineRows>(), successorTypes = deferred<typeof baselineTypes>()
+    const requestRows = vi.spyOn(attendanceApi, 'getLeaves')
+      .mockReturnValueOnce(initialRows.promise)
+      .mockReturnValueOnce(successorRows.promise)
+    const requestTypes = vi.spyOn(attendanceApi, 'getLeaveTypes')
+      .mockReturnValueOnce(initialTypes.promise)
+      .mockReturnValueOnce(successorTypes.promise)
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    try {
+      await nextTick()
+      expect(requestRows).toHaveBeenCalledTimes(1)
+      attendanceLayout.mobile.value = true
+      await nextTick()
+
+      expect(requestRows).toHaveBeenCalledTimes(2)
+      expect(requestTypes).toHaveBeenCalledTimes(2)
+      expect(requestRows).toHaveBeenLastCalledWith({
+        employeeId: undefined, employeeIds: [], month: store.month, startDate: undefined, endDate: undefined, status: undefined
+      })
+      const nextRows = [{ ...baselineRows[0]!, id: 'layout-successor-leave' }]
+      const nextTypes = [{ ...baselineTypes[0]!, id: 'layout-successor-type', name: '布局继任类型' }]
+      successorTypes.resolve(nextTypes)
+      successorRows.resolve(nextRows)
+      await flushPromises()
+      expect(store.leaves).toEqual(nextRows)
+      expect(store.leaveTypes).toEqual(nextTypes)
+      expect(store.loading).toBe(false)
+      expect(store.error).toBe('')
+
+      initialTypes.resolve([{ ...baselineTypes[0]!, id: 'aborted-initial-type' }])
+      initialRows.resolve([{ ...baselineRows[0]!, id: 'aborted-initial-leave' }])
+      await flushPromises()
+      expect(store.leaves).toEqual(nextRows)
+      expect(store.leaveTypes).toEqual(nextTypes)
+      expect(store.error).toBe('')
+    } finally {
+      initialTypes.resolve(baselineTypes); initialRows.resolve(baselineRows)
+      successorTypes.resolve(baselineTypes); successorRows.resolve(baselineRows)
+      wrapper.unmount(); requestRows.mockRestore(); requestTypes.mockRestore()
+    }
+  })
+
+  it('reloads the exact applied leave filters after rapid layout flips and only the latest successor commits', async () => {
+    attendanceLayout.mobile.value = true
+    const baselineRows = await attendanceApi.getLeaves({}), baselineTypes = await attendanceApi.getLeaveTypes()
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    const store = useEmployeeAttendanceStore(pinia)
+    const firstRows = deferred<typeof baselineRows>(), firstTypes = deferred<typeof baselineTypes>()
+    const middleRows = deferred<typeof baselineRows>(), middleTypes = deferred<typeof baselineTypes>()
+    const latestRows = deferred<typeof baselineRows>(), latestTypes = deferred<typeof baselineTypes>()
+    const requestRows = vi.spyOn(attendanceApi, 'getLeaves')
+      .mockReturnValueOnce(firstRows.promise)
+      .mockReturnValueOnce(middleRows.promise)
+      .mockReturnValueOnce(latestRows.promise)
+    const requestTypes = vi.spyOn(attendanceApi, 'getLeaveTypes')
+      .mockReturnValueOnce(firstTypes.promise)
+      .mockReturnValueOnce(middleTypes.promise)
+      .mockReturnValueOnce(latestTypes.promise)
+    const filters = { employeeIds: ['emp-2'], status: 'PENDING' as const, startDate: '2026-08-04', endDate: '2026-08-19' }
+    try {
+      wrapper.getComponent({ name: 'MobileLeaveList' }).vm.$emit('applyFilters', filters)
+      await nextTick()
+      attendanceLayout.mobile.value = false
+      await nextTick()
+      attendanceLayout.mobile.value = true
+      await nextTick()
+
+      expect(requestRows).toHaveBeenCalledTimes(3)
+      expect(requestTypes).toHaveBeenCalledTimes(3)
+      expect(requestRows.mock.calls).toEqual(Array.from({ length: 3 }, () => [{
+        employeeId: undefined, employeeIds: ['emp-2'], month: undefined,
+        startDate: '2026-08-04', endDate: '2026-08-19', status: 'PENDING'
+      }]))
+      const currentRows = [{ ...baselineRows[0]!, id: 'latest-layout-leave', employeeId: 'emp-2', status: 'PENDING' as const }]
+      const currentTypes = [{ ...baselineTypes[0]!, id: 'latest-layout-type', name: '最新布局类型' }]
+      latestTypes.resolve(currentTypes)
+      latestRows.resolve(currentRows)
+      await flushPromises()
+      expect(store.leaves).toEqual(currentRows)
+      expect(store.leaveTypes).toEqual(currentTypes)
+      expect(store.loading).toBe(false)
+
+      firstTypes.resolve([{ ...baselineTypes[0]!, id: 'obsolete-first-type' }])
+      firstRows.resolve([{ ...baselineRows[0]!, id: 'obsolete-first-leave' }])
+      middleTypes.resolve([{ ...baselineTypes[0]!, id: 'obsolete-middle-type' }])
+      middleRows.reject(new Error('旧布局刷新失败'))
+      await flushPromises()
+      expect(store.leaves).toEqual(currentRows)
+      expect(store.leaveTypes).toEqual(currentTypes)
+      expect(store.error).toBe('')
+      expect(store.loading).toBe(false)
+    } finally {
+      firstTypes.resolve(baselineTypes); firstRows.resolve(baselineRows)
+      middleTypes.resolve(baselineTypes); middleRows.resolve(baselineRows)
+      latestTypes.resolve(baselineTypes); latestRows.resolve(baselineRows)
+      wrapper.unmount(); requestRows.mockRestore(); requestTypes.mockRestore()
+    }
+  })
+
+  it('cancels an initial leave load on unmount without starting a replacement', async () => {
+    const baselineRows = await attendanceApi.getLeaves({}), baselineTypes = await attendanceApi.getLeaveTypes()
+    const pinia = createPinia()
+    const store = useEmployeeAttendanceStore(pinia)
+    await store.loadEmployees()
+    const rows = deferred<typeof baselineRows>(), types = deferred<typeof baselineTypes>()
+    const requestRows = vi.spyOn(attendanceApi, 'getLeaves').mockReturnValue(rows.promise)
+    const requestTypes = vi.spyOn(attendanceApi, 'getLeaveTypes').mockReturnValue(types.promise)
+    const wrapper = mount(EmployeeLeavePage, { global: { plugins: [pinia, ElementPlus] } })
+    await nextTick()
+    expect(requestRows).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    await nextTick()
+    expect(requestRows).toHaveBeenCalledTimes(1)
+    expect(requestTypes).toHaveBeenCalledTimes(1)
+    expect(store.loading).toBe(false)
+    types.resolve([{ ...baselineTypes[0]!, id: 'late-unmounted-type' }])
+    rows.reject(new Error('卸载后的初始加载失败'))
+    await flushPromises()
+    expect(store.leaves).toEqual([])
+    expect(store.leaveTypes).toEqual([])
+    expect(store.error).toBe('')
+    expect(requestRows).toHaveBeenCalledTimes(1)
+    requestRows.mockRestore(); requestTypes.mockRestore()
+  })
+
   it('uses full-screen mobile leave editing and disables actions for processed or payroll-locked records', async () => {
     attendanceLayout.mobile.value = true
     const pinia = createPinia()

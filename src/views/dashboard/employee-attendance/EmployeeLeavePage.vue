@@ -60,7 +60,12 @@ watch(form, () => { leaveFormRevision += 1 }, { deep: true, flush: 'sync' })
 watch(typeForm, () => { typeFormRevision += 1 }, { deep: true, flush: 'sync' })
 watch(visible, (open, previous) => { if (previous && !open) { leaveEditorSession += 1; formError.value = '' } })
 watch(typeVisible, (open, previous) => { if (previous && !open) { typeEditorSession += 1; typeFormError.value = '' } })
-watch(isMobileLayout, () => { pageSession += 1; cancelOwnedLoads(); leaveEditorSession += 1; typeEditorSession += 1; leaveSaveOperation += 1; typeSaveOperation += 1; visible.value = false; typeVisible.value = false; leaveSaving.value = false; typeSaving.value = false; reviewTokens.clear(); removeTokens.clear(); typeRemoveTokens.clear() })
+watch(isMobileLayout, () => {
+  pageSession += 1; cancelOwnedLoads(); leaveEditorSession += 1; typeEditorSession += 1; leaveSaveOperation += 1; typeSaveOperation += 1
+  visible.value = false; typeVisible.value = false; leaveSaving.value = false; typeSaving.value = false
+  reviewTokens.clear(); removeTokens.clear(); typeRemoveTokens.clear()
+  void load()
+})
 
 function nameOf(id: string) { return store.employees.find(row => row.id === id)?.name || '-' }
 function typeName(id: string) { return store.leaveTypes.find(row => row.id === id)?.name || '-' }
