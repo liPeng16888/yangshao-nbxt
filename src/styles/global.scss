@@ -366,3 +366,30 @@ textarea {
     flex-direction: column;
   }
 }
+
+@media (max-width: 767px) {
+  .el-dialog {
+    width: calc(100vw - 16px) !important;
+    max-width: none !important;
+    margin: max(8px, env(safe-area-inset-top)) auto !important;
+    border-radius: 14px !important;
+  }
+
+  .el-dialog__body {
+    max-height: calc(100dvh - 150px);
+    overflow: auto;
+    padding: 12px !important;
+  }
+
+  .customer-select-popper,
+  .lab-element-selector-popper {
+    right: 8px !important;
+    left: 8px !important;
+    width: auto !important;
+    max-width: calc(100vw - 16px) !important;
+  }
+
+  .lab-element-selector-popper .element-picker__checkboxes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

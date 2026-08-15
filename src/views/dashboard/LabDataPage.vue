@@ -1,5 +1,9 @@
 <template>
-  <div class="page-stack" :class="{ 'page-stack--mobile': isMobileLayout }" v-loading="labStore.loading">
+  <div
+    class="page-stack"
+    :class="{ 'page-stack--mobile': isMobileLayout, 'page-stack--mobile-selection': isMobileLayout && selectionMode }"
+    v-loading="labStore.loading"
+  >
     <div class="toolbar">
       <div class="toolbar-left">
         <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" @change="handleDateChange" />
@@ -17,7 +21,7 @@
           {{ labStore.autoSaveStatus === 'conflict' ? '确认保存本机内容' : '重试保存' }}
         </el-button>
       </div>
-      <div class="toolbar-right">
+      <div v-if="!isMobileLayout || !selectionMode" class="toolbar-right">
         <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
           标记样品完成
         </el-button>
@@ -35,7 +39,13 @@
       </div>
     </div>
 
-    <LabParameterPanel :parameters="labStore.currentParameters" :saving="labStore.saving" :readonly="isPageReadonly" @save="labStore.saveParameters" />
+    <LabParameterPanel
+      :parameters="labStore.currentParameters"
+      :saving="labStore.saving"
+      :readonly="isPageReadonly"
+      :mobile="isMobileLayout"
+      @save="labStore.saveParameters"
+    />
 
     <MobileLabSampleList
       v-if="isMobileLayout"
@@ -65,6 +75,17 @@
       @blacklist-hit="showBlacklistHit"
       @selection-change="toggleReportBlockSelection"
     />
+
+    <section v-if="isMobileLayout && selectionMode" class="mobile-selection-bar" aria-label="手机批量操作">
+      <div>
+        <strong>已选 {{ selectedReportBlockIds.length }} 个样品</strong>
+        <span>{{ mobileSelectionHint }}</span>
+      </div>
+      <el-button class="mobile-selection-primary" type="primary" @click="handleMobileSelectionPrimary">
+        {{ mobileSelectionButtonText }}
+      </el-button>
+      <el-button class="mobile-selection-cancel" @click="cancelReportSelection">取消</el-button>
+    </section>
 
     <section class="panel append-panel" v-if="!isPageReadonly">
       <div class="panel__body append-body">
@@ -212,6 +233,17 @@ const bulkFillButtonText = computed(() => {
 })
 
 const selectionMode = computed(() => generationMode.value !== null)
+const mobileSelectionButtonText = computed(() => {
+  if (generationMode.value === 'report') return reportButtonText.value
+  if (generationMode.value === 'sms') return smsButtonText.value
+  if (generationMode.value === 'bulkFill') return bulkFillButtonText.value
+  return '请选择操作'
+})
+const mobileSelectionHint = computed(() => {
+  if (generationMode.value === 'report') return '勾选后生成化验报告'
+  if (generationMode.value === 'sms') return '勾选后生成化验短信'
+  return '勾选后批量填写样品'
+})
 
 onMounted(async () => {
   await accessGuard.loadGroups()
@@ -556,6 +588,12 @@ async function handleMobileSaveNext() {
   if (!saved.success) ElMessage.error('当前样品尚未全部保存，系统将继续自动重试')
 }
 
+function handleMobileSelectionPrimary() {
+  if (generationMode.value === 'report') return void handleGenerateReport()
+  if (generationMode.value === 'sms') return void handleGenerateSms()
+  if (generationMode.value === 'bulkFill') return void handleBulkFillSamples()
+}
+
 function jumpToBlacklist(id?: string) {
   hitDialogVisible.value = false
   router.push({ path: '/blacklist', query: id ? { hit: id } : undefined })
@@ -610,5 +648,120 @@ async function scrollToHighlightedBlock(blockId: string) {
 
 :deep(.lab-grid-panel) {
   min-height: 0;
+}
+
+.mobile-selection-bar {
+  position: fixed;
+  right: 0;
+  bottom: calc(58px + env(safe-area-inset-bottom));
+  left: 0;
+  z-index: 19;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 74px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.98);
+  border-top: 1px solid #cbd5e1;
+  box-shadow: 0 -10px 30px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(14px);
+
+  > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  strong {
+    color: #183657;
+    font-size: 14px;
+  }
+
+  span {
+    overflow: hidden;
+    color: #64748b;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :deep(.el-button) {
+    min-height: 44px;
+    margin-left: 0;
+  }
+}
+
+.page-stack--mobile {
+  min-height: calc(100dvh - 140px);
+  gap: 10px;
+  grid-template-rows: none;
+
+  .toolbar {
+    top: calc(56px + env(safe-area-inset-top));
+    display: grid;
+    gap: 8px;
+    margin: -4px -12px 0;
+    padding: 8px 12px;
+    background: rgba(238, 243, 248, 0.98);
+  }
+
+  .toolbar-left {
+    display: grid;
+    grid-template-columns: minmax(145px, 1fr) auto;
+    gap: 6px;
+
+    :deep(.el-date-editor) {
+      width: 100%;
+      min-height: 44px;
+    }
+
+    :deep(.el-tag) {
+      min-height: 28px;
+    }
+  }
+
+  .toolbar-right {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    width: 100%;
+
+    :deep(.el-button) {
+      min-width: 0;
+      min-height: 44px;
+      margin-left: 0;
+      padding-inline: 7px;
+      font-size: 12px;
+    }
+  }
+
+  :deep(.parameter-panel) {
+    position: static;
+  }
+
+  .append-body {
+    display: grid;
+    grid-template-columns: auto minmax(70px, 1fr) auto;
+    padding: 10px;
+  }
+
+  .append-input {
+    width: 100%;
+  }
+}
+
+.page-stack--mobile-selection {
+  padding-bottom: 84px;
+}
+
+@media (max-width: 374px) {
+  .mobile-selection-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .mobile-selection-cancel {
+    grid-column: 2;
+  }
 }
 </style>

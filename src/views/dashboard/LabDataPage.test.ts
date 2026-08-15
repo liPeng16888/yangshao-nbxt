@@ -382,6 +382,25 @@ describe('LabDataPage table layout', () => {
     mobile.unmount()
   })
 
+  it('moves mobile selection actions into a full-width bottom bar with the selected count', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await nextTick()
+    expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 0 个样品')
+
+    await wrapper.get('.mobile-select-block-1').trigger('click')
+    await nextTick()
+    expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 1 个样品')
+    expect(wrapper.get('.mobile-selection-primary').text()).toContain('填写已选1个样品')
+
+    await wrapper.get('.mobile-selection-primary').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.bulk-fill-dialog-stub').exists()).toBe(true)
+  })
+
   it('makes the data grid readonly and hides append controls while parameters are being applied', async () => {
     mocks.labStore.applyingParameters = true
     const wrapper = mountPage()
