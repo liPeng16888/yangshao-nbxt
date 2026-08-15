@@ -8,6 +8,8 @@
   --sidebar-expanded-width: 236px;
   --sidebar-collapsed-width: 76px;
   --sidebar-width: var(--sidebar-expanded-width);
+  --mobile-shell-bottom: 22px;
+  --mobile-page-action-bottom: var(--mobile-shell-bottom);
 }
 
 * {
@@ -236,6 +238,8 @@ textarea {
 
 .app-shell--mobile {
   min-height: 100dvh;
+  --mobile-shell-bottom: env(safe-area-inset-bottom);
+  --mobile-page-action-bottom: var(--mobile-shell-bottom);
 
   .app-main {
     width: 100%;
@@ -243,8 +247,23 @@ textarea {
   }
 
   .app-content {
-    padding: calc(68px + env(safe-area-inset-top)) 12px calc(76px + env(safe-area-inset-bottom));
+    padding: calc(68px + env(safe-area-inset-top)) 12px calc(18px + var(--mobile-shell-bottom));
   }
+}
+
+.app-shell--mobile-has-secondary-nav {
+  --mobile-shell-bottom: calc(58px + env(safe-area-inset-bottom));
+  --mobile-page-action-bottom: var(--mobile-shell-bottom);
+}
+
+:root:has(.app-shell--mobile) {
+  --mobile-shell-bottom: env(safe-area-inset-bottom);
+  --mobile-page-action-bottom: var(--mobile-shell-bottom);
+}
+
+:root:has(.app-shell--mobile-has-secondary-nav) {
+  --mobile-shell-bottom: calc(58px + env(safe-area-inset-bottom));
+  --mobile-page-action-bottom: var(--mobile-shell-bottom);
 }
 
 .app-topbar {

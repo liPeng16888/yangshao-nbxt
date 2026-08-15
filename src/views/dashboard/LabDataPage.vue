@@ -659,7 +659,7 @@ async function scrollToHighlightedBlock(blockId: string) {
 .mobile-selection-bar {
   position: fixed;
   right: 0;
-  bottom: calc(58px + env(safe-area-inset-bottom));
+  bottom: var(--mobile-page-action-bottom);
   left: 0;
   z-index: 19;
   display: grid;

@@ -34,7 +34,7 @@
           v-for="item in customerNavigation"
           :key="item.path"
           :to="item.path"
-          :class="{ 'router-link-active': navigation?.section.key === item.key }"
+          :class="{ 'router-link-active': section?.key === item.key }"
           @click="menuVisible = false"
         >
           <component :is="item.icon" />
@@ -54,20 +54,7 @@
       </div>
     </el-drawer>
 
-    <nav class="mobile-bottom-nav" aria-label="手机版底部导航">
-      <RouterLink to="/data" :class="{ 'router-link-active': route.path === '/data' }">
-        <DataAnalysis />
-        <span>数据录入</span>
-      </RouterLink>
-      <RouterLink to="/lab-report/image-template" :class="{ 'router-link-active': route.path.startsWith('/lab-report') }">
-        <Memo />
-        <span>化验报告</span>
-      </RouterLink>
-      <button class="mobile-bottom-menu-button" type="button" @click="menuVisible = true">
-        <MoreFilled />
-        <span>菜单</span>
-      </button>
-    </nav>
+    <MobileSecondaryNav v-if="showSecondaryNav" :items="children" :active-path="route.path" />
   </div>
 </template>
 
@@ -75,17 +62,16 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  DataAnalysis,
   Lock,
-  Memo,
   Menu,
-  MoreFilled,
   SwitchButton
 } from '@element-plus/icons-vue'
-import { customerNavigation, findCustomerNavigation } from '@/config/customerNavigation'
+import { customerNavigation } from '@/config/customerNavigation'
+import { useCustomerNavigation } from '@/composables/useCustomerNavigation'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { useLabSheetStore } from '@/stores/labSheet'
+import MobileSecondaryNav from './MobileSecondaryNav.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -94,7 +80,7 @@ const accessGuard = useAccessGuardStore()
 const labSheetStore = useLabSheetStore()
 const menuVisible = ref(false)
 const currentTitle = computed(() => String(route.meta.title || '工作台'))
-const navigation = computed(() => findCustomerNavigation(route.path))
+const { section, children, showSecondaryNav } = useCustomerNavigation()
 
 function openAccessSettings() {
   menuVisible.value = false
@@ -124,7 +110,6 @@ async function handleLogout() {
 }
 
 .mobile-menu-button,
-.mobile-bottom-nav > *,
 .mobile-drawer-nav a,
 .mobile-drawer-actions button {
   min-width: 44px;
@@ -184,45 +169,6 @@ async function handleLogout() {
     background: #45d48a;
     border-radius: 50%;
     box-shadow: 0 0 0 3px rgba(69, 212, 138, 0.14);
-  }
-}
-
-.mobile-bottom-nav {
-  position: fixed;
-  inset: auto 0 0;
-  z-index: 18;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  min-height: calc(58px + env(safe-area-inset-bottom));
-  padding: 4px 8px env(safe-area-inset-bottom);
-  background: rgba(255, 255, 255, 0.96);
-  border-top: 1px solid #d8e1eb;
-  box-shadow: 0 -6px 20px rgba(15, 23, 42, 0.07);
-  backdrop-filter: blur(14px);
-}
-
-.mobile-bottom-nav > * {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 2px;
-  padding: 3px 8px;
-  color: #64748b;
-  background: transparent;
-  border: 0;
-  border-radius: 10px;
-  font-size: 11px;
-  text-decoration: none;
-
-  svg {
-    width: 21px;
-    height: 21px;
-  }
-
-  &.router-link-active {
-    color: #b12b20;
-    background: #fff2ef;
   }
 }
 

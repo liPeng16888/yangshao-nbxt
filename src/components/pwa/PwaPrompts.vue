@@ -77,7 +77,7 @@ function isStandaloneDisplay() {
 .pwa-prompt {
   position: fixed;
   right: 12px;
-  bottom: calc(72px + env(safe-area-inset-bottom));
+  bottom: var(--mobile-page-action-bottom);
   left: 12px;
   z-index: 40;
   display: flex;

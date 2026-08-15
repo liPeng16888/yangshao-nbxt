@@ -13,6 +13,10 @@ vi.mock('@/stores/accessGuard', () => ({
   useAccessGuardStore: () => mocks.accessGuard
 }))
 
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ path: '/data' })
+}))
+
 function installMatchMedia() {
   const states = new Map<string, { matches: boolean; listeners: Set<() => void> }>()
   vi.stubGlobal('matchMedia', vi.fn((query: string) => {
@@ -71,6 +75,7 @@ describe('AppLayout responsive shell', () => {
     await nextTick()
 
     expect(wrapper.classes()).toContain('app-shell--mobile')
+    expect(wrapper.classes()).toContain('app-shell--mobile-has-secondary-nav')
     expect(wrapper.find('.mobile-shell-stub').exists()).toBe(true)
     expect(wrapper.find('.desktop-sidebar-stub').exists()).toBe(false)
     expect(wrapper.find('.desktop-topbar-stub').exists()).toBe(false)

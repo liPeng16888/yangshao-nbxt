@@ -53,12 +53,13 @@ describe('AppMobileShell', () => {
     mocks.labSheet.disconnectRealtime.mockReset()
   })
 
-  it('provides a compact header, drawer menu, and three large bottom navigation actions', async () => {
+  it('provides a compact header, first-level drawer, and route-derived secondary rail', async () => {
     const wrapper = mountShell()
 
     expect(wrapper.get('.mobile-app-header').text()).toContain('数据计算')
     expect(wrapper.find('.mobile-menu-drawer-stub').exists()).toBe(false)
-    expect(wrapper.findAll('.mobile-bottom-nav > *')).toHaveLength(3)
+    expect(wrapper.find('.mobile-bottom-nav').exists()).toBe(false)
+    expect(wrapper.find('.mobile-secondary-nav').exists()).toBe(true)
 
     await wrapper.get('.mobile-menu-button').trigger('click')
     await nextTick()

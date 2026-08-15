@@ -3,7 +3,8 @@
     class="app-shell"
     :class="{
       'app-shell--sidebar-collapsed': sidebarCollapsed && !isMobileLayout,
-      'app-shell--mobile': isMobileLayout
+      'app-shell--mobile': isMobileLayout,
+      'app-shell--mobile-has-secondary-nav': isMobileLayout && showSecondaryNav
     }"
   >
     <AppMobileShell v-if="isMobileLayout" />
@@ -20,6 +21,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useMobileLayout } from '@/composables/useMobileLayout'
+import { useCustomerNavigation } from '@/composables/useCustomerNavigation'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import AppMobileShell from './AppMobileShell.vue'
 import AppSidebar from './AppSidebar.vue'
@@ -29,6 +31,7 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'ys_sidebar_collapsed'
 const sidebarCollapsed = ref(false)
 const accessGuard = useAccessGuardStore()
 const { isMobileLayout } = useMobileLayout()
+const { showSecondaryNav } = useCustomerNavigation()
 
 onMounted(() => {
   sidebarCollapsed.value = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'
