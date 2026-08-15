@@ -1,6 +1,5 @@
 <template>
   <nav
-    ref="track"
     class="mobile-secondary-nav"
     :class="`mobile-secondary-nav--${items.length >= 4 ? 'scrollable' : items.length === 2 ? 'two' : 'three'}`"
     aria-label="当前模块二级菜单"

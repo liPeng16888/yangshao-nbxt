@@ -2,7 +2,11 @@
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { compile } from 'sass'
+import { resolve } from 'node:path'
 import PwaPrompts from './PwaPrompts.vue'
+
+const globalStyles = compile(resolve(process.cwd(), 'src/styles/global.scss')).css
 
 function setNavigator(userAgent: string, standalone = false) {
   vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(userAgent)
@@ -53,5 +57,11 @@ describe('PwaPrompts', () => {
     await wrapper.get('.pwa-update-prompt__apply').trigger('click')
     expect(applyUpdate).toHaveBeenCalledTimes(1)
     window.removeEventListener('ys-pwa-apply-update', applyUpdate)
+  })
+
+  it('keeps the desktop prompt offset and uses the shared mobile offset contract', () => {
+    expect(globalStyles).toContain('--mobile-shell-bottom: calc(72px + env(safe-area-inset-bottom));')
+    expect(globalStyles).toMatch(/\.app-shell--mobile\s*\{[\s\S]*?--mobile-shell-bottom: env\(safe-area-inset-bottom\);[\s\S]*?--mobile-page-action-bottom: var\(--mobile-shell-bottom\);/)
+    expect(globalStyles).toMatch(/\.app-shell--mobile-has-secondary-nav\s*\{[\s\S]*?--mobile-shell-bottom: calc\(58px \+ env\(safe-area-inset-bottom\)\);[\s\S]*?--mobile-page-action-bottom: var\(--mobile-shell-bottom\);/)
   })
 })

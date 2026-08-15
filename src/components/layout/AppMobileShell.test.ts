@@ -11,11 +11,14 @@ const mocks = vi.hoisted(() => ({
     logoutCurrentUser: vi.fn()
   },
   accessGuard: { openSettings: vi.fn() },
-  labSheet: { disconnectRealtime: vi.fn() }
+  labSheet: { disconnectRealtime: vi.fn() },
+  route: { path: '/data', meta: { title: '数据计算' } }
 }))
 
+const scrollIntoView = vi.fn()
+
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ path: '/data', meta: { title: '数据计算' } }),
+  useRoute: () => mocks.route,
   useRouter: () => ({ replace: mocks.replace })
 }))
 
@@ -46,11 +49,15 @@ function mountShell() {
 
 describe('AppMobileShell', () => {
   beforeEach(() => {
+    mocks.route.path = '/data'
+    mocks.route.meta.title = '数据计算'
     mocks.replace.mockReset()
     mocks.auth.logoutCurrentUser.mockReset()
     mocks.auth.logoutCurrentUser.mockResolvedValue(undefined)
     mocks.accessGuard.openSettings.mockReset()
     mocks.labSheet.disconnectRealtime.mockReset()
+    scrollIntoView.mockReset()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
   })
 
   it('provides a compact header, first-level drawer, and route-derived secondary rail', async () => {
@@ -88,5 +95,17 @@ describe('AppMobileShell', () => {
     expect(mocks.labSheet.disconnectRealtime).toHaveBeenCalledTimes(1)
     expect(mocks.auth.logoutCurrentUser).toHaveBeenCalledTimes(1)
     expect(mocks.replace).toHaveBeenCalledWith('/login')
+  })
+
+  it('passes the canonical prepaid child to the rail for nested prepaid pages', async () => {
+    mocks.route.path = '/finance/prepaid/customers'
+    mocks.route.meta.title = '预存款客户'
+    const wrapper = mountShell()
+    await nextTick()
+
+    const prepaid = wrapper.get('.mobile-secondary-nav__item[href="/finance/prepaid/add"]')
+    expect(prepaid.classes()).toContain('router-link-active')
+    expect(scrollIntoView.mock.contexts).toContain(prepaid.element)
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'center' })
   })
 })

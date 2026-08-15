@@ -54,7 +54,7 @@
       </div>
     </el-drawer>
 
-    <MobileSecondaryNav v-if="showSecondaryNav" :items="children" :active-path="route.path" />
+    <MobileSecondaryNav v-if="showSecondaryNav" :items="children" :active-path="activeChild?.path ?? route.path" />
   </div>
 </template>
 
@@ -80,7 +80,7 @@ const accessGuard = useAccessGuardStore()
 const labSheetStore = useLabSheetStore()
 const menuVisible = ref(false)
 const currentTitle = computed(() => String(route.meta.title || '工作台'))
-const { section, children, showSecondaryNav } = useCustomerNavigation()
+const { section, children, activeChild, showSecondaryNav } = useCustomerNavigation()
 
 function openAccessSettings() {
   menuVisible.value = false

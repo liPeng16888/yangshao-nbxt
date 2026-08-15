@@ -8,7 +8,7 @@
   --sidebar-expanded-width: 236px;
   --sidebar-collapsed-width: 76px;
   --sidebar-width: var(--sidebar-expanded-width);
-  --mobile-shell-bottom: 22px;
+  --mobile-shell-bottom: calc(72px + env(safe-area-inset-bottom));
   --mobile-page-action-bottom: var(--mobile-shell-bottom);
 }
 
