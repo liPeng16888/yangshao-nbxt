@@ -105,6 +105,8 @@ describe('employee attendance navigation', () => {
     await wrapper.get('[data-testid="edit-employee-emp-1"]').trigger('click')
     expect((wrapper.get('[data-testid="employee-id-card"]').element as HTMLInputElement).value).toBe('')
     expect((wrapper.get('[data-testid="employee-bank-card"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.get('[data-testid="employee-address"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.get('[data-testid="employee-emergency-contact"]').element as HTMLInputElement).value).toBe('')
     expect(wrapper.text()).toContain('离职日期')
 
     const createButton = wrapper.findAll('button').find(node => node.text() === '新增员工')!
@@ -119,6 +121,193 @@ describe('employee attendance navigation', () => {
     expect((wrapper.get('[data-testid="employee-name"]').element as HTMLInputElement).value).toBe('重复员工')
     expect((wrapper.get('[data-testid="employee-id-card"]').element as HTMLInputElement).value).toBe('410000198812121234')
     wrapper.unmount()
+  })
+
+  it('renders exclusive mobile employee cards with masked identity, avatar and photo states', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeDirectoryPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="mobile-employee-card"]')).toHaveLength(2)
+    expect(wrapper.get('[data-testid="mobile-employee-card-emp-1"]').text()).toContain('在职')
+    expect(wrapper.get('[data-testid="mobile-employee-card-emp-1"]').text()).toContain('410****1234')
+    expect(wrapper.get('[data-testid="mobile-employee-card-emp-1"]').text()).toContain('张')
+    expect(wrapper.get('[data-testid="mobile-employee-card-emp-1"]').text()).toContain('暂无照片')
+    expect(wrapper.text()).not.toContain('410000199001011234')
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('filters mobile employee cards through a full-screen search and status drawer', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeDirectoryPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+
+    const store = useEmployeeAttendanceStore(pinia)
+    store.employees[1]!.status = 'INACTIVE'
+    await nextTick()
+    await wrapper.get('[data-testid="mobile-employee-filter"] .mobile-filter-summary').trigger('click')
+    await wrapper.get('[data-testid="mobile-employee-keyword"]').setValue('李四')
+    const status = wrapper.getComponent<any>('[data-testid="mobile-employee-status"]')
+    status.vm.$emit('update:modelValue', 'INACTIVE')
+    await nextTick()
+    await wrapper.get('[data-testid="mobile-employee-filter"]').findAll('.mobile-filter-drawer__actions button')[1]!.trigger('click')
+
+    expect(wrapper.findAll('[data-testid="mobile-employee-card"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="mobile-employee-card-emp-2"]').text()).toContain('停用/离职')
+    expect(wrapper.get('[data-testid="mobile-employee-filter"]').text()).toContain('李四')
+    expect(wrapper.get('[data-testid="mobile-employee-filter"]').text()).toContain('停用/离职')
+    wrapper.unmount()
+  })
+
+  it('uses a full-screen mobile employee editor and retains a newer draft after an older save fails', async () => {
+    attendanceLayout.mobile.value = true
+    let rejectSave!: (error: Error) => void
+    const create = vi.spyOn(attendanceApi, 'createEmployee').mockReturnValue(new Promise((_resolve, reject) => { rejectSave = reject }))
+    const wrapper = mount(EmployeeDirectoryPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="mobile-create-employee"]').trigger('click')
+    expect(wrapper.getComponent({ name: 'MobileFullscreenDialog' }).props('fullscreen')).toBe(true)
+    expect(wrapper.get('.employee-editor-dialog').classes()).toContain('mobile-fullscreen-dialog--active')
+    expect(wrapper.get('.employee-editor-dialog').attributes('style')).toContain('100dvh')
+    await wrapper.get('[data-testid="employee-number"]').setValue('YG901')
+    await wrapper.get('[data-testid="employee-name"]').setValue('第一版姓名')
+    await wrapper.get('[data-testid="employee-phone"]').setValue('13900009999')
+    await wrapper.get('[data-testid="employee-id-card"]').setValue('410000198812121234')
+    await wrapper.get('[data-testid="employee-bank-card"]').setValue('6222029999999999')
+    await wrapper.get('[data-testid="employee-address"]').setValue('保存期间地址')
+    await wrapper.get('[data-testid="employee-emergency-contact"]').setValue('联系人 13900008888')
+    await wrapper.get('[data-testid="employee-save"]').trigger('click')
+    await wrapper.get('[data-testid="employee-name"]').setValue('保存期间的新姓名')
+    await wrapper.get('[data-testid="employee-save"]').trigger('click')
+    expect(create).toHaveBeenCalledTimes(1)
+    rejectSave(new Error('旧保存失败'))
+    await flushPromises()
+
+    expect((wrapper.get('[data-testid="employee-name"]').element as HTMLInputElement).value).toBe('保存期间的新姓名')
+    expect((wrapper.get('[data-testid="employee-phone"]').element as HTMLInputElement).value).toBe('13900009999')
+    expect((wrapper.get('[data-testid="employee-id-card"]').element as HTMLInputElement).value).toBe('410000198812121234')
+    expect((wrapper.get('[data-testid="employee-bank-card"]').element as HTMLInputElement).value).toBe('6222029999999999')
+    expect((wrapper.get('[data-testid="employee-address"]').element as HTMLInputElement).value).toBe('保存期间地址')
+    expect((wrapper.get('[data-testid="employee-emergency-contact"]').element as HTMLInputElement).value).toBe('联系人 13900008888')
+    expect(wrapper.text()).not.toContain('旧保存失败')
+    wrapper.unmount()
+    create.mockRestore()
+  })
+
+  it('ignores an employee save failure after closing and reopening the editor', async () => {
+    attendanceLayout.mobile.value = true
+    let rejectSave!: (error: Error) => void
+    const create = vi.spyOn(attendanceApi, 'createEmployee').mockReturnValue(new Promise((_resolve, reject) => { rejectSave = reject }))
+    const wrapper = mount(EmployeeDirectoryPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="mobile-create-employee"]').trigger('click')
+    await wrapper.get('[data-testid="employee-number"]').setValue('YG902')
+    await wrapper.get('[data-testid="employee-name"]').setValue('旧会话')
+    await wrapper.get('[data-testid="employee-save"]').trigger('click')
+    await wrapper.getComponent({ name: 'MobileFullscreenDialog' }).vm.$emit('update:modelValue', false)
+    await wrapper.get('[data-testid="mobile-create-employee"]').trigger('click')
+    await wrapper.get('[data-testid="employee-name"]').setValue('新会话')
+    rejectSave(new Error('旧会话失败'))
+    await flushPromises()
+
+    expect((wrapper.get('[data-testid="employee-name"]').element as HTMLInputElement).value).toBe('新会话')
+    expect(wrapper.text()).not.toContain('旧会话失败')
+    wrapper.unmount()
+    create.mockRestore()
+  })
+
+  it('requires a fresh access grant on mobile and owns private photo blob URLs until close', async () => {
+    attendanceLayout.mobile.value = true
+    window.localStorage.setItem('ys_mock_access_guard_groups', JSON.stringify([{
+      id: 'attendance-group', name: '员工考勤验证', enabled: true, ttlMinutes: 5, grantVersion: 1, password: '1234',
+      recoveryPrompt: '', recoveryAnswer: '', features: ['EMPLOYEE_ATTENDANCE']
+    }]))
+    window.localStorage.setItem('ys_access_guard_group_sessions', JSON.stringify({
+      'attendance-group': { groupId: 'attendance-group', grantVersion: 1, token: 'expired', expiresAt: Date.now() - 1, features: ['EMPLOYEE_ATTENDANCE'] }
+    }))
+    const photo = new Blob(['private-photo'], { type: 'image/png' })
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn() })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
+    const readPhoto = vi.spyOn(attendanceApi, 'readEmployeePhoto').mockResolvedValue(photo)
+    const reveal = vi.spyOn(attendanceApi, 'revealEmployee')
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:employee-photo')
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeDirectoryPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    useEmployeeAttendanceStore(pinia).employees[0]!.hasPhoto = true
+    await nextTick()
+
+    await wrapper.get('[data-testid="mobile-reveal-employee-emp-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-reveal-employee-emp-1"]').trigger('click')
+    expect(reveal).not.toHaveBeenCalled()
+    expect(useAccessGuardStore(pinia).dialogVisible).toBe(true)
+    await expect(useAccessGuardStore(pinia).verifyPassword('1234')).resolves.toMatchObject({ ok: true })
+    await flushPromises()
+    expect(reveal).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('410000199001011234')
+
+    await wrapper.get('[data-testid="mobile-preview-photo-emp-1"]').trigger('click')
+    await flushPromises()
+    expect(readPhoto).toHaveBeenCalledWith('emp-1')
+    expect(createUrl).toHaveBeenCalledWith(photo)
+    expect(wrapper.get('img[alt="员工照片"]').attributes('src')).toBe('blob:employee-photo')
+    await wrapper.findAllComponents({ name: 'ElDialog' }).find((node) => node.props('title') === '员工私有照片')!.vm.$emit('closed')
+    expect(revokeUrl).toHaveBeenCalledWith('blob:employee-photo')
+
+    wrapper.unmount()
+    readPhoto.mockRestore(); reveal.mockRestore(); createUrl.mockRestore(); revokeUrl.mockRestore()
+  })
+
+  it('does not create a private photo URL when the page unmounts before the blob arrives', async () => {
+    attendanceLayout.mobile.value = true
+    let resolvePhoto!: (blob: Blob) => void
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn() })
+    const readPhoto = vi.spyOn(attendanceApi, 'readEmployeePhoto').mockReturnValue(new Promise((resolve) => { resolvePhoto = resolve }))
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:stale-photo')
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeDirectoryPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    useEmployeeAttendanceStore(pinia).employees[0]!.hasPhoto = true
+    await nextTick()
+    await wrapper.get('[data-testid="mobile-preview-photo-emp-1"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-preview-photo-emp-1"]').trigger('click')
+    expect(readPhoto).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    resolvePhoto(new Blob(['stale'], { type: 'image/png' }))
+    await flushPromises()
+
+    expect(createUrl).not.toHaveBeenCalled()
+    readPhoto.mockRestore(); createUrl.mockRestore()
+  })
+
+  it('revokes the active employee photo preview and closes mobile dialogs on layout change', async () => {
+    attendanceLayout.mobile.value = true
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:layout-photo') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
+    const readPhoto = vi.spyOn(attendanceApi, 'readEmployeePhoto').mockResolvedValue(new Blob(['layout'], { type: 'image/png' }))
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL')
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeDirectoryPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    useEmployeeAttendanceStore(pinia).employees[0]!.hasPhoto = true
+    await nextTick()
+
+    await wrapper.get('[data-testid="mobile-preview-photo-emp-1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('img[alt="员工照片"]').exists()).toBe(true)
+    attendanceLayout.mobile.value = false
+    await nextTick()
+
+    expect(revokeUrl).toHaveBeenCalledWith('blob:layout-photo')
+    expect(wrapper.find('img[alt="员工照片"]').exists()).toBe(false)
+    wrapper.unmount(); readPhoto.mockRestore(); revokeUrl.mockRestore()
   })
 
   it('loads an existing monthly rest quota and clears stale values for an employee without a setting', async () => {
@@ -904,6 +1093,146 @@ describe('employee attendance navigation', () => {
       expect(pageStore.month).not.toBe('')
       page.unmount()
     }
+  })
+
+  it('renders exclusive mobile attendance cards with actual intervals, status and exception summaries', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    useEmployeeAttendanceStore(pinia).attendance[0]!.lateMinutes = 2
+    await nextTick()
+
+    expect(wrapper.findAll('[data-testid="mobile-attendance-record-card"]')).toHaveLength(2)
+    expect(wrapper.get('[data-testid="mobile-attendance-record-card-att-emp-1"]').text()).toContain('实际时段')
+    expect(wrapper.get('[data-testid="mobile-attendance-record-card-att-emp-1"]').text()).toContain('异常')
+    expect(wrapper.get('[data-testid="mobile-attendance-record-card-att-emp-1"]').text()).toContain('迟到 2 分钟')
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('applies mutually exclusive mobile month or date-range filters with employee and status filters', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    useEmployeeAttendanceStore(pinia).attendance[0]!.lateMinutes = 2
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="mobile-attendance-month"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mobile-attendance-start-date"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="mobile-attendance-mode-range"]').trigger('click')
+    expect(wrapper.find('[data-testid="mobile-attendance-month"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mobile-attendance-start-date"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="mobile-attendance-start-date"]').setValue(dayjs().format('YYYY-MM-DD'))
+    await wrapper.get('[data-testid="mobile-attendance-end-date"]').setValue(dayjs().format('YYYY-MM-DD'))
+    await wrapper.get('[data-testid="mobile-attendance-employee"]').setValue('emp-1')
+    await wrapper.get('[data-testid="mobile-attendance-status"]').setValue('NORMAL')
+    await wrapper.get('[data-testid="mobile-attendance-apply-filter"]').trigger('click')
+    await flushPromises()
+
+    const store = useEmployeeAttendanceStore(pinia)
+    expect(store.startDate).toBe(dayjs().format('YYYY-MM-DD'))
+    expect(store.endDate).toBe(dayjs().format('YYYY-MM-DD'))
+    expect(store.employeeId).toBe('emp-1')
+    expect(wrapper.findAll('[data-testid="mobile-attendance-record-card"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="mobile-attendance-filter-summary"]').text()).toContain('日期范围')
+
+    await wrapper.get('[data-testid="mobile-attendance-mode-month"]').trigger('click')
+    expect(wrapper.find('[data-testid="mobile-attendance-start-date"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mobile-attendance-month"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('opens a full-screen mobile multi-interval editor and disables explicit absence while intervals exist', async () => {
+    attendanceLayout.mobile.value = true
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="mobile-edit-attendance-att-emp-1"]').trigger('click')
+    expect(wrapper.getComponent({ name: 'MobileFullscreenDialog' }).props('fullscreen')).toBe(true)
+    expect(wrapper.get('[data-testid="mobile-attendance-editor"]').classes()).toContain('mobile-fullscreen-dialog--active')
+    expect(wrapper.get('[data-testid="mobile-attendance-editor"]').attributes('style')).toContain('100dvh')
+    expect(wrapper.findAll('[data-testid="actual-interval"]')).toHaveLength(1)
+    expect(wrapper.getComponent<any>('[data-testid="attendance-explicit-absence"]').props('disabled')).toBe(true)
+    await wrapper.get('[data-testid="add-actual-interval"]').trigger('click')
+    expect(wrapper.findAll('[data-testid="actual-interval"]')).toHaveLength(2)
+    expect(wrapper.get('[data-testid="mobile-attendance-editor"]').classes()).toContain('mobile-attendance-editor')
+    wrapper.unmount()
+  })
+
+  it('disables edit and delete for payroll-locked mobile attendance records', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    useEmployeeAttendanceStore(pinia).attendance[0]!.lockedAt = '2026-08-31T12:00:00+08:00'
+    await nextTick()
+
+    const card = wrapper.get('[data-testid="mobile-attendance-record-card-att-emp-1"]')
+    expect(card.text()).toContain('工资已锁定')
+    expect(card.get('[data-testid="mobile-edit-attendance-att-emp-1"]').attributes('disabled')).toBeDefined()
+    expect(card.get('[data-testid="mobile-remove-attendance-att-emp-1"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('retains newer mobile attendance edits, blocks duplicate saves and ignores the older failure', async () => {
+    attendanceLayout.mobile.value = true
+    let rejectSave!: (error: Error) => void
+    const save = vi.spyOn(attendanceApi, 'saveAttendance').mockReturnValue(new Promise((_resolve, reject) => { rejectSave = reject }))
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="mobile-edit-attendance-att-emp-1"]').trigger('click')
+    await wrapper.get('[data-testid="attendance-remark"]').setValue('提交版本')
+    await wrapper.get('[data-testid="attendance-save"]').trigger('click')
+    await wrapper.get('[data-testid="attendance-remark"]').setValue('保存期间的新备注')
+    await wrapper.get('[data-testid="attendance-save"]').trigger('click')
+    expect(save).toHaveBeenCalledTimes(1)
+    rejectSave(new Error('旧考勤保存失败'))
+    await flushPromises()
+
+    expect((wrapper.get('[data-testid="attendance-remark"]').element as HTMLInputElement).value).toBe('保存期间的新备注')
+    expect(wrapper.text()).not.toContain('旧考勤保存失败')
+    wrapper.unmount()
+    save.mockRestore()
+  })
+
+  it('confirms a mobile attendance removal before deleting it', async () => {
+    attendanceLayout.mobile.value = true
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const remove = vi.spyOn(attendanceApi, 'deleteAttendance')
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-remove-attendance-att-emp-1"]').trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledWith('删除后无法恢复，是否继续？', '确认删除考勤记录', { type: 'warning' })
+    expect(remove).toHaveBeenCalledWith('att-emp-1')
+    wrapper.unmount()
+    confirm.mockRestore(); remove.mockRestore()
+  })
+
+  it('does not reload or surface state after an attendance save settles post-unmount', async () => {
+    attendanceLayout.mobile.value = true
+    let resolveSave!: (record: Awaited<ReturnType<typeof attendanceApi.saveAttendance>>) => void
+    const existing = (await mockGetAttendance({ employeeId: 'emp-1' }))[0]!
+    const save = vi.spyOn(attendanceApi, 'saveAttendance').mockReturnValue(new Promise((resolve) => { resolveSave = resolve }))
+    const load = vi.spyOn(attendanceApi, 'getAttendance')
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeAttendanceRecordsPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    const loadCount = load.mock.calls.length
+
+    await wrapper.get('[data-testid="mobile-edit-attendance-att-emp-1"]').trigger('click')
+    await wrapper.get('[data-testid="attendance-save"]').trigger('click')
+    wrapper.unmount()
+    resolveSave(existing)
+    await flushPromises()
+
+    expect(load).toHaveBeenCalledTimes(loadCount)
+    expect(useEmployeeAttendanceStore(pinia).error).toBe('')
+    save.mockRestore(); load.mockRestore()
   })
 
   it('keeps every actual attendance segment when saving an unchanged legacy edit form', async () => {
