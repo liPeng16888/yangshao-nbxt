@@ -514,13 +514,53 @@ describe('finance bills store', () => {
     const newerLoad = store.loadPrepaidReport({ scope: customerScope })
     expect(addSignal?.aborted).toBe(false)
     expect(customerSignal?.aborted).toBe(false)
+    expect(store.prepaidReportLoading).toBe(true)
 
     customerPage.resolve({ customerRows: [{ id: 'latest', customer: '最新客户', totalAmount: 1, totalUsableTimes: 1, usedTimes: 0, availableTimes: 1 }], dailyRows: [] })
     await expect(newerLoad).resolves.toBe(true)
-    addPage.resolve({ customerRows: [{ id: 'older', customer: '旧客户', totalAmount: 1, totalUsableTimes: 1, usedTimes: 0, availableTimes: 1 }], dailyRows: [] })
+    expect(store.prepaidReport?.customerRows[0].id).toBe('latest')
+    expect(store.prepaidReportLoading).toBe(false)
+
+    addPage.reject(new Error('stale add-page report failed'))
     await expect(olderLoad).resolves.toBe(false)
 
     expect(store.prepaidReport?.customerRows[0].id).toBe('latest')
+    expect(store.prepaidReportLoading).toBe(false)
+  })
+
+  it('clears latest report loading when its owner aborts while an older scope remains pending', async () => {
+    const olderPage = deferred<any>()
+    const latestPage = deferred<any>()
+    let olderSignal: AbortSignal | undefined
+    let latestSignal: AbortSignal | undefined
+    apiMocks.getPrepaidReport
+      .mockImplementationOnce((options) => {
+        olderSignal = options?.signal
+        return olderPage.promise
+      })
+      .mockImplementationOnce((options) => {
+        latestSignal = options?.signal
+        return latestPage.promise
+      })
+    const store = useFinanceBillsStore()
+    const olderScope = Symbol('older-report-page')
+    const latestScope = Symbol('latest-report-page')
+
+    const olderLoad = store.loadPrepaidReport({ scope: olderScope })
+    const latestLoad = store.loadPrepaidReport({ scope: latestScope })
+    store.cancelPrepaidReportLoads(latestScope)
+
+    expect(olderSignal?.aborted).toBe(false)
+    expect(latestSignal?.aborted).toBe(true)
+    expect(store.prepaidReportLoading).toBe(false)
+
+    latestPage.reject(new Error('owned latest abort'))
+    await expect(latestLoad).resolves.toBe(false)
+    olderPage.resolve({ customerRows: [{ id: 'older', customer: '旧客户', totalAmount: 1, totalUsableTimes: 1, usedTimes: 0, availableTimes: 1 }], dailyRows: [] })
+    await expect(olderLoad).resolves.toBe(false)
+
+    expect(store.prepaidReport).toBeNull()
+    expect(store.prepaidReportLoading).toBe(false)
   })
 
   it('absorbs an older recharge load rejection after a successful deletion request mutation', async () => {

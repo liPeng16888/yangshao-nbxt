@@ -13,6 +13,7 @@ DONE
 - Added mobile customer balance cards showing cumulative amount, total usable, used, and remaining times. Each customer opens a nested full-screen panel containing only that customer's daily usage cards.
 - Added customer and usage remark drafts that save on blur through existing Store mutations. Per-row pending/confirmed/failed result-token reconciliation preserves dirty, post-submit, and exact rejected drafts, accepts clean authoritative changes, ignores unrelated balance-total refreshes, and drops removed/re-added row state. Page-level per-row latches prevent duplicate saves.
 - Added latest-only, scoped AbortController loading for prepaid recharge and report GETs, observable current failures, retry paths, silent stale/owned aborts, and page-unmount cancellation. Report scopes do not cancel one another, only the globally latest response may commit, and both successful and failed stale loads are invalidated by prepaid mutations.
+- Made report loading visibility latest-owner-only through a dedicated `prepaidReportLoading` state. An older outstanding scope can no longer keep the current customer page loading after the latest report commits, and cancelling the latest scope clears visible loading even while an older request remains pending; that older request still cannot commit or surface an error later.
 - Separated the authoritative recharge POST result from its follow-up report GET. A successful POST inserts the recharge, announces success once, clears only an unchanged draft, and starts a refresh-only request; a failed refresh exposes a dedicated stale-report error and can retry only GET without ever repeating POST.
 - Added one shared strict recharge validator used by mobile submission and desktop Element Plus rules: real `YYYY-MM-DD` calendar dates, finite positive amounts with at most two decimal places and safe cents, and positive safe-integer usable times. Payload construction no longer rounds or truncates unsupported input.
 - Preserved the existing API endpoints, Store ownership of create/delete/report/remark mutations, calculation and rounding boundaries, desktop controls, auth boundaries, and canonical prepaid bottom-nav route. Internal actions navigate both ways between `/finance/prepaid/add` and `/finance/prepaid/customers`; existing navigation tests confirm the latter remains active under the former.
@@ -36,21 +37,25 @@ DONE
    - Remark completion: customer/usage tests first failed because the presentation component emitted no result callback; exact rejected drafts then failed again after a matching and later authoritative refresh until an explicit failed snapshot was retained.
    - Strict validation: helper tests first failed because the shared validator did not exist; page tests showed `1.234`, `0.001`, and an unsafe integer reaching confirmation.
    - Stale mutation failure: the deletion race test failed because an older recharge GET rejection was still thrown after the successful mutation.
+5. Independent-review fix round 2:
+   - Command: `pnpm exec vitest run src/stores/financeBills.test.ts -t "report requests independently|latest report loading" --reporter=dot`
+   - RED result: both deferred multi-scope tests failed because `prepaidReportLoading` did not exist and report visibility was coupled to all entries in the active-scope map.
+   - GREEN coverage: B commits and clears loading while A remains pending, A's later rejection is silent, and cancelling latest B clears loading while pending A remains unable to commit. A real Store/customer-page integration test additionally confirms the latest card is immediately visible with no error UI or toast after stale A rejects.
 
 ### GREEN
 
 - Focused Task 17 page/Store/API/validation suite after independent-review fixes:
   - Command: `pnpm exec vitest run src/views/dashboard/FinancePrepaidPages.mobile.test.ts src/views/dashboard/FinancePrepaidAddPage.store.test.ts src/utils/prepaidRecharge.test.ts src/stores/financeBills.test.ts src/api/financeBills.test.ts --reporter=dot`
-  - Result: 5 files passed, 65 tests passed.
+  - Result: 5 files passed, 67 tests passed.
 - Finance phase suite plus Store/API:
   - Command: `pnpm exec vitest run src/views/dashboard/FinancePage.mobile.test.ts src/views/dashboard/FinanceIncomePage.mobile.test.ts src/views/dashboard/FinanceUnsettledPage.test.ts src/views/dashboard/FinanceUnsettledPage.store.test.ts src/views/dashboard/FinanceMonthlySettlementPage.test.ts src/views/dashboard/FinanceMonthlySettlementPage.mobile.test.ts src/views/dashboard/FinancePrepaidPages.mobile.test.ts src/views/dashboard/FinancePrepaidAddPage.store.test.ts src/utils/prepaidRecharge.test.ts src/stores/financeBills.test.ts src/api/financeBills.test.ts src/api/financeBills.mock.test.ts --reporter=dot`
-  - Result: 12 files passed, 121 tests passed.
+  - Result: 12 files passed, 123 tests passed.
 - Default full suite:
   - Command: `pnpm test -- --reporter=dot`
-  - Result: 122 files passed and 1 unrelated file failed; 1308 tests passed and 1 failed. `MedicineInventoryPages.test.ts` hard-codes `2026-08-15`, while `todayInBeijing()` correctly returned `2026-08-16`. Task 17 changes no medicine file.
+  - Result: 122 files passed and 1 unrelated file failed; 1310 tests passed and 1 failed. `MedicineInventoryPages.test.ts` hard-codes `2026-08-15`, while `todayInBeijing()` correctly returned `2026-08-16`. Task 17 changes no medicine file.
 - Controlled-clock full suite at the original acceptance date:
   - Command: `pnpm exec vitest run --config /private/tmp/task16-vitest.config.ts --reporter=dot`
-  - Result: 123 files passed, 1309 tests passed. The temporary configuration is outside the repository and no verification artifact is included in this diff.
+  - Result: 123 files passed, 1311 tests passed. The temporary configuration is outside the repository and no verification artifact is included in this diff.
 - Canonical prepaid navigation regression:
   - Command: `pnpm exec vitest run src/config/customerNavigation.test.ts src/components/layout/AppMobileShell.test.ts --reporter=dot`
   - Result: 2 files passed, 9 tests passed.

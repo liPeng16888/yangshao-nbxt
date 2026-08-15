@@ -4,10 +4,10 @@
       <section class="panel mobile-prepaid-customers">
         <header class="mobile-prepaid-header">
           <div><h2>预存款客户</h2><p class="muted">查看累计充值、使用次数和剩余次数。</p></div>
-          <div class="mobile-prepaid-header__actions"><button data-testid="mobile-prepaid-add-link" class="mobile-touch-target" type="button" @click="router.push('/finance/prepaid/add')">添加预存款</button><button data-testid="mobile-prepaid-report-refresh" class="mobile-touch-target" type="button" :disabled="store.loading" @click="requestPrepaidReport">{{ store.loading ? '刷新中…' : '刷新' }}</button></div>
+          <div class="mobile-prepaid-header__actions"><button data-testid="mobile-prepaid-add-link" class="mobile-touch-target" type="button" @click="router.push('/finance/prepaid/add')">添加预存款</button><button data-testid="mobile-prepaid-report-refresh" class="mobile-touch-target" type="button" :disabled="store.prepaidReportLoading" @click="requestPrepaidReport">{{ store.prepaidReportLoading ? '刷新中…' : '刷新' }}</button></div>
         </header>
         <div v-if="loadError" data-testid="mobile-prepaid-report-error" class="mobile-prepaid-error" role="alert"><span>{{ loadError }}</span><button data-testid="mobile-prepaid-report-retry" class="mobile-touch-target" type="button" @click="retryPrepaidReport">重试</button></div>
-        <MobilePrepaidList v-else kind="customer" :rows="report?.customerRows || []" :loading="store.loading" :saving-id="store.prepaidRemarkSavingId" :saving-ids="remarkSavingIds" @remark-commit="handleCustomerRemarkCommit" @open-usage="openUsage" />
+        <MobilePrepaidList v-else kind="customer" :rows="report?.customerRows || []" :loading="store.prepaidReportLoading" :saving-id="store.prepaidRemarkSavingId" :saving-ids="remarkSavingIds" @remark-commit="handleCustomerRemarkCommit" @open-usage="openUsage" />
       </section>
 
       <MobileFullscreenDialog v-model="usageVisible" :title="`${selectedCustomer || '客户'}使用明细`" fullscreen>
@@ -24,9 +24,9 @@
       <section class="panel">
         <div class="panel__header">
           <div><h2>预存款客户</h2><p class="muted">汇总同一客户的累计充值金额、总可用次数和样品消耗后的剩余次数。</p></div>
-          <div class="panel-actions"><el-button @click="router.push('/finance/prepaid/add')">添加预存款客户</el-button><el-button :loading="store.loading" @click="requestPrepaidReport">刷新</el-button></div>
+          <div class="panel-actions"><el-button @click="router.push('/finance/prepaid/add')">添加预存款客户</el-button><el-button :loading="store.prepaidReportLoading" @click="requestPrepaidReport">刷新</el-button></div>
         </div>
-        <el-table :data="report?.customerRows || []" border v-loading="store.loading" empty-text="暂无预存款客户">
+        <el-table :data="report?.customerRows || []" border v-loading="store.prepaidReportLoading" empty-text="暂无预存款客户">
           <el-table-column prop="customer" label="客户名称" min-width="180" />
           <el-table-column label="累计充值金额" width="150"><template #default="{ row }">¥{{ money(row.totalAmount) }}</template></el-table-column>
           <el-table-column prop="availableTimes" label="可使用次数" width="120" /><el-table-column prop="usedTimes" label="已使用次数" width="120" />
@@ -35,7 +35,7 @@
       </section>
       <section class="panel">
         <div class="panel__header"><div><h2>预存款客户每日明细</h2><p class="muted">数据计算中费用状态选择为“预存款”的样品，会按日期和客户自动汇总到这里。</p></div></div>
-        <el-table :data="report?.dailyRows || []" border v-loading="store.loading" empty-text="暂无预存款样品消耗">
+        <el-table :data="report?.dailyRows || []" border v-loading="store.prepaidReportLoading" empty-text="暂无预存款样品消耗">
           <el-table-column prop="date" label="日期" width="130" /><el-table-column prop="customer" label="客户名称" min-width="180" /><el-table-column prop="sampleCount" label="样品数量" width="120" />
           <el-table-column label="备注" min-width="280"><template #default="{ row }"><el-input v-model="row.remark" size="small" placeholder="可填写备注" :disabled="store.prepaidRemarkSavingId === row.id" @blur="() => handleUsageRemarkBlur(row.id, row.remark || '')" /></template></el-table-column>
         </el-table>

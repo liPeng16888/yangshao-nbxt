@@ -101,6 +101,7 @@ describe('Finance prepaid mobile pages', () => {
       prepaidRecharges: recharges.map((row) => ({ ...row })),
       prepaidReport: { customerRows: customerRows.map((row) => ({ ...row })), dailyRows: usageRows.map((row) => ({ ...row })) },
       loading: false,
+      prepaidReportLoading: false,
       prepaidSaving: false,
       prepaidRemarkSavingId: '',
       prepaidDeletingId: '',

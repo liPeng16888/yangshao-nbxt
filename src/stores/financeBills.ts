@@ -36,6 +36,10 @@ interface ActiveLoad {
   scope: symbol
 }
 
+interface VersionedActiveLoad extends ActiveLoad {
+  requestVersion: number
+}
+
 export const useFinanceBillsStore = defineStore('financeBills', () => {
   const month = ref(currentMonth())
   const monthlySettlementMonth = ref(currentMonth())
@@ -45,6 +49,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   const prepaidRecharges = ref<PrepaidRechargeRow[]>([])
   const prepaidReport = ref<PrepaidReport | null>(null)
   const loading = ref(false)
+  const prepaidReportLoading = ref(false)
   const settlingId = ref('')
   const settlingBatch = ref(false)
   const isSettling = computed(() => Boolean(settlingId.value) || settlingBatch.value)
@@ -63,7 +68,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   let activeUnsettledLoad: ActiveLoad | null = null
   let activeMonthlySettlementLoad: ActiveLoad | null = null
   let activePrepaidRechargeLoad: ActiveLoad | null = null
-  const activePrepaidReportLoads = new Map<symbol, ActiveLoad>()
+  const activePrepaidReportLoads = new Map<symbol, VersionedActiveLoad>()
 
   async function loadIncomeReport(nextMonth = month.value, options: ScopedLoadOptions = {}) {
     activeIncomeLoad?.controller.abort()
@@ -301,12 +306,13 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     activePrepaidReportLoads.get(scope)?.controller.abort()
     const requestVersion = ++prepaidReportLoadVersion
     const mutationAtStart = prepaidMutationVersion
-    const activeLoad: ActiveLoad = {
+    const activeLoad: VersionedActiveLoad = {
       controller: new AbortController(),
-      scope
+      scope,
+      requestVersion
     }
     activePrepaidReportLoads.set(scope, activeLoad)
-    loading.value = true
+    prepaidReportLoading.value = true
     try {
       const report = await getPrepaidReport({ signal: activeLoad.controller.signal })
       if (
@@ -326,8 +332,8 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     } finally {
       if (activePrepaidReportLoads.get(scope) === activeLoad) {
         activePrepaidReportLoads.delete(scope)
-        if (!activePrepaidReportLoads.size) loading.value = false
       }
+      if (requestVersion === prepaidReportLoadVersion) prepaidReportLoading.value = false
     }
   }
 
@@ -340,12 +346,13 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
       const activeLoad = activePrepaidReportLoads.get(scope)
       activeLoad?.controller.abort()
       activePrepaidReportLoads.delete(scope)
+      if (activeLoad?.requestVersion === prepaidReportLoadVersion) prepaidReportLoading.value = false
     } else {
       activePrepaidReportLoads.forEach((activeLoad) => activeLoad.controller.abort())
       activePrepaidReportLoads.clear()
       prepaidReportLoadVersion += 1
+      prepaidReportLoading.value = false
     }
-    if (!activePrepaidReportLoads.size) loading.value = false
   }
 
   async function savePrepaidCustomerRemark(customer: string, remark: string) {
@@ -381,6 +388,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     prepaidRecharges,
     prepaidReport,
     loading,
+    prepaidReportLoading,
     settlingId,
     settlingBatch,
     isSettling,

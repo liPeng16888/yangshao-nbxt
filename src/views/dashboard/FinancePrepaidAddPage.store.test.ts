@@ -4,7 +4,9 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import { defineComponent, ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useFinanceBillsStore } from '@/stores/financeBills'
 import FinancePrepaidAddPage from './FinancePrepaidAddPage.vue'
+import FinancePrepaidCustomersPage from './FinancePrepaidCustomersPage.vue'
 
 const apiMocks = vi.hoisted(() => ({
   createPrepaidRecharge: vi.fn(),
@@ -52,6 +54,15 @@ function mountPage() {
   })
 }
 
+function mountCustomersPage(pinia: ReturnType<typeof createPinia>) {
+  return mount(FinancePrepaidCustomersPage, {
+    global: {
+      plugins: [pinia, ElementPlus],
+      stubs: { MobileFullscreenDialog: DialogStub, teleport: true }
+    }
+  })
+}
+
 async function fill(wrapper: ReturnType<typeof mountPage>, remark = '初始草稿') {
   await wrapper.get('[data-testid="mobile-prepaid-date"]').setValue('2026-08-16')
   await wrapper.get('[data-testid="mobile-prepaid-customer-value"]').setValue('客户甲')
@@ -70,6 +81,36 @@ describe('FinancePrepaidAddPage real Store lifecycle', () => {
     })
     vi.spyOn(ElMessageBox, 'confirm').mockReset().mockResolvedValue('confirm' as never)
     vi.spyOn(ElMessage, 'success').mockReset()
+  })
+
+  it('shows the latest customer report immediately while an older scope remains pending and later rejects', async () => {
+    const olderPage = deferred<any>()
+    const latestPage = deferred<any>()
+    apiMocks.getPrepaidReport.mockReturnValueOnce(olderPage.promise).mockReturnValueOnce(latestPage.promise)
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useFinanceBillsStore()
+    const olderLoad = store.loadPrepaidReport({ scope: Symbol('older-report-owner') })
+    const wrapper = mountCustomersPage(pinia)
+
+    latestPage.resolve({
+      customerRows: [{ id: 'latest-customer', customer: '最新客户', totalAmount: 20, totalUsableTimes: 2, usedTimes: 0, availableTimes: 2 }],
+      dailyRows: []
+    })
+    await flushPromises()
+
+    expect(store.prepaidReportLoading).toBe(false)
+    expect(wrapper.get('[data-testid="mobile-prepaid-customer-card"]').text()).toContain('最新客户')
+    expect(wrapper.get('[data-testid="mobile-prepaid-report-refresh"]').text()).toBe('刷新')
+    expect(wrapper.find('[data-testid="mobile-prepaid-report-error"]').exists()).toBe(false)
+
+    olderPage.reject(new Error('stale report failed'))
+    await expect(olderLoad).resolves.toBe(false)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="mobile-prepaid-customer-card"]').text()).toContain('最新客户')
+    expect(wrapper.find('[data-testid="mobile-prepaid-report-error"]').exists()).toBe(false)
+    expect(ElMessage.success).not.toHaveBeenCalled()
   })
 
   it('treats a successful POST as final and retries only the failed report refresh', async () => {
