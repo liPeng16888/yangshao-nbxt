@@ -27,6 +27,7 @@ let touchGesture: { pointerId: number; x: number; y: number; cancelled: boolean 
 type ChartData = {
   count: () => number
   getItemLayout: (index: number) => unknown
+  getItemGraphicEl?: (index: number) => { contain?: (x: number, y: number) => boolean } | undefined
 }
 
 type ChartSeries = {
@@ -41,7 +42,7 @@ type ChartModel = {
 }
 
 type LayoutRect = { x: number; y: number; width?: number; height?: number }
-type LayoutPie = { cx: number; cy: number; r: number; r0?: number; startAngle: number; endAngle: number }
+type LayoutPie = { cx: number; cy: number; r: number; r0?: number; startAngle: number; endAngle: number; clockwise: boolean }
 
 function renderChart() {
   if (!chartRef.value) return
@@ -111,8 +112,9 @@ function findNearestDataItem(x: number, y: number): { seriesIndex: number; dataI
     const seriesIndex = series.seriesIndex ?? listIndex
     for (let dataIndex = 0; dataIndex < data.count(); dataIndex += 1) {
       const layout = data.getItemLayout(dataIndex)
-      const distance = series.subType === 'pie'
-        ? pieDistance(x, y, layout, series)
+      const graphic = data.getItemGraphicEl?.(dataIndex)
+      const distance = graphic?.contain?.(x, y) === true ? 0 : series.subType === 'pie'
+        ? pieDistance(x, y, layout)
         : cartesianDistance(x, y, layout)
       if (distance === null || (nearest && distance >= nearest.distance)) continue
       nearest = { seriesIndex, dataIndex, distance }
@@ -130,15 +132,17 @@ function cartesianDistance(x: number, y: number, layout: unknown) {
   }
 
   if (!isLayoutRect(layout)) return null
-  const width = Math.max(0, layout.width || 0)
-  const height = Math.max(0, layout.height || 0)
-  const nearestX = clamp(x, layout.x, layout.x + width)
-  const nearestY = clamp(y, layout.y, layout.y + height)
+  const x1 = Math.min(layout.x, layout.x + (layout.width || 0))
+  const x2 = Math.max(layout.x, layout.x + (layout.width || 0))
+  const y1 = Math.min(layout.y, layout.y + (layout.height || 0))
+  const y2 = Math.max(layout.y, layout.y + (layout.height || 0))
+  const nearestX = clamp(x, x1, x2)
+  const nearestY = clamp(y, y1, y2)
   const distance = Math.hypot(x - nearestX, y - nearestY)
   return distance <= 48 ? distance : null
 }
 
-function pieDistance(x: number, y: number, layout: unknown, series: ChartSeries) {
+function pieDistance(x: number, y: number, layout: unknown) {
   if (!isLayoutPie(layout)) return null
   const radius = Math.hypot(x - layout.cx, y - layout.cy)
   const innerRadius = Math.max(0, layout.r0 || 0)
@@ -146,8 +150,7 @@ function pieDistance(x: number, y: number, layout: unknown, series: ChartSeries)
   if (radialDistance > 24) return null
 
   const angle = normalizeAngle(Math.atan2(y - layout.cy, x - layout.cx))
-  const clockwise = typeof series.get?.('clockwise') === 'boolean' ? Boolean(series.get?.('clockwise')) : false
-  const angularDistance = distanceToArc(angle, layout.startAngle, layout.endAngle, clockwise)
+  const angularDistance = distanceToArc(angle, layout.startAngle, layout.endAngle, layout.clockwise)
   return radialDistance + angularDistance * Math.max(radius, innerRadius, 1)
 }
 
@@ -155,11 +158,11 @@ function distanceToArc(angle: number, start: number, end: number, clockwise: boo
   const normalizedStart = normalizeAngle(start)
   const normalizedEnd = normalizeAngle(end)
   const span = clockwise
-    ? normalizeAngle(normalizedStart - normalizedEnd)
-    : normalizeAngle(normalizedEnd - normalizedStart)
+    ? normalizeAngle(end - start)
+    : normalizeAngle(start - end)
   const progress = clockwise
-    ? normalizeAngle(normalizedStart - angle)
-    : normalizeAngle(angle - normalizedStart)
+    ? normalizeAngle(angle - normalizedStart)
+    : normalizeAngle(normalizedStart - angle)
   if (progress <= span) return 0
   return Math.min(angleDistance(angle, normalizedStart), angleDistance(angle, normalizedEnd))
 }
@@ -194,6 +197,7 @@ function isLayoutPie(layout: unknown): layout is LayoutPie {
     && isFiniteNumber((layout as LayoutPie).r)
     && isFiniteNumber((layout as LayoutPie).startAngle)
     && isFiniteNumber((layout as LayoutPie).endAngle)
+    && typeof (layout as LayoutPie).clockwise === 'boolean'
 }
 
 onMounted(() => {

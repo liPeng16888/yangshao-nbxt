@@ -154,10 +154,6 @@ function getRowStatusSummary(row: SampleDetectionDailyRow, status: IncomePayment
   gap: 12px;
 }
 
-.status-grid--mobile {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 .report-table-scroll--mobile {
   width: 100%;
   overflow-x: auto;
@@ -210,6 +206,10 @@ function getRowStatusSummary(row: SampleDetectionDailyRow, status: IncomePayment
   .status-grid {
     grid-template-columns: repeat(3, minmax(150px, 1fr));
   }
+}
+
+.status-grid.status-grid--mobile {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 @media (max-width: 760px) {
