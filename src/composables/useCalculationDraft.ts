@@ -374,11 +374,23 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
   function readLegacySnapshot() {
     const raw = safeStorageGet(adapter.legacyStorageKey)
     if (raw === null) return { state: 'absent' as const }
+    let parsed: unknown
     try {
-      const parsed = JSON.parse(raw)
+      parsed = JSON.parse(raw)
+    } catch {
+      return { state: 'absent' as const }
+    }
+    if (!adapter.migrateLegacy) {
+      try {
+        return { state: 'valid' as const, snapshot: normalizedSnapshot(parsed) }
+      } catch {
+        return { state: 'absent' as const }
+      }
+    }
+    try {
       return {
         state: 'valid' as const,
-        snapshot: normalizedSnapshot(adapter.migrateLegacy ? adapter.migrateLegacy(cloneDraftValue(parsed)) : parsed)
+        snapshot: normalizedSnapshot(adapter.migrateLegacy(cloneDraftValue(parsed)))
       }
     } catch {
       return { state: 'invalid' as const }

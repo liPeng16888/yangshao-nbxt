@@ -236,6 +236,64 @@ describe('useCalculationDraft', () => {
     expect(draft.status.value).toBe('idle')
   })
 
+  it.each([
+    ['malformed JSON', (storage: Storage) => storage.setItem('legacy-draft', '{broken-json')],
+    ['a parsed payload rejected by the ordinary adapter', (storage: Storage) => storage.setItem('legacy-draft', JSON.stringify({ value: 'invalid' }))],
+    ['a storage read exception', (storage: Storage) => {
+      vi.mocked(storage.getItem).mockImplementation((key) => {
+        if (key === 'legacy-draft') throw new Error('blocked legacy read')
+        return null
+      })
+    }]
+  ])('treats %s as absent without a migrator and still saves a later edit', async (_case, arrangeLegacy) => {
+    const storage = memoryStorage()
+    arrangeLegacy(storage)
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    const laterEdit = { value: 8, details: { label: 'later edit' } }
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 0))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(laterEdit, 1))
+    const { draft, apply, edit } = trackedSetup(legacyPayload)
+
+    await draft.load()
+
+    expect(apply).toHaveBeenCalledWith(defaults)
+    expect(draft.status.value).toBe('idle')
+    edit(laterEdit)
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 0,
+      payload: laterEdit
+    })
+    expect(draft.status.value).toBe('saved')
+    expect(storage.removeItem).not.toHaveBeenCalledWith('legacy-draft')
+  })
+
+  it('treats malformed JSON as absent before invoking an explicit migrator', async () => {
+    localStorage.setItem('legacy-draft', '{broken-json')
+    const laterEdit = { value: 9, details: { label: 'edit after unreadable bytes' } }
+    const migrateLegacy = vi.fn(() => legacyPayload)
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 0))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(laterEdit, 1))
+    const result = setup(legacyPayload, { migrateLegacy })
+    scopes.push(result.scope)
+
+    await result.draft.load()
+
+    expect(result.apply).toHaveBeenCalledWith(defaults)
+    expect(result.draft.status.value).toBe('idle')
+    expect(migrateLegacy).not.toHaveBeenCalled()
+    result.edit(laterEdit)
+    result.draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 0,
+      payload: laterEdit
+    })
+    expect(result.draft.status.value).toBe('saved')
+    expect(localStorage.getItem('legacy-draft')).toBe('{broken-json')
+  })
+
   it('does not turn a successful legacy import into failure when removal throws or reimport later', async () => {
     const storage = memoryStorage()
     storage.setItem('legacy-draft', JSON.stringify(legacyPayload))
