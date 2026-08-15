@@ -42,9 +42,23 @@
       </header>
 
       <div v-if="isBlockExpanded(block.id)" class="mobile-sample-card__body">
-        <section class="mobile-form-section mobile-form-section--identity">
-          <h3>样品信息</h3>
-          <div class="mobile-field-grid mobile-field-grid--identity">
+        <section
+          class="mobile-form-section mobile-form-section--identity mobile-collapsible-section"
+          :class="{ 'mobile-collapsible-section--expanded': isGroupExpanded(block.id, 'identity') }"
+          data-mobile-group="identity"
+        >
+          <button
+            class="mobile-group-toggle"
+            type="button"
+            :aria-expanded="isGroupExpanded(block.id, 'identity')"
+            @click="toggleGroup(block.id, 'identity')"
+          >
+            <strong>样品信息</strong>
+            <small>{{ isGroupExpanded(block.id, 'identity') ? '收起' : '展开' }}</small>
+            <span aria-hidden="true">{{ isGroupExpanded(block.id, 'identity') ? '⌃' : '⌄' }}</span>
+          </button>
+          <div v-if="isGroupExpanded(block.id, 'identity')" class="mobile-collapsible-section__content">
+            <div class="mobile-field-grid mobile-field-grid--identity">
             <label class="mobile-field">
               <span>编号</span>
               <input
@@ -157,6 +171,7 @@
                 @blur="commitText(block, 'note', $event)"
               />
             </label>
+            </div>
           </div>
         </section>
 
@@ -176,8 +191,11 @@
           <section
             v-for="group in mobileFieldGroups"
             :key="group.key"
-            class="mobile-form-section mobile-calculation-group"
-            :class="{ 'mobile-calculation-group--expanded': isGroupExpanded(block.id, group.key) }"
+            class="mobile-form-section mobile-collapsible-section mobile-calculation-group"
+            :class="{
+              'mobile-collapsible-section--expanded': isGroupExpanded(block.id, group.key),
+              'mobile-calculation-group--expanded': isGroupExpanded(block.id, group.key)
+            }"
             :data-mobile-group="group.key"
           >
             <button
@@ -190,7 +208,7 @@
               <small>{{ isGroupExpanded(block.id, group.key) ? '收起' : '展开' }}</small>
               <span aria-hidden="true">{{ isGroupExpanded(block.id, group.key) ? '⌃' : '⌄' }}</span>
             </button>
-            <div v-if="isGroupExpanded(block.id, group.key)" class="mobile-calculation-group__content">
+            <div v-if="isGroupExpanded(block.id, group.key)" class="mobile-collapsible-section__content">
               <div class="mobile-field-grid">
                 <label v-for="field in group.fields" :key="field.key" class="mobile-field">
                   <span>{{ field.label }}</span>
@@ -658,15 +676,19 @@ async function scrollToBlock(blockId: string) {
   background: #ffffff;
 }
 
-.mobile-calculation-group {
+.mobile-collapsible-section {
   gap: 0;
   padding: 0;
   overflow: hidden;
 }
 
-.mobile-calculation-group--expanded {
+.mobile-collapsible-section--expanded {
   background: #f6f9fc;
   border-color: #cbd9e7;
+}
+
+.mobile-form-section--identity.mobile-collapsible-section--expanded {
+  background: #ffffff;
 }
 
 .mobile-group-toggle {
@@ -702,7 +724,7 @@ async function scrollToBlock(blockId: string) {
   }
 }
 
-.mobile-calculation-group__content {
+.mobile-collapsible-section__content {
   display: grid;
   gap: 8px;
   padding: 0 10px 10px;

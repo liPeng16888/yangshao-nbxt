@@ -53,12 +53,13 @@ function mountList(overrides: Record<string, unknown> = {}) {
 }
 
 describe('MobileLabSampleList', () => {
-  it('opens one sample with all five calculation groups collapsed by default', async () => {
+  it('opens one sample with sample information and all five calculation groups collapsed by default', async () => {
     const wrapper = mountList()
 
     expect(wrapper.findAll('.mobile-sample-card--expanded')).toHaveLength(1)
     expect(wrapper.get('.mobile-sample-card--expanded').attributes('data-block-id')).toBe('block-1')
     expect(wrapper.findAll('.mobile-group-toggle').map((toggle) => toggle.text())).toEqual([
+      expect.stringContaining('样品信息'),
       expect.stringContaining('金属元素'),
       expect.stringContaining('比重 / 白度'),
       expect.stringContaining('其他元素'),
@@ -67,8 +68,12 @@ describe('MobileLabSampleList', () => {
     ])
     expect(wrapper.findAll('.mobile-group-toggle').every((toggle) => toggle.attributes('aria-expanded') === 'false')).toBe(true)
     expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(0)
+    expect(wrapper.find('[data-mobile-field="sequence"]').exists()).toBe(false)
     expect(wrapper.find('[data-mobile-field="ironRaw"]').exists()).toBe(false)
     expect(wrapper.find('[data-mobile-field="burnedCrucibleSample"]').exists()).toBe(false)
+
+    await getGroupToggle(wrapper, '样品信息').trigger('click')
+    expect(wrapper.find('[data-mobile-field="sequence"]').exists()).toBe(true)
 
     await getGroupToggle(wrapper, '金属元素').trigger('click')
 
@@ -96,14 +101,17 @@ describe('MobileLabSampleList', () => {
   it('toggles calculation groups independently and resets them after reopening the sample', async () => {
     const wrapper = mountList()
 
+    await getGroupToggle(wrapper, '样品信息').trigger('click')
     await getGroupToggle(wrapper, '金属元素').trigger('click')
     await getGroupToggle(wrapper, '比重 / 白度').trigger('click')
+    expect(wrapper.findAll('.mobile-collapsible-section--expanded')).toHaveLength(3)
     expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(2)
 
     await wrapper.findAll('.mobile-sample-card__toggle')[0].trigger('click')
     await wrapper.findAll('.mobile-sample-card__toggle')[0].trigger('click')
 
     expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(0)
+    expect(wrapper.findAll('.mobile-collapsible-section--expanded')).toHaveLength(0)
     expect(wrapper.findAll('.mobile-group-toggle').every((toggle) => toggle.attributes('aria-expanded') === 'false')).toBe(true)
   })
 
@@ -127,11 +135,12 @@ describe('MobileLabSampleList', () => {
     expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(0)
   })
 
-  it('opens and highlights a route-targeted sample and keeps readonly history disabled', () => {
+  it('opens and highlights a route-targeted sample and keeps readonly history disabled', async () => {
     const wrapper = mountList({ highlightBlockId: 'block-2', readonly: true })
 
     expect(wrapper.get('.mobile-sample-card--expanded').attributes('data-block-id')).toBe('block-2')
     expect(wrapper.get('[data-block-id="block-2"]').classes()).toContain('mobile-sample-card--highlight')
+    await getGroupToggle(wrapper, '样品信息').trigger('click')
     expect(wrapper.findAll('input').every((input) => input.attributes('disabled') !== undefined)).toBe(true)
   })
 
@@ -145,6 +154,9 @@ describe('MobileLabSampleList', () => {
     expect(wrapper.find('.mobile-sensitive-lock').exists()).toBe(true)
     expect(wrapper.find('[data-mobile-field="ironRaw"]').exists()).toBe(false)
     expect(wrapper.find('[data-mobile-field="price"]').exists()).toBe(false)
+    expect(wrapper.find('[data-mobile-field="sampleNumber"]').exists()).toBe(false)
+
+    await getGroupToggle(wrapper, '样品信息').trigger('click')
     expect(wrapper.find('[data-mobile-field="sampleNumber"]').exists()).toBe(true)
 
     await wrapper.setProps({ canViewCompletedSensitiveData: true })
@@ -180,8 +192,9 @@ describe('MobileLabSampleList', () => {
     expect(expandedBlockIds(wrapper)).toEqual([])
   })
 
-  it('marks customer controls for mobile-sized touch targets', () => {
+  it('marks customer controls for mobile-sized touch targets', async () => {
     const wrapper = mountList()
+    await getGroupToggle(wrapper, '样品信息').trigger('click')
 
     expect(wrapper.findAll('.mobile-customer-editor')).toHaveLength(2)
   })
