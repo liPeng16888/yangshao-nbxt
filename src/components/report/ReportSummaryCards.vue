@@ -21,10 +21,6 @@ defineProps<{
   gap: 12px;
 }
 
-.summary-cards--mobile {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 .summary-card {
   min-width: 0;
   padding: 16px;
@@ -51,6 +47,10 @@ defineProps<{
   .summary-cards {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+.summary-cards--mobile {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 @media (max-width: 767px) {

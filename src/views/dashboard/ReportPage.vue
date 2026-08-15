@@ -1,5 +1,5 @@
 <template>
-  <div class="page-stack mobile-page" v-loading="reportStore.loading">
+  <div class="page-stack" :class="{ 'mobile-page': isMobileLayout }" v-loading="pageLoading" :aria-busy="pageLoading">
     <div v-if="!isMobileLayout" class="toolbar">
       <ReportTabs v-model:kind="reportStore.kind" />
     </div>
@@ -10,7 +10,7 @@
       v-model:date="reportStore.date"
       v-model:start-date="reportStore.startDate"
       v-model:end-date="reportStore.endDate"
-      @search="loadReport"
+      @search="searchMobileReport"
     />
     <ReportFilterBar
       v-else
@@ -25,6 +25,7 @@
       <span>报表加载失败，请检查网络后重试。</span>
       <button class="mobile-touch-target" data-testid="retry-mobile-report" type="button" @click="loadReport">重试</button>
     </section>
+    <p v-if="pageLoading" class="report-loading-status" data-testid="mobile-report-loading" role="status" aria-live="polite">正在加载报表…</p>
 
     <SampleDetectionReport
       v-if="reportStore.kind === 'sample' && reportStore.sampleReport"
@@ -40,7 +41,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import FinanceReport from '@/components/report/FinanceReport.vue'
 import MobileReportFilter from '@/components/report/MobileReportFilter.vue'
 import ReportFilterBar from '@/components/report/ReportFilterBar.vue'
@@ -52,16 +53,31 @@ import { useReportStore } from '@/stores/report'
 const reportStore = useReportStore()
 const { isMobileLayout } = useMobileLayout()
 const loadError = ref(false)
+const pageLoading = ref(false)
 let activeLoad = 0
+let suppressMobileKindLoad = false
+let disposed = false
 
 async function loadReport() {
   const loadId = ++activeLoad
+  pageLoading.value = true
+  loadError.value = false
   try {
     await reportStore.loadReport()
-    if (loadId === activeLoad) loadError.value = false
+    if (loadId === activeLoad && !disposed) loadError.value = false
   } catch {
-    if (loadId === activeLoad) loadError.value = true
+    if (loadId === activeLoad && !disposed) loadError.value = true
+  } finally {
+    if (loadId === activeLoad && !disposed) pageLoading.value = false
   }
+}
+
+function searchMobileReport() {
+  suppressMobileKindLoad = true
+  void loadReport()
+  queueMicrotask(() => {
+    suppressMobileKindLoad = false
+  })
 }
 
 onMounted(() => {
@@ -70,8 +86,16 @@ onMounted(() => {
 
 watch(
   () => reportStore.kind,
-  () => void loadReport()
+  () => {
+    if (isMobileLayout.value && suppressMobileKindLoad) return
+    void loadReport()
+  }
 )
+
+onBeforeUnmount(() => {
+  disposed = true
+  activeLoad += 1
+})
 </script>
 
 <style scoped lang="scss">
@@ -99,5 +123,11 @@ watch(
     border: 1px solid currentcolor;
     border-radius: 6px;
   }
+}
+
+.report-loading-status {
+  margin: 0;
+  color: #475569;
+  font-size: 14px;
 }
 </style>

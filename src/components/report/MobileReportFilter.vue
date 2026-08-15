@@ -4,7 +4,7 @@
       class="mobile-report-filter__summary mobile-touch-target"
       type="button"
       :aria-label="`打开报表筛选：${summary}`"
-      @click="open = true"
+      @click="openDrawer"
     >
       <span>{{ summary }}</span>
       <span>筛选</span>
@@ -20,7 +20,7 @@
       <div class="mobile-report-filter__fields">
         <section>
           <h2>统计维度</h2>
-          <el-radio-group :model-value="kind" @update:model-value="emit('update:kind', $event as ReportKind)">
+          <el-radio-group v-model="draft.kind">
             <el-radio-button label="sample">收入数据统计</el-radio-button>
             <el-radio-button label="finance">开支数据统计</el-radio-button>
           </el-radio-group>
@@ -28,7 +28,7 @@
 
         <section>
           <h2>时间范围</h2>
-          <el-radio-group :model-value="mode" @update:model-value="emit('update:mode', $event as ReportMode)">
+          <el-radio-group v-model="draft.mode">
             <el-radio-button label="daily">日报</el-radio-button>
             <el-radio-button label="weekly">周报</el-radio-button>
             <el-radio-button label="monthly">月报</el-radio-button>
@@ -37,29 +37,26 @@
         </section>
 
         <el-date-picker
-          v-if="mode !== 'custom'"
-          :model-value="date"
+          v-if="draft.mode !== 'custom'"
+          v-model="draft.date"
           type="date"
           value-format="YYYY-MM-DD"
           :teleported="false"
-          @update:model-value="emit('update:date', String($event))"
         />
         <template v-else>
           <el-date-picker
-            :model-value="startDate"
+            v-model="draft.startDate"
             type="date"
             value-format="YYYY-MM-DD"
             placeholder="开始日期"
             :teleported="false"
-            @update:model-value="emit('update:startDate', String($event))"
           />
           <el-date-picker
-            :model-value="endDate"
+            v-model="draft.endDate"
             type="date"
             value-format="YYYY-MM-DD"
             placeholder="结束日期"
             :teleported="false"
-            @update:model-value="emit('update:endDate', String($event))"
           />
         </template>
       </div>
@@ -74,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import type { ReportKind } from '@/stores/report'
 import type { ReportMode } from '@/types/report'
 
@@ -98,6 +95,13 @@ const emit = defineEmits<{
 }>()
 
 const open = ref(false)
+const draft = reactive({
+  kind: props.kind,
+  mode: props.mode,
+  date: props.date,
+  startDate: props.startDate,
+  endDate: props.endDate
+})
 const summary = computed(() => {
   const modeLabel: Record<ReportMode, string> = {
     daily: '日报',
@@ -109,10 +113,37 @@ const summary = computed(() => {
   return `${props.kind === 'sample' ? '收入' : '开支'} · ${modeLabel[props.mode]} · ${dateRange}`
 })
 
+function syncDraft() {
+  Object.assign(draft, {
+    kind: props.kind,
+    mode: props.mode,
+    date: props.date,
+    startDate: props.startDate,
+    endDate: props.endDate
+  })
+}
+
+function openDrawer() {
+  syncDraft()
+  open.value = true
+}
+
 function search() {
+  emit('update:kind', draft.kind)
+  emit('update:mode', draft.mode)
+  emit('update:date', draft.date)
+  emit('update:startDate', draft.startDate)
+  emit('update:endDate', draft.endDate)
   open.value = false
   emit('search')
 }
+
+watch(
+  () => [props.kind, props.mode, props.date, props.startDate, props.endDate],
+  () => {
+    if (!open.value) syncDraft()
+  }
+)
 </script>
 
 <style scoped lang="scss">
