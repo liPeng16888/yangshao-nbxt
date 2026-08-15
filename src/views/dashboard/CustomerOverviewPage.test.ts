@@ -133,6 +133,42 @@ describe('CustomerOverviewPage', () => {
     expect(wrapper.find('.mobile-secondary-nav').exists()).toBe(false)
   })
 
+  it('uses isolated 44px mobile poppers for customer and sort options and a 44px customer tag remove target', async () => {
+    mocks.mobileLayout.value = true
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="mobile-customer-filter-summary"] .mobile-filter-summary').trigger('click')
+    const [customerSelect, sortSelect] = wrapper.findAllComponents(ElSelect)
+    expect(customerSelect.props('popperClass')).toBe('mobile-customer-overview-popper')
+    expect(sortSelect.props('popperClass')).toBe('mobile-customer-overview-sort-popper')
+
+    customerSelect.vm.$emit('update:modelValue', ['a'])
+    await nextTick()
+    const removeTarget = wrapper.get('[data-testid="mobile-customer-tag-remove"]')
+    expect(removeTarget.classes()).toContain('mobile-touch-target')
+    expect(getComputedStyle(removeTarget.element).minWidth).toBe('44px')
+    expect(getComputedStyle(removeTarget.element).minHeight).toBe('44px')
+    await removeTarget.trigger('click')
+    expect(wrapper.find('[data-testid="mobile-customer-tag-remove"]').exists()).toBe(false)
+  })
+
+  it('disables mobile refresh and retry controls while the page is loading', async () => {
+    mocks.mobileLayout.value = true
+    const request = deferred<typeof rows>()
+    mocks.getCustomerOverview.mockImplementationOnce(() => request.promise)
+    const wrapper = mountPage()
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="mobile-customer-refresh"]').attributes('disabled')).toBeDefined()
+    const setupState = (wrapper.vm as unknown as { $: { setupState: { loadError: string; loading: boolean } } }).$.setupState
+    setupState.loadError = '加载失败，请重试'
+    await nextTick()
+    expect(wrapper.get('[data-testid="mobile-customer-retry"]').attributes('disabled')).toBeDefined()
+    request.resolve(rows)
+    await flushPromises()
+  })
+
   it('stages customer filters until apply, resets only selections, and keeps the selected sort in the mobile summary', async () => {
     mocks.mobileLayout.value = true
     const wrapper = mountPage()
@@ -271,22 +307,37 @@ describe('CustomerOverviewPage', () => {
     expect(wrapper.find('.mobile-customer-overview-state.empty-text').exists()).toBe(false)
   })
 
-  it('keeps only the newest customer request state and ignores completions after unmount', async () => {
+  it('ignores a deferred customer success that settles after the page unmounts', async () => {
     mocks.mobileLayout.value = true
-    const first = deferred<typeof rows>()
-    const second = deferred<typeof rows>()
-    mocks.getCustomerOverview.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+    const request = deferred<typeof rows>()
+    mocks.getCustomerOverview.mockImplementationOnce(() => request.promise)
     const wrapper = mountPage()
     await nextTick()
-    await wrapper.get('[data-testid="mobile-customer-refresh"]').trigger('click')
-    second.resolve([rows[0]])
-    await flushPromises()
-    first.reject(new Error('old failure'))
+    const setupState = (wrapper.vm as unknown as { $: { setupState: { rows: unknown[]; loading: boolean; loadError: string } } }).$.setupState
+
+    wrapper.unmount()
+    request.resolve(rows)
     await flushPromises()
 
-    expect(wrapper.findAll('[data-testid="mobile-customer-card"]')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="mobile-customer-load-error"]').exists()).toBe(false)
+    expect(setupState.rows).toEqual([])
+    expect(setupState.loading).toBe(true)
+    expect(setupState.loadError).toBe('')
+  })
+
+  it('ignores a deferred customer failure that settles after the page unmounts', async () => {
+    mocks.mobileLayout.value = true
+    const request = deferred<typeof rows>()
+    mocks.getCustomerOverview.mockImplementationOnce(() => request.promise)
+    const wrapper = mountPage()
+    await nextTick()
+    const setupState = (wrapper.vm as unknown as { $: { setupState: { rows: unknown[]; loading: boolean; loadError: string } } }).$.setupState
+
     wrapper.unmount()
+    request.reject(new Error('late failure'))
     await flushPromises()
+
+    expect(setupState.rows).toEqual([])
+    expect(setupState.loading).toBe(true)
+    expect(setupState.loadError).toBe('')
   })
 })

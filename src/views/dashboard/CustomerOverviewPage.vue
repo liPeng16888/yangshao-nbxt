@@ -6,7 +6,7 @@
           <h2>客户总览</h2>
           <p class="muted">汇总本账号所有已检测样品的客户、数量、金额和检测时间。</p>
         </div>
-        <button data-testid="mobile-customer-refresh" class="mobile-touch-target mobile-customer-overview__refresh" type="button" @click="loadRows">
+        <button data-testid="mobile-customer-refresh" class="mobile-touch-target mobile-customer-overview__refresh" type="button" :disabled="loading" @click="loadRows">
           刷新
         </button>
       </div>
@@ -34,11 +34,27 @@
                 placeholder="选择一个或多个客户"
               >
                 <el-option v-for="option in customerOptions" :key="option.value" :label="option.label" :value="option.value" />
+                <template #tag="{ data, deleteTag, selectDisabled }">
+                  <el-tag v-for="item in data" :key="item.value" class="mobile-customer-overview__tag" type="info" effect="light">
+                    <span class="mobile-customer-overview__tag-label">{{ item.currentLabel }}</span>
+                    <button
+                      class="mobile-customer-overview__tag-remove mobile-touch-target"
+                      data-testid="mobile-customer-tag-remove"
+                      type="button"
+                      style="min-width: 44px; min-height: 44px"
+                      :aria-label="`移除客户 ${item.currentLabel}`"
+                      :disabled="selectDisabled || item.isDisabled"
+                      @click.stop="deleteTag($event, item)"
+                    >
+                      ×
+                    </button>
+                  </el-tag>
+                </template>
               </el-select>
             </label>
             <label class="control-field">
               <span>排序方式</span>
-              <el-select v-model="draftSortField" class="mobile-customer-overview__select">
+              <el-select v-model="draftSortField" class="mobile-customer-overview__select" popper-class="mobile-customer-overview-sort-popper">
                 <el-option v-for="option in sortOptions" :key="option.value" :label="option.label" :value="option.value" />
               </el-select>
             </label>
@@ -55,7 +71,7 @@
 
       <div v-if="loadError" class="mobile-customer-overview__error" data-testid="mobile-customer-load-error" role="alert">
         <span>{{ loadError }}</span>
-        <button data-testid="mobile-customer-retry" class="mobile-touch-target" type="button" @click="loadRows">重试</button>
+        <button data-testid="mobile-customer-retry" class="mobile-touch-target" type="button" :disabled="loading" @click="loadRows">重试</button>
       </div>
       <MobileCustomerOverviewList v-if="!loadError" :rows="displayRows" :summary="summary" :loading="loading" @show-details="showDetails" />
     </section>
@@ -377,14 +393,46 @@ function contact(row: CustomerOverviewRow | null) {
   min-height: 44px;
 }
 
-.mobile-customer-overview__select :deep(.el-tag__close) {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
+.mobile-customer-overview__select :deep(.el-select__selection) {
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
-:global(.mobile-customer-overview-popper .el-select-dropdown__item) {
+.mobile-customer-overview__select :deep(.el-tag) {
+  max-width: 100%;
+  min-height: 44px;
+}
+
+.mobile-customer-overview__tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 44px;
+  padding-right: 0;
+}
+
+.mobile-customer-overview__tag-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-customer-overview__tag-remove {
+  display: inline-grid;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  margin-left: 4px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  place-items: center;
+}
+
+:global(.mobile-customer-overview-popper .el-select-dropdown__item),
+:global(.mobile-customer-overview-sort-popper .el-select-dropdown__item) {
   height: auto;
   min-height: 44px;
   padding-top: 0;
@@ -393,7 +441,8 @@ function contact(row: CustomerOverviewRow | null) {
 }
 
 @media (pointer: coarse) {
-  :global(.mobile-customer-overview-popper .el-select-dropdown__item) {
+  :global(.mobile-customer-overview-popper .el-select-dropdown__item),
+  :global(.mobile-customer-overview-sort-popper .el-select-dropdown__item) {
     min-height: 44px;
     line-height: 44px;
   }
