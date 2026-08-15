@@ -1,5 +1,5 @@
 <template>
-  <div class="page-stack" v-loading="labStore.loading">
+  <div class="page-stack" :class="{ 'page-stack--mobile': isMobileLayout }" v-loading="labStore.loading">
     <div class="toolbar">
       <div class="toolbar-left">
         <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" @change="handleDateChange" />
@@ -37,7 +37,23 @@
 
     <LabParameterPanel :parameters="labStore.currentParameters" :saving="labStore.saving" :readonly="isPageReadonly" @save="labStore.saveParameters" />
 
+    <MobileLabSampleList
+      v-if="isMobileLayout"
+      :blocks="labStore.sampleBlocks"
+      :readonly="isPageReadonly"
+      :selection-mode="selectionMode"
+      :selected-block-ids="selectedReportBlockIds"
+      :highlight-block-id="highlightBlockId"
+      :can-view-completed-sensitive-data="canViewCompletedSensitiveData"
+      @update="labStore.patchBlock"
+      @field-commit="labStore.commitBlockFieldChange"
+      @blacklist-hit="showBlacklistHit"
+      @selection-change="toggleReportBlockSelection"
+      @save-next="handleMobileSaveNext"
+    />
+
     <LabSheetGrid
+      v-else
       :blocks="labStore.sampleBlocks"
       :readonly="isPageReadonly"
       :selection-mode="selectionMode"
@@ -113,11 +129,13 @@ import BlacklistHitDialog from '@/components/lab-sheet/BlacklistHitDialog.vue'
 import BulkSampleFillDialog from '@/components/lab-sheet/BulkSampleFillDialog.vue'
 import LabParameterPanel from '@/components/lab-sheet/LabParameterPanel.vue'
 import LabSheetGrid from '@/components/lab-sheet/LabSheetGrid.vue'
+import MobileLabSampleList from '@/components/lab-sheet/MobileLabSampleList.vue'
 import SampleCompletionDialog from '@/components/lab-sheet/SampleCompletionDialog.vue'
 import LabReportDialog from '@/components/lab-report/LabReportDialog.vue'
 import LabSmsDialog from '@/components/lab-report/LabSmsDialog.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useLabSheetStore } from '@/stores/labSheet'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { businessDateInBeijing, millisecondsUntilNextBusinessDayInBeijing } from '@/utils/date'
 import { loadLabReportSmsTemplate, loadLabReportTemplate } from '@/utils/labReport'
 
@@ -127,6 +145,7 @@ const route = useRoute()
 const router = useRouter()
 const labStore = useLabSheetStore()
 const accessGuard = useAccessGuardStore()
+const { isMobileLayout } = useMobileLayout()
 const BUSINESS_DAY_PREFLUSH_LEAD_MS = 5_000
 const BUSINESS_DAY_RETRY_MS = 60_000
 
@@ -530,6 +549,11 @@ async function appendBlocks() {
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '新增数量无效')
   }
+}
+
+async function handleMobileSaveNext() {
+  const saved = await labStore.persistAllBlocks({ silent: true })
+  if (!saved.success) ElMessage.error('当前样品尚未全部保存，系统将继续自动重试')
 }
 
 function jumpToBlacklist(id?: string) {
