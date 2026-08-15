@@ -119,7 +119,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function normalizePayload(kind: CalculationDraftKind, value: unknown) {
   try {
-    return kind === 'standard-sample' ? normalizeStandardPayload(value) : normalizeCoefficientPayload(value)
+    return kind === 'standard-sample' ? normalizeStandardPayload(value) : normalizeCoefficientDraftPayload(value)
   } catch {
     return null
   }
@@ -135,7 +135,7 @@ function normalizeStandardPayload(value: unknown): StandardSampleDraft {
   }
 }
 
-function normalizeCoefficientPayload(value: unknown): CoefficientDraftPayload {
+export function normalizeCoefficientDraftPayload(value: unknown): CoefficientDraftPayload {
   const source = requirePlainObject(value)
   requireExactKeys(source, ['parameters', 'standardAddCount', 'calculationAddCount', 'standardRows', 'calculationRows'])
   const parameters = requirePlainObject(source.parameters)

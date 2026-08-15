@@ -26,7 +26,7 @@
         data-testid="confirm-coefficient-application"
         type="primary"
         :loading="loading"
-        :disabled="loading || !selectedStartIndex"
+        :disabled="loading || !isSelectedStartValid"
         @click="confirmApplication"
       >确认应用</el-button>
     </template>
@@ -49,7 +49,14 @@ const emit = defineEmits<{
 }>()
 
 const selectedStartIndex = ref<number | null>(null)
-const sortedSampleIndices = computed(() => [...props.sampleIndices].sort((left, right) => left - right))
+const sortedSampleIndices = computed(() => Array.from(new Set(
+  (props.sampleIndices as unknown[]).filter((index): index is number => (
+    typeof index === 'number' && Number.isSafeInteger(index) && index > 0
+  ))
+)).sort((left, right) => left - right))
+const isSelectedStartValid = computed(() => (
+  selectedStartIndex.value !== null && sortedSampleIndices.value.includes(selectedStartIndex.value)
+))
 
 const impactMessage = computed(() => {
   if (!selectedStartIndex.value) return ''
@@ -62,10 +69,12 @@ const impactMessage = computed(() => {
 })
 
 watch(
-  () => props.visible,
-  (visible, wasVisible) => {
+  [() => props.visible, sortedSampleIndices],
+  ([visible, indices], [wasVisible]) => {
     if (visible && !wasVisible) selectedStartIndex.value = null
-  }
+    else if (visible && selectedStartIndex.value !== null && !indices.includes(selectedStartIndex.value)) selectedStartIndex.value = null
+  },
+  { flush: 'sync' }
 )
 
 function formatIndex(index: number) {
@@ -81,9 +90,12 @@ function handleBeforeClose(done: () => void) {
 }
 
 function confirmApplication() {
-  if (props.loading || !selectedStartIndex.value) return
-  emit('confirm', selectedStartIndex.value)
+  const startIndex = selectedStartIndex.value
+  if (props.loading || startIndex === null || !sortedSampleIndices.value.includes(startIndex)) return
+  emit('confirm', startIndex)
 }
+
+defineExpose({ confirmApplication })
 </script>
 
 <style scoped lang="scss">

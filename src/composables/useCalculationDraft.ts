@@ -19,6 +19,7 @@ export interface CalculationDraftAdapter<T> {
   cacheStorageKey: string
   defaults: () => T
   normalize: (value: unknown) => T
+  migrateLegacy?: (value: unknown) => T
   snapshot: () => T
   apply: (payload: T) => void
 }
@@ -128,10 +129,14 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
 
         if (serverDraft.revision === 0) {
           const legacy = readLegacySnapshot()
-          if (legacy) {
-            applySnapshot(legacy)
-            await executeSave({ payload: legacy, baseRevision: 0, importsLegacy: true }, 'saving')
+          if (legacy.state === 'valid') {
+            applySnapshot(legacy.snapshot)
+            await executeSave({ payload: legacy.snapshot, baseRevision: 0, importsLegacy: true }, 'saving')
             return
+          }
+          if (legacy.state === 'invalid') {
+            applySnapshot(serverSnapshot)
+            throw new TypeError('旧计算草稿无法无损迁移')
           }
         }
 
@@ -368,11 +373,15 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
 
   function readLegacySnapshot() {
     const raw = safeStorageGet(adapter.legacyStorageKey)
-    if (raw === null) return null
+    if (raw === null) return { state: 'absent' as const }
     try {
-      return normalizedSnapshot(JSON.parse(raw))
+      const parsed = JSON.parse(raw)
+      return {
+        state: 'valid' as const,
+        snapshot: normalizedSnapshot(adapter.migrateLegacy ? adapter.migrateLegacy(cloneDraftValue(parsed)) : parsed)
+      }
     } catch {
-      return null
+      return { state: 'invalid' as const }
     }
   }
 

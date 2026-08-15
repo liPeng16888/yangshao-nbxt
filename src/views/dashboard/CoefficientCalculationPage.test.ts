@@ -7,6 +7,7 @@ import { useLabSheetStore } from '@/stores/labSheet'
 import { useAuthStore } from '@/stores/auth'
 import type { AuthUser } from '@/types/auth'
 import type { LabFormulaResult, LabSheet, SampleBlock } from '@/types/labSheet'
+import CoefficientCalculationDesktopView from '@/components/coefficient/CoefficientCalculationDesktopView.vue'
 import CoefficientCalculationPage from './CoefficientCalculationPage.vue'
 
 const apiMocks = vi.hoisted(() => ({
@@ -59,11 +60,17 @@ vi.mock('@/api/labSheet', async (importOriginal) => ({
 vi.mock('@/composables/useCalculationDraft', () => ({
   useCalculationDraft: (adapter: any) => {
     draftMocks.adapters.push(adapter)
-    adapter.apply(draftMocks.payload === undefined ? adapter.defaults() : adapter.normalize(draftMocks.payload))
+    adapter.apply(draftMocks.payload === undefined ? adapter.defaults() : (adapter.migrateLegacy ?? adapter.normalize)(draftMocks.payload))
     const status = ref(draftMocks.status)
     const updatedAt = ref<string | null>(null)
     const conflict = ref(draftMocks.status === 'conflict' ? { serverDraft: true } : null)
-    const scheduleSave = vi.fn(() => window.localStorage.setItem(adapter.legacyStorageKey, JSON.stringify(adapter.snapshot())))
+    const scheduleSave = vi.fn(() => {
+      try {
+        window.localStorage.setItem(adapter.legacyStorageKey, JSON.stringify(adapter.snapshot()))
+      } catch {
+        status.value = 'error'
+      }
+    })
     const useServerVersion = vi.fn(() => {
       if (draftMocks.serverVersion !== undefined) adapter.apply(draftMocks.serverVersion)
       status.value = 'saved'
@@ -450,7 +457,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
     expect(rowCodes(wrapper, 'calculation')).toEqual(['001', '002', '003'])
   })
 
-  it('falls back each table containing a null row item without crashing', () => {
+  it('preserves valid legacy rows instead of replacing a table when another row item is malformed', () => {
     seedIndependentRows({
       standardRows: [{ id: 'standard-valid', code: '001' }, null],
       calculationRows: [null]
@@ -458,7 +465,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
 
     const { wrapper } = mountPage()
 
-    expect(rowCodes(wrapper, 'standard')).toEqual(['001', '002', '003'])
+    expect(rowCodes(wrapper, 'standard')).toEqual(['001'])
     expect(rowCodes(wrapper, 'calculation')).toEqual(['001', '002', '003'])
   })
 
@@ -517,7 +524,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
     await nextTick()
     const stored = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:frontend-user-8')!)
 
-    expect(wrapper.findAll('[data-testid="standard-row"]')).toHaveLength(1 + expectedCount)
+    expect(wrapper.findAll('[data-testid="standard-row"]')).toHaveLength(Math.min(50, 1 + expectedCount))
     expect(stored.standardAddCount).toBe(expectedCount)
     expect(stored.calculationAddCount).toBe(expectedCount)
   })
@@ -545,7 +552,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
     await nextTick()
     const stored = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:frontend-user-8')!)
 
-    expect(wrapper.findAll(`[data-testid="${kind}-row"]`)).toHaveLength(1 + expectedCount)
+    expect(wrapper.findAll(`[data-testid="${kind}-row"]`)).toHaveLength(Math.min(50, 1 + expectedCount))
     expect(stored[`${kind}AddCount`]).toBe(expectedCount)
   })
 
@@ -554,6 +561,23 @@ describe('CoefficientCalculationPage coefficient application', () => {
 
     expect(getAddCountInput(wrapper, 'standard').props('valueOnClear')).toBe('min')
     expect(getAddCountInput(wrapper, 'calculation').props('valueOnClear')).toBe('min')
+  })
+
+  it('round-trips the real 50-row adapter and rejects a corrupted 51-row live state', async () => {
+    const { wrapper } = mountPage()
+    await setAddCount(wrapper, 'standard', 50)
+    await wrapper.get('[data-testid="add-standard-rows"]').trigger('click')
+    await nextTick()
+    const adapter = draftMocks.adapters[0]
+    const payload = adapter.snapshot()
+
+    expect(adapter.normalize(payload).standardRows).toHaveLength(50)
+    const calculation = wrapper.getComponent(CoefficientCalculationDesktopView).props('calculation') as any
+    calculation.standardRows.push({ ...calculation.standardRows[0], id: 'corrupted-live-row-51' })
+    expect(() => adapter.snapshot()).toThrow()
+    await nextTick()
+    expect(draftMocks.instances[0].status.value).toBe('error')
+    expect(JSON.parse(window.localStorage.getItem(adapter.legacyStorageKey)!).standardRows).toHaveLength(50)
   })
 
   it('adds rows to each table independently', async () => {
@@ -856,5 +880,23 @@ describe('CoefficientCalculationPage coefficient application', () => {
     expect(wrapper.find('[data-testid="coefficient-application-dialog"]').exists()).toBe(true)
     expect(messageMocks.success).not.toHaveBeenCalled()
     expect(messageMocks.error).toHaveBeenCalledWith('起始样品已不存在，已刷新当天数据，请重新选择')
+  })
+
+  it('keeps stale-boundary application retryable and explains when the required refresh rejects', async () => {
+    apiMocks.getCurrentLabSheet
+      .mockResolvedValueOnce(makeSheet([1, 2, 3, 4]))
+      .mockRejectedValueOnce(new Error('refresh offline'))
+    apiMocks.applyCurrentParametersFromIndex.mockRejectedValueOnce({
+      response: { data: { message: '起始样品不存在，请刷新后重新选择' } }
+    })
+    const { wrapper } = mountPage()
+
+    await openApplicationDialog(wrapper)
+    await wrapper.get('[data-testid="dialog-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="coefficient-application-dialog"]').exists()).toBe(true)
+    expect(messageMocks.error).toHaveBeenCalledWith('起始样品已不存在，但当天数据刷新失败，请稍后重试')
+    expect(messageMocks.success).not.toHaveBeenCalled()
   })
 })

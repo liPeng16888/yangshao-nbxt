@@ -75,14 +75,15 @@
                 type="number"
                 inputmode="numeric"
                 min="1"
-                max="50"
-                :disabled="disabled"
+                :max="Math.max(1, calculation.standardRemainingCapacity.value)"
+                :disabled="disabled || calculation.standardRemainingCapacity.value === 0"
                 :value="calculation.standardAddCount.value"
                 data-testid="mobile-standard-add-count"
                 @input="calculation.standardAddCount.value = inputNumber($event)"
               />
             </label>
-            <button class="mobile-touch-target" type="button" :disabled="disabled" data-testid="mobile-add-standard-rows" @click="calculation.addStandardRows">确认增加</button>
+            <span data-testid="mobile-standard-capacity">还可增加 {{ calculation.standardRemainingCapacity.value }} 个（最多 50 个）</span>
+            <button class="mobile-touch-target" type="button" :disabled="disabled || calculation.standardRemainingCapacity.value === 0" data-testid="mobile-add-standard-rows" @click="calculation.addStandardRows">确认增加</button>
             <button class="mobile-touch-target" type="button" :disabled="disabled" data-testid="mobile-delete-standard-rows" @click="calculation.standardDeleteMode.value = true">删除样品</button>
           </div>
         </template>
@@ -143,14 +144,15 @@
                 type="number"
                 inputmode="numeric"
                 min="1"
-                max="50"
-                :disabled="disabled"
+                :max="Math.max(1, calculation.calculationRemainingCapacity.value)"
+                :disabled="disabled || calculation.calculationRemainingCapacity.value === 0"
                 :value="calculation.calculationAddCount.value"
                 data-testid="mobile-calculation-add-count"
                 @input="calculation.calculationAddCount.value = inputNumber($event)"
               />
             </label>
-            <button class="mobile-touch-target" type="button" :disabled="disabled" data-testid="mobile-add-calculation-rows" @click="calculation.addCalculationRows">确认增加</button>
+            <span data-testid="mobile-calculation-capacity">还可增加 {{ calculation.calculationRemainingCapacity.value }} 个（最多 50 个）</span>
+            <button class="mobile-touch-target" type="button" :disabled="disabled || calculation.calculationRemainingCapacity.value === 0" data-testid="mobile-add-calculation-rows" @click="calculation.addCalculationRows">确认增加</button>
             <button class="mobile-touch-target" type="button" :disabled="disabled" data-testid="mobile-delete-calculation-rows" @click="calculation.calculationDeleteMode.value = true">删除样品</button>
           </div>
         </template>
@@ -251,7 +253,8 @@ function inputNumber(event: Event) {
 .mobile-coefficient-grid, .mobile-coefficient-parameters { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .mobile-coefficient-grid output { display: block; min-height: 28px; margin-top: 4px; padding: 4px 8px; border-radius: 6px; background: #f1f5f9; color: #0f172a; font-weight: 700; }
 .mobile-coefficient__bottom-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: end; }
-.mobile-coefficient__bottom-actions label { grid-column: 1 / -1; }
+.mobile-coefficient__bottom-actions label, .mobile-coefficient__bottom-actions > span { grid-column: 1 / -1; }
+.mobile-coefficient__bottom-actions > span { color: #64748b; font-size: 13px; }
 .mobile-coefficient__bottom-actions input { box-sizing: border-box; width: 100%; border: 1px solid #9fb1c5; border-radius: 8px; }
 .mobile-coefficient__bottom-actions button, .mobile-coefficient__apply { border: 1px solid #2563eb; border-radius: 8px; background: #fff; color: #1d4ed8; }
 .mobile-coefficient__selection { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px 10px; }

@@ -27,8 +27,9 @@
       </div>
       <div class="add-standard-row" data-testid="standard-bottom-actions">
         <span>增加标样</span>
-        <el-input-number :model-value="calculation.standardAddCount.value" :disabled="disabled" :min="1" :max="50" :step="1" :precision="0" value-on-clear="min" controls-position="right" data-testid="standard-add-count" @update:model-value="calculation.standardAddCount.value = $event ?? 1" />
-        <el-button type="primary" :disabled="disabled" data-testid="add-standard-rows" @click="calculation.addStandardRows">确认增加</el-button>
+        <el-input-number :model-value="calculation.standardAddCount.value" :disabled="disabled || calculation.standardRemainingCapacity.value === 0" :min="1" :max="Math.max(1, calculation.standardRemainingCapacity.value)" :step="1" :precision="0" value-on-clear="min" controls-position="right" data-testid="standard-add-count" @update:model-value="calculation.standardAddCount.value = $event ?? 1" />
+        <span data-testid="standard-capacity">还可增加 {{ calculation.standardRemainingCapacity.value }} 个（最多 50 个）</span>
+        <el-button type="primary" :disabled="disabled || calculation.standardRemainingCapacity.value === 0" data-testid="add-standard-rows" @click="calculation.addStandardRows">确认增加</el-button>
         <el-button class="coefficient-delete-entry" type="danger" plain :disabled="disabled" data-testid="delete-standard-rows" @click="calculation.standardDeleteMode.value = true">删除样品</el-button>
       </div>
     </section>
@@ -59,8 +60,9 @@
       </div>
       <div class="add-standard-row" data-testid="calculation-bottom-actions">
         <span>增加标样</span>
-        <el-input-number :model-value="calculation.calculationAddCount.value" :disabled="disabled" :min="1" :max="50" :step="1" :precision="0" value-on-clear="min" controls-position="right" data-testid="calculation-add-count" @update:model-value="calculation.calculationAddCount.value = $event ?? 1" />
-        <el-button type="primary" :disabled="disabled" data-testid="add-calculation-rows" @click="calculation.addCalculationRows">确认增加</el-button>
+        <el-input-number :model-value="calculation.calculationAddCount.value" :disabled="disabled || calculation.calculationRemainingCapacity.value === 0" :min="1" :max="Math.max(1, calculation.calculationRemainingCapacity.value)" :step="1" :precision="0" value-on-clear="min" controls-position="right" data-testid="calculation-add-count" @update:model-value="calculation.calculationAddCount.value = $event ?? 1" />
+        <span data-testid="calculation-capacity">还可增加 {{ calculation.calculationRemainingCapacity.value }} 个（最多 50 个）</span>
+        <el-button type="primary" :disabled="disabled || calculation.calculationRemainingCapacity.value === 0" data-testid="add-calculation-rows" @click="calculation.addCalculationRows">确认增加</el-button>
         <el-button class="coefficient-delete-entry" type="danger" plain :disabled="disabled" data-testid="delete-calculation-rows" @click="calculation.calculationDeleteMode.value = true">删除样品</el-button>
       </div>
     </section>

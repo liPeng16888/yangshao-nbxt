@@ -17,7 +17,7 @@ import CoefficientApplicationDialog from '@/components/lab-sheet/CoefficientAppl
 import CoefficientCalculationDesktopView from './CoefficientCalculationDesktopView.vue'
 import MobileCoefficientCalculation from './MobileCoefficientCalculation.vue'
 import { useCalculationDraft, type CalculationDraftAdapter } from '@/composables/useCalculationDraft'
-import { normalizeCoefficientDraft, useCoefficientCalculation } from '@/composables/useCoefficientCalculation'
+import { migrateLegacyCoefficientDraft, normalizeCoefficientDraft, useCoefficientCalculation } from '@/composables/useCoefficientCalculation'
 import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useLabSheetStore } from '@/stores/labSheet'
 import type { CoefficientDraftPayload } from '@/types/calculationDraft'
@@ -41,6 +41,7 @@ const adapter: CalculationDraftAdapter<CoefficientDraftPayload> = {
   cacheStorageKey: `ys_calculation_draft_cache:coefficient:${props.accountId}`,
   defaults: calculation.snapshot,
   normalize: normalizeCoefficientDraft,
+  migrateLegacy: migrateLegacyCoefficientDraft,
   snapshot: calculation.snapshot,
   apply(payload) {
     const normalized = normalizeCoefficientDraft(payload)
@@ -100,7 +101,15 @@ async function handleApplyParameters(startIndex: number) {
     ElMessage.success(`已从样品 ${String(startIndex).padStart(3, '0')} 开始应用新参数`)
   } catch (error) {
     if (isMissingStartBoundaryError(error)) {
-      const loaded = await labStore.loadCurrentSheet()
+      let loaded: boolean
+      try {
+        loaded = await labStore.loadCurrentSheet()
+      } catch {
+        applicationDialogKey.value += 1
+        applicationDialogVisible.value = true
+        ElMessage.error('起始样品已不存在，但当天数据刷新失败，请稍后重试')
+        return
+      }
       applicationDialogKey.value += 1
       if (loaded === false) {
         ElMessage.error('起始样品已不存在，但当天数据刷新失败，请稍后重试')
@@ -127,7 +136,14 @@ function installDraftWatcher() {
   stopDraftWatcher = watch(
     [calculation.parameters, calculation.standardRows, calculation.calculationRows, calculation.standardAddCount, calculation.calculationAddCount],
     () => {
-      const current = calculation.snapshot()
+      let current: CoefficientDraftPayload
+      try {
+        current = calculation.snapshot()
+      } catch {
+        ignoredAppliedSnapshot = null
+        draft.scheduleSave()
+        return
+      }
       if (ignoredAppliedSnapshot && equalDraft(current, ignoredAppliedSnapshot)) {
         ignoredAppliedSnapshot = null
         return

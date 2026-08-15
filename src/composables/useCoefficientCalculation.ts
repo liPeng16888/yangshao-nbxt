@@ -1,5 +1,6 @@
-import { reactive, ref, type Ref } from 'vue'
+import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { normalizeCoefficientDraftPayload } from '@/api/calculationDraft'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import type {
   CalculationRow,
@@ -50,6 +51,8 @@ export interface CoefficientCalculationState {
   calculationRows: CalculationRow[]
   standardAddCount: Ref<number>
   calculationAddCount: Ref<number>
+  standardRemainingCapacity: ComputedRef<number>
+  calculationRemainingCapacity: ComputedRef<number>
   standardDeleteMode: Ref<boolean>
   calculationDeleteMode: Ref<boolean>
   selectedStandardRowIds: Ref<string[]>
@@ -79,15 +82,17 @@ export function useCoefficientCalculation(): CoefficientCalculationState {
   const calculationDeleteMode = ref(false)
   const selectedStandardRowIds = ref<string[]>([])
   const selectedCalculationRowIds = ref<string[]>([])
+  const standardRemainingCapacity = computed(() => Math.max(0, 50 - standardRows.length))
+  const calculationRemainingCapacity = computed(() => Math.max(0, 50 - calculationRows.length))
 
   function snapshot(): CoefficientDraftPayload {
-    return {
+    return normalizeCoefficientDraft({
       parameters: { ...parameters },
       standardAddCount: normalizeCoefficientAddCount(standardAddCount.value),
       calculationAddCount: normalizeCoefficientAddCount(calculationAddCount.value),
       standardRows: standardRows.map((row) => ({ ...row })),
       calculationRows: calculationRows.map((row) => ({ ...row, inputs: { ...row.inputs } }))
-    }
+    })
   }
 
   function apply(payload: CoefficientDraftPayload) {
@@ -104,13 +109,15 @@ export function useCoefficientCalculation(): CoefficientCalculationState {
   function addStandardRows() {
     const count = normalizeCoefficientAddCount(standardAddCount.value)
     standardAddCount.value = count
-    for (let offset = 0; offset < count; offset += 1) standardRows.push(createStandardRow(standardRows.length + 1))
+    const actualCount = Math.min(count, standardRemainingCapacity.value)
+    for (let offset = 0; offset < actualCount; offset += 1) standardRows.push(createStandardRow(standardRows.length + 1))
   }
 
   function addCalculationRows() {
     const count = normalizeCoefficientAddCount(calculationAddCount.value)
     calculationAddCount.value = count
-    for (let offset = 0; offset < count; offset += 1) calculationRows.push(createCalculationRow(calculationRows.length + 1))
+    const actualCount = Math.min(count, calculationRemainingCapacity.value)
+    for (let offset = 0; offset < actualCount; offset += 1) calculationRows.push(createCalculationRow(calculationRows.length + 1))
   }
 
   function toggleStandardRow(id: string, checked: boolean) {
@@ -190,6 +197,8 @@ export function useCoefficientCalculation(): CoefficientCalculationState {
     calculationRows,
     standardAddCount,
     calculationAddCount,
+    standardRemainingCapacity,
+    calculationRemainingCapacity,
     standardDeleteMode,
     calculationDeleteMode,
     selectedStandardRowIds,
@@ -245,6 +254,10 @@ function toggleSelection(selected: string[], id: string, checked: boolean) {
 }
 
 export function normalizeCoefficientDraft(value: unknown): CoefficientDraftPayload {
+  return normalizeCoefficientDraftPayload(value)
+}
+
+export function migrateLegacyCoefficientDraft(value: unknown): CoefficientDraftPayload {
   const source = requireCompatibleObject(value, ['parameters', 'addCount', 'standardAddCount', 'calculationAddCount', 'standardRows', 'calculationRows'])
   const parameterKeys = Object.keys(defaultLabParameters) as Array<keyof CoefficientDraftPayload['parameters']>
   const parameterSource = source.parameters === undefined ? {} : requireCompatibleObject(source.parameters, parameterKeys)
@@ -289,9 +302,11 @@ function normalizeCalculationRows(value: unknown) {
 }
 
 function normalizeRows<T>(value: unknown, create: (index: number) => T, normalize: (item: unknown, index: number, ids: Set<string>) => T): T[] {
-  const source = Array.isArray(value) && value.length >= 1 && value.length <= 50 && value.every(isPlainRecord)
-    ? value
-    : [create(1), create(2), create(3)]
+  if (Array.isArray(value) && value.length > 50) throw new TypeError('系数旧草稿行数超过 50')
+  const source = Array.isArray(value) && value.length >= 1
+    ? value.filter(isPlainRecord)
+    : []
+  if (!source.length) return [create(1), create(2), create(3)]
   const ids = new Set<string>()
   return source.map((item, index) => normalize(item, index, ids))
 }

@@ -6,6 +6,12 @@ import {
   getCalculationDraft,
   saveCalculationDraft
 } from '@/api/calculationDraft'
+import type { CoefficientDraftPayload } from '@/types/calculationDraft'
+import {
+  migrateLegacyCoefficientDraft,
+  normalizeCoefficientDraft,
+  useCoefficientCalculation
+} from './useCoefficientCalculation'
 import { useCalculationDraft, type CalculationDraftAdapter } from './useCalculationDraft'
 
 vi.mock('@/api/calculationDraft', async (importOriginal) => {
@@ -69,7 +75,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function setup(initial: TestDraft = defaults) {
+function setup(initial: TestDraft = defaults, adapterOverrides: Partial<CalculationDraftAdapter<TestDraft>> = {}) {
   let current = normalize(initial)
   const apply = vi.fn((payload: TestDraft) => { current = normalize(payload) })
   const adapter: CalculationDraftAdapter<TestDraft> = {
@@ -79,7 +85,8 @@ function setup(initial: TestDraft = defaults) {
     defaults: () => normalize(defaults),
     normalize,
     snapshot: () => current,
-    apply
+    apply,
+    ...adapterOverrides
   }
   const scope = effectScope()
   let draft!: ReturnType<typeof useCalculationDraft<TestDraft>>
@@ -153,6 +160,50 @@ describe('useCalculationDraft', () => {
     await draft.load()
     expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
     expect(draft.revision.value).toBe(1)
+  })
+
+  it('uses an explicit legacy migrator without weakening strict server and live normalization', async () => {
+    const rawLegacy = { legacyValue: 7 }
+    const migrated = { value: 7, details: { label: 'migrated legacy' } }
+    const migrateLegacy = vi.fn((value: unknown) => {
+      if (JSON.stringify(value) !== JSON.stringify(rawLegacy)) throw new Error('invalid legacy')
+      return migrated
+    })
+    localStorage.setItem('legacy-draft', JSON.stringify(rawLegacy))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 0))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(migrated, 1))
+    const result = setup(defaults, { migrateLegacy })
+    scopes.push(result.scope)
+
+    await result.draft.load()
+
+    expect(migrateLegacy).toHaveBeenCalledWith(rawLegacy)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', { baseRevision: 0, payload: migrated })
+    expect(() => result.adapter.normalize(rawLegacy)).toThrow('invalid draft')
+  })
+
+  it('keeps an unconvertible legacy payload and exposes a retryable load error instead of silently showing defaults', async () => {
+    const invalidLegacy = { legacyValue: 'malformed' }
+    localStorage.setItem('legacy-draft', JSON.stringify(invalidLegacy))
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(defaults, 0))
+      .mockResolvedValueOnce(response(defaults, 0))
+    const migrateLegacy = vi.fn(() => { throw new Error('legacy cannot be converted without data loss') })
+    const result = setup(legacyPayload, { migrateLegacy })
+    scopes.push(result.scope)
+
+    await result.draft.load()
+
+    expect(result.apply).toHaveBeenCalledWith(defaults)
+    expect(result.draft.status.value).toBe('error')
+    expect(localStorage.getItem('legacy-draft')).toBe(JSON.stringify(invalidLegacy))
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+
+    await result.draft.retry()
+    expect(getCalculationDraft).toHaveBeenCalledTimes(2)
+    expect(migrateLegacy).toHaveBeenCalledTimes(2)
+    expect(result.draft.status.value).toBe('error')
+    expect(localStorage.getItem('legacy-draft')).toBe(JSON.stringify(invalidLegacy))
   })
 
   it('does not remove legacy data when its first server save fails', async () => {
@@ -569,6 +620,8 @@ describe('useCalculationDraft', () => {
     edit({ value: Number.NaN, details: { label: 'invalid' } })
     draft.scheduleSave()
     expect(draft.status.value).toBe('error')
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(localStorage.getItem('draft-cache')).toBeNull()
     edit(corrected)
     draft.scheduleSave()
 
@@ -579,6 +632,80 @@ describe('useCalculationDraft', () => {
       payload: corrected
     })
     expect(draft.status.value).toBe('saved')
+  })
+
+  it('surfaces a corrupted 51-row real coefficient snapshot without a blank save or dirty cache', async () => {
+    const calculation = useCoefficientCalculation()
+    const serverSnapshot = calculation.snapshot()
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce({
+      kind: 'COEFFICIENT',
+      payload: serverSnapshot,
+      revision: 2,
+      updatedAt: '2026-08-15T08:00:00.000Z'
+    })
+    const adapter: CalculationDraftAdapter<CoefficientDraftPayload> = {
+      kind: 'coefficient',
+      legacyStorageKey: 'coefficient-legacy',
+      cacheStorageKey: 'coefficient-cache',
+      defaults: calculation.snapshot,
+      normalize: normalizeCoefficientDraft,
+      snapshot: calculation.snapshot,
+      apply: calculation.apply
+    }
+    const scope = effectScope()
+    let draft!: ReturnType<typeof useCalculationDraft<CoefficientDraftPayload>>
+    scope.run(() => { draft = useCalculationDraft(adapter) })
+    scopes.push(scope)
+    await draft.load()
+
+    calculation.standardAddCount.value = 50
+    calculation.addStandardRows()
+    calculation.standardRows.push({ ...calculation.standardRows[0], id: 'real-corrupted-row-51' })
+    vi.mocked(saveCalculationDraft).mockClear()
+    draft.scheduleSave()
+
+    expect(draft.status.value).toBe('error')
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(localStorage.getItem('coefficient-cache')).toBeNull()
+  })
+
+  it.each([
+    ['51 rows', Array.from({ length: 51 }, (_, index) => ({ code: `S-${index + 1}` }))],
+    ['one malformed object row', [{ code: 'VALID' }, { code: 'MALFORMED', aluminum: 'not-a-number' }]]
+  ])('keeps a real coefficient legacy payload with %s visible as a migration error', async (_case, standardRows) => {
+    const calculation = useCoefficientCalculation()
+    const legacy = {
+      parameters: { ironBlank: 0.123 },
+      standardRows,
+      calculationRows: [{ code: 'CALC-VALID', inputs: { ironRaw: 1.234 } }]
+    }
+    localStorage.setItem('coefficient-legacy', JSON.stringify(legacy))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce({
+      kind: 'COEFFICIENT',
+      payload: calculation.snapshot(),
+      revision: 0,
+      updatedAt: null
+    })
+    const adapter: CalculationDraftAdapter<CoefficientDraftPayload> = {
+      kind: 'coefficient',
+      legacyStorageKey: 'coefficient-legacy',
+      cacheStorageKey: 'coefficient-cache',
+      defaults: calculation.snapshot,
+      normalize: normalizeCoefficientDraft,
+      migrateLegacy: migrateLegacyCoefficientDraft,
+      snapshot: calculation.snapshot,
+      apply: calculation.apply
+    }
+    const scope = effectScope()
+    let draft!: ReturnType<typeof useCalculationDraft<CoefficientDraftPayload>>
+    scope.run(() => { draft = useCalculationDraft(adapter) })
+    scopes.push(scope)
+
+    await draft.load()
+
+    expect(draft.status.value).toBe('error')
+    expect(localStorage.getItem('coefficient-legacy')).toBe(JSON.stringify(legacy))
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
   })
 
   it('retries the exact failed snapshot before safely saving a newer queued edit', async () => {
