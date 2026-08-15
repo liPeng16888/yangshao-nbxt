@@ -151,6 +151,68 @@ describe('FinanceUnsettledPage batch payment', () => {
     expect(storeMock.settleRows).toHaveBeenCalledWith(rows)
   })
 
+  it('clears the exact unchanged desktop batch after settlement succeeds', async () => {
+    let resolveSettle!: () => void
+    storeMock.settleRows.mockReturnValueOnce(new Promise<void>((resolve) => { resolveSettle = resolve }))
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = mountPage()
+    const table = wrapper.findComponent(TableStub)
+    table.vm.$emit('selection-change', [rows[0]])
+    await nextTick()
+
+    await wrapper.find('.batch-settle-button').trigger('click')
+    await flushPromises()
+    resolveSettle()
+    await flushPromises()
+
+    expect(wrapper.find('.batch-settle-button').attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps a newer valid desktop selection and remaps it to the authoritative row while an older batch settles', async () => {
+    let resolveSettle!: () => void
+    const settlement = new Promise<void>((resolve) => { resolveSettle = resolve })
+    const authoritativeSecondRow = { ...rows[1], amount: 125 }
+    storeMock.settleRows.mockImplementationOnce(async () => {
+      await settlement
+      storeMock.unsettledRows = [authoritativeSecondRow]
+    })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = mountPage()
+    const table = wrapper.findComponent(TableStub)
+    table.vm.$emit('selection-change', [rows[0]])
+    await nextTick()
+
+    await wrapper.find('.batch-settle-button').trigger('click')
+    await flushPromises()
+    table.vm.$emit('selection-change', [rows[0], rows[1]])
+    await nextTick()
+    resolveSettle()
+    await flushPromises()
+
+    expect(wrapper.find('.batch-settle-button').text()).toContain('批量确认已结款（1）')
+    await wrapper.find('.batch-settle-button').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenLastCalledWith(
+      '确认将选中的 1 个样品标记为已结款？合计金额 ¥125.00。',
+      '批量确认结款',
+      expect.objectContaining({ type: 'warning' })
+    )
+    expect(storeMock.settleRows).toHaveBeenLastCalledWith([authoritativeSecondRow])
+  })
+
+  it('preserves a desktop selection when its batch mutation fails', async () => {
+    storeMock.settleRows.mockRejectedValueOnce(new Error('conflict'))
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = mountPage()
+    wrapper.findComponent(TableStub).vm.$emit('selection-change', [rows[0]])
+    await nextTick()
+
+    await wrapper.find('.batch-settle-button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.batch-settle-button').text()).toContain('批量确认已结款（1）')
+  })
+
   it('clears selected rows when the customer filter changes', async () => {
     const wrapper = mountPage()
     const table = wrapper.findComponent(TableStub)

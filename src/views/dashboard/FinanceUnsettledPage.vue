@@ -235,7 +235,7 @@ async function handleBatchSettle() {
       if (committed) await reconcilePendingSelection()
     }
     if (!action.mobile) {
-      await clearSelection()
+      await reconcileDesktopSelection(rows)
     }
     ElMessage.success(`已将 ${rows.length} 个样品同步为已结款`)
   } catch {
@@ -277,6 +277,17 @@ async function reconcilePendingSelection() {
   pendingSettledIds.value = new Set()
   await nextTick()
   if (!isMobileLayout.value) tableRef.value?.clearSelection()
+}
+
+async function reconcileDesktopSelection(settledRows: UnsettledSampleRow[]) {
+  const settledIds = new Set(settledRows.map((row) => row.blockId))
+  const selectedIdSet = new Set(selectedRows.value.map((row) => row.blockId).filter((id) => !settledIds.has(id)))
+  const authoritativeSelection = store.unsettledRows.filter((row) => selectedIdSet.has(row.blockId))
+  if (!authoritativeSelection.length) {
+    await clearSelection()
+    return
+  }
+  selectedRows.value = authoritativeSelection
 }
 
 function beginAction() {
