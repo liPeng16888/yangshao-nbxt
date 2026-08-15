@@ -1,9 +1,11 @@
 import { fileURLToPath, URL } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
+import { VitePWA } from 'vite-plugin-pwa'
+import { pwaOptions } from './src/pwa/options'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), VitePWA(pwaOptions)],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url))
