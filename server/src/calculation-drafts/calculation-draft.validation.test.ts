@@ -64,6 +64,17 @@ const validCoefficient = {
   }]
 }
 
+function withPollutedObjectPrototype<T>(key: string, value: unknown, run: () => T): T {
+  const previous = Object.getOwnPropertyDescriptor(Object.prototype, key)
+  Object.defineProperty(Object.prototype, key, { configurable: true, value })
+  try {
+    return run()
+  } finally {
+    if (previous) Object.defineProperty(Object.prototype, key, previous)
+    else Reflect.deleteProperty(Object.prototype, key)
+  }
+}
+
 describe('calculation draft validation', () => {
   it('preserves a complete standard-sample draft', () => {
     expect(normalizeCalculationDraft('STANDARD_SAMPLE', validStandard)).toEqual(validStandard)
@@ -76,6 +87,62 @@ describe('calculation draft validation', () => {
       ...validStandard,
       aluminum: { ...validStandard.aluminum, injected: true }
     })).toThrow('草稿字段无效')
+  })
+
+  it('rejects an inherited top-level field supplied by Object.prototype pollution', () => {
+    const { parameters: _omitted, ...payloadWithoutParameters } = validCoefficient
+
+    withPollutedObjectPrototype('parameters', validCoefficient.parameters, () => {
+      expect(() => normalizeCalculationDraft('COEFFICIENT', payloadWithoutParameters))
+        .toThrow('草稿字段无效')
+    })
+  })
+
+  it('rejects an inherited nested input supplied by Object.prototype pollution', () => {
+    const { highReading: _omitted, ...aluminumWithoutHighReading } = validStandard.aluminum
+
+    withPollutedObjectPrototype('highReading', validStandard.aluminum.highReading, () => {
+      expect(() => normalizeCalculationDraft('STANDARD_SAMPLE', {
+        ...validStandard,
+        aluminum: aluminumWithoutHighReading
+      })).toThrow('草稿字段无效')
+    })
+  })
+
+  it('rejects an inherited row identity supplied by Object.prototype pollution', () => {
+    const { id: _omitted, ...rowWithoutId } = validCoefficient.standardRows[0]
+
+    withPollutedObjectPrototype('id', validCoefficient.standardRows[0].id, () => {
+      expect(() => normalizeCalculationDraft('COEFFICIENT', {
+        ...validCoefficient,
+        standardRows: [rowWithoutId]
+      })).toThrow('草稿字段无效')
+    })
+  })
+
+  it('rejects symbol own keys', () => {
+    const symbolPayload = { ...validStandard }
+    Object.defineProperty(symbolPayload, Symbol('injected'), { enumerable: true, value: true })
+    expect(() => normalizeCalculationDraft('STANDARD_SAMPLE', symbolPayload)).toThrow('草稿字段无效')
+  })
+
+  it('rejects non-enumerable unknown own keys', () => {
+    const hiddenPayload = { ...validStandard }
+    Object.defineProperty(hiddenPayload, 'injected', { enumerable: false, value: true })
+    expect(() => normalizeCalculationDraft('STANDARD_SAMPLE', hiddenPayload)).toThrow('草稿字段无效')
+  })
+
+  it('rejects objects with custom prototypes', () => {
+    const customPrototypePayload = Object.assign(Object.create({ injected: true }), validStandard)
+    expect(() => normalizeCalculationDraft('STANDARD_SAMPLE', customPrototypePayload)).toThrow('草稿格式无效')
+  })
+
+  it('safely rebuilds a complete null-prototype payload', () => {
+    const nullPrototypePayload = Object.assign(Object.create(null), validStandard)
+    const normalized = normalizeCalculationDraft('STANDARD_SAMPLE', nullPrototypePayload)
+    expect(normalized).toEqual(validStandard)
+    expect(Object.getPrototypeOf(normalized)).toBe(Object.prototype)
+    expect(Reflect.ownKeys(normalized)).toEqual(['aluminum', 'silicon', 'iron'])
   })
 
   it('requires every standard-sample input to be a finite number or null', () => {
@@ -129,7 +196,7 @@ describe('calculation draft validation', () => {
     expect(() => normalizeCalculationDraft('COEFFICIENT', {
       ...validCoefficient,
       parameters: missingParameter
-    })).toThrow('必须是有限数字')
+    })).toThrow('草稿字段无效')
   })
 
   it.each([0, 51, 1.5, Number.NaN])('rejects unsupported add count %s', (count) => {
@@ -151,6 +218,13 @@ describe('calculation draft validation', () => {
         id: `calculation-${index + 1}`
       }))
     })).toThrow('样品最多 50 项')
+  })
+
+  it.each(['standardRows', 'calculationRows'] as const)('rejects sparse %s arrays', (collection) => {
+    expect(() => normalizeCalculationDraft('COEFFICIENT', {
+      ...validCoefficient,
+      [collection]: new Array(1)
+    })).toThrow('样品格式无效')
   })
 
   it('requires non-empty unique row ids within each collection', () => {

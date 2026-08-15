@@ -124,6 +124,9 @@ function normalizeRows<T>(value: unknown, normalizeRow: (source: PlainObject) =>
   if (!Array.isArray(value)) throw new BadRequestException('样品必须是数组')
   if (value.length < 1) throw new BadRequestException('样品至少 1 项')
   if (value.length > 50) throw new BadRequestException('样品最多 50 项')
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) throw new BadRequestException('样品格式无效')
+  }
   const ids = new Set<string>()
   return value.map((row) => {
     const normalized = normalizeRow(requirePlainObject(row))
@@ -146,7 +149,9 @@ function normalizeNullableNumbers<T>(
 
 function requireAllowedKeys(source: PlainObject, allowedKeys: readonly string[]) {
   const allowed = new Set(allowedKeys)
-  if (Object.keys(source).some((key) => !allowed.has(key))) {
+  const hasInvalidKey = Reflect.ownKeys(source).some((key) => typeof key !== 'string' || !allowed.has(key))
+  const hasMissingKey = allowedKeys.some((key) => !Object.hasOwn(source, key))
+  if (hasInvalidKey || hasMissingKey) {
     throw new BadRequestException('草稿字段无效')
   }
 }
