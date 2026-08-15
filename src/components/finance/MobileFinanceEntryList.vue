@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import type { ComponentPublicInstance } from 'vue'
 import MobileFilterDrawer from '@/components/mobile/MobileFilterDrawer.vue'
 import type { FinanceEntry } from '@/types/finance'
 import { getFinanceScreenshotUrls } from './useFinanceEntryDraft'
@@ -8,17 +9,20 @@ const props = defineProps<{
   month: string
   entries: FinanceEntry[]
   loading?: boolean
+  loadError?: string
   deletingId?: string
 }>()
 
 const emit = defineEmits<{
   monthChange: [month: string]
+  retry: []
   deleteRequest: [row: FinanceEntry]
 }>()
 
 const filterOpen = ref(false)
 const draftMonth = ref(props.month)
 const sortedEntries = computed(() => [...props.entries].sort((a, b) => b.paymentDate.localeCompare(a.paymentDate)))
+const previewInstances = new Map<string, ComponentPublicInstance & { showPreview: () => void }>()
 
 watch(filterOpen, (open) => {
   if (open) draftMonth.value = props.month
@@ -38,6 +42,22 @@ function resetMonth() {
 
 function money(value: number) {
   return `¥${Number(value).toFixed(2)}`
+}
+
+function previewKey(rowId: string, index: number) {
+  return `${rowId}:${index}`
+}
+
+function setPreviewInstance(key: string, instance: Element | ComponentPublicInstance | null) {
+  if (instance && 'showPreview' in instance && typeof instance.showPreview === 'function') {
+    previewInstances.set(key, instance as ComponentPublicInstance & { showPreview: () => void })
+  } else {
+    previewInstances.delete(key)
+  }
+}
+
+function openScreenshotPreview(key: string) {
+  previewInstances.get(key)?.showPreview()
 }
 </script>
 
@@ -62,6 +82,10 @@ function money(value: number) {
     </header>
 
     <p v-if="loading" class="mobile-finance-entry-list__state" role="status" aria-live="polite">支出明细加载中…</p>
+    <div v-else-if="loadError" class="mobile-finance-entry-list__error" data-testid="mobile-finance-load-error" role="alert">
+      <span>{{ loadError }}</span>
+      <button data-testid="mobile-finance-retry" class="mobile-touch-target" type="button" @click="emit('retry')">重试</button>
+    </div>
     <p v-else-if="!sortedEntries.length" class="mobile-finance-entry-list__state empty-text" role="status">本月暂无支出记录</p>
     <div v-else class="mobile-finance-entry-list__cards">
       <article v-for="row in sortedEntries" :key="row.id" class="mobile-expense-card" data-testid="mobile-expense-card" :data-entry-id="row.id">
@@ -81,14 +105,28 @@ function money(value: number) {
             <dt>支付截图</dt>
             <dd>
               <div v-if="getFinanceScreenshotUrls(row).length" class="mobile-expense-card__thumbs">
-                <el-image
-                  v-for="url in getFinanceScreenshotUrls(row)"
+                <button
+                  v-for="(url, index) in getFinanceScreenshotUrls(row)"
                   :key="url"
-                  :src="url"
-                  fit="cover"
-                  :preview-src-list="getFinanceScreenshotUrls(row)"
-                  class="mobile-expense-card__thumb"
-                />
+                  data-testid="mobile-expense-preview"
+                  class="mobile-expense-card__preview mobile-touch-target"
+                  style="min-width: 44px; min-height: 44px"
+                  type="button"
+                  :aria-label="`查看${row.item}第 ${index + 1} 张支付截图`"
+                  @click="openScreenshotPreview(previewKey(row.id, index))"
+                  @keydown.enter.prevent.stop="openScreenshotPreview(previewKey(row.id, index))"
+                  @keydown.space.prevent.stop="openScreenshotPreview(previewKey(row.id, index))"
+                >
+                  <el-image
+                    :ref="(instance: Element | ComponentPublicInstance | null) => setPreviewInstance(previewKey(row.id, index), instance)"
+                    :src="url"
+                    fit="cover"
+                    :preview-src-list="getFinanceScreenshotUrls(row)"
+                    :initial-index="index"
+                    class="mobile-expense-card__thumb"
+                    @click.stop
+                  />
+                </button>
               </div>
               <span v-else class="empty-text">无信息</span>
             </dd>
@@ -160,6 +198,26 @@ function money(value: number) {
   text-align: center;
 }
 
+.mobile-finance-entry-list__error {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+}
+
+.mobile-finance-entry-list__error button {
+  justify-self: start;
+  min-height: 44px;
+  padding: 8px 16px;
+  color: #991b1b;
+  background: #fff;
+  border: 1px solid #ef9a9a;
+  border-radius: 8px;
+}
+
 .mobile-expense-card {
   display: grid;
   min-width: 0;
@@ -217,6 +275,23 @@ function money(value: number) {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.mobile-expense-card__preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #d8e1eb;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.mobile-expense-card__preview:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 35%);
+  outline-offset: 2px;
 }
 
 .mobile-expense-card__thumb {

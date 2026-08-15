@@ -7,8 +7,10 @@
       :month="financeStore.month"
       :entries="financeStore.entries"
       :loading="financeStore.loading"
+      :load-error="financeStore.loadError"
       :deleting-id="financeStore.deletingId"
       @month-change="financeStore.loadEntries"
+      @retry="financeStore.retryEntries"
       @delete-request="handleDeleteRequest"
     />
     <FinanceMonthTable
@@ -24,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onBeforeUnmount, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FinanceEntryForm from '@/components/finance/FinanceEntryForm.vue'
 import FinanceMonthTable from '@/components/finance/FinanceMonthTable.vue'
@@ -39,6 +41,10 @@ const { isMobileLayout } = useMobileLayout()
 
 onMounted(() => {
   financeStore.loadEntries()
+})
+
+onBeforeUnmount(() => {
+  financeStore.cancelEntryLoads()
 })
 
 async function handleCreate(payloads: FinancePayload[]) {

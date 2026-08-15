@@ -38,6 +38,34 @@ describe('finance entry draft helpers', () => {
     expect(validateRows('2026-08-15', [first])).toBe('')
   })
 
+  it('requires at least one row and a strict real calendar payment date', () => {
+    expect(validateRows('2026-08-15', [])).toBe('请至少保留一条开支记录')
+    const row = createRow()
+    Object.assign(row, { item: '试剂', amount: 1, paymentMethod: 'cash' })
+    expect(validateRows(undefined as never, [row])).toBe('请选择支付日期')
+    expect(validateRows('2026-2-3', [row])).toBe('支付日期格式无效')
+    expect(validateRows('2026-02-30', [row])).toBe('支付日期格式无效')
+    expect(validateRows('2024-02-29', [row])).toBe('')
+  })
+
+  it.each([1.234, 0.001])('rejects positive finance amount %s with more than two decimal places', (amount) => {
+    const row = createRow()
+    Object.assign(row, { item: '试剂', amount, paymentMethod: 'cash' })
+    expect(validateRows('2026-08-15', [row])).toBe('第 1 行：开支金额最多保留两位小数')
+  })
+
+  it.each([0.01, 1.2, 123456.78])('accepts positive finance amount %s with at most two decimal places', (amount) => {
+    const row = createRow()
+    Object.assign(row, { item: '试剂', amount, paymentMethod: 'online' })
+    expect(validateRows('2026-08-15', [row])).toBe('')
+  })
+
+  it('rejects a runtime payment method outside the shared cash or online contract', () => {
+    const row = createRow()
+    Object.assign(row, { item: '试剂', amount: 1, paymentMethod: 'card' })
+    expect(validateRows('2026-08-15', [row])).toBe('第 1 行：支付方式必须为现金或线上')
+  })
+
   it('builds the same payloads for desktop and mobile drafts and uploads the same local files', async () => {
     const receipt = new File(['receipt'], 'receipt.png', { type: 'image/png', lastModified: 1 })
     const desktopRow = createRow()
@@ -116,6 +144,25 @@ describe('finance entry draft helpers', () => {
     const desktopPayloads = desktop.emitted('submit')?.[0]?.[0]
     expect(save).toHaveBeenCalledWith(desktopPayloads)
     expect(mocks.uploadImages.mock.calls).toEqual([[[receipt]], [[receipt]]])
+    desktop.unmount()
+    mobile.unmount()
+  })
+
+  it('makes desktop and mobile both reject a positive amount beyond two decimals without uploading or emitting', async () => {
+    const save = vi.fn(async (_payloads: FinancePayload[]) => undefined)
+    const desktop = mount(FinanceEntryForm, { global: { plugins: [ElementPlus] } })
+    const mobile = mount(MobileFinanceEntryForm, { props: { save }, global: { plugins: [ElementPlus] } })
+    const desktopDraft = (desktop.vm as unknown as { rows: ExpenseDraftRow[] }).rows[0]
+    const mobileDraft = (mobile.vm as unknown as { rows: ExpenseDraftRow[] }).rows[0]
+    for (const row of [desktopDraft, mobileDraft]) Object.assign(row, { item: '同一开支', amount: 1.234, paymentMethod: 'cash' })
+
+    await desktop.get('.finance-form__actions button').trigger('click')
+    await mobile.get('[data-testid="mobile-finance-save"]').trigger('click')
+    await flushPromises()
+
+    expect(desktop.emitted('submit')).toBeUndefined()
+    expect(save).not.toHaveBeenCalled()
+    expect(mocks.uploadImages).not.toHaveBeenCalled()
     desktop.unmount()
     mobile.unmount()
   })

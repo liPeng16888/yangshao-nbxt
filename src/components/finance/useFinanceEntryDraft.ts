@@ -26,14 +26,36 @@ export function createRow(): ExpenseDraftRow {
 }
 
 export function validateRows(paymentDate: string, rows: ExpenseDraftRow[]) {
-  if (!paymentDate.trim()) return '请选择支付日期'
+  const normalizedPaymentDate = typeof paymentDate === 'string' ? paymentDate.trim() : ''
+  if (!normalizedPaymentDate) return '请选择支付日期'
+  if (!isStrictCalendarDate(normalizedPaymentDate)) return '支付日期格式无效'
+  if (!rows.length) return '请至少保留一条开支记录'
   for (const [index, row] of rows.entries()) {
     const rowNumber = index + 1
     if (!row.item.trim()) return `第 ${rowNumber} 行：开支项目必填`
-    if (!Number.isFinite(Number(row.amount)) || Number(row.amount) <= 0) return `第 ${rowNumber} 行：开支金额必须大于 0`
+    const amount = Number(row.amount)
+    if (!Number.isFinite(amount) || amount <= 0) return `第 ${rowNumber} 行：开支金额必须大于 0`
+    const cents = amount * 100
+    if (Math.abs(cents - Math.round(cents)) > 1e-8) return `第 ${rowNumber} 行：开支金额最多保留两位小数`
     if (!row.paymentMethod) return `第 ${rowNumber} 行：支付方式必填`
+    if (row.paymentMethod !== 'cash' && row.paymentMethod !== 'online') return `第 ${rowNumber} 行：支付方式必须为现金或线上`
   }
   return ''
+}
+
+function isStrictCalendarDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return false
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false
+  const daysInMonth = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  return day <= daysInMonth[month - 1]
+}
+
+function isLeapYear(year: number) {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
 }
 
 export async function buildPayloads(

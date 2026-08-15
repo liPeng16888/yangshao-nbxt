@@ -9,17 +9,38 @@ export const useFinanceStore = defineStore('finance', () => {
   const entries = ref<FinanceEntry[]>([])
   const months = ref<string[]>([])
   const loading = ref(false)
+  const loadError = ref('')
   const deletingId = ref('')
+  let loadVersion = 0
+  let lastRequestedMonth = month.value
 
   async function loadEntries(nextMonth = month.value) {
+    const requestVersion = ++loadVersion
+    lastRequestedMonth = nextMonth
     loading.value = true
+    loadError.value = ''
     try {
+      const [nextEntries, nextMonths] = await Promise.all([getFinanceEntries(nextMonth), getFinanceMonths()])
+      if (requestVersion !== loadVersion) return
       month.value = nextMonth
-      entries.value = sortEntriesByPaymentDate(await getFinanceEntries(nextMonth))
-      months.value = await getFinanceMonths()
+      entries.value = sortEntriesByPaymentDate(nextEntries)
+      months.value = nextMonths
+    } catch {
+      if (requestVersion !== loadVersion) return
+      loadError.value = `${nextMonth} 支出明细加载失败，请重试`
     } finally {
-      loading.value = false
+      if (requestVersion === loadVersion) loading.value = false
     }
+  }
+
+  function retryEntries() {
+    return loadEntries(lastRequestedMonth)
+  }
+
+  function cancelEntryLoads() {
+    loadVersion += 1
+    loading.value = false
+    loadError.value = ''
   }
 
   async function addEntry(payload: FinancePayload) {
@@ -50,7 +71,20 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
-  return { month, entries, months, loading, deletingId, loadEntries, addEntry, addEntries, requestEntryDeletion }
+  return {
+    month,
+    entries,
+    months,
+    loading,
+    loadError,
+    deletingId,
+    loadEntries,
+    retryEntries,
+    cancelEntryLoads,
+    addEntry,
+    addEntries,
+    requestEntryDeletion
+  }
 })
 
 function sortEntriesByPaymentDate(rows: FinanceEntry[]) {

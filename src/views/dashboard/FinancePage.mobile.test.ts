@@ -65,6 +65,23 @@ function mountForm(save: (payloads: FinancePayload[]) => Promise<void> = async (
   return mount(MobileFinanceEntryForm, { props: { save }, ...mountOptions() })
 }
 
+function mountRealPreviewList() {
+  return mount(MobileFinanceEntryList, {
+    props: {
+      month: '2026-08',
+      entries: [{
+        ...entries[0],
+        screenshotUrl: 'https://example.com/receipt-1.png',
+        screenshotUrls: ['https://example.com/receipt-1.png', 'https://example.com/receipt-2.png']
+      }]
+    },
+    global: {
+      plugins: [ElementPlus],
+      stubs: { ElDrawer: DrawerStub, teleport: true }
+    }
+  })
+}
+
 function draftCard(wrapper: ReturnType<typeof mountForm>, index = 0) {
   return wrapper.findAll('[data-testid="mobile-expense-draft-card"]')[index]
 }
@@ -93,8 +110,11 @@ describe('FinancePage mobile', () => {
       month: '2026-08',
       entries: entries.map((row) => ({ ...row, screenshotUrls: [...(row.screenshotUrls || [])] })),
       loading: false,
+      loadError: '',
       deletingId: '',
       loadEntries: vi.fn(async () => undefined),
+      retryEntries: vi.fn(async () => undefined),
+      cancelEntryLoads: vi.fn(),
       addEntries: vi.fn(async () => undefined),
       requestEntryDeletion: vi.fn(async () => undefined)
     }
@@ -256,5 +276,53 @@ describe('FinancePage mobile', () => {
     await wrapper.findAll('[data-testid="mobile-expense-card"]')[0].get('[data-testid="mobile-expense-delete"]').trigger('click')
     expect(wrapper.emitted('monthChange')).toEqual([['2026-06']])
     expect(wrapper.emitted('deleteRequest')).toEqual([[entries[0]]])
+  })
+
+  it('hides retained cards behind a mobile load error and retries the exact store request', async () => {
+    mocks.financeStore.loadError = '2026-07 支出明细加载失败，请重试'
+    const wrapper = mountPage(true)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="mobile-finance-load-error"]').text()).toContain('2026-07')
+    expect(wrapper.find('[data-testid="mobile-expense-card"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="mobile-finance-retry"]').trigger('click')
+    expect(mocks.financeStore.retryEntries).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels pending finance loads when the page unmounts', () => {
+    const wrapper = mountPage(true)
+    wrapper.unmount()
+    expect(mocks.financeStore.cancelEntryLoads).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders every screenshot preview as a named 44px native keyboard target', async () => {
+    const wrapper = mountRealPreviewList()
+    await flushPromises()
+    const triggers = wrapper.findAll('[data-testid="mobile-expense-preview"]')
+
+    expect(triggers).toHaveLength(2)
+    expect(triggers[0].element.tagName).toBe('BUTTON')
+    expect(triggers[0].attributes('aria-label')).toBe('查看标准物质第 1 张支付截图')
+    expect((triggers[0].element as HTMLButtonElement).tabIndex).toBe(0)
+    expect(getComputedStyle(triggers[0].element).minHeight).toBe('44px')
+  })
+
+  it('opens the correct real Element Plus screenshot from the keyboard', async () => {
+    const wrapper = mountRealPreviewList()
+    await flushPromises()
+    const second = wrapper.findAll('[data-testid="mobile-expense-preview"]')[1]
+    await second.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+
+    expect(wrapper.get('.el-image-viewer__img').attributes('src')).toBe('https://example.com/receipt-2.png')
+  })
+
+  it('opens the correct real Element Plus screenshot on click', async () => {
+    const wrapper = mountRealPreviewList()
+    await flushPromises()
+    await wrapper.findAll('[data-testid="mobile-expense-preview"]')[0].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.el-image-viewer__img').attributes('src')).toBe('https://example.com/receipt-1.png')
   })
 })
