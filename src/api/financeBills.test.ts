@@ -8,7 +8,7 @@ vi.mock('@/utils/request', () => ({
   useMocks: false
 }))
 
-import { getIncomeBillReport, getUnsettledSamples, markSamplesAsPaid } from './financeBills'
+import { getIncomeBillReport, getPrepaidRecharges, getPrepaidReport, getUnsettledSamples, markSamplesAsPaid } from './financeBills'
 
 const rows: UnsettledSampleRow[] = [
   {
@@ -53,6 +53,18 @@ describe('finance bills batch payment API', () => {
     expect(requestMock.get).toHaveBeenNthCalledWith(2, '/finance/unsettled-samples', {
       signal: unsettledController.signal
     })
+  })
+
+  it('forwards scoped abort signals to both prepaid GET endpoints', async () => {
+    const rechargeController = new AbortController()
+    const reportController = new AbortController()
+    requestMock.get.mockResolvedValueOnce([]).mockResolvedValueOnce({ customerRows: [], dailyRows: [] })
+
+    await getPrepaidRecharges({ signal: rechargeController.signal })
+    await getPrepaidReport({ signal: reportController.signal })
+
+    expect(requestMock.get).toHaveBeenNthCalledWith(1, '/finance/prepaid-recharges', { signal: rechargeController.signal })
+    expect(requestMock.get).toHaveBeenNthCalledWith(2, '/finance/prepaid-report', { signal: reportController.signal })
   })
 
   it('sends unique block ids to the batch payment endpoint', async () => {

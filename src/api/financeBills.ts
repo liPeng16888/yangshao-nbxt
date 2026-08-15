@@ -117,8 +117,9 @@ export async function updateMonthlySettlementSummary(row: MonthlySettlementSumma
   return savedRow
 }
 
-export async function getPrepaidRecharges(): Promise<PrepaidRechargeRow[]> {
-  if (!useMocks) return request.get('/finance/prepaid-recharges')
+export async function getPrepaidRecharges(options: FinanceLoadOptions = {}): Promise<PrepaidRechargeRow[]> {
+  if (!useMocks) return request.get('/finance/prepaid-recharges', { signal: options.signal })
+  throwIfAborted(options.signal)
   return loadPrepaidRecharges()
 }
 
@@ -144,11 +145,13 @@ export async function requestPrepaidRechargeDeletion(sourceId: string, reason: s
   return { id: `delete-request-${Date.now()}`, status: 'PENDING' }
 }
 
-export async function getPrepaidReport(): Promise<PrepaidReport> {
-  if (!useMocks) return request.get('/finance/prepaid-report')
+export async function getPrepaidReport(options: FinanceLoadOptions = {}): Promise<PrepaidReport> {
+  if (!useMocks) return request.get('/finance/prepaid-report', { signal: options.signal })
+  throwIfAborted(options.signal)
   await getLabSheetByDate(businessDateInBeijing())
   const history = await getLabSheetHistory()
   const dailyRows = await Promise.all(history.map(async (sheet) => getPrepaidDailyRowsFromSheet(await getLabSheetByDate(sheet.date))))
+  throwIfAborted(options.signal)
   return summarizePrepaidReport(loadPrepaidRecharges(), dailyRows.flat(), loadRecord(PREPAID_CUSTOMER_REMARK_STORAGE_KEY), loadRecord(PREPAID_USAGE_REMARK_STORAGE_KEY))
 }
 

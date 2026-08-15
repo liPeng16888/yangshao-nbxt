@@ -55,10 +55,15 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   let incomeLoadVersion = 0
   let unsettledLoadVersion = 0
   let monthlySettlementLoadVersion = 0
+  let prepaidRechargeLoadVersion = 0
+  let prepaidReportLoadVersion = 0
+  let prepaidMutationVersion = 0
   let unsettledMutationVersion = 0
   let activeIncomeLoad: ActiveLoad | null = null
   let activeUnsettledLoad: ActiveLoad | null = null
   let activeMonthlySettlementLoad: ActiveLoad | null = null
+  let activePrepaidRechargeLoad: ActiveLoad | null = null
+  let activePrepaidReportLoad: ActiveLoad | null = null
 
   async function loadIncomeReport(nextMonth = month.value, options: ScopedLoadOptions = {}) {
     activeIncomeLoad?.controller.abort()
@@ -219,21 +224,57 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     }
   }
 
-  async function loadPrepaidRecharges() {
+  async function loadPrepaidRecharges(options: ScopedLoadOptions = {}) {
+    activePrepaidRechargeLoad?.controller.abort()
+    const requestVersion = ++prepaidRechargeLoadVersion
+    const mutationAtStart = prepaidMutationVersion
+    const activeLoad: ActiveLoad = {
+      controller: new AbortController(),
+      scope: options.scope ?? Symbol('finance-prepaid-recharge-load')
+    }
+    activePrepaidRechargeLoad = activeLoad
     loading.value = true
     try {
-      prepaidRecharges.value = await getPrepaidRecharges()
+      const rows = await getPrepaidRecharges({ signal: activeLoad.controller.signal })
+      if (
+        requestVersion !== prepaidRechargeLoadVersion ||
+        mutationAtStart !== prepaidMutationVersion ||
+        activeLoad.controller.signal.aborted
+      ) return false
+      prepaidRecharges.value = rows
+      return true
+    } catch (error) {
+      if (requestVersion !== prepaidRechargeLoadVersion || activeLoad.controller.signal.aborted) return false
+      throw error
     } finally {
-      loading.value = false
+      if (activePrepaidRechargeLoad === activeLoad) {
+        activePrepaidRechargeLoad = null
+        loading.value = false
+      }
     }
+  }
+
+  function retryPrepaidRecharges(options: ScopedLoadOptions = {}) {
+    return loadPrepaidRecharges(options)
+  }
+
+  function cancelPrepaidRechargeLoads(scope?: symbol) {
+    if (scope && activePrepaidRechargeLoad?.scope !== scope) return
+    activePrepaidRechargeLoad?.controller.abort()
+    activePrepaidRechargeLoad = null
+    prepaidRechargeLoadVersion += 1
+    loading.value = false
   }
 
   async function addPrepaidRecharge(payload: PrepaidRechargePayload) {
     prepaidSaving.value = true
     try {
       const row = await createPrepaidRecharge(payload)
+      prepaidMutationVersion += 1
+      const mutationVersion = prepaidMutationVersion
       prepaidRecharges.value = [row, ...prepaidRecharges.value.filter((item) => item.id !== row.id)]
-      prepaidReport.value = await getPrepaidReport()
+      const report = await getPrepaidReport()
+      if (mutationVersion === prepaidMutationVersion) prepaidReport.value = report
       return row
     } finally {
       prepaidSaving.value = false
@@ -247,25 +288,62 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
       prepaidRecharges.value = prepaidRecharges.value.map((item) =>
         item.id === row.id ? { ...item, deleteRequestId: requestRow.id, deleteRequestStatus: requestRow.status } : item
       )
+      prepaidMutationVersion += 1
       return requestRow
     } finally {
       prepaidDeletingId.value = ''
     }
   }
 
-  async function loadPrepaidReport() {
+  async function loadPrepaidReport(options: ScopedLoadOptions = {}) {
+    activePrepaidReportLoad?.controller.abort()
+    const requestVersion = ++prepaidReportLoadVersion
+    const mutationAtStart = prepaidMutationVersion
+    const activeLoad: ActiveLoad = {
+      controller: new AbortController(),
+      scope: options.scope ?? Symbol('finance-prepaid-report-load')
+    }
+    activePrepaidReportLoad = activeLoad
     loading.value = true
     try {
-      prepaidReport.value = await getPrepaidReport()
+      const report = await getPrepaidReport({ signal: activeLoad.controller.signal })
+      if (
+        requestVersion !== prepaidReportLoadVersion ||
+        mutationAtStart !== prepaidMutationVersion ||
+        activeLoad.controller.signal.aborted
+      ) return false
+      prepaidReport.value = report
+      return true
+    } catch (error) {
+      if (requestVersion !== prepaidReportLoadVersion || activeLoad.controller.signal.aborted) return false
+      throw error
     } finally {
-      loading.value = false
+      if (activePrepaidReportLoad === activeLoad) {
+        activePrepaidReportLoad = null
+        loading.value = false
+      }
     }
+  }
+
+  function retryPrepaidReport(options: ScopedLoadOptions = {}) {
+    return loadPrepaidReport(options)
+  }
+
+  function cancelPrepaidReportLoads(scope?: symbol) {
+    if (scope && activePrepaidReportLoad?.scope !== scope) return
+    activePrepaidReportLoad?.controller.abort()
+    activePrepaidReportLoad = null
+    prepaidReportLoadVersion += 1
+    loading.value = false
   }
 
   async function savePrepaidCustomerRemark(customer: string, remark: string) {
     prepaidRemarkSavingId.value = `customer__${customer}`
     try {
       await updatePrepaidCustomerRemark(customer, remark)
+      prepaidMutationVersion += 1
+      const row = prepaidReport.value?.customerRows.find((item) => item.customer === customer)
+      if (row) row.remark = remark
     } finally {
       prepaidRemarkSavingId.value = ''
     }
@@ -275,6 +353,9 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     prepaidRemarkSavingId.value = id
     try {
       await updatePrepaidUsageRemark(id, remark)
+      prepaidMutationVersion += 1
+      const row = prepaidReport.value?.dailyRows.find((item) => item.id === id)
+      if (row) row.remark = remark
     } finally {
       prepaidRemarkSavingId.value = ''
     }
@@ -306,9 +387,13 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     settleRows,
     saveMonthlySettlementRow,
     loadPrepaidRecharges,
+    retryPrepaidRecharges,
+    cancelPrepaidRechargeLoads,
     addPrepaidRecharge,
     requestPrepaidDeletion,
     loadPrepaidReport,
+    retryPrepaidReport,
+    cancelPrepaidReportLoads,
     savePrepaidCustomerRemark,
     savePrepaidUsageRemark
   }

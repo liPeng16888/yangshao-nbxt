@@ -7,12 +7,18 @@ import { useLabSheetStore } from './labSheet'
 import { useFinanceBillsStore } from './financeBills'
 
 const apiMocks = vi.hoisted(() => ({
+  createPrepaidRecharge: vi.fn(),
   getIncomeBillReport: vi.fn(),
   getMonthlySettlementReport: vi.fn(),
+  getPrepaidRecharges: vi.fn(),
+  getPrepaidReport: vi.fn(),
   getUnsettledSamples: vi.fn(),
   markSampleAsPaid: vi.fn(),
   markSamplesAsPaid: vi.fn(),
-  updateMonthlySettlementSummary: vi.fn()
+  requestPrepaidRechargeDeletion: vi.fn(),
+  updateMonthlySettlementSummary: vi.fn(),
+  updatePrepaidCustomerRemark: vi.fn(),
+  updatePrepaidUsageRemark: vi.fn()
 }))
 
 vi.mock('@/api/financeBills', () => apiMocks)
@@ -418,5 +424,84 @@ describe('finance bills store', () => {
     await financeBillsStore.saveMonthlySettlementRow(savedRow)
 
     expect(financeBillsStore.monthlySettlementReport?.summaryRows[0]).toEqual(savedRow)
+  })
+
+  it('commits only the latest prepaid recharge load and aborts the stale request', async () => {
+    const older = deferred<any[]>()
+    const latest = deferred<any[]>()
+    const prepaidRow = {
+      id: 'prepaid-row', rechargeDate: '2026-08-15', customer: '客户甲', amount: 100, usableTimes: 5, remark: ''
+    }
+    let olderSignal: AbortSignal | undefined
+    apiMocks.getPrepaidRecharges
+      .mockImplementationOnce((options) => {
+        olderSignal = options?.signal
+        return older.promise
+      })
+      .mockImplementationOnce(() => latest.promise)
+    const store = useFinanceBillsStore()
+
+    const olderLoad = store.loadPrepaidRecharges({ scope: Symbol('older-add-page') })
+    const latestLoad = store.loadPrepaidRecharges({ scope: Symbol('latest-add-page') })
+    expect(olderSignal?.aborted).toBe(true)
+    latest.resolve([{ ...prepaidRow, id: 'latest' }])
+    await expect(latestLoad).resolves.toBe(true)
+    older.resolve([{ ...prepaidRow, id: 'older' }])
+    await expect(olderLoad).resolves.toBe(false)
+
+    expect(store.prepaidRecharges.map((item) => item.id)).toEqual(['latest'])
+  })
+
+  it('aborts and absorbs a prepaid report rejection after its owning page unmounts', async () => {
+    const pending = deferred<any>()
+    let signal: AbortSignal | undefined
+    apiMocks.getPrepaidReport.mockImplementationOnce((options) => {
+      signal = options?.signal
+      return pending.promise
+    })
+    const store = useFinanceBillsStore()
+    const scope = Symbol('prepaid-customers-page')
+    const load = store.loadPrepaidReport({ scope })
+
+    store.cancelPrepaidReportLoads(scope)
+    expect(signal?.aborted).toBe(true)
+    pending.reject(new Error('late prepaid report rejection'))
+    await expect(load).resolves.toBe(false)
+    expect(store.prepaidReport).toBeNull()
+    expect(store.loading).toBe(false)
+  })
+
+  it('keeps the latest prepaid failures observable for page error and retry handling', async () => {
+    apiMocks.getPrepaidRecharges.mockRejectedValueOnce(new Error('recharges failed'))
+    apiMocks.getPrepaidReport.mockRejectedValueOnce(new Error('report failed'))
+    const store = useFinanceBillsStore()
+
+    await expect(store.loadPrepaidRecharges({ scope: Symbol('add-page') })).rejects.toThrow('recharges failed')
+    await expect(store.loadPrepaidReport({ scope: Symbol('customers-page') })).rejects.toThrow('report failed')
+    expect(store.loading).toBe(false)
+  })
+
+  it('does not let a delayed post-recharge report overwrite a newer saved remark', async () => {
+    const delayedReport = deferred<any>()
+    const savedRecharge = { id: 'prepaid-new', rechargeDate: '2026-08-16', customer: '客户甲', amount: 25, usableTimes: 2, remark: '' }
+    apiMocks.createPrepaidRecharge.mockResolvedValueOnce(savedRecharge)
+    apiMocks.getPrepaidReport.mockReturnValueOnce(delayedReport.promise)
+    apiMocks.updatePrepaidCustomerRemark.mockResolvedValueOnce({ customer: '客户甲', remark: '最新备注' })
+    const store = useFinanceBillsStore()
+    store.prepaidReport = {
+      customerRows: [{ id: 'customer-a', customer: '客户甲', totalAmount: 100, totalUsableTimes: 5, usedTimes: 1, availableTimes: 4, remark: '旧备注' }],
+      dailyRows: []
+    }
+
+    const add = store.addPrepaidRecharge(savedRecharge)
+    await Promise.resolve()
+    await store.savePrepaidCustomerRemark('客户甲', '最新备注')
+    delayedReport.resolve({
+      customerRows: [{ id: 'customer-a', customer: '客户甲', totalAmount: 125, totalUsableTimes: 7, usedTimes: 1, availableTimes: 6, remark: '旧备注' }],
+      dailyRows: []
+    })
+    await add
+
+    expect(store.prepaidReport?.customerRows[0].remark).toBe('最新备注')
   })
 })
