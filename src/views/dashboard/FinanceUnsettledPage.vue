@@ -61,7 +61,7 @@
         empty-text="暂无未结款样品"
         @selection-change="handleSelectionChange"
       >
-        <el-table-column type="selection" width="52" />
+        <el-table-column type="selection" width="52" reserve-selection />
         <el-table-column prop="date" label="日期" width="130" />
         <el-table-column prop="sequence" label="编号" width="90" />
         <el-table-column prop="sampleNumber" label="样品编号" min-width="150" />
@@ -123,7 +123,10 @@ const store = useFinanceBillsStore()
 const { isMobileLayout } = useMobileLayout()
 const selectedCustomers = ref<string[]>([])
 const selectedRows = ref<UnsettledSampleRow[]>([])
-const tableRef = ref<{ clearSelection: () => void }>()
+const tableRef = ref<{
+  clearSelection: () => void
+  toggleRowSelection: (row: UnsettledSampleRow, selected: boolean) => void
+}>()
 const actionPending = ref(false)
 const pendingSettledIds = ref<Set<string>>(new Set())
 const unsettledLoadScope = Symbol('finance-unsettled-page')
@@ -131,6 +134,7 @@ let viewVersion = 0
 let actionId = 0
 let activeActionId = 0
 let disposed = false
+let restoringDesktopSelection = false
 
 const customerOptions = computed(() => {
   return Array.from(new Set(store.unsettledRows.map((row) => row.customer))).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
@@ -194,6 +198,7 @@ async function handleSettle(row: UnsettledSampleRow, checked: string | number | 
 }
 
 function handleSelectionChange(rows: UnsettledSampleRow[]) {
+  if (restoringDesktopSelection) return
   selectedRows.value = rows
 }
 
@@ -257,7 +262,8 @@ function refreshRows() {
 function requestUnsettledRows() {
   void store.loadUnsettledRows({ scope: unsettledLoadScope })
     .then((committed) => {
-      if (committed && !disposed) return reconcilePendingSelection()
+      if (!committed || disposed) return
+      return isMobileLayout.value ? reconcilePendingSelection() : reconcileDesktopSelection([])
     })
     .catch(() => undefined)
 }
@@ -287,7 +293,16 @@ async function reconcileDesktopSelection(settledRows: UnsettledSampleRow[]) {
     await clearSelection()
     return
   }
-  selectedRows.value = authoritativeSelection
+  restoringDesktopSelection = true
+  try {
+    selectedRows.value = authoritativeSelection
+    await nextTick()
+    tableRef.value?.clearSelection()
+    authoritativeSelection.forEach((row) => tableRef.value?.toggleRowSelection(row, true))
+    await nextTick()
+  } finally {
+    restoringDesktopSelection = false
+  }
 }
 
 function beginAction() {

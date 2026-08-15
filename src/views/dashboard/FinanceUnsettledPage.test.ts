@@ -59,7 +59,10 @@ const TableStub = defineComponent({
   emits: ['selection-change'],
   setup(props, { emit, expose, slots }) {
     provide(tableRowsKey, computed(() => props.data))
-    expose({ clearSelection: () => emit('selection-change', []) })
+    expose({
+      clearSelection: () => emit('selection-change', []),
+      toggleRowSelection: () => undefined
+    })
     return () => h('div', { class: 'table-stub' }, slots.default?.())
   }
 })
