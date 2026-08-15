@@ -5,6 +5,7 @@ const props = defineProps<{
   title: string
   summary: string
   modelValue: boolean
+  fullscreen?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -34,9 +35,10 @@ const open = computed({
     <el-drawer
       v-model="open"
       class="mobile-filter-drawer__panel"
+      :class="{ 'mobile-filter-drawer__panel--fullscreen': fullscreen }"
       :title="title"
       direction="btt"
-      size="auto"
+      :size="fullscreen ? '100%' : 'auto'"
     >
       <slot />
 
