@@ -124,7 +124,9 @@ async function save() {
   attendanceSaving.value = true; formError.value = ''
   try {
     const saved = await store.runQuiet(() => api.saveAttendance(payload, context.editingId || undefined), true)
-    if (!currentEditor(context) || context.revision !== formRevision) return
+    if (!currentEditor(context)) return
+    if (!context.editingId && context.revision !== formRevision) { editingId.value = saved.id; return }
+    if (context.revision !== formRevision) return
     editingMetrics.value = { lateMinutes: saved.lateMinutes, earlyLeaveMinutes: saved.earlyLeaveMinutes, absenceMinutes: saved.absenceMinutes }
     visible.value = false; await load()
   } catch (error) { if (currentEditor(context) && context.revision === formRevision) formError.value = errorText(error, '保存失败') }

@@ -55,6 +55,7 @@ import type { Employee, EmployeePayload, RevealedEmployee } from '@/types/employ
 
 const store = useEmployeeAttendanceStore()
 const accessGuard = useAccessGuardStore()
+const accessRequestOwner = Symbol('employee-directory-page')
 const { isMobileLayout } = useMobileLayout()
 const keyword = ref(''), statusFilter = ref<Employee['status'] | ''>(''), visible = ref(false), editingId = ref(''), formError = ref('')
 const revealVisible = ref(false), revealed = ref<RevealedEmployee | null>(null), photoVisible = ref(false), photoUrl = ref('')
@@ -82,7 +83,7 @@ watch(visible, (open, previous) => {
     Object.assign(form, { idCard: '', bankCard: '', address: '', emergencyContact: '' })
   }
 })
-watch(isMobileLayout, () => { closeEditor(); releaseRevealed(); releasePhoto() })
+watch(isMobileLayout, () => { accessGuard.cancelAccess(accessRequestOwner); closeEditor(); releaseRevealed(); releasePhoto() })
 
 async function load() { if (pageActive) await store.loadEmployees().catch(() => undefined) }
 function openCreate() { editorSession += 1; editingId.value = ''; Object.assign(form, blank()); formError.value = ''; visible.value = true }
@@ -96,8 +97,10 @@ async function save() {
   const payload = api.buildEmployeeMutationPayload({ ...form }, Boolean(context.editingId))
   employeeSaving.value = true; formError.value = ''; store.clearError()
   try {
-    await store.runQuiet(() => context.editingId ? api.updateEmployee(context.editingId, payload) : api.createEmployee(payload), true)
-    if (!currentEditor(context) || context.revision !== formRevision) return
+    const saved = await store.runQuiet(() => context.editingId ? api.updateEmployee(context.editingId, payload) : api.createEmployee(payload), true)
+    if (!currentEditor(context)) return
+    if (!context.editingId && context.revision !== formRevision) { editingId.value = saved.id; return }
+    if (context.revision !== formRevision) return
     closeEditor(); await load(); if (pageActive) ElMessage.success('员工档案已保存')
   } catch (error) { if (currentEditor(context) && context.revision === formRevision) formError.value = errorText(error, '保存失败') }
   finally { if (pageActive && context.operation === saveOperation) employeeSaving.value = false }
@@ -120,7 +123,7 @@ async function reveal(row: Employee) {
     const sessions = JSON.parse(window.localStorage.getItem('ys_access_guard_group_sessions') || '{}') as Record<string, { token?: string; expiresAt?: number; features?: string[] }>
     if (!api.selectEmployeeAttendanceGrant(sessions)) { delete sessions[group.id]; window.localStorage.setItem('ys_access_guard_group_sessions', JSON.stringify(sessions)) }
   } catch { window.localStorage.removeItem('ys_access_guard_group_sessions') }
-  if (accessGuard.requestFeatureAccess('EMPLOYEE_ATTENDANCE', { title: '员工敏感信息验证', message: '请输入访问密码后查看本次敏感信息', onSuccess: () => revealNow(row, operation) })) await revealNow(row, operation)
+  if (accessGuard.requestFeatureAccess('EMPLOYEE_ATTENDANCE', { title: '员工敏感信息验证', message: '请输入访问密码后查看本次敏感信息', owner: accessRequestOwner, onSuccess: () => revealNow(row, operation) })) await revealNow(row, operation)
 }
 function releaseRevealed() { revealOperation += 1; revealPendingOperation = 0; revealed.value = null; revealVisible.value = false }
 async function upload(row: Employee, file?: File) {
@@ -148,7 +151,7 @@ async function previewPhoto(row: Employee) {
 function clearPhotoPreview() { photoOperation += 1; photoPendingId.value = ''; if (photoUrl.value) URL.revokeObjectURL(photoUrl.value); photoUrl.value = '' }
 function releasePhoto() { clearPhotoPreview(); photoVisible.value = false }
 onMounted(load)
-onBeforeUnmount(() => { pageActive = false; saveOperation += 1; revealOperation += 1; uploadOperation += 1; removeOperation += 1; releasePhoto(); revealed.value = null })
+onBeforeUnmount(() => { pageActive = false; saveOperation += 1; revealOperation += 1; uploadOperation += 1; removeOperation += 1; accessGuard.cancelAccess(accessRequestOwner); releasePhoto(); revealed.value = null })
 </script>
 
 <style scoped>

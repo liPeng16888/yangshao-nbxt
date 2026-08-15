@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { toBeijingDateTimeLocal } from '@/api/employeeAttendance'
+import MobileFilterDrawer from '@/components/mobile/MobileFilterDrawer.vue'
 import type { AttendanceRecord, Employee } from '@/types/employeeAttendance'
 
 export type MobileAttendanceFilterMode = 'month' | 'range'
@@ -27,15 +29,18 @@ const emit = defineEmits<{
   applyFilters: [filters: MobileAttendanceFilters]
 }>()
 
+const filterOpen = ref(false)
+const defaultMonth = props.filters.month
 const draft = reactive<MobileAttendanceFilters>({ ...props.filters })
-watch(() => props.filters, (filters) => Object.assign(draft, filters), { deep: true })
+watch(filterOpen, (open) => { if (open) Object.assign(draft, props.filters) })
 
-const filteredRecords = computed(() => props.records.filter((record) => !draft.status || statusCode(record) === draft.status))
+const filteredRecords = computed(() => props.records.filter((record) => !props.filters.status || statusCode(record) === props.filters.status))
 const summary = computed(() => {
-  const date = draft.mode === 'month' ? draft.month : `${draft.startDate || '不限'} 至 ${draft.endDate || '不限'}`
-  const employee = props.employees.find((row) => row.id === draft.employeeId)?.name || '全部员工'
-  const status = draft.status === 'NORMAL' ? '正常' : draft.status === 'EXCEPTION' ? '异常' : draft.status === 'LOCKED' ? '工资已锁定' : '全部状态'
-  return `${draft.mode === 'month' ? '月份' : '日期范围'} ${date} · ${employee} · ${status}`
+  const applied = props.filters
+  const date = applied.mode === 'month' ? applied.month : `${applied.startDate || '不限'} 至 ${applied.endDate || '不限'}`
+  const employee = props.employees.find((row) => row.id === applied.employeeId)?.name || '全部员工'
+  const status = applied.status === 'NORMAL' ? '正常' : applied.status === 'EXCEPTION' ? '异常' : applied.status === 'LOCKED' ? '工资已锁定' : '全部状态'
+  return `${applied.mode === 'month' ? '月份' : '日期范围'} ${date} · ${employee} · ${status}`
 })
 
 function nameOf(employeeId: string) { return props.employees.find((row) => row.id === employeeId)?.name || '未知员工' }
@@ -48,7 +53,7 @@ function statusName(record: AttendanceRecord) {
   return status === 'LOCKED' ? '工资已锁定' : status === 'EXCEPTION' ? '异常' : '正常'
 }
 function clock(value?: string | null) {
-  const match = String(value || '').match(/T(\d{2}:\d{2})/)
+  const match = toBeijingDateTimeLocal(value).match(/T(\d{2}:\d{2})/)
   return match?.[1] || '未录入'
 }
 function actualText(record: AttendanceRecord) {
@@ -68,42 +73,50 @@ function switchMode(mode: MobileAttendanceFilterMode) {
   draft.mode = mode
   if (mode === 'month') { draft.startDate = ''; draft.endDate = '' }
 }
-function applyFilters() { emit('applyFilters', { ...draft }) }
+function applyFilters() { emit('applyFilters', { ...draft }); filterOpen.value = false }
+function resetFilters() {
+  const defaults: MobileAttendanceFilters = { mode: 'month', month: defaultMonth, startDate: '', endDate: '', employeeId: '', status: '' }
+  Object.assign(draft, defaults)
+  emit('applyFilters', defaults)
+  filterOpen.value = false
+}
 </script>
 
 <template>
   <section class="mobile-attendance-record-list" aria-label="考勤记录列表">
-    <section class="mobile-attendance-record-list__filters" data-testid="mobile-attendance-record-filter" aria-label="筛选考勤记录">
-      <p data-testid="mobile-attendance-filter-summary">{{ summary }}</p>
-      <div class="mobile-attendance-record-list__mode" role="group" aria-label="日期筛选方式">
-        <button data-testid="mobile-attendance-mode-month" class="mobile-touch-target" type="button" :aria-pressed="draft.mode === 'month'" @click="switchMode('month')">按月份</button>
-        <button data-testid="mobile-attendance-mode-range" class="mobile-touch-target" type="button" :aria-pressed="draft.mode === 'range'" @click="switchMode('range')">按日期范围</button>
-      </div>
-      <label v-if="draft.mode === 'month'">
-        <span>月份</span>
-        <input v-model="draft.month" data-testid="mobile-attendance-month" class="mobile-touch-target" type="month" />
-      </label>
-      <div v-else class="mobile-attendance-record-list__date-range">
-        <label><span>开始日期</span><input v-model="draft.startDate" data-testid="mobile-attendance-start-date" class="mobile-touch-target" type="date" /></label>
-        <label><span>结束日期</span><input v-model="draft.endDate" data-testid="mobile-attendance-end-date" class="mobile-touch-target" type="date" /></label>
-      </div>
-      <div class="mobile-attendance-record-list__selects">
-        <label>
-          <span>员工</span>
-          <select v-model="draft.employeeId" data-testid="mobile-attendance-employee" class="mobile-touch-target">
-            <option value="">全部员工</option>
-            <option v-for="employee in employees" :key="employee.id" :value="employee.id">{{ employee.employeeNumber }} {{ employee.name }}</option>
-          </select>
-        </label>
-        <label>
-          <span>状态</span>
-          <select v-model="draft.status" data-testid="mobile-attendance-status" class="mobile-touch-target">
-            <option value="">全部状态</option><option value="NORMAL">正常</option><option value="EXCEPTION">异常</option><option value="LOCKED">工资已锁定</option>
-          </select>
-        </label>
-      </div>
-      <button data-testid="mobile-attendance-apply-filter" class="mobile-touch-target mobile-attendance-record-list__apply" type="button" :disabled="busy" @click="applyFilters">应用筛选</button>
-    </section>
+    <div data-testid="mobile-attendance-record-filter">
+      <MobileFilterDrawer v-model="filterOpen" title="筛选考勤记录" :summary="summary" fullscreen @apply="applyFilters" @reset="resetFilters">
+        <section class="mobile-attendance-record-list__filters" aria-label="筛选考勤记录">
+          <div class="mobile-attendance-record-list__mode" role="group" aria-label="日期筛选方式">
+            <button data-testid="mobile-attendance-mode-month" class="mobile-touch-target" type="button" :aria-pressed="draft.mode === 'month'" @click="switchMode('month')">按月份</button>
+            <button data-testid="mobile-attendance-mode-range" class="mobile-touch-target" type="button" :aria-pressed="draft.mode === 'range'" @click="switchMode('range')">按日期范围</button>
+          </div>
+          <label v-if="draft.mode === 'month'">
+            <span>月份</span>
+            <input v-model="draft.month" data-testid="mobile-attendance-month" class="mobile-touch-target" type="month" />
+          </label>
+          <div v-else class="mobile-attendance-record-list__date-range">
+            <label><span>开始日期</span><input v-model="draft.startDate" data-testid="mobile-attendance-start-date" class="mobile-touch-target" type="date" /></label>
+            <label><span>结束日期</span><input v-model="draft.endDate" data-testid="mobile-attendance-end-date" class="mobile-touch-target" type="date" /></label>
+          </div>
+          <div class="mobile-attendance-record-list__selects">
+            <label>
+              <span>员工</span>
+              <select v-model="draft.employeeId" data-testid="mobile-attendance-employee" class="mobile-touch-target">
+                <option value="">全部员工</option>
+                <option v-for="employee in employees" :key="employee.id" :value="employee.id">{{ employee.employeeNumber }} {{ employee.name }}</option>
+              </select>
+            </label>
+            <label>
+              <span>状态</span>
+              <select v-model="draft.status" data-testid="mobile-attendance-status" class="mobile-touch-target">
+                <option value="">全部状态</option><option value="NORMAL">正常</option><option value="EXCEPTION">异常</option><option value="LOCKED">工资已锁定</option>
+              </select>
+            </label>
+          </div>
+        </section>
+      </MobileFilterDrawer>
+    </div>
 
     <button data-testid="mobile-create-attendance" class="mobile-touch-target mobile-attendance-record-list__create" type="button" :disabled="busy" @click="emit('create')">手工新增实际出勤</button>
     <p v-if="!filteredRecords.length" class="mobile-attendance-record-list__empty" role="status">暂无手工考勤记录</p>
