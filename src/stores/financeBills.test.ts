@@ -67,12 +67,98 @@ const row: UnsettledSampleRow = {
   amount: 80
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 describe('finance bills store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    apiMocks.markSampleAsPaid.mockReset()
-    apiMocks.markSamplesAsPaid.mockReset()
-    apiMocks.updateMonthlySettlementSummary.mockReset()
+    Object.values(apiMocks).forEach((mock) => mock.mockReset())
+  })
+
+  it('commits only the latest income month when an older request resolves last', async () => {
+    const july = deferred<any>()
+    const june = deferred<any>()
+    apiMocks.getIncomeBillReport.mockReturnValueOnce(july.promise).mockReturnValueOnce(june.promise)
+    const store = useFinanceBillsStore()
+
+    const julyLoad = store.loadIncomeReport('2026-07')
+    const juneLoad = store.loadIncomeReport('2026-06')
+    june.resolve({ month: '2026-06', totalSamples: 0, totalAmount: 0, statusSummaries: [], rows: [] })
+    await juneLoad
+    july.resolve({ month: '2026-07', totalSamples: 1, totalAmount: 1, statusSummaries: [], rows: [] })
+    await julyLoad
+
+    expect(store.month).toBe('2026-06')
+    expect(store.incomeReport?.month).toBe('2026-06')
+    expect(store.loading).toBe(false)
+  })
+
+  it('invalidates a pending income month load when its page unmounts', async () => {
+    const pending = deferred<any>()
+    apiMocks.getIncomeBillReport.mockReturnValueOnce(pending.promise)
+    const store = useFinanceBillsStore()
+    const load = store.loadIncomeReport('2026-07')
+
+    store.cancelIncomeLoads()
+    pending.resolve({ month: '2026-07', totalSamples: 1, totalAmount: 1, statusSummaries: [], rows: [] })
+    await load
+
+    expect(store.incomeReport).toBeNull()
+    expect(store.loading).toBe(false)
+  })
+
+  it('keeps only the latest unsettled refresh result', async () => {
+    const older = deferred<UnsettledSampleRow[]>()
+    const latest = deferred<UnsettledSampleRow[]>()
+    apiMocks.getUnsettledSamples.mockReturnValueOnce(older.promise).mockReturnValueOnce(latest.promise)
+    const store = useFinanceBillsStore()
+
+    const olderLoad = store.loadUnsettledRows()
+    const latestLoad = store.loadUnsettledRows()
+    latest.resolve([{ ...row, blockId: 'latest' }])
+    await latestLoad
+    older.resolve([{ ...row, blockId: 'older' }])
+    await olderLoad
+
+    expect(store.unsettledRows.map((item) => item.blockId)).toEqual(['latest'])
+    expect(store.loading).toBe(false)
+  })
+
+  it('does not let a refresh started before settlement reinsert the paid row', async () => {
+    const pending = deferred<UnsettledSampleRow[]>()
+    apiMocks.getUnsettledSamples.mockReturnValueOnce(pending.promise)
+    apiMocks.markSampleAsPaid.mockResolvedValue(makeBlock('已结款'))
+    const store = useFinanceBillsStore()
+    store.unsettledRows = [row]
+
+    const load = store.loadUnsettledRows()
+    await store.settleRow(row)
+    pending.resolve([row])
+    await load
+
+    expect(store.unsettledRows).toEqual([])
+  })
+
+  it('invalidates a pending unsettled refresh when its page unmounts', async () => {
+    const pending = deferred<UnsettledSampleRow[]>()
+    apiMocks.getUnsettledSamples.mockReturnValueOnce(pending.promise)
+    const store = useFinanceBillsStore()
+    const load = store.loadUnsettledRows()
+
+    store.cancelUnsettledLoads()
+    pending.resolve([row])
+    await load
+
+    expect(store.unsettledRows).toEqual([])
+    expect(store.loading).toBe(false)
   })
 
   it('syncs paid status back into the loaded lab sheet cache', async () => {

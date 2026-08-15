@@ -43,24 +43,44 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
   const prepaidSaving = ref(false)
   const prepaidRemarkSavingId = ref('')
   const prepaidDeletingId = ref('')
+  let incomeLoadVersion = 0
+  let unsettledLoadVersion = 0
+  let unsettledMutationVersion = 0
 
   async function loadIncomeReport(nextMonth = month.value) {
+    const requestVersion = ++incomeLoadVersion
     loading.value = true
     try {
+      const nextReport = await getIncomeBillReport(nextMonth)
+      if (requestVersion !== incomeLoadVersion) return
       month.value = nextMonth
-      incomeReport.value = await getIncomeBillReport(nextMonth)
+      incomeReport.value = nextReport
     } finally {
-      loading.value = false
+      if (requestVersion === incomeLoadVersion) loading.value = false
     }
   }
 
+  function cancelIncomeLoads() {
+    incomeLoadVersion += 1
+    loading.value = false
+  }
+
   async function loadUnsettledRows() {
+    const requestVersion = ++unsettledLoadVersion
+    const mutationAtStart = unsettledMutationVersion
     loading.value = true
     try {
-      unsettledRows.value = await getUnsettledSamples()
+      const nextRows = await getUnsettledSamples()
+      if (requestVersion !== unsettledLoadVersion || mutationAtStart !== unsettledMutationVersion) return
+      unsettledRows.value = nextRows
     } finally {
-      loading.value = false
+      if (requestVersion === unsettledLoadVersion) loading.value = false
     }
+  }
+
+  function cancelUnsettledLoads() {
+    unsettledLoadVersion += 1
+    loading.value = false
   }
 
   async function loadMonthlySettlementReport(nextMonth = monthlySettlementMonth.value) {
@@ -77,6 +97,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     settlingId.value = row.blockId
     try {
       const savedBlock = await markSampleAsPaid(row)
+      unsettledMutationVersion += 1
       syncLoadedLabSheet(row, savedBlock)
       unsettledRows.value = unsettledRows.value.filter((item) => item.blockId !== row.blockId)
     } finally {
@@ -89,6 +110,7 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     settlingBatch.value = true
     try {
       const savedBlocks = await markSamplesAsPaid(rows)
+      unsettledMutationVersion += 1
       const savedById = new Map(savedBlocks.map((block) => [block.id, block]))
       rows.forEach((row) => {
         const savedBlock = savedById.get(row.blockId)
@@ -202,7 +224,9 @@ export const useFinanceBillsStore = defineStore('financeBills', () => {
     prepaidRemarkSavingId,
     prepaidDeletingId,
     loadIncomeReport,
+    cancelIncomeLoads,
     loadUnsettledRows,
+    cancelUnsettledLoads,
     loadMonthlySettlementReport,
     settleRow,
     settleRows,
