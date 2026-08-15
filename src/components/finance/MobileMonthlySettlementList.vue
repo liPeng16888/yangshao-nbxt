@@ -20,7 +20,14 @@ const emit = defineEmits<{
 }>()
 
 const statusOptions: MonthlySettlementStatus[] = ['已结款', '未结款', '部分结款']
-const remarkDrafts = ref<Record<string, string>>({})
+interface RemarkDraftState {
+  identity: string
+  base: string
+  value: string
+  submitted?: string
+}
+
+const remarkDrafts = ref<Record<string, RemarkDraftState>>({})
 const dailyCountByCustomer = computed(() => {
   const counts = new Map<string, number>()
   props.dailyRows.forEach((row) => counts.set(row.customer, (counts.get(row.customer) || 0) + 1))
@@ -28,8 +35,33 @@ const dailyCountByCustomer = computed(() => {
 })
 
 watch(() => props.summaries, (summaries) => {
-  const next: Record<string, string> = {}
-  summaries.forEach((row) => { next[row.id] = row.remark || '' })
+  const next: Record<string, RemarkDraftState> = {}
+  summaries.forEach((row) => {
+    const identity = remarkIdentity(row)
+    const authoritative = row.remark || ''
+    const current = remarkDrafts.value[row.id]
+    if (!current || current.identity !== identity) {
+      next[row.id] = { identity, base: authoritative, value: authoritative }
+      return
+    }
+
+    if (current.submitted !== undefined && authoritative !== current.base) {
+      const canResync = current.value === current.submitted || current.value === authoritative
+      next[row.id] = {
+        identity,
+        base: authoritative,
+        value: canResync ? authoritative : current.value
+      }
+      return
+    }
+
+    if (current.submitted === undefined && current.value === current.base) {
+      next[row.id] = { identity, base: authoritative, value: authoritative }
+      return
+    }
+
+    next[row.id] = current
+  })
   remarkDrafts.value = next
 }, { immediate: true, deep: true })
 
@@ -44,7 +76,28 @@ function unpaidAmount(row: MonthlySettlementSummaryRow) {
 }
 
 function updateRemark(id: string, value: string) {
-  remarkDrafts.value = { ...remarkDrafts.value, [id]: value }
+  const current = remarkDrafts.value[id]
+  if (!current) return
+  remarkDrafts.value = {
+    ...remarkDrafts.value,
+    [id]: { ...current, value }
+  }
+}
+
+function commitRemark(row: MonthlySettlementSummaryRow) {
+  const current = remarkDrafts.value[row.id]
+  const submitted = current?.value || ''
+  if (current) {
+    remarkDrafts.value = {
+      ...remarkDrafts.value,
+      [row.id]: { ...current, submitted }
+    }
+  }
+  emit('remarkCommit', row, submitted)
+}
+
+function remarkIdentity(row: MonthlySettlementSummaryRow) {
+  return `${row.month}\u0000${row.customer}`
 }
 
 function emitPaidAmount(row: MonthlySettlementSummaryRow, event: Event) {
@@ -115,12 +168,12 @@ function money(value: number) {
           <span>备注</span>
           <textarea
             :data-testid="`mobile-monthly-remark-${row.id}`"
-            :value="remarkDrafts[row.id] || ''"
+            :value="remarkDrafts[row.id]?.value || ''"
             :disabled="savingId === row.id"
             rows="2"
             placeholder="可填写备注"
             @input="updateRemark(row.id, ($event.target as HTMLTextAreaElement).value)"
-            @blur="emit('remarkCommit', row, remarkDrafts[row.id] || '')"
+            @blur="commitRemark(row)"
           />
         </label>
 

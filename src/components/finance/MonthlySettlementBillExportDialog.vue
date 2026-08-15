@@ -30,6 +30,7 @@
             :model-value="element.unitPrice"
             :min="0"
             :precision="2"
+            :controls="!mobile"
             controls-position="right"
             @update:model-value="updateElementPrice(element.key, $event)"
           />
@@ -116,6 +117,7 @@
                     data-testid="bill-preview-quantity-input"
                     :model-value="entry.quantity"
                     :min="0"
+                    :controls="!mobile"
                     controls-position="right"
                     @update:model-value="updateEntry(entry.id, { quantity: $event })"
                   />
@@ -125,6 +127,7 @@
                     :model-value="undefined"
                     :min="0"
                     disabled
+                    :controls="!mobile"
                     controls-position="right"
                   />
                 </td>
@@ -162,6 +165,20 @@
     </template>
   </el-dialog>
 </template>
+
+<script lang="ts">
+let mobileShareExportInFlight = false
+
+function acquireMobileShareExport() {
+  if (mobileShareExportInFlight) return false
+  mobileShareExportInFlight = true
+  return true
+}
+
+function releaseMobileShareExport() {
+  mobileShareExportInFlight = false
+}
+</script>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -350,6 +367,12 @@ async function exportPng() {
     return
   }
 
+  const ownsMobileShareExport = props.mobile && acquireMobileShareExport()
+  if (props.mobile && !ownsMobileShareExport) {
+    ElMessage.warning('系统分享仍在进行中，请稍候')
+    return
+  }
+
   exporting.value = true
   const operation = ++exportVersion
   try {
@@ -367,6 +390,7 @@ async function exportPng() {
   } catch {
     if (isExportCurrent(operation, props.mobile)) ElMessage.error('账单图片生成失败，请重试')
   } finally {
+    if (ownsMobileShareExport) releaseMobileShareExport()
     if (operation === exportVersion) exporting.value = false
   }
 }
@@ -385,6 +409,11 @@ async function exportMobilePng(operation: number, currentDraft: MonthlyBillDraft
     mobilePreviewUrl.value = URL.createObjectURL(blob)
   } catch {
     ElMessage.error('账单图片预览生成失败，请重试')
+    return
+  }
+
+  if (typeof File !== 'function') {
+    mobileShareStatus.value = '当前设备不支持系统文件分享，请长按保存图片'
     return
   }
 

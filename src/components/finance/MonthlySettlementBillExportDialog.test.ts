@@ -7,6 +7,8 @@ import dialogSource from './MonthlySettlementBillExportDialog.vue?raw'
 import type { MonthlySettlementDailyRow } from '@/types/financeBills'
 import { createMonthlyBillPngBlob, downloadMonthlyBillAsPng } from '@/utils/monthlySettlementBillPng'
 
+const initialInnerWidth = window.innerWidth
+
 vi.mock('@/utils/monthlySettlementBillPng', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/utils/monthlySettlementBillPng')>(),
   createMonthlyBillPngBlob: vi.fn(),
@@ -87,6 +89,7 @@ function mockMessages() {
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: initialInnerWidth })
 })
 
 describe('MonthlySettlementBillExportDialog', () => {
@@ -129,6 +132,26 @@ describe('MonthlySettlementBillExportDialog', () => {
     expect(dialogSource).toContain('padding-top: max(16px, env(safe-area-inset-top))')
     expect(dialogSource).toContain('padding-bottom: max(12px, env(safe-area-inset-bottom))')
     expect(dialogSource).toContain('min-height: 44px !important')
+  })
+
+  it('removes narrow stepper buttons from mobile price inputs at coarse widths while preserving desktop controls', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 900 })
+    const mobile = mountDialog({ mobile: true })
+    await selectCustomer(mobile, '客户甲')
+    const mobilePrice = mobile.get('[data-testid="bill-price-input"]')
+
+    expect(mobilePrice.findComponent({ name: 'ElInputNumber' }).props('controls')).toBe(false)
+    expect(mobilePrice.findAll('.el-input-number__increase')).toHaveLength(0)
+    expect(mobilePrice.findAll('.el-input-number__decrease')).toHaveLength(0)
+    expect(mobile.findAll('.el-input-number__increase')).toHaveLength(0)
+    expect(mobile.findAll('.el-input-number__decrease')).toHaveLength(0)
+
+    const desktop = mountDialog({ mobile: false })
+    await selectCustomer(desktop, '客户甲')
+    const desktopPrice = desktop.get('[data-testid="bill-price-input"]')
+    expect(desktopPrice.findComponent({ name: 'ElInputNumber' }).props('controls')).toBe(true)
+    expect(desktopPrice.findAll('.el-input-number__increase')).toHaveLength(1)
+    expect(desktopPrice.findAll('.el-input-number__decrease')).toHaveLength(1)
   })
 
   it('applies a temporary element price without mutating source rows', async () => {
@@ -372,6 +395,34 @@ describe('MonthlySettlementBillExportDialog', () => {
     expect(revokeUrl).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps the preview fallback when File is unavailable without probing or invoking system share', async () => {
+    vi.mocked(createMonthlyBillPngBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+    const createUrl = vi.fn(() => 'blob:file-unavailable-preview')
+    const revokeUrl = vi.fn()
+    const canShare = vi.fn(() => true)
+    const share = vi.fn()
+    const messages = mockMessages()
+    vi.stubGlobal('URL', { createObjectURL: createUrl, revokeObjectURL: revokeUrl })
+    vi.stubGlobal('navigator', { canShare, share })
+    vi.stubGlobal('File', undefined)
+    const wrapper = mountDialog({ mobile: true })
+    await selectCustomer(wrapper, '客户甲')
+    await setElementPrice(wrapper, 'aluminumSiliconRatio', 60)
+    await setElementPrice(wrapper, 'sulfur', 10)
+
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="bill-mobile-image-preview"]').attributes('src')).toBe('blob:file-unavailable-preview')
+    expect(wrapper.get('[data-testid="bill-mobile-save-hint"]').text()).toContain('长按保存图片')
+    expect(wrapper.get('[data-testid="bill-mobile-share-status"]').text()).toContain('不支持系统文件分享')
+    expect(canShare).not.toHaveBeenCalled()
+    expect(share).not.toHaveBeenCalled()
+    expect(messages.error).not.toHaveBeenCalled()
+    wrapper.unmount()
+    expect(revokeUrl).toHaveBeenCalledTimes(1)
+  })
+
   it('invalidates and revokes a mobile preview when the visible bill draft changes', async () => {
     vi.mocked(createMonthlyBillPngBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
     const createUrl = vi.fn()
@@ -435,6 +486,103 @@ describe('MonthlySettlementBillExportDialog', () => {
     await flushPromises()
     wrapper.unmount()
     expect(revokeUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps one global share latch across close and reopen until the original share settles', async () => {
+    vi.mocked(createMonthlyBillPngBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+    let finishFirstShare!: () => void
+    const share = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirstShare = resolve }))
+      .mockResolvedValueOnce(undefined)
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:reopen-preview'), revokeObjectURL: vi.fn() })
+    vi.stubGlobal('navigator', { canShare: vi.fn(() => true), share })
+    const wrapper = mountDialog({ mobile: true })
+    await selectCustomer(wrapper, '客户甲')
+    await setElementPrice(wrapper, 'aluminumSiliconRatio', 60)
+    await setElementPrice(wrapper, 'sulfur', 10)
+
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    await wrapper.setProps({ visible: false })
+    await wrapper.setProps({ visible: true })
+    await selectCustomer(wrapper, '客户甲')
+    await setElementPrice(wrapper, 'aluminumSiliconRatio', 60)
+    await setElementPrice(wrapper, 'sulfur', 10)
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+
+    expect(createMonthlyBillPngBlob).toHaveBeenCalledTimes(1)
+    expect(share).toHaveBeenCalledTimes(1)
+
+    finishFirstShare()
+    await flushPromises()
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    expect(createMonthlyBillPngBlob).toHaveBeenCalledTimes(2)
+    expect(share).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the global share latch after unmount and releases it for a new instance after resolve', async () => {
+    vi.mocked(createMonthlyBillPngBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+    let finishFirstShare!: () => void
+    const share = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirstShare = resolve }))
+      .mockResolvedValueOnce(undefined)
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:instance-preview'), revokeObjectURL: vi.fn() })
+    vi.stubGlobal('navigator', { canShare: vi.fn(() => true), share })
+    const first = mountDialog({ mobile: true })
+    await selectCustomer(first, '客户甲')
+    await setElementPrice(first, 'aluminumSiliconRatio', 60)
+    await setElementPrice(first, 'sulfur', 10)
+    await first.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    first.unmount()
+
+    const second = mountDialog({ mobile: true })
+    await selectCustomer(second, '客户甲')
+    await setElementPrice(second, 'aluminumSiliconRatio', 60)
+    await setElementPrice(second, 'sulfur', 10)
+    await second.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    expect(createMonthlyBillPngBlob).toHaveBeenCalledTimes(1)
+    expect(share).toHaveBeenCalledTimes(1)
+
+    finishFirstShare()
+    await flushPromises()
+    await second.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    expect(createMonthlyBillPngBlob).toHaveBeenCalledTimes(2)
+    expect(share).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the global share latch through a layout flip and releases it after rejection', async () => {
+    vi.mocked(createMonthlyBillPngBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+    let rejectFirstShare!: (error: Error) => void
+    const share = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectFirstShare = reject }))
+      .mockResolvedValueOnce(undefined)
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:layout-preview'), revokeObjectURL: vi.fn() })
+    vi.stubGlobal('navigator', { canShare: vi.fn(() => true), share })
+    const wrapper = mountDialog({ mobile: true })
+    await selectCustomer(wrapper, '客户甲')
+    await setElementPrice(wrapper, 'aluminumSiliconRatio', 60)
+    await setElementPrice(wrapper, 'sulfur', 10)
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+
+    await wrapper.setProps({ mobile: false })
+    await wrapper.setProps({ mobile: true })
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    expect(createMonthlyBillPngBlob).toHaveBeenCalledTimes(1)
+    expect(share).toHaveBeenCalledTimes(1)
+
+    rejectFirstShare(new Error('share failed'))
+    await flushPromises()
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+    expect(createMonthlyBillPngBlob).toHaveBeenCalledTimes(2)
+    expect(share).toHaveBeenCalledTimes(2)
   })
 
   it('distinguishes a cancelled share from a rejected share while preserving the preview fallback', async () => {

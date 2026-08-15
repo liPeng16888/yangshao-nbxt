@@ -68,7 +68,8 @@
       </section>
 
       <MobileFullscreenDialog v-if="dailyDetailVisible && dailyDetailCustomer" v-model="dailyDetailVisible" :title="`${dailyDetailCustomer.label}每日明细`" fullscreen>
-        <section data-testid="mobile-monthly-daily-dialog" role="dialog" :aria-label="`${dailyDetailCustomer.label}每日明细`">
+        <section data-testid="mobile-monthly-daily-dialog" role="region" aria-labelledby="mobile-monthly-daily-detail-heading">
+          <h3 id="mobile-monthly-daily-detail-heading" class="mobile-monthly-detail-heading">{{ dailyDetailCustomer.label }}每日明细</h3>
           <article v-for="row in dailyDetailRows" :key="row.id" data-testid="mobile-monthly-detail-row" class="mobile-monthly-detail-row">
             <header><strong>{{ row.date }}</strong><b>¥{{ money(row.amount) }}</b></header>
             <p>{{ getCustomerDisplay(row) }} · {{ row.sampleCount }} 个样品</p>
@@ -344,6 +345,7 @@ function getCustomerDisplay(row: MonthlySettlementDailyRow | MonthlySettlementSu
 .mobile-monthly-customer-filter input { width: 20px; height: 20px; }
 .mobile-monthly-daily-rows,
 [data-testid='mobile-monthly-daily-dialog'] { display: grid; gap: 10px; }
+.mobile-monthly-detail-heading { margin: 0; color: #0f172a; font-size: 16px; }
 .mobile-monthly-daily-rows article,
 .mobile-monthly-detail-row { min-width: 0; padding: 12px; background: #f8fafc; border: 1px solid #d8e1eb; border-radius: 10px; }
 .mobile-monthly-daily-rows article p,

@@ -49,6 +49,7 @@ DONE
 ## Files changed
 
 - `src/components/finance/MobileMonthlySettlementList.vue` (new)
+- `src/components/finance/MobileMonthlySettlementList.test.ts` (new)
 - `src/views/dashboard/FinanceMonthlySettlementPage.mobile.test.ts` (new)
 - `src/views/dashboard/FinanceMonthlySettlementPage.vue`
 - `src/views/dashboard/FinanceMonthlySettlementPage.test.ts`
@@ -98,3 +99,50 @@ DONE
 4. Combined review-fix GREEN:
    - Command: `pnpm exec vitest run src/views/dashboard/FinanceMonthlySettlementPage.mobile.test.ts src/components/finance/MonthlySettlementBillExportDialog.test.ts --reporter=dot`
    - Result: 2 files passed, 27 tests passed.
+
+## Root independent-review fix round
+
+### Findings addressed
+
+- Added one module-level mobile share latch shared by every export-dialog instance. The latch is acquired before PNG Blob generation, survives close/reopen, unmount/new-instance, and mobile/desktop/mobile layout flips, and is released only when the original export path finishes (including `navigator.share` resolution or rejection). Instance tokens still suppress stale UI and own preview URL cleanup.
+- Guarded unavailable `File` support after creating the long-press preview but before constructing a `File` or probing `navigator.canShare`. Unsupported devices retain the preview and receive “当前设备不支持系统文件分享，请长按保存图片” without a generic generation error.
+- Removed Element Plus +/- steppers from every mobile export-dialog number input through the explicit `mobile` prop while retaining the desktop controls unchanged. The focusable mobile spinbutton remains covered by the existing 44px mobile-class rule.
+- Replaced the whole-array remark reset with per-row `identity`, authoritative `base`, local `value`, and `submitted` snapshot state. Dirty drafts survive unrelated and same-row pending patches; a confirmed authoritative value only resyncs when the local text still matches the submitted snapshot or that authoritative value; removed rows drop state and new/re-added rows start from their current authoritative value.
+- Removed the nested daily-detail `role="dialog"`. The existing `MobileFullscreenDialog` remains the sole dialog, while its content is a `region` labelled by a real heading.
+
+### RED evidence
+
+- Command: `pnpm exec vitest run src/components/finance/MonthlySettlementBillExportDialog.test.ts src/components/finance/MobileMonthlySettlementList.test.ts src/views/dashboard/FinanceMonthlySettlementPage.mobile.test.ts --reporter=dot`
+- Result: 3 files failed with 8 expected failures and 28 passes. Failures directly showed: three cross-instance/lifecycle share duplicates, generic `File`-missing failure, rendered mobile price steppers, two dirty-draft overwrites, and the nested dialog role.
+- The mobile stepper contract was tightened and rerun before production changes; it failed because the rendered `ElInputNumber` still reported `controls=true` and included actual `.el-input-number__increase`/`.el-input-number__decrease` controls at a 900px mobile layout width.
+
+### GREEN and final verification
+
+- Global share latch: 3/3 lifecycle tests passed for close/reopen, unmount/new instance, and layout flip; both resolve and reject release paths permit the next export only after settlement, with no second Blob/share while pending.
+- `File` unavailable fallback: 1/1 passed; preview retained, no `canShare`/`share`, and URL revoked once on unmount.
+- Rendered mobile number controls: 1/1 passed; no mobile +/- controls at coarse width, while desktop still renders both controls.
+- Per-row remark reconciliation: 4/4 passed for A-dirty/B-patch, same-row submitted snapshot plus newer text, clean external update, and row removal/add/re-add.
+- Labelled daily-detail region: 1/1 passed.
+- Focused Task 16 suite:
+  - Command: `pnpm exec vitest run src/views/dashboard/FinanceMonthlySettlementPage.test.ts src/views/dashboard/FinanceMonthlySettlementPage.mobile.test.ts src/components/finance/MobileMonthlySettlementList.test.ts src/components/finance/MonthlySettlementBillExportDialog.test.ts src/utils/monthlySettlementBillPng.test.ts src/stores/financeBills.test.ts --reporter=dot`
+  - Result: 6 files passed, 69 tests passed.
+- Type check:
+  - Command: `pnpm exec vue-tsc --noEmit`
+  - Result: exit 0.
+- Default full-suite midnight diagnosis:
+  - Command: `pnpm test`
+  - Result: 119 files passed and 1 unrelated file failed; 1263 tests passed and 1 failed. `MedicineInventoryPages.test.ts` hard-codes `2026-08-15`, while `todayInBeijing()` correctly returned `2026-08-16` after local midnight. The failing test reproduced alone and Task 16 changed no medicine file.
+- Controlled full-suite verification using a `/private/tmp`-only Vitest setup fixing `Date.now()` to the original 2026-08-15 acceptance date:
+  - Command: `pnpm exec vitest run --config /private/tmp/task16-vitest.config.ts --reporter=dot`
+  - Result: 120 files passed, 1264 tests passed. No temporary verification file is part of the repository diff.
+- Production build and final type check:
+  - Command: `pnpm build`
+  - Result: exit 0; `vue-tsc --noEmit`, Vite production bundling, and PWA service-worker generation completed.
+
+### Second-round self-review
+
+- Confirmed the global latch has exactly one acquisition and one release site; local invalidation never clears it. Blob-generation throws, unsupported capability, share resolve, share cancel, and share reject all release through the same `finally` path.
+- Confirmed preview ownership remains instance-local and is cleared before every revoke, so the module latch introduces no cross-instance URL ownership.
+- Confirmed the mobile component still imports no Store/API and still emits exactly the same four intents; remark reconciliation changes presentation state only.
+- Confirmed desktop bill inputs retain controls and the desktop filename/content/download path is unchanged.
+- Confirmed the diff remains Task 16-only: no Task 17+, medicine, server, admin, API contract expansion, navigation, deployment, or production file was changed.

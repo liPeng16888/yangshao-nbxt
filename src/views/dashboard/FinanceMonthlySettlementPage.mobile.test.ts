@@ -271,7 +271,9 @@ describe('FinanceMonthlySettlementPage mobile', () => {
 
     await wrapper.get('[data-testid="mobile-monthly-details-summary-a"]').trigger('click')
     const dialog = wrapper.get('[data-testid="mobile-monthly-daily-dialog"]')
-    expect(dialog.attributes('role')).toBe('dialog')
+    expect(dialog.attributes('role')).toBe('region')
+    expect(dialog.attributes('aria-labelledby')).toBe('mobile-monthly-daily-detail-heading')
+    expect(wrapper.get('#mobile-monthly-daily-detail-heading').text()).toContain('客户甲 13800000000每日明细')
     expect(dialog.text()).toContain('客户甲 13800000000')
     expect(dialog.findAll('[data-testid="mobile-monthly-detail-row"]')).toHaveLength(2)
     expect(dialog.text()).toContain('铝硅比2个')
