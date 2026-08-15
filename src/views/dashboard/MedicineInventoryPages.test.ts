@@ -321,6 +321,143 @@ describe('MedicineInventoryInboundPage', () => {
     expect(api.createMedicineCommonName).toHaveBeenCalledWith({ name: '盐酸' })
   })
 
+  for (const [layoutName, mobile] of [['desktop', false], ['mobile', true]] as const) {
+    it(`shares one common-name save handler on ${layoutName} and blocks Enter plus button duplicates`, async () => {
+      layout.isMobileLayout.value = mobile
+      const saveRequest = deferred<unknown>()
+      api.createMedicineCommonName.mockReturnValueOnce(saveRequest.promise)
+      const successSpy = vi.spyOn(ElMessage, 'success')
+      const wrapper = mountPage(MedicineInventoryInboundPage)
+      await flushPromises()
+      const initialNameLoads = api.getMedicineCommonNames.mock.calls.length
+
+      const input = wrapper.get('[data-testid="common-name-input"]')
+      await input.setValue('  盐酸  ')
+      const enter = input.trigger('keyup', { key: 'Enter' })
+      const click = wrapper.get('[data-testid="common-name-submit"]').trigger('click')
+      await Promise.all([enter, click])
+
+      expect(api.createMedicineCommonName).toHaveBeenCalledTimes(1)
+      expect(api.createMedicineCommonName).toHaveBeenCalledWith({ name: '盐酸' })
+
+      saveRequest.resolve(commonNames[0])
+      await flushPromises()
+
+      expect(api.getMedicineCommonNames).toHaveBeenCalledTimes(initialNameLoads + 1)
+      expect(successSpy).toHaveBeenCalledTimes(1)
+      expect((input.element as HTMLInputElement).value).toBe('')
+    })
+  }
+
+  it('preserves a newer common-name draft when an older save succeeds', async () => {
+    const saveRequest = deferred<unknown>()
+    api.createMedicineCommonName.mockReturnValueOnce(saveRequest.promise)
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+    const initialNameLoads = api.getMedicineCommonNames.mock.calls.length
+    const input = wrapper.get('[data-testid="common-name-input"]')
+
+    await input.setValue('  盐酸  ')
+    await wrapper.get('[data-testid="common-name-submit"]').trigger('click')
+    await input.setValue('生理盐水')
+    saveRequest.resolve(commonNames[0])
+    await flushPromises()
+
+    expect(api.createMedicineCommonName).toHaveBeenCalledWith({ name: '盐酸' })
+    expect((input.element as HTMLInputElement).value).toBe('生理盐水')
+    expect(api.getMedicineCommonNames).toHaveBeenCalledTimes(initialNameLoads + 1)
+  })
+
+  it('retains the unchanged common-name draft after failure and allows a successful retry', async () => {
+    api.createMedicineCommonName
+      .mockRejectedValueOnce(new Error('save failed'))
+      .mockResolvedValueOnce(commonNames[0])
+    const errorSpy = vi.spyOn(ElMessage, 'error')
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+    const input = wrapper.get('[data-testid="common-name-input"]')
+
+    await input.setValue('盐酸')
+    await wrapper.get('[data-testid="common-name-submit"]').trigger('click')
+    await flushPromises()
+
+    expect((input.element as HTMLInputElement).value).toBe('盐酸')
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+
+    await wrapper.get('[data-testid="common-name-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createMedicineCommonName).toHaveBeenCalledTimes(2)
+    expect((input.element as HTMLInputElement).value).toBe('')
+  })
+
+  it('retains a newer common-name draft after the submitted save fails', async () => {
+    const saveRequest = deferred<unknown>()
+    api.createMedicineCommonName.mockReturnValueOnce(saveRequest.promise)
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+    const input = wrapper.get('[data-testid="common-name-input"]')
+
+    await input.setValue('盐酸')
+    await wrapper.get('[data-testid="common-name-submit"]').trigger('click')
+    await input.setValue('生理盐水')
+    saveRequest.reject(new Error('save failed'))
+    await flushPromises()
+
+    expect((input.element as HTMLInputElement).value).toBe('生理盐水')
+  })
+
+  for (const settle of ['success', 'error'] as const) {
+    it(`keeps common-name API ${settle} silent and leaves the draft untouched after unmount`, async () => {
+      const saveRequest = deferred<unknown>()
+      api.createMedicineCommonName.mockReturnValueOnce(saveRequest.promise)
+      const successSpy = vi.spyOn(ElMessage, 'success')
+      const errorSpy = vi.spyOn(ElMessage, 'error')
+      const wrapper = mountPage(MedicineInventoryInboundPage)
+      await flushPromises()
+      const initialNameLoads = api.getMedicineCommonNames.mock.calls.length
+      const input = wrapper.get('[data-testid="common-name-input"]')
+
+      await input.setValue('盐酸')
+      await wrapper.get('[data-testid="common-name-submit"]').trigger('click')
+      const nativeInput = input.element as HTMLInputElement
+      wrapper.unmount()
+      if (settle === 'success') saveRequest.resolve(commonNames[0])
+      else saveRequest.reject(new Error('late failure'))
+      await flushPromises()
+
+      expect(nativeInput.value).toBe('盐酸')
+      expect(api.getMedicineCommonNames).toHaveBeenCalledTimes(initialNameLoads)
+      expect(successSpy).not.toHaveBeenCalled()
+      expect(errorSpy).not.toHaveBeenCalled()
+    })
+  }
+
+  it('does not clear or message when unmounted during the post-save common-name reload', async () => {
+    const reloadRequest = deferred<typeof commonNames>()
+    api.getMedicineCommonNames
+      .mockResolvedValueOnce(commonNames)
+      .mockReturnValueOnce(reloadRequest.promise)
+    const successSpy = vi.spyOn(ElMessage, 'success')
+    const errorSpy = vi.spyOn(ElMessage, 'error')
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+    const input = wrapper.get('[data-testid="common-name-input"]')
+
+    await input.setValue('盐酸')
+    await wrapper.get('[data-testid="common-name-submit"]').trigger('click')
+    await flushPromises()
+    const nativeInput = input.element as HTMLInputElement
+    wrapper.unmount()
+    reloadRequest.resolve(commonNames)
+    await flushPromises()
+
+    expect(nativeInput.value).toBe('盐酸')
+    expect(api.getMedicineCommonNames).toHaveBeenCalledTimes(2)
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
   it('silently ignores late inbound bootstrap and common-name save work after unmount', async () => {
     const itemsRequest = deferred<typeof items>()
     const namesRequest = deferred<typeof commonNames>()

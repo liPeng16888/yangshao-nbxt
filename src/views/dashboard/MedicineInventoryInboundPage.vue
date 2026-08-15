@@ -380,25 +380,27 @@ function handleMedicineSuggestion(suggestion: { value: string; item?: MedicineIn
 }
 
 async function saveCommonName() {
+  if (commonNamesSaving.value) return
   const lifecycleToken = lifecycleEpoch
-  const name = commonNameInput.value.trim()
-  if (!name) {
+  const submittedRawName = commonNameInput.value
+  const submittedName = submittedRawName.trim()
+  if (!submittedName) {
     ElMessage.warning('请填写常用药品名称')
     return
   }
   commonNamesSaving.value = true
   try {
-    await createMedicineCommonName({ name })
+    await createMedicineCommonName({ name: submittedName })
     if (!isLifecycleCurrent(lifecycleToken)) return
-    commonNameInput.value = ''
     await loadCommonNames()
     if (!isLifecycleCurrent(lifecycleToken)) return
+    if (commonNameInput.value === submittedRawName) commonNameInput.value = ''
     ElMessage.success('常用药品名称已添加')
   } catch (error) {
     if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '常用药品名称添加失败，请稍后重试'))
   } finally {
-    if (isLifecycleCurrent(lifecycleToken)) commonNamesSaving.value = false
+    commonNamesSaving.value = false
   }
 }
 
