@@ -1,7 +1,18 @@
 <template>
-  <div class="page-stack">
-    <FinanceEntryForm @submit="handleCreate" />
+  <div class="page-stack" :class="{ 'mobile-page': isMobileLayout }">
+    <MobileFinanceEntryForm v-if="isMobileLayout" :save="handleCreate" />
+    <FinanceEntryForm v-else @submit="handleCreate" />
+    <MobileFinanceEntryList
+      v-if="isMobileLayout"
+      :month="financeStore.month"
+      :entries="financeStore.entries"
+      :loading="financeStore.loading"
+      :deleting-id="financeStore.deletingId"
+      @month-change="financeStore.loadEntries"
+      @delete-request="handleDeleteRequest"
+    />
     <FinanceMonthTable
+      v-else
       :month="financeStore.month"
       :entries="financeStore.entries"
       :loading="financeStore.loading"
@@ -17,10 +28,14 @@ import { onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FinanceEntryForm from '@/components/finance/FinanceEntryForm.vue'
 import FinanceMonthTable from '@/components/finance/FinanceMonthTable.vue'
+import MobileFinanceEntryForm from '@/components/finance/MobileFinanceEntryForm.vue'
+import MobileFinanceEntryList from '@/components/finance/MobileFinanceEntryList.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useFinanceStore } from '@/stores/finance'
 import type { FinanceEntry, FinancePayload } from '@/types/finance'
 
 const financeStore = useFinanceStore()
+const { isMobileLayout } = useMobileLayout()
 
 onMounted(() => {
   financeStore.loadEntries()
