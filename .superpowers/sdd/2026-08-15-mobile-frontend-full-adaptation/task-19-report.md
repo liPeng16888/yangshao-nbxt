@@ -15,6 +15,7 @@
 - Employee and attendance create saves adopt only the returned stable ID when the same open editor has newer input, preserving every newer field and converting the next submit into an update. Closed/reopened, context-changed, layout-changed, and unmounted sessions cannot adopt a stale ID; unchanged saves still close and active failures retain the exact draft.
 - Attendance save/delete operations use local saving/error boundaries plus operation, editor-session, form-revision, layout, mounted-state, and duplicate guards. A late result cannot affect a newer edit or reload after unmount, while an active unchanged failure remains visible with the exact draft retained.
 - Sensitive-access prompts now carry page ownership. Layout change and unmount cancel only the employee page's current prompt, while stale in-flight verification cannot persist a grant or run its reveal action; a newer prompt owned by another consumer is preserved.
+- The shared access dialog's visible Cancel button now calls an explicit no-argument wrapper, preventing Vue's click `MouseEvent` from being mistaken for an owner token while leaving symbol-scoped page cancellation unchanged.
 - Cards and filter controls use native labels/buttons, textual statuses in addition to color, 44px touch targets, safe-area bottom spacing, min-width constraints, and `overflow-wrap` handling for long employee/contact/remark content.
 - Apart from the minimal scoped-cancellation support in the shared access-guard Store, no employee-attendance Store, API adapter, mock implementation, server, admin, router, navigation, payroll calculation, database, migration, production, or Task 20+ file changed.
 
@@ -36,6 +37,7 @@ Observed result: 12 new mobile assertions failed while the pre-existing 52 asser
 - Attendance tests cover exclusive cards, employee/date/status filtering, mutually exclusive month/range controls, actual/exception summaries, mobile full-screen multi-interval editing, explicit-absence disabling, existing same-day/`24:00`/overlap validation, payroll locks, delete confirmation, duplicate/newer-draft save retention, and no post-unmount reload/error.
 - Review-fix RED assertions separately reproduced raw UTC card slicing, successful creates that stayed in create mode after a newer edit, draft filters changing cards before Apply, and page prompts surviving layout/unmount. Each failed for its targeted behavior before the corresponding minimal production change.
 - Review-fix coverage verifies Beijing rendering for UTC/offset/legacy endpoints, stable-ID adoption without draft overwrite for both employee and attendance creates, stale-session non-adoption, atomic Apply/cancel/reset filter semantics, owned prompt cancellation, stale verification non-persistence, and multiple-consumer prompt isolation.
+- Review round 2 added a dialog-level RED test that mounted the real shared access dialog and reproduced the visible Cancel button leaving the prompt open. GREEN verifies that the click closes and invalidates the pending prompt, performs no password verification, writes no grant, and runs no protected action.
 - Existing desktop tests continue to exercise desktop tables, legacy attendance responses, unchanged multi-interval payloads, mutation failures, access verification, and monthly/date query behavior.
 
 ## Final verification
@@ -43,9 +45,12 @@ Observed result: 12 new mobile assertions failed while the pre-existing 52 asser
 - Focused page, Store, adapter, mock, and access-ownership suite:
   - Command: `pnpm exec vitest run src/views/dashboard/EmployeeAttendancePages.test.ts src/stores/employeeAttendance.test.ts src/api/employeeAttendance.adapters.test.ts src/api/employeeAttendance.mock.test.ts src/stores/accessGuard.test.ts --reporter=dot`
   - Result: 5 files passed, 136 tests passed.
+- Focused access-dialog, access Store/session, and employee-page suite:
+  - Command: `pnpm exec vitest run src/components/access/AccessGuardDialog.test.ts src/stores/accessGuard.test.ts src/api/accessGuard.sessions.test.ts src/views/dashboard/EmployeeAttendancePages.test.ts --reporter=dot`
+  - Result: 4 files passed, 77 tests passed.
 - Controlled-clock full suite at the 2026-08-15 acceptance date:
   - Command: `pnpm exec vitest run --config /private/tmp/task16-vitest.config.ts --reporter=dot`
-  - Result: 124 files passed, 1,354 tests passed.
+  - Result: 125 files passed, 1,355 tests passed.
 - Type check:
   - Command: `pnpm exec vue-tsc --noEmit`
   - Result: exit 0.
@@ -66,4 +71,6 @@ Observed result: 12 new mobile assertions failed while the pre-existing 52 asser
 - `src/views/dashboard/EmployeeAttendancePages.test.ts`
 - `src/stores/accessGuard.ts`
 - `src/stores/accessGuard.test.ts`
+- `src/components/access/AccessGuardDialog.vue`
+- `src/components/access/AccessGuardDialog.test.ts`
 - `.superpowers/sdd/2026-08-15-mobile-frontend-full-adaptation/task-19-report.md`
