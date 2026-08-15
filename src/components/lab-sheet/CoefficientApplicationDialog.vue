@@ -3,6 +3,7 @@
     :model-value="visible"
     title="选择应用起始样品"
     width="460px"
+    :fullscreen="mobile"
     :close-on-click-modal="false"
     :close-on-press-escape="!loading"
     :show-close="!loading"
@@ -12,7 +13,7 @@
     <el-form label-position="top">
       <el-form-item label="从哪个样品开始应用">
         <el-select v-model="selectedStartIndex" data-testid="coefficient-start-select" placeholder="请选择样品">
-          <el-option v-for="index in sampleIndices" :key="index" :label="formatIndex(index)" :value="index" />
+          <el-option v-for="index in sortedSampleIndices" :key="index" :label="formatIndex(index)" :value="index" />
         </el-select>
       </el-form-item>
     </el-form>
@@ -35,11 +36,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   visible: boolean
   sampleIndices: number[]
   loading: boolean
-}>()
+  mobile?: boolean
+}>(), { mobile: false })
 
 const emit = defineEmits<{
   cancel: []
@@ -47,11 +49,12 @@ const emit = defineEmits<{
 }>()
 
 const selectedStartIndex = ref<number | null>(null)
+const sortedSampleIndices = computed(() => [...props.sampleIndices].sort((left, right) => left - right))
 
 const impactMessage = computed(() => {
   if (!selectedStartIndex.value) return ''
   const start = selectedStartIndex.value
-  const first = Math.min(...props.sampleIndices)
+  const first = sortedSampleIndices.value[0]
   const selected = formatIndex(start)
   const impact = `将从样品 ${selected}（含）开始应用新的空白和系数，并立即重新计算 ${selected} 及后续已有样品`
   if (start === first) return `${impact}。`

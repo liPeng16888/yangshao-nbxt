@@ -107,4 +107,29 @@ describe('CoefficientApplicationDialog', () => {
     expect(dialogElement('[data-testid="confirm-coefficient-application"]').hasAttribute('disabled')).toBe(true)
     wrapper.unmount()
   })
+
+  it('is fullscreen only when the coefficient editor uses the mobile layout', async () => {
+    const wrapper = mountDialog({ mobile: true })
+    await nextTick()
+    expect(document.body.querySelector('.el-dialog.is-fullscreen')).not.toBeNull()
+
+    await wrapper.setProps({ mobile: false })
+    await nextTick()
+    expect(document.body.querySelector('.el-dialog.is-fullscreen')).toBeNull()
+  })
+
+  it('sorts the actual sample indices while emitting the chosen index', async () => {
+    const wrapper = mountDialog({ sampleIndices: [8, 2, 5] })
+    await nextTick()
+    dialogElement('[data-testid="coefficient-start-select"] .el-select__wrapper').click()
+    await nextTick()
+    const labels = Array.from(document.body.querySelectorAll<HTMLElement>('.el-select-dropdown__item')).map((item) => item.textContent?.trim())
+    expect(labels).toEqual(['002', '005', '008'])
+
+    Array.from(document.body.querySelectorAll<HTMLElement>('.el-select-dropdown__item'))
+      .find((item) => item.textContent?.trim() === '005')!.click()
+    await nextTick()
+    dialogElement('[data-testid="confirm-coefficient-application"]').click()
+    expect(wrapper.emitted('confirm')).toEqual([[5]])
+  })
 })
