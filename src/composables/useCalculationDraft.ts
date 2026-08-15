@@ -74,8 +74,7 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     if (loadPromise) return loadPromise
 
     const task = (async () => {
-      if (activeSave) await activeSave
-      if (disposed) return
+      if (!await drainSavesBeforeLoad()) return
       const versionAtStart = editVersion
       status.value = 'loading'
       loadFailed = false
@@ -87,7 +86,7 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
         updatedAt.value = serverDraft.updatedAt
 
         if (editVersion !== versionAtStart || pendingSnapshot) return
-        writeCache(serverSnapshot)
+        removeRecoveryCache()
 
         if (serverDraft.revision === 0) {
           const legacy = readLegacySnapshot()
@@ -104,6 +103,7 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
         status.value = 'idle'
       } catch {
         if (!disposed) {
+          restoreRecoveryCache(versionAtStart)
           loadFailed = true
           status.value = 'error'
         }
@@ -119,6 +119,31 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     })
     loadPromise = tracked
     return tracked
+  }
+
+  async function drainSavesBeforeLoad() {
+    while (!disposed) {
+      if (activeSave) {
+        await activeSave
+        await Promise.resolve()
+        continue
+      }
+      if (status.value === 'conflict' || failedAttempt || snapshotCaptureFailed) return false
+      if (pendingSnapshot && !loadFailed) {
+        clearTimer()
+        const queuedSnapshot = pendingSnapshot
+        pendingSnapshot = null
+        await executeSave({
+          payload: queuedSnapshot,
+          baseRevision: revision.value,
+          importsLegacy: false
+        }, 'saving')
+        continue
+      }
+      if (status.value === 'error' && !loadFailed) return false
+      return true
+    }
+    return false
   }
 
   async function retry() {
@@ -164,7 +189,7 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     applySnapshot(serverDraft.payload)
     revision.value = serverDraft.revision
     updatedAt.value = serverDraft.updatedAt
-    writeCache(serverDraft.payload)
+    removeRecoveryCache()
     pendingSnapshot = null
     failedAttempt = null
     snapshotCaptureFailed = false
@@ -200,10 +225,10 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
           payload: exactAttempt.payload
         })
         if (disposed) return
-        const savedSnapshot = normalizedSnapshot(savedDraft.payload)
+        normalizedSnapshot(savedDraft.payload)
         revision.value = savedDraft.revision
         updatedAt.value = savedDraft.updatedAt
-        if (!pendingSnapshot) writeCache(savedSnapshot)
+        if (!pendingSnapshot) removeRecoveryCache()
         if (exactAttempt.importsLegacy) removeLegacy()
         failedAttempt = null
         loadFailed = false
@@ -295,6 +320,29 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
     }
   }
 
+  function restoreRecoveryCache(versionAtStart: number) {
+    if (
+      editVersion !== versionAtStart ||
+      pendingSnapshot ||
+      failedAttempt ||
+      snapshotCaptureFailed ||
+      status.value === 'conflict'
+    ) {
+      return
+    }
+    const raw = safeStorageGet(adapter.cacheStorageKey)
+    if (raw === null) return
+    try {
+      const cached = normalizedSnapshot(JSON.parse(raw))
+      applySnapshot(cached)
+      pendingSnapshot = cached
+      pendingDueAt = Date.now()
+      editVersion += 1
+    } catch {
+      // Recovery storage is best effort and never blocks authoritative retry.
+    }
+  }
+
   function applySnapshot(snapshot: T) {
     adapter.apply(cloneDraftValue(snapshot))
   }
@@ -309,6 +357,10 @@ export function useCalculationDraft<T>(adapter: CalculationDraftAdapter<T>) {
 
   function removeLegacy() {
     safeStorageRemove(adapter.legacyStorageKey)
+  }
+
+  function removeRecoveryCache() {
+    safeStorageRemove(adapter.cacheStorageKey)
   }
 
   function clearTimer() {
@@ -376,6 +428,9 @@ function cloneDraftValue<T>(value: T, seen = new WeakSet<object>()): T {
   if (seen.has(value)) throw new TypeError('草稿不能循环引用')
   seen.add(value)
   if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index)) throw new TypeError('草稿数组不能包含空槽')
+    }
     const result = value.map((item) => cloneDraftValue(item, seen))
     seen.delete(value)
     return result as T
