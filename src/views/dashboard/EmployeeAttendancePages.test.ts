@@ -2528,6 +2528,8 @@ describe('employee attendance navigation', () => {
     expect(card.text()).toContain('应发')
     expect(card.text()).toContain('实发')
     expect(card.text()).toContain('¥6488.20')
+    expect(card.get('[data-testid="mobile-payroll-authoritative-snapshot-payable"]').text()).toBe('应发¥6488.20')
+    expect(card.get('[data-testid="mobile-payroll-authoritative-item-payable"]').text()).toBe('实发¥6488.20')
     expect(card.text()).toContain('草稿')
     expect(wrapper.find('.el-table').exists()).toBe(false)
     await card.get('[data-testid="mobile-payroll-details-payroll-mobile-1"]').trigger('click')
@@ -2602,5 +2604,418 @@ describe('employee attendance navigation', () => {
     prompt.mockRestore()
     reopenPayroll.mockRestore()
     wrapper.unmount()
+  })
+
+  it.each([
+    ['commission', 'resolve'], ['commission', 'reject'],
+    ['bonus', 'resolve'], ['bonus', 'reject'],
+    ['type', 'resolve'], ['type', 'reject']
+  ] as const)('retires the %s save owner on layout replacement and isolates a newer save from old %s', async (kind, settlement) => {
+    attendanceLayout.mobile.value = true
+    const oldSave = deferred<any>()
+    const newSave = deferred<any>()
+    const apiMethod = kind === 'commission' ? 'saveCommission' : kind === 'bonus' ? 'saveBonus' : 'saveCommissionType'
+    const save = vi.spyOn(attendanceApi, apiMethod).mockReturnValueOnce(oldSave.promise).mockReturnValueOnce(newSave.promise)
+    const wrapper = mount(EmployeeCompensationPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+
+    const startSave = async () => {
+      if (kind === 'commission') {
+        await wrapper.get('[data-testid="mobile-create-commission"]').trigger('click')
+        await wrapper.get('[data-testid="commission-save"]').trigger('click')
+        return
+      }
+      if (kind === 'bonus') {
+        await wrapper.get('[data-testid="mobile-compensation-tab-bonuses"]').trigger('click')
+        await wrapper.get('[data-testid="mobile-create-bonus"]').trigger('click')
+        await wrapper.get('[data-testid="bonus-amount"]').setValue('88.60')
+        await wrapper.get('[data-testid="bonus-reason"]').setValue('布局切换奖金')
+        await wrapper.get('[data-testid="bonus-save"]').trigger('click')
+        return
+      }
+      await wrapper.get('[data-testid="mobile-compensation-tab-types"]').trigger('click')
+      await wrapper.get('[data-testid="mobile-create-commission-type"]').trigger('click')
+      await wrapper.get('[data-testid="commission-type-name"]').setValue('布局切换类型')
+      await wrapper.get('[data-testid="commission-type-unit-name"]').setValue('次')
+      await wrapper.get('[data-testid="commission-type-save"]').trigger('click')
+    }
+
+    await startSave()
+    expect(save).toHaveBeenCalledTimes(1)
+
+    attendanceLayout.mobile.value = false
+    await nextTick()
+    attendanceLayout.mobile.value = true
+    await flushPromises()
+
+    const createButton = wrapper.get(`[data-testid="mobile-create-${kind === 'type' ? 'commission-type' : kind}"]`)
+    expect(createButton.attributes('disabled')).toBeUndefined()
+    await startSave()
+    expect(save).toHaveBeenCalledTimes(2)
+    const saveButton = wrapper.get(`[data-testid="${kind === 'type' ? 'commission-type' : kind}-save"]`)
+    expect(saveButton.attributes('disabled')).toBeDefined()
+
+    if (settlement === 'resolve') {
+      oldSave.resolve(kind === 'commission'
+        ? { id: 'old-commission', employeeId: 'emp-1', commissionTypeId: 'ct-1', date: '2026-08-16', quantity: 1, unitPrice: 12, amount: 12, remark: '' }
+        : kind === 'bonus'
+          ? { id: 'old-bonus', employeeId: 'emp-1', date: '2026-08-16', amount: 88.6, reason: '布局切换奖金' }
+          : { id: 'old-type', name: '布局切换类型', unitName: '次', unitPrice: 0, active: true })
+    } else {
+      oldSave.reject(new Error('旧布局失败'))
+    }
+    await flushPromises()
+    expect(saveButton.attributes('disabled')).toBeDefined()
+    expect(useEmployeeAttendanceStore().error).toBe('')
+
+    wrapper.unmount()
+    newSave.reject(new Error('卸载后的新保存失败'))
+    await flushPromises()
+    save.mockRestore()
+  })
+
+  it.each(['resolve', 'reject'] as const)('retires the adjustment save owner on layout replacement and isolates a newer save from old %s', async (settlement) => {
+    attendanceLayout.mobile.value = true
+    const oldSave = deferred<Awaited<ReturnType<typeof attendanceApi.createPayrollAdjustment>>>()
+    const newSave = deferred<Awaited<ReturnType<typeof attendanceApi.createPayrollAdjustment>>>()
+    const save = vi.spyOn(attendanceApi, 'createPayrollAdjustment').mockReturnValueOnce(oldSave.promise).mockReturnValueOnce(newSave.promise)
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    await nextTick()
+    const itemId = store.payroll.items[0]!.id
+
+    await wrapper.get(`[data-testid="mobile-adjust-payroll-${itemId}"]`).trigger('click')
+    await wrapper.get('[data-testid="payroll-adjustment-amount"]').setValue('25.50')
+    await wrapper.get('[data-testid="payroll-adjustment-reason"]').setValue('布局切换调整')
+    await wrapper.get('[data-testid="payroll-adjustment-save"]').trigger('click')
+    expect(save).toHaveBeenCalledTimes(1)
+
+    attendanceLayout.mobile.value = false
+    await nextTick()
+    attendanceLayout.mobile.value = true
+    await flushPromises()
+    expect(wrapper.get(`[data-testid="mobile-adjust-payroll-${itemId}"]`).attributes('disabled')).toBeUndefined()
+    await wrapper.get(`[data-testid="mobile-adjust-payroll-${itemId}"]`).trigger('click')
+    await wrapper.get('[data-testid="payroll-adjustment-amount"]').setValue('30.50')
+    await wrapper.get('[data-testid="payroll-adjustment-reason"]').setValue('新布局调整')
+    await wrapper.get('[data-testid="payroll-adjustment-save"]').trigger('click')
+    expect(save).toHaveBeenCalledTimes(2)
+    if (settlement === 'resolve') oldSave.resolve({ id: 'old-adjustment', payrollItemId: itemId, amount: 25.5, reason: '布局切换调整' })
+    else oldSave.reject(new Error('旧布局调整失败'))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="payroll-adjustment-save"]').attributes('disabled')).toBeDefined()
+    expect(store.error).toBe('')
+    wrapper.unmount()
+    newSave.reject(new Error('卸载后的新调整失败'))
+    await flushPromises()
+    save.mockRestore()
+  })
+
+  it.each(['commission', 'type', 'adjustment'] as const)('surfaces an active %s failure while preserving newer input', async (kind) => {
+    attendanceLayout.mobile.value = true
+    const pending = deferred<any>()
+    const apiMethod = kind === 'commission' ? 'saveCommission' : kind === 'type' ? 'saveCommissionType' : 'createPayrollAdjustment'
+    const save = vi.spyOn(attendanceApi, apiMethod).mockReturnValue(pending.promise)
+    const pinia = createPinia()
+    const component = kind === 'adjustment' ? EmployeePayrollPage : EmployeeCompensationPage
+    const wrapper = mount(component, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+
+    let field
+    if (kind === 'commission') {
+      await wrapper.get('[data-testid="mobile-create-commission"]').trigger('click')
+      field = wrapper.get('[data-testid="commission-quantity"]')
+      await field.setValue('2.5')
+      await wrapper.get('[data-testid="commission-save"]').trigger('click')
+      await field.setValue('3.5')
+    } else if (kind === 'type') {
+      await wrapper.get('[data-testid="mobile-compensation-tab-types"]').trigger('click')
+      await wrapper.get('[data-testid="mobile-create-commission-type"]').trigger('click')
+      field = wrapper.get('[data-testid="commission-type-name"]')
+      await field.setValue('提交版本')
+      await wrapper.get('[data-testid="commission-type-unit-name"]').setValue('次')
+      await wrapper.get('[data-testid="commission-type-save"]').trigger('click')
+      await field.setValue('较新版本')
+    } else {
+      store.payroll = await attendanceApi.generatePayroll(store.month)
+      await nextTick()
+      await wrapper.get(`[data-testid="mobile-adjust-payroll-${store.payroll.items[0]!.id}"]`).trigger('click')
+      await wrapper.get('[data-testid="payroll-adjustment-amount"]').setValue('10')
+      field = wrapper.get('[data-testid="payroll-adjustment-reason"]')
+      await field.setValue('提交版本')
+      await wrapper.get('[data-testid="payroll-adjustment-save"]').trigger('click')
+      await field.setValue('较新版本')
+    }
+    pending.reject(new Error(`${kind} active failure`))
+    await flushPromises()
+
+    expect((field.element as HTMLInputElement).value).toContain(kind === 'commission' ? '3.5' : '较新版本')
+    expect(wrapper.text()).toContain(`${kind} active failure`)
+    const saveButton = wrapper.get(`[data-testid="${kind === 'type' ? 'commission-type' : kind === 'adjustment' ? 'payroll-adjustment' : kind}-save"]`)
+    expect(saveButton.attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+    save.mockRestore()
+  })
+
+  it('uses exact commission create/edit/delete payloads and adopts a created ID for a newer draft', async () => {
+    attendanceLayout.mobile.value = true
+    const first = deferred<Awaited<ReturnType<typeof attendanceApi.saveCommission>>>()
+    const saved = { id: 'created-commission', employeeId: 'emp-1', commissionTypeId: 'ct-1', date: '2026-08-18', quantity: 2.5, unitPrice: 13.25, amount: 33.13, remark: '提交版本' }
+    const save = vi.spyOn(attendanceApi, 'saveCommission').mockReturnValueOnce(first.promise).mockResolvedValueOnce({ ...saved, remark: '较新版本' })
+    const remove = vi.spyOn(attendanceApi, 'deleteCommission').mockResolvedValue(undefined as any)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = mount(EmployeeCompensationPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-create-commission"]').trigger('click')
+    ;(wrapper.getComponent('[data-testid="commission-employee"]') as any).vm.$emit('update:modelValue', 'emp-1')
+    ;(wrapper.getComponent('[data-testid="commission-type"]') as any).vm.$emit('update:modelValue', 'ct-1')
+    wrapper.findAllComponents({ name: 'ElDatePicker' })[0]!.vm.$emit('update:modelValue', '2026-08-18')
+    await wrapper.get('[data-testid="commission-quantity"]').setValue('2.5')
+    await wrapper.get('[data-testid="commission-unit-price"]').setValue('13.25')
+    await wrapper.get('[data-testid="commission-remark"]').setValue('提交版本')
+    await wrapper.get('[data-testid="commission-save"]').trigger('click')
+    expect(save).toHaveBeenNthCalledWith(1, {
+      employeeId: 'emp-1', commissionTypeId: 'ct-1', date: '2026-08-18', quantity: 2.5, unitPrice: 13.25, remark: '提交版本'
+    }, undefined)
+
+    await wrapper.get('[data-testid="commission-remark"]').setValue('较新版本')
+    first.resolve(saved)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="mobile-compensation-action-status"]').text()).toContain('有较新输入待保存')
+    await wrapper.get('[data-testid="commission-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenNthCalledWith(2, {
+      employeeId: 'emp-1', commissionTypeId: 'ct-1', date: '2026-08-18', quantity: 2.5, unitPrice: 13.25, remark: '较新版本'
+    }, 'created-commission')
+
+    await wrapper.get('[data-testid="mobile-remove-commission-com-1"]').trigger('click')
+    await flushPromises()
+    expect(remove).toHaveBeenCalledWith('com-1')
+    wrapper.unmount()
+    save.mockRestore(); remove.mockRestore(); confirm.mockRestore()
+  })
+
+  it('uses exact bonus create/edit/delete payloads and adopts a created ID for a newer draft', async () => {
+    attendanceLayout.mobile.value = true
+    const first = deferred<Awaited<ReturnType<typeof attendanceApi.saveBonus>>>()
+    const saved = { id: 'created-bonus', employeeId: 'emp-1', date: '2026-08-19', amount: 66.25, reason: '提交版本' }
+    const save = vi.spyOn(attendanceApi, 'saveBonus').mockReturnValueOnce(first.promise).mockResolvedValueOnce({ ...saved, reason: '较新版本' })
+    const remove = vi.spyOn(attendanceApi, 'deleteBonus').mockResolvedValue(undefined as any)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = mount(EmployeeCompensationPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-compensation-tab-bonuses"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-create-bonus"]').trigger('click')
+    ;(wrapper.getComponent('[data-testid="bonus-employee"]') as any).vm.$emit('update:modelValue', 'emp-1')
+    wrapper.findAllComponents({ name: 'ElDatePicker' })[0]!.vm.$emit('update:modelValue', '2026-08-19')
+    await wrapper.get('[data-testid="bonus-amount"]').setValue('66.25')
+    await wrapper.get('[data-testid="bonus-reason"]').setValue('提交版本')
+    await wrapper.get('[data-testid="bonus-save"]').trigger('click')
+    expect(save).toHaveBeenNthCalledWith(1, { employeeId: 'emp-1', date: '2026-08-19', amount: 66.25, reason: '提交版本' }, undefined)
+
+    await wrapper.get('[data-testid="bonus-reason"]').setValue('较新版本')
+    first.resolve(saved)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="mobile-compensation-action-status"]').text()).toContain('有较新输入待保存')
+    await wrapper.get('[data-testid="bonus-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenNthCalledWith(2, { employeeId: 'emp-1', date: '2026-08-19', amount: 66.25, reason: '较新版本' }, 'created-bonus')
+
+    await wrapper.get('[data-testid="mobile-remove-bonus-bonus-1"]').trigger('click')
+    await flushPromises()
+    expect(remove).toHaveBeenCalledWith('bonus-1')
+    wrapper.unmount()
+    save.mockRestore(); remove.mockRestore(); confirm.mockRestore()
+  })
+
+  it('uses exact commission-type create/edit/delete payloads and adopts a created ID for a newer draft', async () => {
+    attendanceLayout.mobile.value = true
+    const first = deferred<Awaited<ReturnType<typeof attendanceApi.saveCommissionType>>>()
+    const saved = { id: 'created-type', name: '提交版本', unitName: '次', unitPrice: 8.75, active: true, referenced: false }
+    const save = vi.spyOn(attendanceApi, 'saveCommissionType').mockReturnValueOnce(first.promise).mockResolvedValueOnce({ ...saved, name: '较新版本' })
+    const remove = vi.spyOn(attendanceApi, 'deleteCommissionType').mockResolvedValue(undefined as any)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = mount(EmployeeCompensationPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-compensation-tab-types"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-create-commission-type"]').trigger('click')
+    await wrapper.get('[data-testid="commission-type-name"]').setValue('提交版本')
+    await wrapper.get('[data-testid="commission-type-unit-name"]').setValue('次')
+    await wrapper.get('[data-testid="commission-type-unit-price"]').setValue('8.75')
+    await wrapper.get('[data-testid="commission-type-save"]').trigger('click')
+    expect(save).toHaveBeenNthCalledWith(1, { name: '提交版本', unitName: '次', unitPrice: 8.75, active: true }, undefined)
+
+    await wrapper.get('[data-testid="commission-type-name"]').setValue('较新版本')
+    first.resolve(saved)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="mobile-compensation-action-status"]').text()).toContain('有较新输入待保存')
+    await wrapper.get('[data-testid="commission-type-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenNthCalledWith(2, { name: '较新版本', unitName: '次', unitPrice: 8.75, active: true }, 'created-type')
+
+    await wrapper.get('[data-testid="mobile-remove-commission-type-ct-1"]').trigger('click')
+    await flushPromises()
+    expect(remove).toHaveBeenCalledWith('ct-1')
+    wrapper.unmount()
+    save.mockRestore(); remove.mockRestore(); confirm.mockRestore()
+  })
+
+  it('uses exact adjustment create/edit/delete payloads and adopts a created ID for a newer draft', async () => {
+    attendanceLayout.mobile.value = true
+    const first = deferred<Awaited<ReturnType<typeof attendanceApi.createPayrollAdjustment>>>()
+    const create = vi.spyOn(attendanceApi, 'createPayrollAdjustment').mockReturnValue(first.promise)
+    const update = vi.spyOn(attendanceApi, 'updatePayrollAdjustment').mockResolvedValue({ id: 'created-adjustment', payrollItemId: 'ignored', amount: 20.5, reason: '较新版本' })
+    const remove = vi.spyOn(attendanceApi, 'deletePayrollAdjustment').mockResolvedValue(undefined as any)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    await nextTick()
+    const item = store.payroll.items[0]!
+    await wrapper.get(`[data-testid="mobile-adjust-payroll-${item.id}"]`).trigger('click')
+    await wrapper.get('[data-testid="payroll-adjustment-amount"]').setValue('20.50')
+    await wrapper.get('[data-testid="payroll-adjustment-reason"]').setValue('提交版本')
+    await wrapper.get('[data-testid="payroll-adjustment-save"]').trigger('click')
+    expect(create).toHaveBeenCalledWith(item.id, { amount: 20.5, reason: '提交版本' })
+
+    await wrapper.get('[data-testid="payroll-adjustment-reason"]').setValue('较新版本')
+    first.resolve({ id: 'created-adjustment', payrollItemId: item.id, amount: 20.5, reason: '提交版本' })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="payroll-adjustment-save-status"]').text()).toContain('有较新输入待保存')
+    await wrapper.get('[data-testid="payroll-adjustment-save"]').trigger('click')
+    await flushPromises()
+    expect(update).toHaveBeenCalledWith('created-adjustment', { amount: 20.5, reason: '较新版本' })
+
+    const currentItem = store.payroll!.items.find((candidate) => candidate.id === item.id)!
+    currentItem.adjustments.push({ id: 'delete-adjustment', payrollItemId: currentItem.id, amount: -5, reason: '删除版本' })
+    await nextTick()
+    wrapper.getComponent({ name: 'MobilePayrollList' }).vm.$emit('removeAdjustment', currentItem.adjustments[0])
+    await flushPromises()
+    expect(remove).toHaveBeenCalledWith('delete-adjustment')
+    wrapper.unmount()
+    create.mockRestore(); update.mockRestore(); remove.mockRestore(); confirm.mockRestore()
+  })
+
+  it.each([
+    ['confirm', 'month'], ['confirm', 'run'],
+    ['reopen', 'month'], ['reopen', 'run'],
+    ['delete', 'month'], ['delete', 'run']
+  ] as const)('blocks a deferred payroll %s prompt after %s identity changes', async (action, identityChange) => {
+    attendanceLayout.mobile.value = true
+    const prompt = deferred<any>()
+    const dialog = action === 'reopen'
+      ? vi.spyOn(ElMessageBox, 'prompt').mockReturnValue(prompt.promise)
+      : vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(prompt.promise)
+    const apiMethod = action === 'confirm' ? 'confirmPayroll' : action === 'reopen' ? 'reopenPayroll' : 'deletePayrollAdjustment'
+    const mutation = vi.spyOn(attendanceApi, apiMethod)
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    store.payroll.issueCount = 0
+    store.payroll.issues = []
+    if (action === 'reopen') store.payroll.status = 'CONFIRMED'
+    if (action === 'delete') {
+      const item = store.payroll.items[0]!
+      item.adjustments.push({ id: 'deferred-delete-adjustment', payrollItemId: item.id, amount: -10, reason: '旧月删除' })
+    }
+    await nextTick()
+
+    if (action === 'confirm') await wrapper.get('[data-testid="mobile-confirm-payroll"]').trigger('click')
+    else if (action === 'reopen') await wrapper.get('[data-testid="mobile-reopen-payroll"]').trigger('click')
+    else wrapper.getComponent({ name: 'MobilePayrollList' }).vm.$emit('removeAdjustment', store.payroll.items[0]!.adjustments[0])
+    if (identityChange === 'month') store.selectMonth('2026-09')
+    else store.payroll = { ...store.payroll, id: 'same-month-newer-run' }
+    prompt.resolve(action === 'reopen' ? { value: '旧月原因' } : 'confirm')
+    await flushPromises()
+
+    expect(mutation).not.toHaveBeenCalled()
+    wrapper.unmount()
+    dialog.mockRestore()
+    mutation.mockRestore()
+  })
+
+  it('blocks adjustment save after its editor month or run identity becomes stale', async () => {
+    attendanceLayout.mobile.value = true
+    const save = vi.spyOn(attendanceApi, 'createPayrollAdjustment')
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    await nextTick()
+    const open = async () => {
+      await wrapper.get(`[data-testid="mobile-adjust-payroll-${store.payroll!.items[0]!.id}"]`).trigger('click')
+      await wrapper.get('[data-testid="payroll-adjustment-amount"]').setValue('12.50')
+      await wrapper.get('[data-testid="payroll-adjustment-reason"]').setValue('身份保护')
+    }
+
+    await open()
+    store.selectMonth('2026-09')
+    await wrapper.get('[data-testid="payroll-adjustment-save"]').trigger('click')
+    expect(save).not.toHaveBeenCalled()
+
+    store.selectMonth('2026-08')
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    await nextTick()
+    await open()
+    store.payroll = { ...store.payroll, id: 'same-month-newer-run' }
+    await wrapper.get('[data-testid="payroll-adjustment-save"]').trigger('click')
+    expect(save).not.toHaveBeenCalled()
+    wrapper.unmount()
+    save.mockRestore()
+  })
+
+  it.each(['month', 'run'] as const)('does not reload or publish a generated payroll after %s identity changes', async (identityChange) => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    await nextTick()
+    const original = store.payroll
+    const pending = deferred<Awaited<ReturnType<typeof attendanceApi.generatePayroll>>>()
+    const generate = vi.spyOn(attendanceApi, 'generatePayroll').mockReturnValue(pending.promise)
+    const reload = vi.spyOn(attendanceApi, 'getPayroll')
+
+    await wrapper.findAll('button').find((node) => node.text() === '生成/刷新草稿')!.trigger('click')
+    if (identityChange === 'month') store.selectMonth('2026-09')
+    else store.payroll = { ...original, id: 'newer-run-before-generate-result' }
+    pending.resolve({ ...original, id: 'late-generated-run' })
+    await flushPromises()
+
+    expect(generate).toHaveBeenCalledWith('2026-08')
+    expect(reload).not.toHaveBeenCalled()
+    expect(store.payroll?.id).not.toBe('late-generated-run')
+    wrapper.unmount()
+    generate.mockRestore(); reload.mockRestore()
+  })
+
+  it('publishes the authoritative generated run only in the current payroll identity', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    await nextTick()
+    const generated = { ...store.payroll, id: 'current-generated-run' }
+    const generate = vi.spyOn(attendanceApi, 'generatePayroll').mockResolvedValue(generated)
+
+    await wrapper.findAll('button').find((node) => node.text() === '生成/刷新草稿')!.trigger('click')
+    await flushPromises()
+
+    expect(generate).toHaveBeenCalledWith(store.month)
+    expect(store.payroll?.id).toBe('current-generated-run')
+    wrapper.unmount()
+    generate.mockRestore()
   })
 })

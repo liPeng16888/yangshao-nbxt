@@ -29,8 +29,8 @@ function pending(id: string) { return props.pendingIds.includes(id) }
     <article v-for="item in run.items" :key="item.id" data-testid="mobile-payroll-card" class="mobile-payroll-card">
       <header><div><strong>{{ item.employee.employeeNumber }} {{ item.employee.name }}</strong><span>{{ run.status === 'CONFIRMED' ? '已确认' : '草稿' }}</span></div></header>
       <div class="mobile-payroll-card__totals">
-        <div><span>应发</span><strong>{{ formatPayrollMoney(item.calculationSnapshot.result.payableAmount) }}</strong></div>
-        <div><span>实发</span><strong>{{ formatPayrollMoney(item.payableAmount) }}</strong></div>
+        <div data-testid="mobile-payroll-authoritative-snapshot-payable"><span>应发</span><strong>{{ formatPayrollMoney(item.calculationSnapshot.result.payableAmount) }}</strong></div>
+        <div data-testid="mobile-payroll-authoritative-item-payable"><span>实发</span><strong>{{ formatPayrollMoney(item.payableAmount) }}</strong></div>
       </div>
       <button :data-testid="`mobile-payroll-details-${item.id}`" class="details-button" type="button" :aria-expanded="expanded.has(item.id)" @click="toggle(item.id)">{{ expanded.has(item.id) ? '收起工资组成' : '展开工资组成' }}</button>
       <dl v-if="expanded.has(item.id)" class="mobile-payroll-card__details">
