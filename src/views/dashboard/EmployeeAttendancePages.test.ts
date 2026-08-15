@@ -2412,4 +2412,195 @@ describe('employee attendance navigation', () => {
     expect(wrapper.text()).toContain('1 条请假待审批')
     wrapper.unmount()
   })
+
+  it('renders exclusive mobile compensation cards, touch tabs, applied filters and exact money', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeCompensationPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="mobile-commission-card"]')).toHaveLength(store.commissions.length)
+    expect(wrapper.get('[data-testid="mobile-commission-card"]').text()).toContain('¥96.00')
+    expect(wrapper.get('[data-testid="mobile-compensation-filter-summary"]').text()).toContain(store.month)
+    expect(wrapper.get('[data-testid="mobile-compensation-filter-summary"]').text()).toContain('全部员工')
+    expect(wrapper.get('[data-testid="mobile-compensation-tab-records"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="mobile-compensation-tab-bonuses"]').trigger('click')
+    expect(wrapper.findAll('[data-testid="mobile-bonus-card"]')).toHaveLength(store.bonuses.length)
+    expect(wrapper.get('[data-testid="mobile-bonus-card"]').text()).toContain('¥200.00')
+
+    await wrapper.get('[data-testid="mobile-compensation-tab-types"]').trigger('click')
+    const referenced = wrapper.get('[data-testid="mobile-commission-type-card-ct-1"]')
+    expect(referenced.text()).toContain('已使用，仅可停用')
+    expect(referenced.get('[data-testid="mobile-edit-commission-type-ct-1"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('uses full-screen decimal compensation editors and retains a failed newer bonus draft', async () => {
+    attendanceLayout.mobile.value = true
+    const saveBonus = vi.spyOn(attendanceApi, 'saveBonus').mockRejectedValue(new Error('奖金保存失败：网络中断'))
+    const wrapper = mount(EmployeeCompensationPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="mobile-compensation-tab-bonuses"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-create-bonus"]').trigger('click')
+    const editor = wrapper.findAllComponents({ name: 'MobileFullscreenDialog' }).find((node) => node.props('modelValue') === true)!
+    expect(editor.props('fullscreen')).toBe(true)
+    const amount = wrapper.get('[data-testid="bonus-amount"]')
+    expect(amount.attributes('inputmode')).toBe('decimal')
+    await amount.setValue('123.45')
+    await wrapper.get('[data-testid="bonus-reason"]').setValue('手机端奖项')
+    await wrapper.get('[data-testid="bonus-save"]').trigger('click')
+    await flushPromises()
+
+    expect(editor.props('modelValue')).toBe(true)
+    expect((wrapper.get('[data-testid="bonus-amount"]').element as HTMLInputElement).value).toBe('123.45')
+    expect(wrapper.text()).toContain('奖金保存失败：网络中断')
+    expect(wrapper.get('[data-testid="mobile-compensation-action-status"]').text()).toContain('保存失败')
+    saveBonus.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('keeps payroll-locked compensation records visibly immutable on mobile', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeeCompensationPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.commissions[0]!.lockedAt = '2026-08-31T12:00:00.000Z'
+    await nextTick()
+
+    const card = wrapper.get('[data-testid="mobile-commission-card"]')
+    expect(card.text()).toContain('工资已锁定')
+    expect(card.get('[data-testid="mobile-edit-commission-com-1"]').attributes('disabled')).toBeDefined()
+    expect(card.get('[data-testid="mobile-remove-commission-com-1"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('retains and reports a newer bonus draft when its in-flight save fails', async () => {
+    attendanceLayout.mobile.value = true
+    const pending = deferred<Awaited<ReturnType<typeof attendanceApi.saveBonus>>>()
+    const saveBonus = vi.spyOn(attendanceApi, 'saveBonus').mockReturnValue(pending.promise)
+    const wrapper = mount(EmployeeCompensationPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-compensation-tab-bonuses"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-create-bonus"]').trigger('click')
+    await wrapper.get('[data-testid="bonus-amount"]').setValue('88.60')
+    const reason = wrapper.get('[data-testid="bonus-reason"]')
+    await reason.setValue('第一版原因')
+    await wrapper.get('[data-testid="bonus-save"]').trigger('click')
+    await reason.setValue('保存期间继续编辑的新原因')
+    pending.reject(new Error('保存请求失败'))
+    await flushPromises()
+
+    expect((wrapper.get('[data-testid="bonus-reason"]').element as HTMLInputElement).value).toBe('保存期间继续编辑的新原因')
+    expect(wrapper.text()).toContain('保存请求失败')
+    expect(wrapper.get('[data-testid="mobile-compensation-action-status"]').text()).toContain('保存失败')
+    saveBonus.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('renders authoritative mobile payroll cards with expandable composition and exclusive desktop markup', async () => {
+    attendanceLayout.mobile.value = true
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    const employee = store.employees[0]!
+    store.payroll = {
+      id: 'run-mobile', month: store.month, status: 'DRAFT', totalAmount: 6488.2, issueCount: 0, issues: [],
+      items: [{
+        id: 'payroll-mobile-1', employeeId: employee.id, employee, payableAmount: 6488.2, issues: [],
+        adjustments: [{ id: 'adjustment-1', payrollItemId: 'payroll-mobile-1', amount: -12.3, reason: '补扣' }],
+        calculationSnapshot: {
+          generatedAt: '2026-08-31T12:00:00.000Z',
+          input: { baseSalary: 6000, attendanceBonus: 300, scheduledWorkDays: 22, restQuotaDays: 4, countedLeaveDays: 1, absenceDays: 0, overtimeMinutes: 120, overtimeHourlyRate: 25, commissionAmount: 100, bonusAmount: 50, adjustments: [{ amount: -12.3 }] },
+          result: { dailyRate: 272.73, excessLeaveDays: 0, leaveDeduction: 0, absenceDeduction: 0, overtimeHours: 2, overtimePay: 50, commissionAmount: 100, bonusAmount: 50, adjustmentAmount: -12.3, attendanceBonus: 300, payableAmount: 6488.2, issues: [] }
+        }
+      }]
+    }
+    await nextTick()
+
+    const card = wrapper.get('[data-testid="mobile-payroll-card"]')
+    expect(wrapper.findAll('[data-testid="mobile-payroll-card"]')).toHaveLength(1)
+    expect(card.text()).toContain('应发')
+    expect(card.text()).toContain('实发')
+    expect(card.text()).toContain('¥6488.20')
+    expect(card.text()).toContain('草稿')
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    await card.get('[data-testid="mobile-payroll-details-payroll-mobile-1"]').trigger('click')
+    expect(card.text()).toContain('基本月薪')
+    expect(card.text()).toContain('请假扣款')
+    expect(card.text()).toContain('补扣')
+    wrapper.unmount()
+  })
+
+  it('uses mobile payroll action handlers, exact confirmations, fullscreen adjustment and both export modes', async () => {
+    attendanceLayout.mobile.value = true
+    const confirmDialog = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const confirmPayroll = vi.spyOn(attendanceApi, 'confirmPayroll')
+    const pinia = createPinia()
+    const PayrollExportDialogStub = defineComponent({ name: 'PayrollExportDialog', props: { visible: Boolean, run: Object, item: Object }, template: '<div />' })
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus], stubs: { PayrollExportDialog: PayrollExportDialogStub } } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    store.payroll.issueCount = 0
+    store.payroll.issues = []
+    store.payroll.items.forEach((item) => { item.issues = [] })
+    await nextTick()
+    const runId = store.payroll.id
+    const item = store.payroll.items[0]!
+
+    await wrapper.get(`[data-testid="mobile-adjust-payroll-${item.id}"]`).trigger('click')
+    expect(wrapper.getComponent({ name: 'MobileFullscreenDialog' }).props('fullscreen')).toBe(true)
+    expect(wrapper.get('[data-testid="payroll-adjustment-amount"]').attributes('inputmode')).toBe('decimal')
+    wrapper.getComponent({ name: 'MobileFullscreenDialog' }).vm.$emit('update:modelValue', false)
+    await nextTick()
+
+    await wrapper.get('[data-testid="mobile-export-payroll-summary"]').trigger('click')
+    expect(wrapper.getComponent(PayrollExportDialogStub).props('item')).toBeNull()
+    await wrapper.get(`[data-testid="mobile-export-payroll-${item.id}"]`).trigger('click')
+    expect(wrapper.getComponent(PayrollExportDialogStub).props('item')).toEqual(item)
+
+    await wrapper.get('[data-testid="mobile-confirm-payroll"]').trigger('click')
+    await flushPromises()
+    expect(confirmDialog).toHaveBeenCalledWith('确认后当月考勤、请假、提成和奖金将被锁定。', '确认工资', { type: 'warning' })
+    expect(confirmPayroll).toHaveBeenCalledWith(runId)
+    confirmDialog.mockRestore()
+    confirmPayroll.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('removes every payroll mutation control when confirmed and reopens through the exact reason prompt', async () => {
+    attendanceLayout.mobile.value = true
+    const prompt = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '考勤更正' } as never)
+    const reopenPayroll = vi.spyOn(attendanceApi, 'reopenPayroll')
+    const pinia = createPinia()
+    const wrapper = mount(EmployeePayrollPage, { global: { plugins: [pinia, ElementPlus] } })
+    const store = useEmployeeAttendanceStore(pinia)
+    await flushPromises()
+    store.payroll = await attendanceApi.generatePayroll(store.month)
+    store.payroll.status = 'CONFIRMED'
+    const runId = store.payroll.id
+    const itemId = store.payroll.items[0]!.id
+    await nextTick()
+
+    expect(wrapper.text()).toContain('已确认')
+    expect(wrapper.find(`[data-testid="mobile-adjust-payroll-${itemId}"]`).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mobile-confirm-payroll"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="mobile-reopen-payroll"]').trigger('click')
+    await flushPromises()
+
+    expect(prompt).toHaveBeenCalledWith('撤销后可重新修改当月数据，请填写原因。', '撤销确认', {
+      inputPattern: /\S+/,
+      inputErrorMessage: '原因必填'
+    })
+    expect(reopenPayroll).toHaveBeenCalledWith(runId, '考勤更正')
+    prompt.mockRestore()
+    reopenPayroll.mockRestore()
+    wrapper.unmount()
+  })
 })

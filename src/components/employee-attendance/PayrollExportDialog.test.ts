@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessage } from 'element-plus'
-import { defineComponent, nextTick } from 'vue'
+import { defineComponent, nextTick, ref } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Employee, PayrollItem, PayrollRun } from '@/types/employeeAttendance'
 import PayrollExportDialog from './PayrollExportDialog.vue'
@@ -8,6 +8,12 @@ import {
   downloadEmployeePayrollPng,
   downloadPayrollSummaryPng
 } from '@/utils/payrollPng'
+
+const exportLayout = vi.hoisted(() => ({ mobile: undefined as unknown as ReturnType<typeof ref<boolean>> }))
+
+vi.mock('@/composables/useMobileLayout', () => ({
+  useMobileLayout: () => ({ isMobileLayout: exportLayout.mobile })
+}))
 
 vi.mock('@/utils/payrollPng', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/utils/payrollPng')>(),
@@ -17,7 +23,7 @@ vi.mock('@/utils/payrollPng', async (importOriginal) => ({
 
 const DialogStub = defineComponent({
   name: 'ElDialog',
-  props: { modelValue: Boolean, title: String, width: String },
+  props: { modelValue: Boolean, title: String, width: String, fullscreen: Boolean },
   emits: ['close'],
   template: '<section v-if="modelValue"><h2>{{ title }}</h2><slot /><slot name="footer" /></section>'
 })
@@ -68,6 +74,8 @@ afterEach(() => {
 })
 
 describe('PayrollExportDialog', () => {
+  exportLayout.mobile = ref(false)
+
   it('previews the selected employee payslip using the locked snapshot values', () => {
     const item = makeItem()
     const wrapper = mountDialog({ item })
@@ -165,5 +173,35 @@ describe('PayrollExportDialog', () => {
     await flushPromises()
     expect(messages.success).toHaveBeenCalledWith('工资汇总图片已保存')
     expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('uses an explicit full-screen mobile presentation while preserving the desktop dialog width', async () => {
+    exportLayout.mobile.value = true
+    const wrapper = mountDialog()
+    expect(wrapper.getComponent(DialogStub).props('fullscreen')).toBe(true)
+    expect(wrapper.getComponent(DialogStub).props('width')).toBe('100%')
+    expect(wrapper.classes()).toContain('payroll-export-dialog--mobile')
+    expect(wrapper.text()).toContain('保存为 PNG')
+
+    exportLayout.mobile.value = false
+    await nextTick()
+    expect(wrapper.getComponent(DialogStub).props('fullscreen')).toBe(false)
+    expect(wrapper.getComponent(DialogStub).props('width')).toBe('min(980px, calc(100vw - 32px))')
+    wrapper.unmount()
+  })
+
+  it('silences a late export completion after the dialog unmounts', async () => {
+    const messages = mockMessages()
+    let finish: (result: boolean) => void = () => undefined
+    vi.mocked(downloadPayrollSummaryPng).mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    const wrapper = mountDialog()
+
+    await wrapper.get('[data-testid="payroll-export-confirm"]').trigger('click')
+    wrapper.unmount()
+    finish(true)
+    await flushPromises()
+
+    expect(messages.success).not.toHaveBeenCalled()
+    expect(messages.error).not.toHaveBeenCalled()
   })
 })
