@@ -1,4 +1,4 @@
-import { defineComponent, nextTick, type Component } from 'vue'
+import { defineComponent, nextTick, ref, type Component, type Ref } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ElementPlus, { ElAutocomplete, ElMessageBox, ElSelect } from 'element-plus'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -20,7 +20,14 @@ const api = vi.hoisted(() => ({
   correctMedicineMovement: vi.fn()
 }))
 
+const layout = vi.hoisted(() => ({
+  isMobileLayout: undefined as unknown as Ref<boolean>
+}))
+
 vi.mock('@/api/medicineInventory', () => api)
+vi.mock('@/composables/useMobileLayout', () => ({
+  useMobileLayout: () => ({ isMobileLayout: layout.isMobileLayout })
+}))
 
 const DialogStub = defineComponent({
   name: 'ElDialog',
@@ -95,6 +102,7 @@ function componentByTestId(wrapper: VueWrapper, testId: string): VueWrapper<any>
 }
 
 beforeEach(() => {
+  layout.isMobileLayout = ref(false)
   vi.restoreAllMocks()
   api.getMedicineItems.mockReset()
   api.getMedicineCommonNames.mockReset()
@@ -104,7 +112,7 @@ beforeEach(() => {
   api.createMedicineInbound.mockReset()
   api.createMedicineOutbound.mockReset()
   api.correctMedicineMovement.mockReset()
-  api.getMedicineItems.mockResolvedValue(items)
+  api.getMedicineItems.mockImplementation(() => Promise.resolve(structuredClone(items)))
   api.getMedicineCommonNames.mockResolvedValue(commonNames)
   api.createMedicineCommonName.mockResolvedValue({ id: 'common-hydrochloric', frontendUserId: 'frontend-1', name: '盐酸', createdAt: '2026-08-03T08:00:00.000Z', updatedAt: '2026-08-03T08:00:00.000Z' })
   api.deleteMedicineCommonName.mockResolvedValue(undefined)
@@ -177,6 +185,64 @@ describe('MedicineInventoryStockPage', () => {
 
     expect(wrapper.find('[data-testid="stock-load-error"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('阿莫西林')
+  })
+
+  it('renders only mobile stock cards with complete stock fields and filter drawer on mobile', async () => {
+    layout.isMobileLayout.value = true
+    const wrapper = mountPage(MedicineInventoryStockPage)
+    await flushPromises()
+
+    const cards = wrapper.findAll('[data-testid="mobile-medicine-stock-card"]')
+    expect(cards).toHaveLength(3)
+    expect(cards[0].text()).toContain('阿莫西林')
+    expect(cards[0].text()).toContain('10')
+    expect(cards[0].text()).toContain('瓶')
+    expect(cards[0].text()).toContain('2026-08-02 16:00')
+    expect(wrapper.find('.mobile-filter-drawer').exists()).toBe(true)
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    expect(wrapper.find('.inventory-control-band').exists()).toBe(false)
+  })
+
+  it('keeps a mobile stock filter through an error/retry and ignores a stale request', async () => {
+    layout.isMobileLayout.value = true
+    let resolveOlder!: (value: typeof items) => void
+    const olderRequest = new Promise<typeof items>((resolve) => { resolveOlder = resolve })
+    api.getMedicineItems.mockReturnValueOnce(olderRequest)
+    const wrapper = mountPage(MedicineInventoryStockPage)
+    await nextTick()
+
+    await wrapper.get('.mobile-filter-summary').trigger('click')
+    const drawerSelect = wrapper.getComponent(ElSelect)
+    drawerSelect.vm.$emit('update:modelValue', ['item-saline'])
+    await wrapper.findAll('.mobile-filter-drawer__actions button')[1].trigger('click')
+    api.getMedicineItems.mockRejectedValueOnce(new Error('network'))
+    await wrapper.get('[data-testid="mobile-stock-refresh"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="stock-load-error"]').text()).toContain('药品库存加载失败')
+    expect(wrapper.get('.mobile-filter-summary').text()).toContain('已选 1 项')
+
+    api.getMedicineItems.mockResolvedValueOnce(items)
+    await wrapper.get('[data-testid="stock-retry"]').trigger('click')
+    await flushPromises()
+    resolveOlder([items[0]])
+    await flushPromises()
+
+    const cards = wrapper.findAll('[data-testid="mobile-medicine-stock-card"]')
+    expect(cards).toHaveLength(1)
+    expect(cards[0].text()).toContain('生理盐水')
+  })
+
+  it('switches stock layout without rendering desktop and mobile records together', async () => {
+    const wrapper = mountPage(MedicineInventoryStockPage)
+    await flushPromises()
+    expect(wrapper.find('.inventory-control-band').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mobile-medicine-stock-list"]').exists()).toBe(false)
+
+    layout.isMobileLayout.value = true
+    await nextTick()
+    expect(wrapper.find('.inventory-control-band').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mobile-medicine-stock-list"]').exists()).toBe(true)
   })
 })
 
@@ -331,6 +397,91 @@ describe('MedicineInventoryInboundPage', () => {
     expect(ElMessageBox.confirm).toHaveBeenCalled()
     expect(api.correctMedicineMovement).toHaveBeenCalledWith('movement-inbound-1', { reason: '录入数量有误' })
   })
+
+  it('uses a collapsed mobile inbound form backed by the same persistent inputs and movement cards', async () => {
+    layout.isMobileLayout.value = true
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+
+    const toggle = wrapper.get('[data-testid="mobile-inbound-form-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('[data-testid="mobile-inbound-form"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="mobile-inbound-form"]').isVisible()).toBe(false)
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="mobile-inbound-card"]')).toHaveLength(1)
+
+    await toggle.trigger('click')
+    await wrapper.get('[data-testid="inbound-quantity"]').setValue('2.5')
+    expect(wrapper.get('[data-testid="inbound-quantity"]').attributes('inputmode')).toBe('decimal')
+    await toggle.trigger('click')
+    await toggle.trigger('click')
+    expect((wrapper.get('[data-testid="inbound-quantity"]').element as HTMLInputElement).value).toBe('2.5')
+  })
+
+  it('keeps a mobile inbound inventory error visible while the form is collapsed', async () => {
+    layout.isMobileLayout.value = true
+    api.getMedicineItems.mockRejectedValueOnce(new Error('network'))
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="mobile-inbound-form-toggle"]').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[data-testid="inbound-items-error"]').isVisible()).toBe(true)
+  })
+
+  it('submits the exact inbound business payload from the mobile form', async () => {
+    layout.isMobileLayout.value = true
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-inbound-form-toggle"]').trigger('click')
+
+    const datePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[0] as VueWrapper<any>
+    datePicker.vm.$emit('update:modelValue', '2026-08-14')
+    const nameInput = wrapper.getComponent(ElAutocomplete) as unknown as VueWrapper<any>
+    nameInput.vm.$emit('update:modelValue', '葡萄糖')
+    componentByTestId(wrapper, 'inbound-unit').vm.$emit('update:modelValue', 'MILLILITER')
+    await wrapper.get('[data-testid="inbound-quantity"]').setValue('2.125')
+    const remark = wrapper.findAllComponents({ name: 'ElInput' }).find((input) => input.props('placeholder') === '可填写入库备注')
+    remark?.vm.$emit('update:modelValue', '  移动入库  ')
+    await nextTick()
+    await wrapper.get('[data-testid="inbound-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createMedicineInbound).toHaveBeenCalledWith({
+      occurredOn: '2026-08-14',
+      name: '葡萄糖',
+      unit: 'MILLILITER',
+      quantity: '2.125',
+      remark: '移动入库'
+    })
+  })
+
+  it('keeps mobile history filters on retry and opens a fullscreen correction that retains failed input', async () => {
+    layout.isMobileLayout.value = true
+    const wrapper = mountPage(MedicineInventoryInboundPage)
+    await flushPromises()
+
+    await wrapper.get('.mobile-filter-summary').trigger('click')
+    const historySelect = componentByTestId(wrapper, 'mobile-medicine-history-item-filter')
+    historySelect.vm.$emit('update:modelValue', ['item-amoxicillin'])
+    api.getMedicineMovements.mockRejectedValueOnce(new Error('network'))
+    await wrapper.findAll('.mobile-filter-drawer__actions button')[1].trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.mobile-filter-summary').text()).toContain('已选 1 项')
+
+    await wrapper.get('[data-testid="inbound-history-retry"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="correct-movement-inbound-1"]').trigger('click')
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(true)
+    await wrapper.get('[data-testid="correction-submit"]').trigger('click')
+    expect(api.correctMedicineMovement).not.toHaveBeenCalled()
+
+    api.correctMedicineMovement.mockRejectedValueOnce(new Error('save failed'))
+    await wrapper.get('[data-testid="correction-reason"]').setValue('录入数量有误')
+    await wrapper.get('[data-testid="correction-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="correction-dialog"]').exists()).toBe(true)
+    expect((wrapper.get('[data-testid="correction-reason"]').element as HTMLTextAreaElement).value).toBe('录入数量有误')
+  })
 })
 
 describe('MedicineInventoryOutboundPage', () => {
@@ -424,5 +575,117 @@ describe('MedicineInventoryOutboundPage', () => {
     expect(componentByTestId(wrapper, 'outbound-item').props('modelValue')).toBe('item-amoxicillin')
     expect((wrapper.get('[data-testid="outbound-quantity"]').element as HTMLInputElement).value).toBe('8')
     expect((wrapper.get('[data-testid="outbound-remark"]').element as HTMLInputElement).value).toBe('紧急出库')
+  })
+
+  it('uses a collapsed mobile outbound form and complete movement cards without desktop tables', async () => {
+    layout.isMobileLayout.value = true
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    const toggle = wrapper.get('[data-testid="mobile-outbound-form-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[data-testid="mobile-outbound-form"]').isVisible()).toBe(false)
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    const card = wrapper.get('[data-testid="mobile-outbound-card"]')
+    expect(card.text()).toContain('阿莫西林')
+    expect(card.text()).toContain('10 瓶')
+    expect(card.text()).toContain('剩余库存')
+    expect(card.text()).toContain('frontend-1')
+    expect(card.text()).toContain('初始入库')
+    expect(card.text()).toContain('2026-08-02 16:00')
+
+    await toggle.trigger('click')
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('1.5')
+    expect(wrapper.get('[data-testid="outbound-quantity"]').attributes('inputmode')).toBe('decimal')
+    await toggle.trigger('click')
+    await toggle.trigger('click')
+    expect((wrapper.get('[data-testid="outbound-quantity"]').element as HTMLInputElement).value).toBe('1.5')
+  })
+
+  it('preserves mobile outbound fields and updated stock after an insufficient-stock conflict without duplicate submit', async () => {
+    layout.isMobileLayout.value = true
+    let rejectOutbound!: (error: unknown) => void
+    api.createMedicineOutbound.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectOutbound = reject }))
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-outbound-form-toggle"]').trigger('click')
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-amoxicillin')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('8')
+    await wrapper.get('[data-testid="outbound-remark"]').setValue('紧急出库')
+    await nextTick()
+
+    await Promise.all([
+      wrapper.get('[data-testid="outbound-submit"]').trigger('click'),
+      wrapper.get('[data-testid="outbound-submit"]').trigger('click')
+    ])
+    await flushPromises()
+    expect(api.createMedicineOutbound).toHaveBeenCalledTimes(1)
+
+    rejectOutbound({ response: { status: 409, data: { item: { currentQuantity: 2 }, message: '库存不足' } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('当前库存 2 瓶')
+    expect(componentByTestId(wrapper, 'outbound-item').props('modelValue')).toBe('item-amoxicillin')
+    expect((wrapper.get('[data-testid="outbound-quantity"]').element as HTMLInputElement).value).toBe('8')
+    expect((wrapper.get('[data-testid="outbound-remark"]').element as HTMLInputElement).value).toBe('紧急出库')
+  })
+
+  it('submits the exact outbound business payload from the mobile form', async () => {
+    layout.isMobileLayout.value = true
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+    await wrapper.get('[data-testid="mobile-outbound-form-toggle"]').trigger('click')
+
+    const datePicker = wrapper.findAllComponents({ name: 'ElDatePicker' })[0] as VueWrapper<any>
+    datePicker.vm.$emit('update:modelValue', '2026-08-14')
+    componentByTestId(wrapper, 'outbound-item').vm.$emit('update:modelValue', 'item-saline')
+    await wrapper.get('[data-testid="outbound-quantity"]').setValue('0.125')
+    await wrapper.get('[data-testid="outbound-remark"]').setValue('  移动出库  ')
+    await nextTick()
+    await wrapper.get('[data-testid="outbound-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createMedicineOutbound).toHaveBeenCalledWith({
+      occurredOn: '2026-08-14',
+      medicineItemId: 'item-saline',
+      quantity: '0.125',
+      remark: '移动出库'
+    })
+  })
+
+  it('hides correction actions for correction rows and already-corrected originals on mobile', async () => {
+    layout.isMobileLayout.value = true
+    api.getMedicineMovements.mockResolvedValueOnce([
+      { ...inboundMovement, id: 'outbound-original', type: 'OUTBOUND' },
+      { ...inboundMovement, id: 'outbound-correction', type: 'CORRECTION_IN', correctionOfId: 'outbound-original', remark: '库存更正' }
+    ])
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="correct-outbound-original"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="correct-outbound-correction"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="mobile-outbound-card"]').text()).toContain('已更正')
+    expect(wrapper.findAll('[data-testid="mobile-outbound-card"]')[1].text()).toContain('更正自 outbound-original')
+  })
+
+  it('submits a mobile correction only once when confirmation is clicked repeatedly', async () => {
+    layout.isMobileLayout.value = true
+    api.getMedicineMovements.mockResolvedValueOnce([{ ...inboundMovement, id: 'outbound-1', type: 'OUTBOUND' }])
+    let resolveCorrection!: (value: unknown) => void
+    api.correctMedicineMovement.mockReturnValueOnce(new Promise((resolve) => { resolveCorrection = resolve }))
+    const wrapper = mountPage(MedicineInventoryOutboundPage)
+    await flushPromises()
+
+    await wrapper.get('[data-testid="correct-outbound-1"]').trigger('click')
+    await wrapper.get('[data-testid="correction-reason"]').setValue('重复录入')
+    await Promise.all([
+      wrapper.get('[data-testid="correction-submit"]').trigger('click'),
+      wrapper.get('[data-testid="correction-submit"]').trigger('click')
+    ])
+    await flushPromises()
+
+    expect(api.correctMedicineMovement).toHaveBeenCalledTimes(1)
+    resolveCorrection({ item: items[0], movement: inboundMovement })
+    await flushPromises()
   })
 })
