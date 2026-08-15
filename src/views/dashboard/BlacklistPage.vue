@@ -6,7 +6,7 @@
         :records="blacklistStore.records" :keyword="blacklistStore.keyword" :loading="blacklistStore.loading"
         :highlight-id="highlightId" :load-error="loadError" :deleting-id="blacklistStore.deletingId"
         :updating-id="blacklistStore.updatingId" :save="handleCreate"
-        @retry="loadRecords()" @search="loadRecords" @supplement="openSupplement" @delete="handleDelete"
+        @retry="retryLoadRecords" @search="loadRecords" @supplement="openSupplement" @delete="handleDelete"
       />
     </KeepAlive>
 
@@ -33,9 +33,10 @@
         <label><span>备注</span><textarea v-model.trim="supplementForm.note" :disabled="supplementSaving" data-testid="blacklist-supplement-note" rows="3" /></label>
         <label class="mobile-blacklist-supplement__images">
           <span>图片（最多 2 张）</span>
-          <el-upload v-model:file-list="supplementImageFiles" :auto-upload="false" :disabled="supplementSaving" :limit="2" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="选择黑名单补充图片" list-type="picture-card"
+          <el-upload v-model:file-list="supplementImageFiles" :auto-upload="false" :disabled="supplementSaving" :limit="2" accept="image/png,image/jpeg,image/webp,image/gif" list-type="picture-card"
             :on-change="handleSupplementImageChange" :on-remove="handleSupplementImageRemove" :on-exceed="handleSupplementExceed">
-            <el-icon><Plus /></el-icon>
+            <el-icon aria-hidden="true"><Plus /></el-icon>
+            <span class="blacklist-upload-trigger-label">选择黑名单补充图片</span>
           </el-upload>
           <small>已选 {{ supplementImageFiles.length }} / 2 张</small>
         </label>
@@ -51,9 +52,10 @@
           <el-form-item label="金额"><el-input-number v-model="supplementForm.amount" :disabled="supplementSaving" :precision="2" :min="0" controls-position="right" /></el-form-item>
         </div>
         <el-form-item label="图片">
-          <el-upload v-model:file-list="supplementImageFiles" :auto-upload="false" :disabled="supplementSaving" :limit="2" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="选择黑名单补充图片" list-type="picture-card"
+          <el-upload v-model:file-list="supplementImageFiles" :auto-upload="false" :disabled="supplementSaving" :limit="2" accept="image/png,image/jpeg,image/webp,image/gif" list-type="picture-card"
             :on-change="handleSupplementImageChange" :on-remove="handleSupplementImageRemove" :on-exceed="handleSupplementExceed">
-            <el-icon><Plus /></el-icon>
+            <el-icon aria-hidden="true"><Plus /></el-icon>
+            <span class="blacklist-upload-trigger-label">选择黑名单补充图片</span>
           </el-upload>
         </el-form-item>
         <el-form-item label="其他"><el-input v-model.trim="supplementForm.other" :disabled="supplementSaving" /></el-form-item>
@@ -68,7 +70,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import type { UploadFile, UploadFiles, UploadUserFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -81,7 +83,13 @@ import MobileFullscreenDialog from '@/components/mobile/MobileFullscreenDialog.v
 import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useBlacklistStore } from '@/stores/blacklist'
 import type { BlacklistPayload, BlacklistRecord } from '@/types/blacklist'
-import { createOwnedImagePreview, revokeOwnedImagePreview, validateBlacklistImage } from '@/utils/blacklistImages'
+import {
+  createOwnedImagePreview,
+  forgetOwnedImagePreview,
+  registerOwnedImagePreview,
+  revokeOwnedImagePreview,
+  validateBlacklistImage
+} from '@/utils/blacklistImages'
 import { validateBlacklistPayload } from '@/utils/validators'
 
 const route = useRoute()
@@ -98,27 +106,31 @@ let supplementUploadedUrls = new WeakMap<File, string>()
 const deletingRecords = new Set<string>()
 let pageLoadVersion = 0
 let loadController: AbortController | null = null
+let failedLoadKeyword = ''
 let disposed = false
 let retainSupplementAcrossLayout = false
+let supplementPreviewLayoutVersion = 0
 const supplementForm = reactive<BlacklistPayload>({ phone: '', wechat: '', wechatNickname: '', amount: null, images: [], other: '', note: '' })
 
 onMounted(() => { void loadRecords(highlightId.value ? '' : blacklistStore.keyword) })
 onBeforeUnmount(() => {
   disposed = true
   pageLoadVersion += 1
+  supplementPreviewLayoutVersion += 1
   loadController?.abort()
-  releaseSupplementUrls()
+  forgetSupplementUrls()
   deletingRecords.clear()
 })
 
 watch(() => route.query.hit, () => { void loadRecords(highlightId.value ? '' : blacklistStore.keyword) })
 watch(isMobileLayout, () => {
   if (!supplementVisible.value) return
-  if (supplementSaving.value) { retainSupplementAcrossLayout = true; return }
+  if (supplementSaving.value) retainSupplementAcrossLayout = true
+  if (retainSupplementAcrossLayout) { void refreshSupplementPreviewsAfterLayoutChange(); return }
   if (!retainSupplementAcrossLayout) supplementVisible.value = false
 })
 watch(supplementVisible, (visible) => {
-  if (!visible) { retainSupplementAcrossLayout = false; resetSupplementForm() }
+  if (!visible) { retainSupplementAcrossLayout = false; resetSupplementForm(false) }
 })
 
 async function loadRecords(keyword = highlightId.value ? '' : blacklistStore.keyword) {
@@ -130,10 +142,17 @@ async function loadRecords(keyword = highlightId.value ? '' : blacklistStore.key
   try {
     await blacklistStore.loadRecords(keyword, { signal: controller.signal })
   } catch {
-    if (!disposed && !controller.signal.aborted && currentLoad === pageLoadVersion) loadError.value = '黑名单加载失败，请检查网络后重试。'
+    if (!disposed && !controller.signal.aborted && currentLoad === pageLoadVersion) {
+      failedLoadKeyword = keyword
+      loadError.value = '黑名单加载失败，请检查网络后重试。'
+    }
   } finally {
     if (loadController === controller) loadController = null
   }
+}
+
+function retryLoadRecords() {
+  void loadRecords(failedLoadKeyword)
 }
 
 async function handleCreate(payload: BlacklistPayload): Promise<void> {
@@ -171,8 +190,10 @@ function openSupplement(row: BlacklistRecord) {
   supplementVisible.value = true
 }
 
-function resetSupplementForm() {
-  releaseSupplementUrls()
+function resetSupplementForm(revokeUrls = true) {
+  supplementPreviewLayoutVersion += 1
+  if (revokeUrls) releaseSupplementUrls()
+  else forgetSupplementUrls()
   supplementRecord.value = null
   supplementImageFiles.value = []
   supplementUploadedUrls = new WeakMap<File, string>()
@@ -180,22 +201,28 @@ function resetSupplementForm() {
 }
 
 function releaseSupplementUrls() {
-  for (const url of supplementOwnedUrls) revokeOwnedImagePreview(url)
-  supplementOwnedUrls.clear()
+  for (const url of [...supplementOwnedUrls]) releaseSupplementUrl(url)
 }
 
-function syncSupplementImages(files: UploadFiles) {
+function forgetSupplementUrls() {
+  for (const url of [...supplementOwnedUrls]) forgetSupplementUrl(url)
+}
+
+function syncSupplementImages(files: UploadFiles, revokeMissing = true) {
   const next: UploadUserFile[] = []
   for (const item of files) {
     if (next.length >= 2) break
     if (item.raw) {
       const error = validateBlacklistImage(item.raw)
       if (error) {
+        registerSupplementElementPreview(item)
+        if (item.url) releaseSupplementUrl(item.url)
         ElMessage.error(error)
         continue
       }
     }
     let url = item.url || ''
+    registerSupplementElementPreview(item)
     if (!url && item.raw) {
       try {
         url = createOwnedImagePreview(item.raw)
@@ -210,8 +237,8 @@ function syncSupplementImages(files: UploadFiles) {
   const activeUrls = new Set(next.map((item) => item.url).filter((url): url is string => Boolean(url)))
   for (const url of [...supplementOwnedUrls]) {
     if (!activeUrls.has(url)) {
-      revokeOwnedImagePreview(url)
-      supplementOwnedUrls.delete(url)
+      if (revokeMissing) releaseSupplementUrl(url)
+      else forgetSupplementUrl(url)
     }
   }
   supplementImageFiles.value = next
@@ -219,8 +246,50 @@ function syncSupplementImages(files: UploadFiles) {
 }
 
 function handleSupplementImageChange(_file: UploadFile, files: UploadFiles) { syncSupplementImages(files) }
-function handleSupplementImageRemove(_file: UploadFile, files: UploadFiles) { syncSupplementImages(files) }
+function handleSupplementImageRemove(_file: UploadFile, files: UploadFiles) { syncSupplementImages(files, false) }
 function handleSupplementExceed() { ElMessage.error('图片最多上传 2 张') }
+
+function registerSupplementElementPreview(item: UploadUserFile) {
+  if (!item.raw || !item.url?.startsWith('blob:')) return
+  registerOwnedImagePreview(item.url)
+  supplementOwnedUrls.add(item.url)
+}
+
+function releaseSupplementUrl(url: string) {
+  revokeOwnedImagePreview(url)
+  supplementOwnedUrls.delete(url)
+}
+
+function forgetSupplementUrl(url: string) {
+  forgetOwnedImagePreview(url)
+  supplementOwnedUrls.delete(url)
+}
+
+async function refreshSupplementPreviewsAfterLayoutChange() {
+  const currentLayout = ++supplementPreviewLayoutVersion
+  for (const item of supplementImageFiles.value) {
+    if (!item.raw || !item.url?.startsWith('blob:')) continue
+    const previousUrl = item.url
+    item.url = ''
+    releaseSupplementUrl(previousUrl)
+  }
+  supplementImageFiles.value = supplementImageFiles.value.map((item) => ({ ...item }))
+  supplementForm.images = supplementImageFiles.value.map((item) => item.url || '').filter(Boolean)
+  await nextTick()
+  if (disposed || !supplementVisible.value || currentLayout !== supplementPreviewLayoutVersion) return
+  supplementImageFiles.value = supplementImageFiles.value.map((item) => {
+    if (!item.raw || item.url) return item
+    try {
+      const url = createOwnedImagePreview(item.raw)
+      supplementOwnedUrls.add(url)
+      return { ...item, url }
+    } catch {
+      ElMessage.error('图片预览失败，请重新选择')
+      return item
+    }
+  })
+  supplementForm.images = supplementImageFiles.value.map((item) => item.url || '').filter(Boolean)
+}
 
 async function persistSupplementFiles(files: File[]) {
   const missing = files.filter((file) => !supplementUploadedUrls.has(file))
@@ -232,7 +301,12 @@ async function persistSupplementFiles(files: File[]) {
 }
 
 function supplementDraftSignature() {
-  return JSON.stringify({ ...supplementForm, images: supplementImageFiles.value.map((item) => [item.name, item.url, item.raw?.size, item.raw?.lastModified]) })
+  return JSON.stringify({
+    ...supplementForm,
+    images: supplementImageFiles.value.map((item) => item.raw
+      ? ['local', item.name, item.raw.type, item.raw.size, item.raw.lastModified]
+      : ['remote', item.url])
+  })
 }
 
 async function submitSupplement() {
@@ -278,5 +352,6 @@ async function submitSupplement() {
 .mobile-blacklist-supplement > label { display: grid; min-width: 0; gap: 6px; color: #475569; }
 .mobile-blacklist-supplement input, .mobile-blacklist-supplement textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 9px 11px; color: #0f172a; background: #fff; border: 1px solid #aebdcd; border-radius: 8px; }
 .mobile-blacklist-supplement textarea { min-height: 88px; resize: vertical; }
+.blacklist-upload-trigger-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 900px) { .blacklist-form-grid { grid-template-columns: 1fr; } }
 </style>

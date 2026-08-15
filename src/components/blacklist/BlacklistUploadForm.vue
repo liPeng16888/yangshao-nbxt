@@ -26,13 +26,13 @@
             :disabled="submitting"
             :limit="2"
             accept="image/png,image/jpeg,image/webp,image/gif"
-            aria-label="选择黑名单图片"
             list-type="picture-card"
             :on-change="handleImageChange"
             :on-remove="handleImageRemove"
             :on-exceed="handleExceed"
           >
-            <el-icon><Plus /></el-icon>
+            <el-icon aria-hidden="true"><Plus /></el-icon>
+            <span class="blacklist-upload-trigger-label">选择黑名单图片</span>
           </el-upload>
         </el-form-item>
         <el-form-item label="其他">
@@ -54,7 +54,13 @@ import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { uploadImages } from '@/api/upload'
 import type { BlacklistPayload } from '@/types/blacklist'
-import { createOwnedImagePreview, revokeOwnedImagePreview, validateBlacklistImage } from '@/utils/blacklistImages'
+import {
+  createOwnedImagePreview,
+  forgetOwnedImagePreview,
+  registerOwnedImagePreview,
+  revokeOwnedImagePreview,
+  validateBlacklistImage
+} from '@/utils/blacklistImages'
 import { validateBlacklistPayload } from '@/utils/validators'
 
 const props = defineProps<{
@@ -75,17 +81,23 @@ const form = reactive<BlacklistPayload>({
   note: ''
 })
 
-onBeforeUnmount(releaseUrls)
+onBeforeUnmount(forgetUrls)
 
-function syncImages(files: UploadFiles) {
+function syncImages(files: UploadFiles, revokeMissing = true) {
   const next: UploadUserFile[] = []
   for (const item of files) {
     if (next.length >= 2) break
     if (item.raw) {
       const error = validateBlacklistImage(item.raw)
-      if (error) { ElMessage.error(error); continue }
+      if (error) {
+        registerElementPreview(item)
+        if (item.url) releaseUrl(item.url)
+        ElMessage.error(error)
+        continue
+      }
     }
     let url = item.url || ''
+    registerElementPreview(item)
     if (!url && item.raw) {
       try {
         url = createOwnedImagePreview(item.raw)
@@ -99,13 +111,16 @@ function syncImages(files: UploadFiles) {
   }
   const active = new Set(next.map((item) => item.url).filter((url): url is string => Boolean(url)))
   for (const url of [...ownedUrls]) {
-    if (!active.has(url)) { revokeOwnedImagePreview(url); ownedUrls.delete(url) }
+    if (!active.has(url)) {
+      if (revokeMissing) releaseUrl(url)
+      else forgetUrl(url)
+    }
   }
   imageFiles.value = next
 }
 
 function handleImageChange(_file: UploadFile, files: UploadFiles) { syncImages(files) }
-function handleImageRemove(_file: UploadFile, files: UploadFiles) { syncImages(files) }
+function handleImageRemove(_file: UploadFile, files: UploadFiles) { syncImages(files, false) }
 
 function handleExceed() {
   ElMessage.error('图片最多上传 2 张')
@@ -143,8 +158,27 @@ function draftSignature() {
 }
 
 function releaseUrls() {
-  for (const url of ownedUrls) revokeOwnedImagePreview(url)
-  ownedUrls.clear()
+  for (const url of [...ownedUrls]) releaseUrl(url)
+}
+
+function forgetUrls() {
+  for (const url of [...ownedUrls]) forgetUrl(url)
+}
+
+function registerElementPreview(item: UploadUserFile) {
+  if (!item.raw || !item.url?.startsWith('blob:')) return
+  registerOwnedImagePreview(item.url)
+  ownedUrls.add(item.url)
+}
+
+function releaseUrl(url: string) {
+  revokeOwnedImagePreview(url)
+  ownedUrls.delete(url)
+}
+
+function forgetUrl(url: string) {
+  forgetOwnedImagePreview(url)
+  ownedUrls.delete(url)
 }
 
 function reset() {
@@ -160,6 +194,18 @@ function reset() {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));
   gap: 12px;
+}
+
+.blacklist-upload-trigger-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 @media (max-width: 900px) {

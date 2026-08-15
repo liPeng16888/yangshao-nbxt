@@ -15,6 +15,14 @@ export function createOwnedImagePreview(file: File): string {
   return url
 }
 
+export function registerOwnedImagePreview(url: string) {
+  if (url.startsWith('blob:')) ownedBlobUrls.add(url)
+}
+
+export function forgetOwnedImagePreview(url: string) {
+  ownedBlobUrls.delete(url)
+}
+
 export function revokeOwnedImagePreview(url: string) {
   if (!ownedBlobUrls.delete(url)) return
   URL.revokeObjectURL(url)

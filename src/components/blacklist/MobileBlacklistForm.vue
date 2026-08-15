@@ -5,7 +5,13 @@ import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { uploadImages } from '@/api/upload'
 import type { BlacklistPayload } from '@/types/blacklist'
-import { createOwnedImagePreview, revokeOwnedImagePreview, validateBlacklistImage } from '@/utils/blacklistImages'
+import {
+  createOwnedImagePreview,
+  forgetOwnedImagePreview,
+  registerOwnedImagePreview,
+  revokeOwnedImagePreview,
+  validateBlacklistImage
+} from '@/utils/blacklistImages'
 import { validateBlacklistPayload } from '@/utils/validators'
 
 const props = defineProps<{
@@ -28,21 +34,24 @@ let disposed = false
 
 onBeforeUnmount(() => {
   disposed = true
-  releaseOwnedUrls()
+  forgetOwnedUrls()
 })
 
-function syncImageFiles(files: UploadFiles) {
+function syncImageFiles(files: UploadFiles, revokeMissing = true) {
   const next: UploadUserFile[] = []
   for (const item of files) {
     if (next.length >= 2) break
     if (item.raw) {
       const error = validateBlacklistImage(item.raw)
       if (error) {
+        registerElementPreview(item)
+        if (item.url) releaseOwnedUrl(item.url)
         ElMessage.error(error)
         continue
       }
     }
     let url = item.url || ''
+    registerElementPreview(item)
     if (!url && item.raw) {
       try {
         url = createOwnedImagePreview(item.raw)
@@ -57,8 +66,8 @@ function syncImageFiles(files: UploadFiles) {
   const activeUrls = new Set(next.map((item) => item.url).filter((url): url is string => Boolean(url)))
   for (const url of [...ownedImageUrls]) {
     if (!activeUrls.has(url)) {
-      revokeOwnedImagePreview(url)
-      ownedImageUrls.delete(url)
+      if (revokeMissing) releaseOwnedUrl(url)
+      else forgetOwnedUrl(url)
     }
   }
   imageFiles.value = next
@@ -69,7 +78,7 @@ function handleImageChange(_file: UploadFile, files: UploadFiles) {
 }
 
 function handleImageRemove(_file: UploadFile, files: UploadFiles) {
-  syncImageFiles(files)
+  syncImageFiles(files, false)
 }
 
 function handleExceed() {
@@ -77,8 +86,27 @@ function handleExceed() {
 }
 
 function releaseOwnedUrls() {
-  for (const url of ownedImageUrls) revokeOwnedImagePreview(url)
-  ownedImageUrls.clear()
+  for (const url of [...ownedImageUrls]) releaseOwnedUrl(url)
+}
+
+function forgetOwnedUrls() {
+  for (const url of [...ownedImageUrls]) forgetOwnedUrl(url)
+}
+
+function registerElementPreview(item: UploadUserFile) {
+  if (!item.raw || !item.url?.startsWith('blob:')) return
+  registerOwnedImagePreview(item.url)
+  ownedImageUrls.add(item.url)
+}
+
+function releaseOwnedUrl(url: string) {
+  revokeOwnedImagePreview(url)
+  ownedImageUrls.delete(url)
+}
+
+function forgetOwnedUrl(url: string) {
+  forgetOwnedImagePreview(url)
+  ownedImageUrls.delete(url)
 }
 
 function reset() {
@@ -153,14 +181,13 @@ async function submit() {
           data-testid="blacklist-create-images"
           :auto-upload="false"
           :disabled="submitting"
-          aria-label="选择黑名单图片"
           :limit="2"
           accept="image/png,image/jpeg,image/webp,image/gif"
           list-type="picture-card"
           :on-change="handleImageChange"
           :on-remove="handleImageRemove"
           :on-exceed="handleExceed"
-        ><el-icon><Plus /></el-icon></el-upload>
+        ><el-icon aria-hidden="true"><Plus /></el-icon><span class="blacklist-upload-trigger-label">选择黑名单图片</span></el-upload>
         <small data-testid="blacklist-create-image-count">已选 {{ imageFiles.length }} / 2 张</small>
       </label>
     </div>
@@ -223,6 +250,18 @@ async function submit() {
 
 .mobile-blacklist-form__images small {
   color: #64748b;
+}
+
+.blacklist-upload-trigger-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .mobile-blacklist-form__save {

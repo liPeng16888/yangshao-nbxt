@@ -115,6 +115,13 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+async function selectRealUploadFile(scope: any, file: File) {
+  const input = scope.get('input[type="file"]')
+  Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+  await input.trigger('change')
+  await flushPromises()
+}
+
 function freshRecords() {
   return records.map((row) => ({ ...row, images: [...row.images] }))
 }
@@ -196,6 +203,15 @@ describe('BlacklistPage mobile', () => {
     expect(card(wrapper, 'blacklist-other').find('[data-testid="delete-blacklist-other"]').exists()).toBe(false)
   })
 
+  it('names the actual focusable mobile create and supplement upload triggers', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="mobile-blacklist-create"] .el-upload[role="button"]').text()).toContain('选择黑名单图片')
+
+    await card(wrapper, 'blacklist-own').get('[data-testid="supplement-blacklist-own"]').trigger('click')
+    expect(wrapper.get('.mobile-fullscreen-dialog .el-upload[role="button"]').text()).toContain('选择黑名单补充图片')
+  })
+
   it('stages a 44px search drawer and retains the applied keyword when loading fails', async () => {
     mocks.searchBlacklist.mockResolvedValueOnce(records).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([records[0]])
     const wrapper = mountPage()
@@ -221,6 +237,29 @@ describe('BlacklistPage mobile', () => {
     await flushPromises()
     expect(mocks.searchBlacklist.mock.calls.at(-1)?.[0]).toBe('')
     expect(card(wrapper, 'blacklist-other').classes()).toContain('mobile-blacklist-card--highlight')
+  })
+
+  it('retries the exact failed nonempty filter while a hit route remains active', async () => {
+    mocks.route.query.hit = 'blacklist-own'
+    mocks.searchBlacklist
+      .mockResolvedValueOnce(records)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce([records[0]])
+    const wrapper = mountPage()
+    await flushPromises()
+    expect(mocks.searchBlacklist.mock.calls[0]?.[0]).toBe('')
+
+    await wrapper.get('.mobile-filter-summary').trigger('click')
+    await wrapper.get('[data-testid="mobile-blacklist-keyword"]').setValue('张三')
+    await wrapper.findAll('.mobile-filter-drawer__actions button')[1].trigger('click')
+    await flushPromises()
+    expect(mocks.searchBlacklist.mock.calls.at(-1)?.[0]).toBe('张三')
+    expect(wrapper.find('[data-testid="mobile-blacklist-load-error"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="mobile-blacklist-retry"]').trigger('click')
+    await flushPromises()
+    expect(mocks.searchBlacklist.mock.calls.at(-1)?.[0]).toBe('张三')
+    expect(wrapper.findAll('[data-testid="mobile-blacklist-card"]')).toHaveLength(1)
   })
 
   it('matches hit ids exactly, expands and scrolls the card after render, and handles route changes safely', async () => {
@@ -270,9 +309,8 @@ describe('BlacklistPage mobile', () => {
     await fillCreateForm(wrapper)
 
     const create = wrapper.get('[data-testid="mobile-blacklist-create"]')
-    const upload = create.findComponent(ElUpload)
     const image = new File(['image'], 'evidence.png', { type: 'image/png' })
-    await (upload.props('onChange') as Function)({ name: image.name, raw: image }, [{ name: image.name, raw: image }])
+    await selectRealUploadFile(create, image)
     expect(create.get('[data-testid="blacklist-create-image-count"]').text()).toContain('1')
 
     await create.get('[data-testid="blacklist-create-save"]').trigger('click')
@@ -309,6 +347,26 @@ describe('BlacklistPage mobile', () => {
     expect((create.get('[data-testid="blacklist-create-phone"]').element as HTMLInputElement).value).toBe('')
     expect(create.get('[data-testid="blacklist-create-image-count"]').text()).toContain('0')
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:blacklist-image')
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets Element Plus revoke mobile create previews exactly once on removal and page unmount', async () => {
+    vi.mocked(URL.createObjectURL).mockReturnValueOnce('blob:mobile-remove').mockReturnValueOnce('blob:mobile-unmount')
+    const wrapper = mountPage()
+    await flushPromises()
+    const create = wrapper.get('[data-testid="mobile-blacklist-create"]')
+    const upload = create.findComponent(ElUpload)
+    const removeFile = new File(['png'], 'remove.png', { type: 'image/png' })
+    await selectRealUploadFile(create, removeFile)
+    await (upload.vm.$.exposed as { handleRemove: (file: File) => Promise<void> }).handleRemove(removeFile)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mobile-remove')
+
+    const unmountFile = new File(['png'], 'unmount.png', { type: 'image/png' })
+    await selectRealUploadFile(create, unmountFile)
+    wrapper.unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
+    expect(URL.revokeObjectURL).toHaveBeenLastCalledWith('blob:mobile-unmount')
   })
 
   it('uses decimal money input and keeps valid images when an invalid or excess selection is rejected', async () => {
@@ -397,10 +455,7 @@ describe('BlacklistPage mobile', () => {
     ])
     expect(dialog.text()).toContain('已选 1 / 2 张')
     const added = new File(['new'], 'new.png', { type: 'image/png' })
-    await (upload.props('onChange') as Function)({ name: added.name, raw: added }, [
-      { name: 'existing', url: 'https://example.com/one.png' },
-      { name: added.name, raw: added }
-    ])
+    await selectRealUploadFile(dialog, added)
     expect(dialog.text()).toContain('已选 2 / 2 张')
     await (upload.props('onExceed') as Function)([new File(['third'], 'third.png', { type: 'image/png' })], [])
     expect(dialog.text()).toContain('已选 2 / 2 张')
@@ -424,6 +479,28 @@ describe('BlacklistPage mobile', () => {
     await flushPromises()
     expect(mocks.uploadImages).toHaveBeenCalledTimes(1)
     expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:blacklist-image')
+  })
+
+  it('lets Element Plus revoke supplement previews exactly once on removal and page unmount', async () => {
+    vi.mocked(URL.createObjectURL).mockReturnValueOnce('blob:supplement-remove').mockReturnValueOnce('blob:supplement-unmount')
+    const wrapper = mountPage()
+    await flushPromises()
+    await card(wrapper, 'blacklist-own').get('[data-testid="supplement-blacklist-own"]').trigger('click')
+    const dialog = wrapper.get('.mobile-fullscreen-dialog')
+    const upload = dialog.findComponent(ElUpload)
+    const removeFile = new File(['png'], 'remove.png', { type: 'image/png' })
+    await selectRealUploadFile(dialog, removeFile)
+    await (upload.vm.$.exposed as { handleRemove: (file: File) => Promise<void> }).handleRemove(removeFile)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:supplement-remove')
+
+    const unmountFile = new File(['png'], 'unmount.png', { type: 'image/png' })
+    await selectRealUploadFile(dialog, unmountFile)
+    wrapper.unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
+    expect(URL.revokeObjectURL).toHaveBeenLastCalledWith('blob:supplement-unmount')
   })
 
   it('resets supplement edits on cancel and closes the active dialog when the layout changes', async () => {
@@ -468,25 +545,49 @@ describe('BlacklistPage mobile', () => {
   })
 
   it('keeps a pending supplement draft open across a layout change and rejection', async () => {
+    vi.mocked(URL.createObjectURL)
+      .mockReturnValueOnce('blob:supplement-mobile')
+      .mockReturnValueOnce('blob:supplement-desktop')
+      .mockReturnValueOnce('blob:supplement-mobile-restored')
     const request = deferred<(typeof records)[number]>()
     mocks.updateBlacklist.mockImplementationOnce(() => request.promise)
     const wrapper = mountPage()
     await flushPromises()
     await card(wrapper, 'blacklist-own').get('[data-testid="supplement-blacklist-own"]').trigger('click')
     await wrapper.get('[data-testid="blacklist-supplement-note"]').setValue('跨布局保留')
+    const image = new File(['png'], 'layout.png', { type: 'image/png' })
+    await selectRealUploadFile(wrapper.get('.mobile-fullscreen-dialog'), image)
     await wrapper.get('.mobile-fullscreen-dialog__confirm').trigger('click')
     await nextTick()
 
     mocks.mobileLayout.value = false
-    await nextTick()
+    await flushPromises()
     expect(wrapper.find('.dialog-stub').exists()).toBe(true)
+    expect(vi.mocked(URL.createObjectURL)).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('.dialog-stub').findComponent(ElUpload).props('fileList')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ raw: image, url: 'blob:supplement-desktop' })
+    ]))
     request.reject(new Error('offline'))
     await flushPromises()
     mocks.mobileLayout.value = true
-    await nextTick()
+    await flushPromises()
 
     expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(true)
     expect((wrapper.get('[data-testid="blacklist-supplement-note"]').element as HTMLTextAreaElement).value).toBe('跨布局保留')
+    expect(vi.mocked(URL.createObjectURL)).toHaveBeenCalledTimes(3)
+    expect(wrapper.get('.mobile-fullscreen-dialog').findComponent(ElUpload).props('fileList')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ raw: image, url: 'blob:supplement-mobile-restored' })
+    ]))
+    expect(URL.revokeObjectURL).toHaveBeenNthCalledWith(1, 'blob:supplement-mobile')
+    expect(URL.revokeObjectURL).toHaveBeenNthCalledWith(2, 'blob:supplement-desktop')
+
+    mocks.updateBlacklist.mockResolvedValueOnce({ ...records[0], note: '跨布局保留' })
+    await wrapper.get('.mobile-fullscreen-dialog__confirm').trigger('click')
+    await flushPromises()
+    expect(mocks.uploadImages).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.mobile-fullscreen-dialog').exists()).toBe(false)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(3)
+    expect(URL.revokeObjectURL).toHaveBeenNthCalledWith(3, 'blob:supplement-mobile-restored')
   })
 
   it('uses the same nullable decimal amount contract when a mobile supplement clears an existing amount', async () => {
