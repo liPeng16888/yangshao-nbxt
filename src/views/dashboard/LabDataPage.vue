@@ -5,37 +5,54 @@
     v-loading="labStore.loading"
   >
     <div class="toolbar">
-      <div class="toolbar-left">
-        <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" @change="handleDateChange" />
-        <el-tag v-if="switchingBusinessDay" type="info" effect="plain">正在切换业务日</el-tag>
-        <el-tag v-else-if="labStore.sheet?.readonly" type="warning" effect="plain">历史副表只读</el-tag>
-        <el-tag v-else type="success" effect="plain">当前表可编辑</el-tag>
-        <el-tag v-if="!isPageReadonly" :type="autoSaveTagType" effect="plain">{{ autoSaveText }}</el-tag>
-        <el-button
-          v-if="!isPageReadonly && (labStore.autoSaveStatus === 'error' || labStore.autoSaveStatus === 'conflict')"
-          size="small"
-          :type="labStore.autoSaveStatus === 'conflict' ? 'danger' : 'primary'"
-          :loading="labStore.saving || labStore.autoSaving"
-          @click="handleSaveRecovery"
-        >
-          {{ labStore.autoSaveStatus === 'conflict' ? '确认保存本机内容' : '重试保存' }}
-        </el-button>
-      </div>
-      <div v-if="!isMobileLayout || !selectionMode" class="toolbar-right">
-        <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
-          标记样品完成
-        </el-button>
-        <el-button v-if="!canViewCompletedSensitiveData" @click="requestCompletedSampleDataAccess">查看加密数据</el-button>
-        <el-button :icon="EditPen" :loading="labStore.saving" :disabled="isPageReadonly" @click="handleBulkFillSamples">
-          {{ bulkFillButtonText }}
-        </el-button>
-        <el-button :icon="ChatLineSquare" :loading="labStore.saving" @click="handleGenerateSms">
-          {{ smsButtonText }}
-        </el-button>
-        <el-button :icon="DocumentChecked" :loading="labStore.saving" @click="handleGenerateReport">
-          {{ reportButtonText }}
-        </el-button>
-        <el-button v-if="selectionMode" @click="cancelReportSelection">取消选择</el-button>
+      <button
+        v-if="isMobileLayout"
+        class="mobile-toolbar-summary"
+        type="button"
+        :aria-expanded="mobileToolbarExpanded"
+        :aria-label="mobileToolbarExpanded ? '收起数据计算操作' : '展开数据计算操作'"
+        @click="mobileToolbarExpanded = !mobileToolbarExpanded"
+      >
+        <span class="mobile-toolbar-summary__date">{{ selectedDate }}</span>
+        <span class="mobile-toolbar-summary__edit">{{ mobileToolbarEditStatus }}</span>
+        <span v-if="!isPageReadonly" class="mobile-toolbar-summary__save" :class="`is-${labStore.autoSaveStatus}`">
+          {{ autoSaveText }}
+        </span>
+        <span class="mobile-toolbar-summary__toggle">{{ mobileToolbarExpanded ? '收起' : '展开' }}</span>
+      </button>
+      <div v-if="!isMobileLayout || mobileToolbarExpanded" class="toolbar-content">
+        <div class="toolbar-left">
+          <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" @change="handleDateChange" />
+          <el-tag v-if="switchingBusinessDay" type="info" effect="plain">正在切换业务日</el-tag>
+          <el-tag v-else-if="labStore.sheet?.readonly" type="warning" effect="plain">历史副表只读</el-tag>
+          <el-tag v-else type="success" effect="plain">当前表可编辑</el-tag>
+          <el-tag v-if="!isPageReadonly" :type="autoSaveTagType" effect="plain">{{ autoSaveText }}</el-tag>
+          <el-button
+            v-if="!isPageReadonly && (labStore.autoSaveStatus === 'error' || labStore.autoSaveStatus === 'conflict')"
+            size="small"
+            :type="labStore.autoSaveStatus === 'conflict' ? 'danger' : 'primary'"
+            :loading="labStore.saving || labStore.autoSaving"
+            @click="handleSaveRecovery"
+          >
+            {{ labStore.autoSaveStatus === 'conflict' ? '确认保存本机内容' : '重试保存' }}
+          </el-button>
+        </div>
+        <div v-if="!isMobileLayout || !selectionMode" class="toolbar-right">
+          <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
+            标记样品完成
+          </el-button>
+          <el-button v-if="!canViewCompletedSensitiveData" @click="requestCompletedSampleDataAccess">查看加密数据</el-button>
+          <el-button :icon="EditPen" :loading="labStore.saving" :disabled="isPageReadonly" @click="handleBulkFillSamples">
+            {{ bulkFillButtonText }}
+          </el-button>
+          <el-button :icon="ChatLineSquare" :loading="labStore.saving" @click="handleGenerateSms">
+            {{ smsButtonText }}
+          </el-button>
+          <el-button :icon="DocumentChecked" :loading="labStore.saving" @click="handleGenerateReport">
+            {{ reportButtonText }}
+          </el-button>
+          <el-button v-if="selectionMode" @click="cancelReportSelection">取消选择</el-button>
+        </div>
       </div>
     </div>
 
@@ -250,6 +267,12 @@ const bulkFillButtonText = computed(() => {
 })
 
 const selectionMode = computed(() => generationMode.value !== null)
+const mobileToolbarExpanded = ref(false)
+const mobileToolbarEditStatus = computed(() => {
+  if (switchingBusinessDay.value) return '正在切换业务日'
+  if (labStore.sheet?.readonly) return '历史副表只读'
+  return '当前表可编辑'
+})
 const mobileSelectionButtonText = computed(() => {
   if (generationMode.value === 'report') return reportButtonText.value
   if (generationMode.value === 'sms') return smsButtonText.value
@@ -273,6 +296,14 @@ onBeforeUnmount(() => {
   clearBusinessDayTimers()
   unbindBusinessDayListeners()
   labStore.disconnectRealtime()
+})
+
+watch(isMobileLayout, () => {
+  mobileToolbarExpanded.value = false
+})
+
+watch(selectionMode, (selecting) => {
+  if (isMobileLayout.value && selecting) mobileToolbarExpanded.value = false
 })
 
 watch(
@@ -670,6 +701,14 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
   gap: 10px;
 }
 
+.toolbar-content {
+  display: contents;
+}
+
+.mobile-toolbar-summary {
+  display: none;
+}
+
 .toolbar {
   position: sticky;
   top: 74px;
@@ -748,6 +787,49 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
     background: rgba(238, 243, 248, 0.98);
   }
 
+  .mobile-toolbar-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 44px;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0;
+    overflow: hidden;
+    color: #183657;
+    text-align: left;
+    background: transparent;
+    border: 0;
+
+    > span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &__date,
+    &__edit,
+    &__save {
+      font-size: 12px;
+    }
+
+    &__toggle {
+      display: grid;
+      min-height: 44px;
+      place-items: center;
+      color: #2563eb;
+      font-size: 12px;
+    }
+  }
+
+  .toolbar-content {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
   .toolbar-left {
     display: grid;
     grid-template-columns: minmax(145px, 1fr) auto;
@@ -765,7 +847,7 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
 
   .toolbar-right {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 7px;
     width: 100%;
 
@@ -806,6 +888,17 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
 }
 
 @media (max-width: 374px) {
+  .mobile-toolbar-summary {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 44px;
+
+    &__edit,
+    &__save {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
   .mobile-selection-bar {
     grid-template-columns: minmax(0, 1fr) auto;
   }

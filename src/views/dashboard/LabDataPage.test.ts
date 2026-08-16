@@ -432,6 +432,8 @@ describe('LabDataPage table layout', () => {
     expect(desktop.find('.lab-grid-stub').exists()).toBe(true)
     expect(desktop.find('.mobile-lab-list-stub').exists()).toBe(false)
     expect(desktop.getComponent({ name: 'LabSmsDialog' }).props('mobile')).toBe(false)
+    expect(desktop.find('.mobile-toolbar-summary').exists()).toBe(false)
+    expect(desktop.get('.toolbar-content').text()).toContain('生成化验报告')
     desktop.unmount()
 
     mocks.mobileLayout.isMobileLayout.value = true
@@ -441,7 +443,59 @@ describe('LabDataPage table layout', () => {
     expect(mobile.find('.lab-grid-stub').exists()).toBe(false)
     expect(mobile.find('.append-submit').exists()).toBe(true)
     expect(mobile.getComponent({ name: 'LabSmsDialog' }).props('mobile')).toBe(true)
+    expect(mobile.get('.mobile-toolbar-summary').attributes('aria-expanded')).toBe('false')
     mobile.unmount()
+  })
+
+  it('starts the mobile toolbar as a compact summary and expands and collapses the existing controls', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    const summary = wrapper.get('.mobile-toolbar-summary')
+    expect(summary.attributes('aria-expanded')).toBe('false')
+    expect(summary.text()).toContain('2026-06-24')
+    expect(summary.text()).toContain('当前表可编辑')
+    expect(summary.text()).toContain('自动保存开启')
+    expect(wrapper.find('.toolbar-content').exists()).toBe(false)
+    expect(wrapper.findAll('button').some((button) => button.text() === '生成化验报告')).toBe(false)
+
+    await summary.trigger('click')
+    await nextTick()
+    expect(wrapper.get('.mobile-toolbar-summary').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('.toolbar-content').text()).toContain('生成化验报告')
+    expect(wrapper.get('.toolbar-content').text()).toContain('生成化验短信')
+
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.toolbar-content').exists()).toBe(false)
+  })
+
+  it('automatically collapses the expanded mobile toolbar when selection mode starts', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('.mobile-toolbar-summary').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('.toolbar-content').exists()).toBe(false)
+    expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 0 个样品')
+  })
+
+  it('keeps save failures visible in the collapsed mobile summary and recovery available after expanding', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    mocks.labStore.autoSaveStatus = 'error'
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(wrapper.get('.mobile-toolbar-summary').text()).toContain('自动保存失败，请手动保存')
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    await findButtonByText(wrapper, '重试保存').trigger('click')
+    await Promise.resolve()
+    expect(mocks.labStore.retryFailedSaves).toHaveBeenCalledTimes(1)
   })
 
   it('enlarges only the mobile append-count input to the shared touch target', async () => {
@@ -484,6 +538,7 @@ describe('LabDataPage table layout', () => {
     const wrapper = mountPage()
     await settleMountedPage()
 
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
     await findButtonByText(wrapper, '批量填写样品').trigger('click')
     await nextTick()
     expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 0 个样品')
