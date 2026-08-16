@@ -8,9 +8,10 @@
       <button
         v-if="isMobileLayout"
         class="mobile-toolbar-summary"
+        ref="mobileToolbarSummaryRef"
         type="button"
         :aria-expanded="mobileToolbarExpanded"
-        :aria-label="mobileToolbarExpanded ? '收起数据计算操作' : '展开数据计算操作'"
+        :aria-label="mobileToolbarAccessibleName"
         @click="mobileToolbarExpanded = !mobileToolbarExpanded"
       >
         <span class="mobile-toolbar-summary__date">{{ selectedDate }}</span>
@@ -20,6 +21,14 @@
         </span>
         <span class="mobile-toolbar-summary__toggle">{{ mobileToolbarExpanded ? '收起' : '展开' }}</span>
       </button>
+      <span
+        v-if="isMobileLayout && mobileToolbarLiveStatus"
+        class="mobile-toolbar-live-status"
+        role="status"
+        aria-live="polite"
+      >
+        {{ mobileToolbarLiveStatus }}
+      </span>
       <div v-if="!isMobileLayout || mobileToolbarExpanded" class="toolbar-content">
         <div class="toolbar-left">
           <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" @change="handleDateChange" />
@@ -270,10 +279,23 @@ const bulkFillButtonText = computed(() => {
 
 const selectionMode = computed(() => generationMode.value !== null)
 const mobileToolbarExpanded = ref(false)
+const mobileToolbarSummaryRef = ref<HTMLButtonElement | null>(null)
 const mobileToolbarEditStatus = computed(() => {
   if (switchingBusinessDay.value) return '正在切换业务日'
+  if (labStore.applyingParameters) return '正在应用参数'
   if (labStore.sheet?.readonly) return '历史副表只读'
   return '当前表可编辑'
+})
+const mobileToolbarAccessibleName = computed(() => [
+  mobileToolbarExpanded.value ? '收起数据计算操作' : '展开数据计算操作',
+  selectedDate.value,
+  mobileToolbarEditStatus.value,
+  isPageReadonly.value ? '' : autoSaveText.value
+].filter(Boolean).join('，'))
+const mobileToolbarLiveStatus = computed(() => {
+  if (isPageReadonly.value) return ''
+  if (labStore.autoSaveStatus === 'error' || labStore.autoSaveStatus === 'conflict') return autoSaveText.value
+  return ''
 })
 const mobileSelectionButtonText = computed(() => {
   if (generationMode.value === 'report') return reportButtonText.value
@@ -305,7 +327,10 @@ watch(isMobileLayout, () => {
 })
 
 watch(selectionMode, (selecting) => {
-  if (isMobileLayout.value && selecting) mobileToolbarExpanded.value = false
+  if (isMobileLayout.value && selecting) {
+    mobileToolbarExpanded.value = false
+    void nextTick(() => mobileToolbarSummaryRef.value?.focus())
+  }
 })
 
 watch(
@@ -709,6 +734,18 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
 
 .mobile-toolbar-summary {
   display: none;
+}
+
+.mobile-toolbar-live-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .toolbar {

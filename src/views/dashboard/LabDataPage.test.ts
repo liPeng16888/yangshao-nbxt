@@ -471,6 +471,35 @@ describe('LabDataPage table layout', () => {
     expect(wrapper.find('.toolbar-content').exists()).toBe(false)
   })
 
+  it('gives the mobile toolbar summary a complete accessible name and politely announces save failures and conflicts', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    const idleSummary = wrapper.get('.mobile-toolbar-summary')
+    expect(idleSummary.attributes('aria-label')).toContain('展开数据计算操作')
+    expect(idleSummary.attributes('aria-label')).toContain('2026-06-24')
+    expect(idleSummary.attributes('aria-label')).toContain('当前表可编辑')
+    expect(idleSummary.attributes('aria-label')).toContain('自动保存开启')
+    expect(wrapper.find('.mobile-toolbar-live-status').exists()).toBe(false)
+    wrapper.unmount()
+
+    mocks.labStore.autoSaveStatus = 'error'
+    const errorWrapper = mountPage()
+    await settleMountedPage()
+    expect(errorWrapper.get('.mobile-toolbar-summary').attributes('aria-label')).toContain('自动保存失败，请手动保存')
+    expect(errorWrapper.get('.mobile-toolbar-live-status').attributes('role')).toBe('status')
+    expect(errorWrapper.get('.mobile-toolbar-live-status').attributes('aria-live')).toBe('polite')
+    expect(errorWrapper.get('.mobile-toolbar-live-status').text()).toContain('自动保存失败，请手动保存')
+    errorWrapper.unmount()
+
+    mocks.labStore.autoSaveStatus = 'conflict'
+    const conflictWrapper = mountPage()
+    await settleMountedPage()
+    expect(conflictWrapper.get('.mobile-toolbar-summary').attributes('aria-label')).toContain('保存冲突，本机内容已保留')
+    expect(conflictWrapper.get('.mobile-toolbar-live-status').text()).toContain('保存冲突，本机内容已保留')
+  })
+
   it('automatically collapses the expanded mobile toolbar when selection mode starts', async () => {
     mocks.mobileLayout.isMobileLayout.value = true
     const wrapper = mountPage()
@@ -483,6 +512,34 @@ describe('LabDataPage table layout', () => {
     expect(wrapper.get('.mobile-toolbar-summary').attributes('aria-expanded')).toBe('false')
     expect(wrapper.find('.toolbar-content').exists()).toBe(false)
     expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 0 个样品')
+  })
+
+  it('returns focus to the collapsed mobile toolbar summary after entering selection mode', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    const summary = wrapper.get('.mobile-toolbar-summary')
+    const focusSpy = vi.spyOn(summary.element as HTMLButtonElement, 'focus')
+    await summary.trigger('click')
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await Promise.resolve()
+
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+    focusSpy.mockRestore()
+  })
+
+  it('shows that parameters are being applied in the mobile toolbar summary', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    mocks.labStore.applyingParameters = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(wrapper.get('.mobile-toolbar-summary').text()).toContain('正在应用参数')
+    expect(wrapper.get('.mobile-toolbar-summary').attributes('aria-label')).toContain('正在应用参数')
   })
 
   it('keeps save failures visible in the collapsed mobile summary and recovery available after expanding', async () => {
