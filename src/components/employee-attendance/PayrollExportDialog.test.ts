@@ -44,8 +44,8 @@ function makeItem(): PayrollItem {
     adjustments: [{ id: 'a1', payrollItemId: 'item-1', amount: -12.3, reason: '补扣' }],
     calculationSnapshot: {
       generatedAt: '2026-08-31T12:00:00.000Z',
-      input: { baseSalary: 6000, attendanceBonus: 300, scheduledWorkDays: 22, restQuotaDays: 4, countedLeaveDays: 1, absenceDays: 0, overtimeMinutes: 120, overtimeHourlyRate: 25, commissionAmount: 100, bonusAmount: 50, adjustments: [{ amount: -12.3 }] },
-      result: { dailyRate: 272.73, excessLeaveDays: 0, leaveDeduction: 0, absenceDeduction: 0, overtimeHours: 2, overtimePay: 50, commissionAmount: 100, bonusAmount: 50, adjustmentAmount: -12.3, attendanceBonus: 300, payableAmount: 6488.2, issues: [] }
+      input: { baseSalary: 6000, attendanceBonus: 300, scheduledWorkDays: 22, restQuotaDays: 4, countedLeaveDays: 1, absenceDays: 0, overtimeMinutes: 120, overtimeHourlyRate: 25, commissionAmount: 100.5, bonusAmount: 50, adjustments: [{ amount: -12.3 }] },
+      result: { dailyRate: 272.73, excessLeaveDays: 0, leaveDeduction: 0, absenceDeduction: 0, overtimeHours: 2, overtimePay: 50, commissionAmount: 100.5, bonusAmount: 50, adjustmentAmount: -12.3, attendanceBonus: 300, grossEarningsAmount: 6500.5, deductionAmount: 12.3, payableAmount: 6488.2, issues: [] }
     }
   }
 }

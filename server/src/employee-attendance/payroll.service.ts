@@ -15,7 +15,7 @@ import type { AdminEmployeeAttendanceQueryDto } from './employee-attendance.dto'
 import { EmployeeDataCipherService } from './employee-data-cipher.service'
 import { breakMinutes, deriveAttendanceMetrics } from './attendance-intervals'
 import { deriveAttendanceCalendarDay } from './attendance-calendar'
-import { calculatePayroll, type PayrollCalculationInput } from './payroll-calculator'
+import { calculatePayroll, derivePayrollTotals, type PayrollCalculationInput } from './payroll-calculator'
 import { PayrollMonthLockService } from './payroll-month-lock.service'
 
 type Db = Prisma.TransactionClient | PrismaService
@@ -198,12 +198,13 @@ export class PayrollService {
     })
   }
 
-  getPayroll(frontendUserId: string, month: string) {
+  async getPayroll(frontendUserId: string, month: string) {
     this.assertMonth(month)
-    return this.prisma.employeePayrollRun.findFirst({
+    const run = await this.prisma.employeePayrollRun.findFirst({
       where: { frontendUserId, month },
       include: { items: { include: { adjustments: true }, orderBy: { employeeNumberSnapshot: 'asc' } } }
     })
+    return this.projectPayrollTotals(run)
   }
 
   async createAdjustment(frontendUserId: string, actorUserId: string, payrollItemId: string, amount: number, reason: string) {
@@ -577,6 +578,30 @@ export class PayrollService {
       overtimePay: this.money(result.overtimePay), adjustmentAmount: this.money(result.adjustmentAmount), payableAmount: this.money(result.payableAmount),
       calculationSnapshot: { input: this.plainInput(input), result: { ...result, issues }, generatedAt: new Date().toISOString() }
     } })
+  }
+
+  private projectPayrollTotals(run: any) {
+    if (!run) return run
+    return {
+      ...run,
+      items: (run.items || []).map((item: any) => {
+        const snapshot = item.calculationSnapshot as any
+        if (!snapshot?.input || !snapshot?.result) return item
+        if (snapshot.result.grossEarningsAmount != null && snapshot.result.deductionAmount != null) return item
+        const derived = derivePayrollTotals(snapshot.input, snapshot.result)
+        return {
+          ...item,
+          calculationSnapshot: {
+            ...snapshot,
+            result: {
+              ...snapshot.result,
+              grossEarningsAmount: snapshot.result.grossEarningsAmount ?? derived.grossEarningsAmount,
+              deductionAmount: snapshot.result.deductionAmount ?? derived.deductionAmount
+            }
+          }
+        }
+      })
+    }
   }
 
   private async setLocks(tx: Prisma.TransactionClient, frontendUserId: string, month: string, value: Date | null) {

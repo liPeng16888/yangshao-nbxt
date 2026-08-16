@@ -586,7 +586,18 @@ describe('employee attendance mock repository', () => {
     await mockCreatePayrollAdjustment(item.id, { amount: -10.01, reason: '补扣' })
     const refreshed = await mockGetPayroll(month)
     const result = refreshed!.items.find((row) => row.employeeId === 'emp-1')!.calculationSnapshot.result
-    expect(result).toMatchObject({ attendanceBonus: 0, overtimePay: 15.5, commissionAmount: 96, bonusAmount: 200, adjustmentAmount: -10.01, leaveDeduction: 285.71, absenceDeduction: 142.86, payableAmount: 5872.92 })
+    expect(result).toMatchObject({
+      attendanceBonus: 0,
+      overtimePay: 15.5,
+      commissionAmount: 96,
+      bonusAmount: 200,
+      adjustmentAmount: -10.01,
+      leaveDeduction: 285.71,
+      absenceDeduction: 142.86,
+      grossEarningsAmount: 6311.5,
+      deductionAmount: 438.58,
+      payableAmount: 5872.92
+    })
   })
 
   it('matches conflict, inactive-type, overlapping-month, history-delete and employment-window rules', async () => {
@@ -641,7 +652,7 @@ describe('employee attendance mock repository', () => {
     const draft = await mockGeneratePayroll(month)
     const snapshot = draft.items.find((row) => row.employeeId === 'emp-1')!.calculationSnapshot
     expect(Object.keys(snapshot.input).sort()).toEqual(['adjustments', 'absenceDays', 'attendanceBonus', 'baseSalary', 'bonusAmount', 'commissionAmount', 'countedLeaveDays', 'overtimeHourlyRate', 'overtimeMinutes', 'restQuotaDays', 'scheduledWorkDays'].sort())
-    expect(Object.keys(snapshot.result).sort()).toEqual(['absenceDeduction', 'adjustmentAmount', 'attendanceBonus', 'bonusAmount', 'commissionAmount', 'dailyRate', 'excessLeaveDays', 'issues', 'leaveDeduction', 'overtimeHours', 'overtimePay', 'payableAmount'].sort())
+    expect(Object.keys(snapshot.result).sort()).toEqual(['absenceDeduction', 'adjustmentAmount', 'attendanceBonus', 'bonusAmount', 'commissionAmount', 'dailyRate', 'deductionAmount', 'excessLeaveDays', 'grossEarningsAmount', 'issues', 'leaveDeduction', 'overtimeHours', 'overtimePay', 'payableAmount'].sort())
     expect(snapshot).toEqual({
       input: expect.objectContaining({ baseSalary: 6000, scheduledWorkDays: 21, overtimeMinutes: 90, overtimeHourlyRate: 30, adjustments: [] }),
       result: expect.objectContaining({ overtimeHours: 1.5, overtimePay: 45, payableAmount: expect.any(Number), issues: [] }),

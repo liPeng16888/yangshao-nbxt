@@ -2375,7 +2375,7 @@ describe('employee attendance navigation', () => {
       calculationSnapshot: {
         generatedAt: '2026-08-31T00:00:00.000Z',
         input: { baseSalary: 6000, attendanceBonus: 200, scheduledWorkDays: 22, restQuotaDays: 4, countedLeaveDays: 0, absenceDays: 0, overtimeMinutes: 0, overtimeHourlyRate: 20, commissionAmount: 0, bonusAmount: 0, adjustments: [] },
-        result: { dailyRate: 272.73, excessLeaveDays: 0, leaveDeduction: 0, absenceDeduction: 0, overtimeHours: 0, overtimePay: 0, commissionAmount: 0, bonusAmount: 0, adjustmentAmount: 0, attendanceBonus: 200, payableAmount: 6200, issues: [] }
+        result: { dailyRate: 272.73, excessLeaveDays: 0, leaveDeduction: 0, absenceDeduction: 0, overtimeHours: 0, overtimePay: 0, commissionAmount: 0, bonusAmount: 0, adjustmentAmount: 0, attendanceBonus: 200, grossEarningsAmount: 6200, deductionAmount: 0, payableAmount: 6200, issues: [] }
       }
     }
     store.payroll = { id: 'run-1', month: '2026-08', status: 'DRAFT', totalAmount: 6200, issueCount: 0, issues: [], items: [item] }
@@ -2517,7 +2517,7 @@ describe('employee attendance navigation', () => {
         calculationSnapshot: {
           generatedAt: '2026-08-31T12:00:00.000Z',
           input: { baseSalary: 6000, attendanceBonus: 300, scheduledWorkDays: 22, restQuotaDays: 4, countedLeaveDays: 1, absenceDays: 0, overtimeMinutes: 120, overtimeHourlyRate: 25, commissionAmount: 100, bonusAmount: 50, adjustments: [{ amount: -12.3 }] },
-          result: { dailyRate: 272.73, excessLeaveDays: 0, leaveDeduction: 0, absenceDeduction: 0, overtimeHours: 2, overtimePay: 50, commissionAmount: 100, bonusAmount: 50, adjustmentAmount: -12.3, attendanceBonus: 300, payableAmount: 6488.2, issues: [] }
+          result: { dailyRate: 272.73, excessLeaveDays: 0, leaveDeduction: 0, absenceDeduction: 0, overtimeHours: 2, overtimePay: 50, commissionAmount: 100, bonusAmount: 50, adjustmentAmount: -12.3, attendanceBonus: 300, grossEarningsAmount: 6800.5, deductionAmount: 312.3, payableAmount: 6488.2, issues: [] }
         }
       }]
     }
@@ -2525,11 +2525,10 @@ describe('employee attendance navigation', () => {
 
     const card = wrapper.get('[data-testid="mobile-payroll-card"]')
     expect(wrapper.findAll('[data-testid="mobile-payroll-card"]')).toHaveLength(1)
-    expect(card.text()).toContain('应发')
-    expect(card.text()).toContain('实发')
-    expect(card.text()).toContain('¥6488.20')
-    expect(card.get('[data-testid="mobile-payroll-authoritative-snapshot-payable"]').text()).toBe('应发¥6488.20')
-    expect(card.get('[data-testid="mobile-payroll-authoritative-item-payable"]').text()).toBe('实发¥6488.20')
+    expect(card.get('[data-testid="mobile-payroll-authoritative-gross"]').text()).toBe('应发¥6800.50')
+    expect(card.get('[data-testid="mobile-payroll-authoritative-deduction"]').text()).toBe('扣款¥312.30')
+    expect(card.get('[data-testid="mobile-payroll-authoritative-payable"]').text()).toBe('实发¥6488.20')
+    expect(wrapper.get('.mobile-payroll__summary').text()).toContain('实发合计¥6488.20')
     expect(card.text()).toContain('草稿')
     expect(wrapper.find('.el-table').exists()).toBe(false)
     await card.get('[data-testid="mobile-payroll-details-payroll-mobile-1"]').trigger('click')

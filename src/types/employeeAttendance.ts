@@ -65,7 +65,7 @@ export interface PayrollCalculationInput {
 export interface PayrollCalculationResult {
   dailyRate: number; excessLeaveDays: number; leaveDeduction: number; absenceDeduction: number; overtimeHours: number;
   overtimePay: number; commissionAmount: number; bonusAmount: number; adjustmentAmount: number; attendanceBonus: number;
-  payableAmount: number; issues: string[]
+  grossEarningsAmount: number; deductionAmount: number; payableAmount: number; issues: string[]
 }
 export interface PayrollSnapshot { input: PayrollCalculationInput; result: PayrollCalculationResult; generatedAt: string }
 export interface PayrollItem { id: string; employeeId: string; employee: Employee; payableAmount: number; calculationSnapshot: PayrollSnapshot; issues: string[]; adjustments: PayrollAdjustment[] }
