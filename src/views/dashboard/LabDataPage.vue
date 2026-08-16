@@ -28,6 +28,8 @@
           <el-tag v-else type="success" effect="plain">当前表可编辑</el-tag>
           <el-tag v-if="!isPageReadonly" :type="autoSaveTagType" effect="plain">{{ autoSaveText }}</el-tag>
           <el-button
+            class="mobile-toolbar-recovery"
+            :class="{ 'mobile-touch-target': isMobileLayout }"
             v-if="!isPageReadonly && (labStore.autoSaveStatus === 'error' || labStore.autoSaveStatus === 'conflict')"
             size="small"
             :type="labStore.autoSaveStatus === 'conflict' ? 'danger' : 'primary'"
@@ -834,6 +836,11 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
     display: grid;
     grid-template-columns: minmax(145px, 1fr) auto;
     gap: 6px;
+
+    .mobile-toolbar-recovery {
+      min-height: 44px;
+      margin-left: 0;
+    }
 
     :deep(.el-date-editor) {
       width: 100%;

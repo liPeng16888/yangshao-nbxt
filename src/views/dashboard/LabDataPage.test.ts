@@ -498,6 +498,18 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.retryFailedSaves).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps the mobile save recovery button at the 44px touch target', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    mocks.labStore.autoSaveStatus = 'error'
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    const recoveryButton = findButtonByText(wrapper, '重试保存')
+    expect(recoveryButton.classes()).toContain('mobile-toolbar-recovery')
+    expect(recoveryButton.classes()).toContain('mobile-touch-target')
+  })
+
   it('enlarges only the mobile append-count input to the shared touch target', async () => {
     const desktop = mountPage()
     await settleMountedPage()
