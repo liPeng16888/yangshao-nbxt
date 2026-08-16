@@ -127,10 +127,10 @@
                   data-mobile-field="price"
                   type="text"
                   inputmode="decimal"
-                  :value="formatInput(block.inputs.price, getSampleAmountPrecision(block))"
+                  :value="formatNumberInput(block, 'price', getSampleAmountPrecision(block))"
                   :disabled="isDisabled(block)"
                   enterkeyhint="next"
-                  @focus="rememberField(block, 'price')"
+                  @focus="rememberNumberField(block, 'price', $event)"
                   @input="updateNumber(block, 'price', $event)"
                   @blur="commitNumber(block, 'price', $event)"
                   @keydown.enter.prevent="focusNextField"
@@ -217,10 +217,10 @@
                     :data-mobile-field="field.key"
                     type="text"
                     inputmode="decimal"
-                    :value="formatInput(block.inputs[field.key])"
+                    :value="formatNumberInput(block, field.key)"
                     :disabled="isDisabled(block) || isSampleCalculationBlocked(block)"
                     enterkeyhint="next"
-                    @focus="rememberField(block, field.key)"
+                    @focus="rememberNumberField(block, field.key, $event)"
                     @input="updateNumber(block, field.key, $event)"
                     @blur="commitNumber(block, field.key, $event)"
                     @keydown.enter.prevent="focusNextField"
@@ -357,6 +357,7 @@ const initiallyExpandedBlockId = props.highlightBlockId || props.blocks[0]?.id |
 const expandedBlockIds = ref(new Set(initiallyExpandedBlockId ? [initiallyExpandedBlockId] : []))
 const expandedGroupKeysByBlock = ref(new Map<string, Set<string>>())
 const focusedFieldValues = new Map<string, unknown>()
+const numericInputDrafts = ref(new Map<string, string>())
 
 watch(
   () => props.highlightBlockId,
@@ -432,7 +433,9 @@ function isSensitiveHidden(block: SampleBlock) {
 }
 
 function updateNumber(block: SampleBlock, field: keyof LabSampleInput, event: Event) {
-  const value = parseNumericInput((event.target as HTMLInputElement).value)
+  const rawValue = (event.target as HTMLInputElement).value
+  numericInputDrafts.value.set(fieldKey(block.id, field), rawValue)
+  const value = parseNumericInput(rawValue)
   emit('update', block.id, { [field]: value } as Partial<LabSampleInput>)
 }
 
@@ -444,8 +447,15 @@ function rememberField(block: SampleBlock, field: keyof LabSampleInput) {
   focusedFieldValues.set(fieldKey(block.id, field), block.inputs[field] ?? null)
 }
 
+function rememberNumberField(block: SampleBlock, field: keyof LabSampleInput, event: Event) {
+  rememberField(block, field)
+  numericInputDrafts.value.set(fieldKey(block.id, field), (event.target as HTMLInputElement).value)
+}
+
 function commitNumber(block: SampleBlock, field: keyof LabSampleInput, event: Event) {
-  commitField(block, field, parseNumericInput((event.target as HTMLInputElement).value))
+  const rawValue = (event.target as HTMLInputElement).value
+  numericInputDrafts.value.delete(fieldKey(block.id, field))
+  commitField(block, field, parseNumericInput(rawValue))
 }
 
 function commitText(block: SampleBlock, field: keyof LabSampleInput, event: Event) {
@@ -521,6 +531,11 @@ function getResultValue(block: SampleBlock, result: MobileResultField) {
 function formatInput(value: unknown, precision?: number) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return ''
   return precision === undefined ? String(value) : value.toFixed(precision)
+}
+
+function formatNumberInput(block: SampleBlock, field: keyof LabSampleInput, precision?: number) {
+  const draft = numericInputDrafts.value.get(fieldKey(block.id, field))
+  return draft === undefined ? formatInput(block.inputs[field], precision) : draft
 }
 
 function formatResult(value: unknown) {

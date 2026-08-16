@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { defineComponent, h, nextTick, ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import type { LabSampleInput, SampleBlock } from '@/types/labSheet'
@@ -39,6 +39,51 @@ function mountList(overrides: Record<string, unknown> = {}) {
       canViewCompletedSensitiveData: true,
       ...overrides
     },
+    global: {
+      stubs: {
+        CustomerCellEditor: {
+          template: '<button class="customer-editor-stub" type="button">客户</button>'
+        },
+        LabElementSelector: {
+          template: '<button class="element-selector-stub" type="button">元素</button>'
+        }
+      }
+    }
+  })
+}
+
+function mountListWithLiveUpdates() {
+  const blocks = ref([
+    makeBlock('block-1', 1, {
+      sampleNumber: '连续输入样品',
+      customerText: '张总',
+      price: 6,
+      paymentStatus: '已结款',
+      elementNote: '铁'
+    })
+  ])
+  const Host = defineComponent({
+    setup() {
+      function applyUpdate(blockId: string, patch: Partial<LabSampleInput>) {
+        blocks.value = blocks.value.map((block) => block.id === blockId
+          ? {
+              ...block,
+              inputs: { ...block.inputs, ...patch },
+              results: calculateSampleResults({ ...block.inputs, ...patch }, block.parameterSnapshot)
+            }
+          : block)
+      }
+
+      return () => h(MobileLabSampleList, {
+        blocks: blocks.value,
+        canViewCompletedSensitiveData: true,
+        onUpdate: applyUpdate
+      })
+    }
+  })
+
+  return mount(Host, {
+    attachTo: document.body,
     global: {
       stubs: {
         CustomerCellEditor: {
@@ -133,6 +178,42 @@ describe('MobileLabSampleList', () => {
     expect(wrapper.emitted('saveNext')).toContainEqual(['block-1'])
     expect(wrapper.get('.mobile-sample-card--expanded').attributes('data-block-id')).toBe('block-2')
     expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(0)
+  })
+
+  it('keeps the raw amount draft and focus while parsed updates flow back from the parent', async () => {
+    const wrapper = mountListWithLiveUpdates()
+    const list = wrapper.getComponent(MobileLabSampleList)
+    const identityToggle = list.findAll('.mobile-group-toggle').find((button) => button.text().includes('样品信息'))
+    if (!identityToggle) throw new Error('Missing mobile sample information toggle')
+    await identityToggle.trigger('click')
+    const amount = list.get<HTMLInputElement>('input[data-mobile-field="price"]')
+    const input = amount.element
+
+    input.focus()
+    input.value = '1'
+    await amount.trigger('input')
+    await nextTick()
+
+    expect(document.activeElement).toBe(input)
+    expect(input.value).toBe('1')
+
+    input.value = '12'
+    await amount.trigger('input')
+    await nextTick()
+    expect(document.activeElement).toBe(input)
+    expect(input.value).toBe('12')
+
+    input.value = '12.3'
+    await amount.trigger('input')
+    await nextTick()
+    expect(document.activeElement).toBe(input)
+    expect(input.value).toBe('12.3')
+
+    input.blur()
+    await nextTick()
+    expect(input.value).toBe('12.30')
+
+    wrapper.unmount()
   })
 
   it('opens and highlights a route-targeted sample and keeps readonly history disabled', async () => {
