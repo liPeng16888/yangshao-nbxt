@@ -199,8 +199,11 @@ watch(
   }
 
   :deep(.el-radio-button__inner) {
+    display: inline-flex;
     width: 100%;
     min-height: 44px;
+    align-items: center;
+    justify-content: center;
     padding: 0 8px;
     overflow-wrap: anywhere;
     white-space: normal;

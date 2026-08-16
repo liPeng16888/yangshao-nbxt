@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
 import { flushPromises, mount } from '@vue/test-utils'
 import { reactive, ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ElRadioButton, ElRadioGroup } from 'element-plus'
+import { compileString } from 'sass'
 import type { FinanceReport, SampleDetectionReport } from '@/types/report'
 import MobileReportFilter from '@/components/report/MobileReportFilter.vue'
 import ReportPage from './ReportPage.vue'
@@ -70,6 +73,15 @@ const globalStubs = {
   ElTable: { template: '<div class="el-table"><slot /></div>' },
   ElTableColumn: { template: '<div />' },
   ReportChart: { props: ['option'], template: '<div class="report-chart-stub" />' }
+}
+
+function installReportFilterStyles() {
+  const source = readFileSync('src/components/report/MobileReportFilter.vue', 'utf8')
+  const componentStyle = source.match(/<style[^>]*>([\s\S]*?)<\/style>/)?.[1] ?? ''
+  const scopedStyle = compileString(componentStyle).css.replace(/:deep\(([^()]+)\)/g, '$1')
+  const style = document.createElement('style')
+  style.textContent = `${readFileSync('node_modules/element-plus/dist/index.css', 'utf8')}\n${scopedStyle}`
+  document.head.appendChild(style)
 }
 
 function mountPage() {
@@ -216,6 +228,36 @@ describe('mobile reports', () => {
 })
 
 describe('MobileReportFilter', () => {
+  it('centers every statistics and time-range label inside its 44px touch target', () => {
+    installReportFilterStyles()
+    const wrapper = mount(MobileReportFilter, {
+      props: {
+        mode: 'daily',
+        date: '2026-08-16',
+        startDate: '2026-08-01',
+        endDate: '2026-08-16'
+      },
+      global: {
+        components: { ElRadioButton, ElRadioGroup },
+        stubs: {
+          ...globalStubs,
+          ElRadioButton: false,
+          ElRadioGroup: false
+        }
+      }
+    })
+
+    const labels = wrapper.findAll('.el-radio-button__inner')
+    expect(labels).toHaveLength(6)
+    for (const label of labels) {
+      const style = getComputedStyle(label.element)
+      expect(style.display).toBe('inline-flex')
+      expect(style.alignItems).toBe('center')
+      expect(style.justifyContent).toBe('center')
+      expect(Number.parseFloat(style.minHeight)).toBeGreaterThanOrEqual(44)
+    }
+  })
+
   it('stages the existing filter values and atomically emits them with one explicit search', async () => {
     const wrapper = mount(MobileReportFilter, {
       props: {
