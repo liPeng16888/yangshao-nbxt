@@ -2,7 +2,7 @@ import { defineComponent, nextTick, ref, type Component, type Ref } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ElementPlus, { ElAutocomplete, ElMessage, ElMessageBox, ElSelect } from 'element-plus'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import appRouter from '@/router'
 import MedicineInventoryInboundPage from './MedicineInventoryInboundPage.vue'
@@ -137,6 +137,8 @@ function medicineRemarkField(wrapper: VueWrapper, kind: MedicineFlowKind) {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-08-15T12:00:00+08:00'))
   layout.isMobileLayout = ref(false)
   vi.restoreAllMocks()
   api.getMedicineItems.mockReset()
@@ -158,6 +160,10 @@ beforeEach(() => {
   vi.spyOn(ElMessageBox, 'confirm').mockImplementation(
     () => Promise.resolve(undefined) as unknown as ReturnType<typeof ElMessageBox.confirm>
   )
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('medicine inventory navigation', () => {
