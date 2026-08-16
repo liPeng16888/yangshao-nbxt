@@ -20,10 +20,16 @@ import { getMockSharedPrepaidOwnerId, listMockSharedPrepaidIncomeRecharges } fro
 
 const MONTHLY_SETTLEMENT_STORAGE_KEY = 'ys_monthly_settlement_records'
 
-export async function getIncomeBillReport(month: string): Promise<IncomeBillReport> {
-  if (!useMocks) return request.get('/finance/income-bills', { params: { month } })
+export interface FinanceLoadOptions {
+  signal?: AbortSignal
+}
+
+export async function getIncomeBillReport(month: string, options: FinanceLoadOptions = {}): Promise<IncomeBillReport> {
+  if (!useMocks) return request.get('/finance/income-bills', { params: { month }, signal: options.signal })
+  throwIfAborted(options.signal)
   const dates = getMonthDates(month)
   const rows = await Promise.all(dates.map(async (date) => summarizeIncomeSheet(await getLabSheetByDate(date))))
+  throwIfAborted(options.signal)
   const recharges = listMockSharedPrepaidIncomeRecharges(
     getMockSharedPrepaidOwnerId(),
     dates[0] || `${month}-01`,
@@ -32,11 +38,13 @@ export async function getIncomeBillReport(month: string): Promise<IncomeBillRepo
   return summarizeIncomeRows(month, rows, recharges, new Set(dates))
 }
 
-export async function getUnsettledSamples(): Promise<UnsettledSampleRow[]> {
-  if (!useMocks) return request.get('/finance/unsettled-samples')
+export async function getUnsettledSamples(options: FinanceLoadOptions = {}): Promise<UnsettledSampleRow[]> {
+  if (!useMocks) return request.get('/finance/unsettled-samples', { signal: options.signal })
+  throwIfAborted(options.signal)
   await getLabSheetByDate(businessDateInBeijing())
   const history = await getLabSheetHistory()
   const rows = await Promise.all(history.map(async (sheet) => getUnsettledRowsFromSheet(await getLabSheetByDate(sheet.date))))
+  throwIfAborted(options.signal)
   return rows.flat().sort((a, b) => `${b.date}-${b.sequence}`.localeCompare(`${a.date}-${a.sequence}`))
 }
 
@@ -91,9 +99,11 @@ export async function markSamplesAsPaid(rows: UnsettledSampleRow[]): Promise<Sam
   return savedBlocks
 }
 
-export async function getMonthlySettlementReport(month: string): Promise<MonthlySettlementReport> {
-  if (!useMocks) return request.get('/finance/monthly-settlements', { params: { month } })
+export async function getMonthlySettlementReport(month: string, options: FinanceLoadOptions = {}): Promise<MonthlySettlementReport> {
+  if (!useMocks) return request.get('/finance/monthly-settlements', { params: { month }, signal: options.signal })
+  throwIfAborted(options.signal)
   const dailyRows = await Promise.all(getMonthDates(month).map(async (date) => getMonthlySettlementDailyRowsFromSheet(await getLabSheetByDate(date))))
+  throwIfAborted(options.signal)
   return summarizeMonthlySettlementReport(month, dailyRows.flat(), loadMonthlySettlementRows().filter((row) => row.month === month))
 }
 
@@ -136,4 +146,10 @@ function loadMonthlySettlementRows(): MonthlySettlementSummaryRow[] {
 function saveMonthlySettlementRows(rows: MonthlySettlementSummaryRow[]) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(MONTHLY_SETTLEMENT_STORAGE_KEY, JSON.stringify(rows))
+}
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  const error = new Error('canceled')
+  error.name = 'AbortError'
+  throw error
 }

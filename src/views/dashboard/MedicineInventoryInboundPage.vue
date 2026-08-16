@@ -1,5 +1,82 @@
 <template>
-  <div class="page-stack">
+  <div class="page-stack" :class="{ 'mobile-page': isMobileLayout, 'mobile-medicine-page': isMobileLayout }">
+    <template v-if="isMobileLayout">
+      <section class="mobile-medicine-form-section">
+        <div v-if="itemsError" class="medicine-load-error mobile-medicine-items-error" data-testid="inbound-items-error" role="alert">
+          <span>{{ itemsError }}</span>
+          <el-button data-testid="inbound-items-retry" link type="primary" :loading="loading" @click="loadItems">重试</el-button>
+        </div>
+        <button
+          class="mobile-medicine-form-toggle mobile-touch-target"
+          data-testid="mobile-inbound-form-toggle"
+          type="button"
+          :aria-expanded="mobileFormExpanded"
+          aria-controls="mobile-inbound-form"
+          @click="mobileFormExpanded = !mobileFormExpanded"
+        >
+          <span><strong>药品入库</strong><small>已存在药品会锁定其单位</small></span>
+          <span aria-hidden="true">{{ mobileFormExpanded ? '⌃' : '⌄' }}</span>
+        </button>
+        <div id="mobile-inbound-form" v-show="mobileFormExpanded" data-testid="mobile-inbound-form" class="mobile-medicine-form" v-loading="loading">
+          <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent>
+            <div class="medicine-form-grid">
+              <el-form-item label="入库日期" prop="occurredOn">
+                <el-date-picker v-model="form.occurredOn" type="date" value-format="YYYY-MM-DD" />
+              </el-form-item>
+              <el-form-item label="药品名称" prop="name">
+                <el-autocomplete v-model="form.name" data-testid="inbound-item" clearable :fetch-suggestions="queryMedicineSuggestions" placeholder="输入药品名称或选择常用名称" @input="handleMedicineNameInput" @select="handleMedicineSuggestion">
+                  <template #default="{ item }"><span>{{ item.label }}</span></template>
+                </el-autocomplete>
+              </el-form-item>
+              <el-form-item label="单位" prop="unit">
+                <el-select v-model="form.unit" data-testid="inbound-unit" :disabled="Boolean(selectedExistingItem)" placeholder="选择单位">
+                  <el-option v-for="unit in medicineUnitOptions" :key="unit.value" :label="unit.label" :value="unit.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="数量" prop="quantity" required>
+                <el-input v-model="form.quantity" data-testid="inbound-quantity" inputmode="decimal" placeholder="输入入库数量" />
+              </el-form-item>
+              <el-form-item class="medicine-form-grid__wide" label="备注">
+                <el-input v-model="form.remark" maxlength="120" show-word-limit placeholder="可填写入库备注" />
+              </el-form-item>
+            </div>
+            <div class="medicine-common-names">
+              <div>
+                <h3>常用药品名称</h3>
+                <p class="muted">仅供当前登录账号使用；录入后可在药品名称中直接选择。</p>
+              </div>
+              <div class="medicine-common-names__entry">
+                <el-input v-model="commonNameInput" data-testid="common-name-input" maxlength="60" placeholder="录入常用药品名称" @keyup.enter="saveCommonName" />
+                <el-button data-testid="common-name-submit" type="primary" :loading="commonNamesSaving" @click="saveCommonName">添加</el-button>
+              </div>
+              <div v-if="commonNames.length" class="medicine-common-names__tags">
+                <el-tag v-for="commonName in commonNames" :key="commonName.id" closable @close="removeCommonName(commonName.id)">{{ commonName.name }}</el-tag>
+              </div>
+            </div>
+            <MobileActionBar>
+              <el-button :disabled="saving" @click="resetForm">重置</el-button>
+              <el-button data-testid="inbound-submit" type="primary" :loading="saving" @click="handleSubmit">确认入库</el-button>
+            </MobileActionBar>
+          </el-form>
+        </div>
+      </section>
+
+      <MobileMedicineMovementList
+        kind="inbound"
+        :rows="movements"
+        :items="items"
+        :loading="historyLoading"
+        :error="historyError"
+        :selected-medicine-item-ids="historyMedicineItemIds"
+        :date-range="historyDateRange"
+        :correctable-ids="correctableMovementIds"
+        :corrected-movement-ids="Array.from(correctedMovementIds)"
+        @filter="applyMobileHistoryFilter"
+        @correct="openCorrection"
+        @retry="loadHistory"
+      />
+    </template>
+    <template v-else>
     <section class="panel">
       <div class="panel__header">
         <div>
@@ -105,8 +182,19 @@
         </el-table-column>
       </el-table>
     </section>
+    </template>
 
-    <el-dialog v-model="correctionVisible" title="更正入库记录" width="420px" :close-on-click-modal="false" @closed="resetCorrection">
+    <MobileFullscreenDialog v-if="isMobileLayout" v-model="correctionVisible" title="更正入库记录" :saving="correctionSaving" fullscreen @confirm="submitCorrection">
+      <p class="muted">将创建一条反向更正流水，原记录不会被修改。</p>
+      <el-input v-model="correctionReason" data-testid="correction-reason" type="textarea" :rows="3" maxlength="120" show-word-limit placeholder="填写更正原因" />
+      <template #footer="{ cancel }">
+        <div class="mobile-fullscreen-dialog__actions">
+          <button class="mobile-fullscreen-dialog__cancel mobile-touch-target" type="button" :disabled="correctionSaving" @click="cancel">取消</button>
+          <button data-testid="correction-submit" class="mobile-fullscreen-dialog__confirm mobile-touch-target" type="button" :disabled="correctionSaving" @click="submitCorrection">{{ correctionSaving ? '更正中…' : '确认更正' }}</button>
+        </div>
+      </template>
+    </MobileFullscreenDialog>
+    <el-dialog v-else v-model="correctionVisible" title="更正入库记录" width="420px" :close-on-click-modal="false" @closed="resetCorrection">
       <p class="muted">将创建一条反向更正流水，原记录不会被修改。</p>
       <el-input v-model="correctionReason" data-testid="correction-reason" type="textarea" :rows="3" maxlength="120" show-word-limit placeholder="填写更正原因" />
       <template #footer>
@@ -121,6 +209,10 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { correctMedicineMovement, createMedicineCommonName, createMedicineInbound, deleteMedicineCommonName, getMedicineCommonNames, getMedicineItems, getMedicineMovements } from '@/api/medicineInventory'
+import MobileMedicineMovementList from '@/components/medicine/MobileMedicineMovementList.vue'
+import MobileActionBar from '@/components/mobile/MobileActionBar.vue'
+import MobileFullscreenDialog from '@/components/mobile/MobileFullscreenDialog.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import type { MedicineCommonName, MedicineInventoryItem, MedicineInventoryMovement, MedicineUnit } from '@/types/medicineInventory'
 import { formatDateTime, todayInBeijing } from '@/utils/date'
 import { formatMedicineQuantity, medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
@@ -146,7 +238,15 @@ const commonNamesSaving = ref(false)
 const selectedExistingItemId = ref('')
 const historyMedicineItemIds = ref<string[]>([])
 const historyDateRange = ref<string[] | undefined>()
+const mobileFormExpanded = ref(false)
+const { isMobileLayout } = useMobileLayout()
+let itemsRequestId = 0
+let commonNamesRequestId = 0
 let historyRequestId = 0
+let submitPending = false
+let correctionSubmitPending = false
+let lifecycleEpoch = 0
+let pageActive = true
 
 const form = reactive<{
   occurredOn: string
@@ -175,6 +275,7 @@ const correctedMovementIds = computed(() => new Set(movements.value.flatMap((mov
 const hasUnsavedInput = computed(() => Boolean(
   form.name.trim() || form.unit || form.quantity.trim() || form.remark.trim() || commonNameInput.value.trim() || correctionVisible.value
 ))
+const correctableMovementIds = computed(() => movements.value.filter(isCorrectable).map((movement) => movement.id))
 
 const rules: FormRules<typeof form> = {
   occurredOn: [{ required: true, message: '请选择入库日期', trigger: 'change' }],
@@ -194,32 +295,50 @@ onMounted(() => {
   })
 })
 
-onBeforeUnmount(() => unregisterRealtime?.())
+onBeforeUnmount(() => {
+  unregisterRealtime?.()
+  pageActive = false
+  lifecycleEpoch += 1
+  itemsRequestId += 1
+  commonNamesRequestId += 1
+  historyRequestId += 1
+})
 
 async function loadItems() {
+  const lifecycleToken = lifecycleEpoch
+  const requestId = ++itemsRequestId
   loading.value = true
   itemsError.value = ''
   try {
-    items.value = await getMedicineItems()
+    const result = await getMedicineItems()
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== itemsRequestId) return
+    items.value = result
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== itemsRequestId) return
     items.value = []
     itemsError.value = errorMessage(error, '药品库存加载失败，请稍后重试')
     ElMessage.error(itemsError.value)
   } finally {
-    loading.value = false
+    if (isLifecycleCurrent(lifecycleToken) && requestId === itemsRequestId) loading.value = false
   }
 }
 
 async function loadCommonNames() {
+  const lifecycleToken = lifecycleEpoch
+  const requestId = ++commonNamesRequestId
   try {
-    commonNames.value = await getMedicineCommonNames()
+    const result = await getMedicineCommonNames()
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== commonNamesRequestId) return
+    commonNames.value = result
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== commonNamesRequestId) return
     commonNames.value = []
     ElMessage.error(errorMessage(error, '常用药品名称加载失败，请稍后重试'))
   }
 }
 
 async function loadHistory() {
+  const lifecycleToken = lifecycleEpoch
   const requestId = ++historyRequestId
   const [startDate, endDate] = historyDateRange.value || []
   historyLoading.value = true
@@ -231,20 +350,26 @@ async function loadHistory() {
       ...(startDate ? { startDate } : {}),
       ...(endDate ? { endDate } : {})
     })
-    if (requestId !== historyRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== historyRequestId) return
     movements.value = result
   } catch (error) {
-    if (requestId !== historyRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== historyRequestId) return
     movements.value = []
     historyError.value = errorMessage(error, '入库明细加载失败，请稍后重试')
     ElMessage.error(historyError.value)
   } finally {
-    if (requestId === historyRequestId) historyLoading.value = false
+    if (isLifecycleCurrent(lifecycleToken) && requestId === historyRequestId) historyLoading.value = false
   }
 }
 
 function handleHistoryDateRangeChange(value: string[] | undefined) {
   historyDateRange.value = value
+  void loadHistory()
+}
+
+function applyMobileHistoryFilter(value: { medicineItemIds: string[]; dateRange?: string[] }) {
+  historyMedicineItemIds.value = value.medicineItemIds
+  historyDateRange.value = value.dateRange
   void loadHistory()
 }
 
@@ -266,18 +391,24 @@ function handleMedicineSuggestion(suggestion: { value: string; item?: MedicineIn
 }
 
 async function saveCommonName() {
-  const name = commonNameInput.value.trim()
-  if (!name) {
+  if (commonNamesSaving.value) return
+  const lifecycleToken = lifecycleEpoch
+  const submittedRawName = commonNameInput.value
+  const submittedName = submittedRawName.trim()
+  if (!submittedName) {
     ElMessage.warning('请填写常用药品名称')
     return
   }
   commonNamesSaving.value = true
   try {
-    await createMedicineCommonName({ name })
-    commonNameInput.value = ''
+    await createMedicineCommonName({ name: submittedName })
+    if (!isLifecycleCurrent(lifecycleToken)) return
     await loadCommonNames()
+    if (!isLifecycleCurrent(lifecycleToken)) return
+    if (commonNameInput.value === submittedRawName) commonNameInput.value = ''
     ElMessage.success('常用药品名称已添加')
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '常用药品名称添加失败，请稍后重试'))
   } finally {
     commonNamesSaving.value = false
@@ -285,49 +416,97 @@ async function saveCommonName() {
 }
 
 async function removeCommonName(commonNameId: string) {
+  const lifecycleToken = lifecycleEpoch
   try {
     await deleteMedicineCommonName(commonNameId)
+    if (!isLifecycleCurrent(lifecycleToken)) return
     commonNames.value = commonNames.value.filter((commonName) => commonName.id !== commonNameId)
     ElMessage.success('常用药品名称已移除')
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '常用药品名称移除失败，请稍后重试'))
   }
 }
 
 async function handleSubmit() {
+  if (submitPending) return
+  const lifecycleToken = lifecycleEpoch
+  const submission = {
+    occurredOn: form.occurredOn,
+    name: form.name,
+    unit: form.unit,
+    quantity: form.quantity,
+    remark: form.remark,
+    selectedExistingItemId: selectedExistingItemId.value
+  }
+  submitPending = true
   const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid || !form.unit) return
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    submitPending = false
+    return
+  }
+  if (!valid || !submission.unit) {
+    submitPending = false
+    return
+  }
 
-  const quantity = validateMedicineQuantity(form.unit, form.quantity)
-  if (!quantity.ok) return
+  const quantity = validateMedicineQuantity(submission.unit, submission.quantity)
+  if (!quantity.ok) {
+    submitPending = false
+    return
+  }
 
   try {
-    await ElMessageBox.confirm(`确认入库 ${quantity.value} ${unitLabel(form.unit)} 的“${form.name}”？`, '确认入库', {
+    await ElMessageBox.confirm(`确认入库 ${quantity.value} ${unitLabel(submission.unit)} 的“${submission.name}”？`, '确认入库', {
       confirmButtonText: '确认入库',
       cancelButtonText: '取消',
       type: 'warning'
     })
   } catch {
+    submitPending = false
+    return
+  }
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    submitPending = false
     return
   }
 
   saving.value = true
   try {
     await createMedicineInbound({
-      occurredOn: form.occurredOn,
-      name: form.name.trim(),
-      unit: form.unit,
+      occurredOn: submission.occurredOn,
+      name: submission.name.trim(),
+      unit: submission.unit,
       quantity: quantity.value,
-      remark: form.remark.trim()
+      remark: submission.remark.trim()
     })
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('药品已入库')
-    resetForm()
+    if (matchesInboundDraft(submission)) resetForm()
     await Promise.all([loadItems(), loadHistory()])
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '药品入库失败，请稍后重试'))
   } finally {
-    saving.value = false
+    if (isLifecycleCurrent(lifecycleToken)) saving.value = false
+    submitPending = false
   }
+}
+
+function matchesInboundDraft(submission: {
+  occurredOn: string
+  name: string
+  unit: MedicineUnit | ''
+  quantity: string
+  remark: string
+  selectedExistingItemId: string
+}) {
+  return form.occurredOn === submission.occurredOn
+    && form.name === submission.name
+    && form.unit === submission.unit
+    && form.quantity === submission.quantity
+    && form.remark === submission.remark
+    && selectedExistingItemId.value === submission.selectedExistingItemId
 }
 
 function resetForm() {
@@ -350,11 +529,15 @@ function openCorrection(movement: MedicineInventoryMovement) {
 }
 
 async function submitCorrection() {
+  if (correctionSubmitPending) return
   const reason = correctionReason.value.trim()
   if (!reason) {
     ElMessage.warning('请填写更正原因')
     return
   }
+  const lifecycleToken = lifecycleEpoch
+  const movementId = correctionMovementId.value
+  correctionSubmitPending = true
   try {
     await ElMessageBox.confirm('确认创建反向更正流水？原入库记录不会被修改。', '二次确认更正', {
       confirmButtonText: '确认更正',
@@ -362,20 +545,32 @@ async function submitCorrection() {
       type: 'warning'
     })
   } catch {
+    correctionSubmitPending = false
+    return
+  }
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    correctionSubmitPending = false
     return
   }
 
   correctionSaving.value = true
   try {
-    await correctMedicineMovement(correctionMovementId.value, { reason })
+    await correctMedicineMovement(movementId, { reason })
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('更正流水已创建')
     correctionVisible.value = false
     await Promise.all([loadItems(), loadHistory()])
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '更正失败，请稍后重试'))
   } finally {
-    correctionSaving.value = false
+    if (isLifecycleCurrent(lifecycleToken)) correctionSaving.value = false
+    correctionSubmitPending = false
   }
+}
+
+function isLifecycleCurrent(token: number) {
+  return pageActive && token === lifecycleEpoch
 }
 
 function resetCorrection() {
@@ -477,6 +672,67 @@ function errorMessage(error: unknown, fallback: string) {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.mobile-medicine-page {
+  padding-bottom: calc(76px + var(--mobile-page-action-bottom));
+}
+
+.mobile-medicine-form-section {
+  min-width: 0;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #d8e1eb;
+  border-radius: 12px;
+}
+
+.mobile-medicine-items-error {
+  margin: 10px 10px 0;
+}
+
+.mobile-medicine-form-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 12px;
+  color: #1f2937;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+
+.mobile-medicine-form-toggle > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.mobile-medicine-form-toggle small {
+  color: #64748b;
+  font-weight: 400;
+}
+
+.mobile-medicine-form {
+  padding: 12px;
+  border-top: 1px solid #e4ebf3;
+}
+
+.mobile-medicine-form :deep(.el-input),
+.mobile-medicine-form :deep(.el-select),
+.mobile-medicine-form :deep(.el-date-editor) {
+  width: 100%;
+}
+
+.mobile-medicine-form :deep(.el-input__wrapper),
+.mobile-medicine-form :deep(.el-select__wrapper),
+.mobile-medicine-form :deep(.el-date-editor) {
+  min-height: 44px;
+}
+
+.mobile-medicine-form :deep(.mobile-action-bar .el-button) {
+  flex: 1;
+  min-height: 44px;
 }
 
 @media (max-width: 980px) {

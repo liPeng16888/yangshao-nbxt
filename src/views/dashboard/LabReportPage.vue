@@ -1,15 +1,14 @@
 <template>
-  <div class="page-stack lab-report-page">
-    <div class="report-section-tabs" role="tablist" aria-label="化验报告模板设置">
-      <button
-        v-for="section in sections"
-        :key="section.value"
-        type="button"
-        :class="{ 'is-active': activeSection === section.value }"
-        @click="switchSection(section.value)"
-      >
-        {{ section.label }}
-      </button>
+  <div class="page-stack lab-report-page" :class="{ 'lab-report-page--mobile': isMobileLayout }">
+    <div
+      v-if="activeStatus === 'error'"
+      class="template-save-error"
+      data-testid="template-save-error"
+      :data-section="activeSection"
+      role="alert"
+    >
+      <span>模板自动保存失败，当前输入已保留，请重试。</span>
+      <el-button data-testid="retry-template-save" @click="retryTemplateSave">重试保存</el-button>
     </div>
 
     <div class="preference-save-state">
@@ -20,16 +19,42 @@
       </template>
     </div>
 
-    <LabReportTemplatePanel
-      v-if="activeSection === 'image'"
-      :model-value="reportTemplate"
-      @update:model-value="updateReportTemplate"
-    />
-    <LabReportSmsTemplatePanel
-      v-else
-      :model-value="smsTemplate"
-      @update:model-value="updateSmsTemplate"
-    />
+    <template v-if="isMobileLayout">
+      <MobileLabReportTemplatePanel
+        v-if="activeSection === 'image'"
+        :model-value="reportTemplate"
+        @update:model-value="updateReportTemplate"
+      />
+      <MobileLabReportSmsTemplatePanel
+        v-else
+        :model-value="smsTemplate"
+        @update:model-value="updateSmsTemplate"
+      />
+    </template>
+
+    <template v-else>
+      <div class="report-section-tabs" role="tablist" aria-label="化验报告模板设置">
+        <button
+          v-for="section in sections"
+          :key="section.value"
+          type="button"
+          :class="{ 'is-active': activeSection === section.value }"
+          @click="switchSection(section.value)"
+        >
+          {{ section.label }}
+        </button>
+      </div>
+      <LabReportTemplatePanel
+        v-if="activeSection === 'image'"
+        :model-value="reportTemplate"
+        @update:model-value="updateReportTemplate"
+      />
+      <LabReportSmsTemplatePanel
+        v-else
+        :model-value="smsTemplate"
+        @update:model-value="updateSmsTemplate"
+      />
+    </template>
   </div>
 </template>
 
@@ -38,6 +63,9 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LabReportSmsTemplatePanel from '@/components/lab-report/LabReportSmsTemplatePanel.vue'
 import LabReportTemplatePanel from '@/components/lab-report/LabReportTemplatePanel.vue'
+import MobileLabReportSmsTemplatePanel from '@/components/lab-report/MobileLabReportSmsTemplatePanel.vue'
+import MobileLabReportTemplatePanel from '@/components/lab-report/MobileLabReportTemplatePanel.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useAuthStore } from '@/stores/auth'
 import {
   frontendPreferenceActorKey,
@@ -53,6 +81,7 @@ type TemplatePreferenceSection = 'LAB_REPORT_TEMPLATE' | 'LAB_REPORT_SMS_TEMPLAT
 
 const route = useRoute()
 const router = useRouter()
+const { isMobileLayout } = useMobileLayout()
 const authStore = useAuthStore()
 const preferences = useFrontendPreferencesStore()
 const reportTemplate = ref<LabReportTemplate>(preferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate))
@@ -271,16 +300,36 @@ function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+function retryTemplateSave() {
+  if (activeStatus.value !== 'error') return
+  if (activeSection.value === 'image') updateReportTemplate(reportTemplate.value)
+  else updateSmsTemplate(smsTemplate.value)
+}
+
 function switchSection(section: ReportSection) {
   const target = sections.find((item) => item.value === section)
   if (!target || route.path === target.path) return
-  router.push(target.path)
+  void router.push(target.path)
 }
 </script>
 
 <style scoped lang="scss">
 .lab-report-page {
   min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.template-save-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
 }
 
 .report-section-tabs {
@@ -315,5 +364,19 @@ function switchSection(section: ReportSection) {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.lab-report-page--mobile {
+  padding-bottom: calc(20px + var(--mobile-page-action-bottom, env(safe-area-inset-bottom)));
+
+  .template-save-error {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .template-save-error :deep(.el-button) {
+    min-height: 44px;
+    margin: 0;
+  }
 }
 </style>

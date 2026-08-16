@@ -1,12 +1,16 @@
 <template>
   <div class="page-stack">
-    <ReportSummaryCards :items="summaryItems" />
-    <section class="panel">
+    <ReportSummaryCards :items="summaryItems" :mobile="mobile" />
+    <section
+      class="panel report-charts"
+      :class="{ 'mobile-report-charts--single-column': mobile }"
+      data-testid="mobile-report-charts"
+    >
       <div class="panel__header">
         <h2>收入分类汇总</h2>
       </div>
       <div class="panel__body">
-        <div class="status-grid">
+        <div class="status-grid" :class="{ 'status-grid--mobile': mobile }">
           <div v-for="summary in statusSummaries" :key="summary.status" class="status-card">
             <span class="status-card__name">{{ summary.status }}</span>
             <strong>{{ summary.count }} 个</strong>
@@ -22,6 +26,7 @@
           <el-button
             data-testid="chart-metric-amount"
             size="small"
+            :class="{ 'mobile-touch-target': mobile }"
             :type="chartMetric === 'amount' ? 'primary' : 'default'"
             @click="chartMetric = 'amount'"
           >
@@ -30,6 +35,7 @@
           <el-button
             data-testid="chart-metric-count"
             size="small"
+            :class="{ 'mobile-touch-target': mobile }"
             :type="chartMetric === 'count' ? 'primary' : 'default'"
             @click="chartMetric = 'count'"
           >
@@ -46,21 +52,23 @@
       <div class="panel__header">
         <h2>日期明细</h2>
       </div>
-      <el-table :data="report.rows" border>
-        <el-table-column prop="date" label="日期" />
-        <el-table-column prop="sampleCount" label="样品数量" width="100" />
-        <el-table-column prop="totalPrice" label="收入金额" width="120">
-          <template #default="{ row }">¥{{ row.totalPrice.toFixed(2) }}</template>
-        </el-table-column>
-        <el-table-column v-for="status in visibleStatuses" :key="status" :label="status" min-width="130">
-          <template #default="{ row }">
-            <div class="status-cell">
-              <strong>{{ getRowStatusSummary(row, status).count }} 个</strong>
-              <span>¥{{ getRowStatusSummary(row, status).amount.toFixed(2) }}</span>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="report-table-scroll" :class="{ 'report-table-scroll--mobile': mobile }" aria-label="日期明细">
+        <el-table :data="report.rows" border>
+          <el-table-column prop="date" label="日期" />
+          <el-table-column prop="sampleCount" label="样品数量" width="100" />
+          <el-table-column prop="totalPrice" label="收入金额" width="120">
+            <template #default="{ row }">¥{{ row.totalPrice.toFixed(2) }}</template>
+          </el-table-column>
+          <el-table-column v-for="status in visibleStatuses" :key="status" :label="status" min-width="130">
+            <template #default="{ row }">
+              <div class="status-cell">
+                <strong>{{ getRowStatusSummary(row, status).count }} 个</strong>
+                <span>¥{{ getRowStatusSummary(row, status).amount.toFixed(2) }}</span>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </section>
   </div>
 </template>
@@ -76,6 +84,7 @@ import ReportChart from './ReportChart.vue'
 
 const props = defineProps<{
   report: SampleDetectionReport
+  mobile?: boolean
 }>()
 
 const summaryItems = computed(() => [
@@ -147,6 +156,12 @@ function getRowStatusSummary(row: SampleDetectionDailyRow, status: IncomePayment
   gap: 12px;
 }
 
+.report-table-scroll--mobile {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .status-card {
   padding: 14px;
   border: 1px solid #dce5ef;
@@ -193,6 +208,10 @@ function getRowStatusSummary(row: SampleDetectionDailyRow, status: IncomePayment
   .status-grid {
     grid-template-columns: repeat(3, minmax(150px, 1fr));
   }
+}
+
+.status-grid.status-grid--mobile {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 @media (max-width: 760px) {

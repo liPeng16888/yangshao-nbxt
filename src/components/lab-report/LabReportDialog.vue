@@ -1,6 +1,6 @@
 <template>
-  <el-dialog :model-value="visible" width="1120px" class="lab-report-dialog" :title="dialogTitle" @close="emit('close')">
-    <div v-if="step === 'elements'" class="element-step">
+  <el-dialog :model-value="visible" width="1120px" class="lab-report-dialog" :fullscreen="mobile" :title="dialogTitle" @close="handleDialogClose">
+    <div v-if="step === 'elements'" class="element-step" :class="{ 'element-step--mobile': mobile }">
       <el-alert
         title="优先使用数据计算中已选择的化验元素；未填写的样品保持空白，可在这里手动选择。"
         type="info"
@@ -42,7 +42,7 @@
       </div>
     </div>
 
-    <div v-else-if="draft" class="preview-step">
+    <div v-else-if="draft" class="preview-step" :class="{ 'preview-step--mobile': mobile }">
       <div v-if="sampleUnitConflict" class="sample-unit-conflict">
         <strong>来样单位快捷名称存在同步冲突</strong>
         <span>请选择服务器内容，或确认后用本机内容覆盖。</span>
@@ -87,11 +87,20 @@
         </div>
         <div class="preview-actions__commands">
           <el-button @click="step = 'elements'">返回选择元素</el-button>
-          <el-button type="primary" :loading="exportingReport" @click="downloadCurrentReport">保存为图片</el-button>
+          <el-button type="primary" :loading="exportingReport" @click="downloadCurrentReport">{{ reportExportButtonText }}</el-button>
         </div>
       </div>
 
-      <div class="report-preview">
+      <section v-if="mobileReportPreviewUrl" class="mobile-report-share-preview">
+        <img :src="mobileReportPreviewUrl" alt="化验报告保存预览" />
+        <div>
+          <strong>长按保存图片</strong>
+          <p>当前浏览器不支持直接分享文件，请长按上方图片并选择“存储到照片”。</p>
+        </div>
+      </section>
+
+      <div class="report-preview-viewport" aria-label="化验报告可滚动预览">
+        <div class="report-preview">
         <input v-model="draft.title" class="report-title-input" />
         <div class="meta-grid">
           <div class="report-cell report-cell--label">来样日期</div>
@@ -153,16 +162,21 @@
             <span v-else>电子公章</span>
           </div>
         </div>
+        </div>
       </div>
     </div>
 
     <template #footer>
-      <el-button @click="emit('close')">关闭</el-button>
+      <el-button @click="handleDialogClose">关闭</el-button>
       <el-button v-if="step === 'elements'" type="primary" @click="createPreview">生成预览</el-button>
-      <el-button v-else type="primary" :loading="exportingReport" @click="downloadCurrentReport">保存为图片</el-button>
+      <el-button v-else type="primary" :loading="exportingReport" @click="downloadCurrentReport">{{ reportExportButtonText }}</el-button>
     </template>
   </el-dialog>
 </template>
+
+<script lang="ts">
+let mobileLabReportShareInFlight = false
+</script>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -179,6 +193,7 @@ import type { LabReportDraft, LabReportDraftRow, LabReportElementKey, LabReportT
 import type { SampleBlock } from '@/types/labSheet'
 import {
   createLabReportFilename,
+  createLabReportPngBlob,
   createReportDraft,
   downloadLabReportAsPng,
   getBlockCustomerName,
@@ -212,6 +227,7 @@ const props = defineProps<{
   selectedBlockIds: string[]
   template: LabReportTemplate
   date: string
+  mobile?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -231,6 +247,9 @@ const savedSampleUnits = ref<string[]>([])
 let sampleUnitOperationGeneration = 0
 let sampleUnitEditSession = preferences.registerEditSession('LAB_REPORT_SAMPLE_UNITS')
 let sampleUnitMutationsInFlight = 0
+const mobileReportPreviewUrl = ref('')
+let exportOperationId = 0
+let componentMounted = true
 
 const selectedBlocks = computed(() => props.blocks.filter((block) => props.selectedBlockIds.includes(block.id)))
 const dialogTitle = computed(() => (step.value === 'elements' ? '选择化验报告检测元素' : '化验报告预览'))
@@ -245,6 +264,7 @@ const sampleUnitConflict = computed(() => canAccessSampleUnits.value &&
   Boolean(preferences.conflicts.LAB_REPORT_SAMPLE_UNITS))
 const sampleUnitMutationLocked = computed(() => !canAccessSampleUnits.value ||
   sampleUnitsSaving.value || sampleUnitsResolving.value || sharedSampleUnitsSaving.value || sampleUnitConflict.value)
+const reportExportButtonText = computed(() => (props.mobile ? '分享或保存图片' : '保存为图片'))
 const displayElements = computed<DisplayElement[]>(() => {
   if (!draft.value) return []
   const elements: DisplayElement[] = draft.value.elements.map((element, index) => ({
@@ -278,6 +298,8 @@ watch(
   () => props.visible,
   (visible) => {
     invalidateSampleUnitOperations()
+    invalidateExportOperation()
+    clearMobileReportPreview()
     if (!visible) return
     step.value = 'elements'
     draft.value = null
@@ -317,11 +339,13 @@ watch(
   { deep: true, immediate: true, flush: 'sync' }
 )
 
-onBeforeUnmount(() => {
-  invalidateSampleUnitOperations()
-  sampleUnitEditSession.unregister()
-})
-
+watch(
+  () => props.mobile,
+  () => {
+    invalidateExportOperation()
+    clearMobileReportPreview()
+  }
+)
 function applyBulkElements() {
   if (!selectedBlocks.value.length) {
     ElMessage.warning('请先选择需要生成报告的样品')
@@ -567,22 +591,115 @@ function handleSampleUnitConflictResult(
 }
 
 async function downloadCurrentReport() {
-  if (!draft.value || exportingReport.value) return
+  if (!draft.value || exportingReport.value || mobileLabReportShareInFlight) return
+  const operationId = ++exportOperationId
+  const mobileAtStart = Boolean(props.mobile)
   exportingReport.value = true
+  clearMobileReportPreview()
   ElMessage.info('正在生成化验报告图片')
   try {
     const filename = createLabReportFilename(selectedBlocks.value, draft.value.reportDate || props.date)
+    if (mobileAtStart) {
+      const blob = await createLabReportPngBlob(draft.value)
+      if (!isExportOperationCurrent(operationId, mobileAtStart)) return
+      if (!blob) {
+        ElMessage.error('图片生成失败，请刷新页面后重试')
+        return
+      }
+      await shareOrPreviewMobileReport(blob, filename, operationId)
+      return
+    }
     const downloaded = await downloadLabReportAsPng(draft.value, filename)
+    if (!isExportOperationCurrent(operationId, mobileAtStart)) return
     if (downloaded) {
       ElMessage.success('化验报告图片已开始下载')
       return
     }
     ElMessage.error('图片生成失败，请刷新页面后重试')
   } catch {
+    if (!isExportOperationCurrent(operationId, mobileAtStart)) return
     ElMessage.error('图片生成失败，请刷新页面后重试')
   } finally {
-    exportingReport.value = false
+    if (operationId === exportOperationId) exportingReport.value = false
   }
+}
+
+async function shareOrPreviewMobileReport(blob: Blob, filename: string, operationId: number) {
+  if (!isExportOperationCurrent(operationId, true)) return
+  if (typeof File !== 'function') {
+    showMobileReportPreview(blob, operationId)
+    return
+  }
+  const file = new File([blob], filename, { type: 'image/png' })
+  const shareData: ShareData = { files: [file], title: '化验报告' }
+  let supportsFileShare = false
+  try {
+    supportsFileShare = typeof navigator.share === 'function'
+      && typeof navigator.canShare === 'function'
+      && navigator.canShare(shareData)
+  } catch {
+    supportsFileShare = false
+  }
+
+  if (supportsFileShare) {
+    if (mobileLabReportShareInFlight) return
+    mobileLabReportShareInFlight = true
+    try {
+      await navigator.share(shareData)
+      if (!isExportOperationCurrent(operationId, true)) return
+      clearMobileReportPreview()
+      ElMessage.success('已打开系统分享')
+      return
+    } catch (error) {
+      if (!isExportOperationCurrent(operationId, true)) return
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        ElMessage.info('已取消分享')
+        return
+      }
+      ElMessage.error('系统分享失败，已切换为长按保存图片')
+    } finally {
+      mobileLabReportShareInFlight = false
+    }
+  }
+
+  if (!isExportOperationCurrent(operationId, true)) return
+  showMobileReportPreview(blob, operationId)
+}
+
+function showMobileReportPreview(blob: Blob, operationId: number) {
+  if (!isExportOperationCurrent(operationId, true)) return
+  clearMobileReportPreview()
+  const previewUrl = URL.createObjectURL(blob)
+  if (!isExportOperationCurrent(operationId, true)) {
+    URL.revokeObjectURL(previewUrl)
+    return
+  }
+  mobileReportPreviewUrl.value = previewUrl
+  ElMessage.info('请长按图片保存到手机')
+}
+
+function isExportOperationCurrent(operationId: number, mobileAtStart: boolean) {
+  return componentMounted
+    && operationId === exportOperationId
+    && props.visible
+    && Boolean(props.mobile) === mobileAtStart
+}
+
+function invalidateExportOperation() {
+  exportOperationId += 1
+  exportingReport.value = false
+}
+
+function handleDialogClose() {
+  invalidateExportOperation()
+  clearMobileReportPreview()
+  emit('close')
+}
+
+function clearMobileReportPreview() {
+  if (!mobileReportPreviewUrl.value) return
+  URL.revokeObjectURL(mobileReportPreviewUrl.value)
+  mobileReportPreviewUrl.value = ''
 }
 
 function updateDisplayElement(element: DisplayElement, field: 'label' | 'symbol', event: Event) {
@@ -609,6 +726,14 @@ function contactInputWidth(value: string, minChars: number) {
   const length = Math.max(minChars, Array.from(value || '').length)
   return `${length + 1}em`
 }
+
+onBeforeUnmount(() => {
+  componentMounted = false
+  invalidateSampleUnitOperations()
+  sampleUnitEditSession.unregister()
+  invalidateExportOperation()
+  clearMobileReportPreview()
+})
 
 </script>
 
@@ -792,6 +917,116 @@ function contactInputWidth(value: string, minChars: number) {
   background: #ffffff;
   border: 1px solid #111827;
   font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+}
+
+.report-preview-viewport {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.element-step--mobile,
+.preview-step--mobile {
+  min-width: 0;
+  max-width: 100%;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  overflow-x: clip;
+}
+
+.element-step--mobile .element-checkboxes {
+  grid-template-columns: 1fr;
+}
+
+.element-step--mobile .bulk-element-card__header,
+.element-step--mobile .sample-element-card__header,
+.preview-step--mobile .preview-actions {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.element-step--mobile .bulk-element-card__actions {
+  display: grid;
+  justify-content: stretch;
+  width: 100%;
+  grid-template-columns: 1fr;
+}
+
+.preview-step--mobile .sample-unit-shortcuts,
+.preview-step--mobile .preview-actions__commands {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 1fr;
+}
+
+.preview-step--mobile .sample-unit-shortcuts__select {
+  width: 100%;
+}
+
+.preview-step--mobile .preview-actions :deep(.el-button),
+.element-step--mobile .bulk-element-card__actions :deep(.el-button) {
+  min-height: 44px;
+  margin: 0;
+}
+
+.preview-step--mobile .report-preview-viewport {
+  width: 100%;
+  border-radius: 8px;
+}
+
+:global(.lab-report-dialog.is-fullscreen) {
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;
+  overflow: hidden;
+}
+
+:global(.lab-report-dialog.is-fullscreen .el-dialog__header) {
+  padding-top: calc(12px + env(safe-area-inset-top));
+}
+
+:global(.lab-report-dialog.is-fullscreen .el-dialog__body) {
+  max-height: calc(100dvh - 116px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+:global(.lab-report-dialog.is-fullscreen .el-dialog__footer) {
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+:global(.lab-report-dialog.is-fullscreen .el-dialog__footer .el-button),
+:global(.lab-report-dialog.is-fullscreen .el-dialog__headerbtn) {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.mobile-report-share-preview {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #86b7fe;
+  border-radius: 10px;
+  background: #eff6ff;
+
+  img {
+    display: block;
+    width: min(100%, 430px);
+    max-height: 60dvh;
+    margin: 0 auto;
+    object-fit: contain;
+    background: #ffffff;
+  }
+
+  strong {
+    color: #10233f;
+  }
+
+  p {
+    margin: 4px 0 0;
+    color: #475569;
+    line-height: 1.6;
+  }
 }
 
 .report-title-input {

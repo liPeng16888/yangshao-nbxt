@@ -7,8 +7,8 @@ import {
 } from '@/api/accessGuard'
 import { featureForPath, type AccessGuardFeature } from '@/router/guards'
 
-interface AccessRequestOptions { title: string; message: string; onSuccess: () => void | Promise<void> }
-type PendingAction = (() => void | Promise<void>) | null
+interface AccessRequestOptions { title: string; message: string; owner?: symbol; onSuccess: () => void | Promise<void> }
+interface PendingRequest { owner?: symbol; action: () => void | Promise<void> }
 
 export type AccessGuardSession = StoredAccessGuardSession
 
@@ -21,7 +21,7 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
   const accessMessage = ref('请输入访问密码后继续')
   const activeGroupId = ref('')
   const accessSessionRevision = ref(0)
-  let pendingAction: PendingAction = null
+  let pendingRequest: PendingRequest | null = null
 
   const activeGroup = computed(() => groups.value.find((group) => group.id === activeGroupId.value) || null)
   const settings = computed(() => activeGroup.value || { enabled: false, ttlMinutes: 5, grantVersion: 0, password: '', recoveryPrompt: '', recoveryAnswer: '' })
@@ -66,7 +66,7 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
     activeGroupId.value = group.id
     accessTitle.value = options.title
     accessMessage.value = options.message
-    pendingAction = options.onSuccess
+    pendingRequest = { owner: options.owner, action: options.onSuccess }
     dialogVisible.value = true
     return false
   }
@@ -74,21 +74,30 @@ export const useAccessGuardStore = defineStore('accessGuard', () => {
     const feature = featureForPath(location.pathname)
     return feature ? requestFeatureAccess(feature, options) : true
   }
-  function cancelAccess() { pendingAction = null; dialogVisible.value = false }
+  function cancelAccess(owner?: symbol) {
+    if (!pendingRequest || (owner && pendingRequest.owner !== owner)) return false
+    pendingRequest = null
+    dialogVisible.value = false
+    return true
+  }
   async function verifyPassword(password: string) {
+    const request = pendingRequest
+    if (!request || !dialogVisible.value) return { ok: false, message: '访问验证已取消' }
     const group = activeGroup.value
     if (!group) return { ok: false, message: '未找到访问组合' }
     if (!password.trim()) return { ok: false, message: '请输入访问密码' }
     try {
       const verification = await verifyAccessGuardGroup(group.id, password.trim(), group.ttlMinutes, group.password)
+      if (pendingRequest !== request || !dialogVisible.value) return { ok: false, message: '访问验证已取消' }
       if (verification.groupId !== group.id || !verification.features.length) return { ok: false, message: '访问授权响应无效' }
       group.grantVersion = verification.grantVersion
       group.features = [...verification.features]
       const sessions = readAccessGuardSessions(); sessions[group.id] = verification; writeAccessGuardSessions(sessions); accessSessionRevision.value += 1
     } catch (error) {
+      if (pendingRequest !== request || !dialogVisible.value) return { ok: false, message: '访问验证已取消' }
       return { ok: false, message: error instanceof Error ? error.message : '访问密码不正确' }
     }
-    const action = pendingAction; pendingAction = null; dialogVisible.value = false; if (action) await action()
+    pendingRequest = null; dialogVisible.value = false; await request.action()
     return { ok: true, message: `已通过“${group.name}”访问验证` }
   }
   async function resetPasswordWithRecovery(payload: { recoveryAnswer: string; newPassword: string; confirmPassword: string }) {

@@ -8,7 +8,7 @@
         </div>
       </div>
 
-      <div class="panel__body filter-body">
+      <div v-if="!isMobileLayout" class="panel__body filter-body">
         <div class="consumption-filters">
           <label class="filter-field"><span>会员手机号筛选</span><el-input v-model="filters.phone" data-testid="consumption-filter-phone" aria-label="会员手机号筛选" clearable placeholder="会员手机号" @keyup.enter="applyFilters" /></label>
           <label class="filter-field">
@@ -39,6 +39,26 @@
         </div>
       </div>
 
+      <MobileFilterDrawer
+        v-if="isMobileLayout"
+        v-model="mobileFilterOpen"
+        data-testid="mobile-consumption-filter"
+        title="筛选消费明细"
+        :summary="consumptionFilterSummary"
+        fullscreen
+        @apply="applyMobileFilters"
+        @reset="resetConsumptionFilters"
+      >
+        <div class="mobile-consumption-filter-fields">
+          <label class="filter-field"><span>会员手机号</span><el-input v-model="filters.phone" data-testid="consumption-filter-phone" inputmode="tel" /></label>
+          <label class="filter-field"><span>充值来源账号</span><el-select v-model="filters.sourceOwnerId" data-testid="consumption-filter-source" filterable clearable><el-option v-for="option in store.consumptionFilterOptions.sourceOwners" :key="option.id" :label="option.label" :value="option.id" /></el-select></label>
+          <label class="filter-field"><span>消费账号</span><el-select v-model="filters.consumingFrontendUserId" data-testid="consumption-filter-consumer" filterable clearable><el-option v-for="option in store.consumptionFilterOptions.consumingOwners" :key="option.id" :label="option.label" :value="option.id" /></el-select></label>
+          <label class="filter-field"><span>样品日期范围</span><el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" /></label>
+          <label class="filter-field"><span>消费/冲正状态</span><el-select v-model="filters.status" data-testid="consumption-filter-status" clearable><el-option label="有效消费" value="ACTIVE" /><el-option label="已冲正及冲正流水" value="REVERSED" /></el-select></label>
+          <label class="filter-field"><span>结算状态</span><el-select v-model="filters.payableStatus" data-testid="consumption-filter-payable" clearable><el-option label="待结算" value="PENDING" /><el-option label="已进入结算单" value="HELD" /><el-option label="已完成" value="COMPLETED" /><el-option label="已冲正" value="REVERSED" /></el-select></label>
+        </div>
+      </MobileFilterDrawer>
+
       <el-alert v-if="realtime.hasPendingRefresh.value" class="consumption-alert" type="warning" :closable="false" show-icon title="共享消费明细已变化">
         <template #default><el-button link type="primary" @click="realtime.retryRefresh">立即刷新</el-button></template>
       </el-alert>
@@ -56,7 +76,23 @@
         <template #default><el-button link type="primary" @click="loadPageData(store.consumptionsPage.page)">重试</el-button></template>
       </el-alert>
 
-      <el-table :data="store.consumptionsPage.items" border v-loading="store.loadingByPage.consumptions" empty-text="暂无符合条件的消费明细">
+      <div v-if="isMobileLayout" class="mobile-consumption-list" aria-live="polite">
+        <article v-for="row in store.consumptionsPage.items" :key="row.id" data-testid="mobile-consumption-card" class="mobile-consumption-card">
+          <header><div><strong>{{ row.phoneSnapshot }}</strong><p>{{ row.sampleNumberSnapshot || '无样品编号' }} · {{ row.sampleCountSnapshot }} 个样品</p></div><el-tag :type="row.kind === 'REVERSAL' ? 'info' : 'success'">{{ row.kind === 'REVERSAL' ? '冲正流水' : '消费' }}</el-tag></header>
+          <div class="mobile-consumption-summary"><span>消费金额<strong>¥{{ prepaidMoney(row.amount) }}</strong></span><span>跨账号应转<strong>¥{{ prepaidMoney(payableTotal(row)) }}</strong></span></div>
+          <p>充值来源 {{ sourceOwnerLabels(row) }}</p><p>消费账号 {{ prepaidAccountLabel(row.consumingFrontendUser) }}</p><p>{{ row.sheetDate }} · {{ prepaidFormatElements(row.elementsSnapshot) }} · {{ rowStatus(row) }}</p>
+          <button data-testid="mobile-consumption-toggle" class="mobile-touch-target mobile-consumption-toggle" type="button" :aria-expanded="expandedConsumptionId === row.id" @click="toggleConsumption(row.id)">{{ expandedConsumptionId === row.id ? '收起审计明细' : '展开审计明细' }}</button>
+          <section v-if="expandedConsumptionId === row.id" class="mobile-consumption-detail">
+            <div class="audit-identity"><strong>{{ row.kind === 'REVERSAL' ? '冲正流水' : '消费流水' }} {{ row.id }}</strong><span v-if="row.reversalOfId">原消费流水 {{ row.reversalOfId }}</span></div>
+            <h3>充值来源与分摊</h3><article v-for="allocation in row.allocations" :key="allocation.id" class="allocation-card"><strong>充值批次 {{ allocation.rechargeId }}</strong><span>分摊价值 ¥{{ prepaidMoney(allocation.allocatedAmount) }}</span><span>分摊本金 ¥{{ prepaidMoney(allocatedPaid(allocation)) }}</span><span>分摊赠送 ¥{{ prepaidMoney(allocatedGift(allocation)) }}</span></article>
+            <h3>账号间应转</h3><article v-for="payable in row.payables" :key="payable.id" class="payable-card"><span>{{ prepaidAccountLabel(payable.sourceOwner) }} → {{ prepaidAccountLabel(payable.consumerOwner) }}</span><strong>应转金额 ¥{{ prepaidMoney(payable.amount) }}</strong><span>{{ payableStatusLabel(payable.status) }}</span></article>
+            <template v-if="row.originalPayables.length"><h3>原消费应转明细</h3><article v-for="payable in row.originalPayables" :key="payable.id" class="payable-card"><strong>原应转金额 ¥{{ prepaidMoney(payable.amount) }}</strong><span>{{ payableStatusLabel(payable.status) }}</span></article></template>
+          </section>
+          <el-button v-if="canReverseConsumption(row)" :data-testid="`reverse-consumption-${row.id}`" class="mobile-touch-target" type="warning" plain @click="reverseConsumption(row)">冲正</el-button>
+        </article>
+        <el-empty v-if="!store.loadingByPage.consumptions && !store.consumptionsPage.items.length" description="暂无符合条件的消费明细" />
+      </div>
+      <el-table v-else :data="store.consumptionsPage.items" border v-loading="store.loadingByPage.consumptions" empty-text="暂无符合条件的消费明细">
         <el-table-column type="expand" width="46">
           <template #default="{ row }">
             <div class="consumption-detail">
@@ -161,6 +197,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+import MobileFilterDrawer from '@/components/mobile/MobileFilterDrawer.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useSharedPrepaidRealtimeRegistration } from '@/composables/useSharedPrepaidRealtime'
 import { useAuthStore } from '@/stores/auth'
 import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
@@ -186,8 +224,11 @@ defineOptions({ name: 'PrepaidConsumptionsPage' })
 const pageSize = 20
 const store = useSharedPrepaidStore()
 const auth = useAuthStore()
+const { isMobileLayout } = useMobileLayout()
 const mutationError = ref('')
 const filterError = ref('')
+const mobileFilterOpen = ref(false)
+const expandedConsumptionId = ref('')
 const filters = reactive<{
   phone: string
   sourceOwnerId: string
@@ -199,6 +240,10 @@ const filters = reactive<{
 
 const isMainAccount = computed(() => auth.user?.role === 'FRONTEND_USER' || auth.user?.isFrontendMainAccount === true)
 const currentOwnerId = computed(() => auth.user?.dataOwnerId || auth.user?.id || '')
+const consumptionFilterSummary = computed(() => {
+  const count = [filters.phone, filters.sourceOwnerId, filters.consumingFrontendUserId, filters.dateRange.length ? '日期' : '', filters.status, filters.payableStatus].filter(Boolean).length
+  return count ? `已启用 ${count} 项筛选` : '全部消费与冲正'
+})
 const realtime = useSharedPrepaidRealtimeRegistration('consumptions', {
   isDirty: () => false,
   refresh: () => loadPageData(store.consumptionsPage.page)
@@ -247,6 +292,20 @@ async function loadPageData(page = 1) {
 
 function applyFilters() {
   return loadConsumptions(1)
+}
+
+async function applyMobileFilters() {
+  await applyFilters()
+  if (!filterError.value) mobileFilterOpen.value = false
+}
+
+function resetConsumptionFilters() {
+  Object.assign(filters, { phone: '', sourceOwnerId: '', consumingFrontendUserId: '', dateRange: [], status: '', payableStatus: '' })
+  return applyMobileFilters()
+}
+
+function toggleConsumption(id: string) {
+  expandedConsumptionId.value = expandedConsumptionId.value === id ? '' : id
 }
 
 function canReverseConsumption(row: PrepaidConsumptionListRow) {
@@ -339,6 +398,17 @@ function percent(value: unknown) {
 .allocation-card > div:first-child, .payable-card { align-items: center; }
 .allocation-card :deep(.el-tag) { margin-left: 8px; }
 .prepaid-pagination { display: flex; justify-content: flex-end; padding: 14px 16px; }
+.mobile-consumption-filter-fields, .mobile-consumption-list, .mobile-consumption-detail { display: grid; gap: 12px; }
+.mobile-consumption-filter-fields :deep(.el-input), .mobile-consumption-filter-fields :deep(.el-select), .mobile-consumption-filter-fields :deep(.el-date-editor) { width: 100%; min-height: 44px; }
+.mobile-consumption-list { padding: 12px; }
+.mobile-consumption-card { display: grid; gap: 9px; padding: 14px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
+.mobile-consumption-card > header { display: flex; justify-content: space-between; gap: 8px; }
+.mobile-consumption-card p { margin: 0; color: #64748b; font-size: 13px; overflow-wrap: anywhere; }
+.mobile-consumption-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mobile-consumption-summary span { display: grid; gap: 3px; padding: 9px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 12px; }
+.mobile-consumption-summary strong { color: #0f172a; font-size: 15px; }
+.mobile-consumption-toggle { width: 100%; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #1d4ed8; }
+.mobile-consumption-detail { padding-top: 4px; }
 @media (max-width: 1000px) { .consumption-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .allocation-list, .payable-list { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .consumption-filters { grid-template-columns: 1fr; } .consumption-detail { padding-left: 14px; } }
 </style>

@@ -107,4 +107,79 @@ describe('CoefficientApplicationDialog', () => {
     expect(dialogElement('[data-testid="confirm-coefficient-application"]').hasAttribute('disabled')).toBe(true)
     wrapper.unmount()
   })
+
+  it('is fullscreen only when the coefficient editor uses the mobile layout', async () => {
+    const wrapper = mountDialog({ mobile: true })
+    await nextTick()
+    expect(document.body.querySelector('.el-dialog.is-fullscreen')).not.toBeNull()
+
+    await wrapper.setProps({ mobile: false })
+    await nextTick()
+    expect(document.body.querySelector('.el-dialog.is-fullscreen')).toBeNull()
+  })
+
+  it('sorts the actual sample indices while emitting the chosen index', async () => {
+    const wrapper = mountDialog({ sampleIndices: [8, 2, 5] })
+    await nextTick()
+    dialogElement('[data-testid="coefficient-start-select"] .el-select__wrapper').click()
+    await nextTick()
+    const labels = Array.from(document.body.querySelectorAll<HTMLElement>('.el-select-dropdown__item')).map((item) => item.textContent?.trim())
+    expect(labels).toEqual(['002', '005', '008'])
+
+    Array.from(document.body.querySelectorAll<HTMLElement>('.el-select-dropdown__item'))
+      .find((item) => item.textContent?.trim() === '005')!.click()
+    await nextTick()
+    dialogElement('[data-testid="confirm-coefficient-application"]').click()
+    expect(wrapper.emitted('confirm')).toEqual([[5]])
+  })
+
+  it('offers only unique positive safe integer indices in numeric order', async () => {
+    mountDialog({
+      sampleIndices: [5, 0, -1, 2.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, 2, 5, '3' as unknown as number]
+    })
+    await nextTick()
+    dialogElement('[data-testid="coefficient-start-select"] .el-select__wrapper').click()
+    await nextTick()
+
+    const labels = Array.from(document.body.querySelectorAll<HTMLElement>('.el-select-dropdown__item')).map((item) => item.textContent?.trim())
+    expect(labels).toEqual(['002', '005'])
+  })
+
+  it('clears a selected index removed while visible and emits nothing stale', async () => {
+    const wrapper = mountDialog()
+    await nextTick()
+    await selectStartSample(2)
+
+    await wrapper.setProps({ sampleIndices: [1, 3, 4] })
+    await nextTick()
+
+    expect(document.body.textContent).not.toContain('002（含）')
+    expect(dialogElement('[data-testid="confirm-coefficient-application"]').hasAttribute('disabled')).toBe(true)
+    dialogElement('[data-testid="confirm-coefficient-application"]').click()
+    expect(wrapper.emitted('confirm')).toBeUndefined()
+  })
+
+  it('preserves a selected index that remains valid after an option update', async () => {
+    const wrapper = mountDialog()
+    await nextTick()
+    await selectStartSample(2)
+
+    await wrapper.setProps({ sampleIndices: [4, 2, 3, 2] })
+    await nextTick()
+    dialogElement('[data-testid="confirm-coefficient-application"]').click()
+
+    expect(document.body.textContent).toContain('002（含）')
+    expect(wrapper.emitted('confirm')).toEqual([[2]])
+  })
+
+  it('rechecks option membership when confirmation is called programmatically', async () => {
+    const wrapper = mountDialog()
+    await nextTick()
+    await selectStartSample(2)
+
+    await wrapper.setProps({ visible: false, sampleIndices: [1, 3, 4] })
+    ;(wrapper.vm as unknown as { confirmApplication: () => void }).confirmApplication()
+
+    expect(wrapper.emitted('confirm')).toBeUndefined()
+  })
 })

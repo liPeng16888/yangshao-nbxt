@@ -6,12 +6,25 @@
           <h2>全局预存款客户</h2>
           <p class="muted">同一标准化手机号全局唯一，余额可跨前端主账号共享查看。</p>
         </div>
-        <div class="customer-filters">
+        <div v-if="!isMobileLayout" class="customer-filters">
           <label class="filter-field"><span>会员手机号筛选</span><el-input v-model="phoneFilter" data-testid="member-filter-phone" aria-label="会员手机号筛选" clearable placeholder="搜索会员手机号" @keyup.enter="applyFilter" /></label>
           <el-button data-testid="member-filter-submit" type="primary" :loading="store.loadingByPage.members" @click="applyFilter">查询</el-button>
           <el-button :loading="store.loadingByPage.members" @click="loadMembers(store.membersPage.page)">刷新</el-button>
         </div>
       </div>
+
+      <MobileFilterDrawer
+        v-if="isMobileLayout"
+        v-model="mobileFilterOpen"
+        data-testid="mobile-member-filter"
+        title="筛选预存款客户"
+        :summary="phoneFilter ? `手机号 ${phoneFilter}` : '全部预存款客户'"
+        fullscreen
+        @apply="applyMobileFilter"
+        @reset="resetMobileFilter"
+      >
+        <label class="filter-field"><span>会员手机号</span><el-input v-model="phoneFilter" data-testid="member-filter-phone" inputmode="tel" /></label>
+      </MobileFilterDrawer>
 
       <el-alert v-if="realtime.hasPendingRefresh.value" class="customer-alert" type="warning" :closable="false" show-icon title="共享客户数据已更新">
         <template #default><el-button link type="primary" @click="realtime.retryRefresh">立即刷新</el-button></template>
@@ -29,7 +42,17 @@
         <template #default><el-button link type="primary" @click="loadMembers(store.membersPage.page)">重试</el-button></template>
       </el-alert>
 
-      <el-table :data="store.membersPage.items" border v-loading="store.loadingByPage.members" empty-text="暂无预存款客户">
+      <div v-if="isMobileLayout" class="mobile-member-list" aria-live="polite">
+        <article v-for="row in store.membersPage.items" :key="row.id" data-testid="mobile-member-card" class="mobile-member-card">
+          <header><strong>{{ row.phone }}</strong><strong>当前余额 ¥{{ prepaidMoney(row.balance) }}</strong></header>
+          <div class="mobile-member-summary"><span>充值本金<strong>¥{{ prepaidMoney(row.paidTotal) }}</strong></span><span>赠送总额<strong>¥{{ prepaidMoney(row.giftTotal) }}</strong></span><span>充值合计<strong>¥{{ prepaidMoney(Number(row.paidTotal) + Number(row.giftTotal)) }}</strong></span><span>消费总额<strong>¥{{ prepaidMoney(row.consumedTotal) }}</strong></span></div>
+          <div v-if="row.ownerComposition.length" class="composition-list"><el-tag v-for="owner in row.ownerComposition" :key="owner.ownerFrontendUserId" type="info">{{ owner.ownerDisplayName }} / {{ owner.ownerAccount }} ¥{{ prepaidMoney(owner.balance) }}</el-tag></div>
+          <p>最近充值 {{ prepaidPreciseDateTime(row.latestRechargeTime) }}</p><p>最近消费 {{ prepaidPreciseDateTime(row.latestConsumptionTime) }}</p>
+          <el-button :data-testid="`mobile-member-detail-${row.id}`" class="mobile-touch-target" type="primary" plain @click="openDetail(row.id)">查看不可变历史</el-button>
+        </article>
+        <el-empty v-if="!store.loadingByPage.members && !store.membersPage.items.length" description="暂无预存款客户" />
+      </div>
+      <el-table v-else :data="store.membersPage.items" border v-loading="store.loadingByPage.members" empty-text="暂无预存款客户">
         <el-table-column prop="phone" label="会员手机号" width="145" />
         <el-table-column label="充值本金" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.paidTotal) }}</template></el-table-column>
         <el-table-column label="赠送总额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.giftTotal) }}</template></el-table-column>
@@ -64,7 +87,7 @@
       </div>
     </section>
 
-    <section v-if="store.selectedMember" class="panel member-detail" data-testid="member-detail">
+    <section v-if="!isMobileLayout && store.selectedMember" class="panel member-detail" data-testid="member-detail">
       <div class="panel__header">
         <div>
           <h2>会员详情：{{ store.selectedMember.phone }}</h2>
@@ -144,12 +167,32 @@
         </div>
       </div>
     </section>
+
+    <MobileFullscreenDialog
+      v-if="isMobileLayout"
+      :model-value="Boolean(store.selectedMember)"
+      title="会员不可变历史"
+      fullscreen
+      @update:model-value="closeMobileDetail"
+    >
+      <div v-if="store.selectedMember" data-testid="mobile-member-detail" :aria-label="`会员 ${store.selectedMember.phone} 详情`" class="mobile-member-detail">
+        <header><h2>{{ store.selectedMember.phone }}</h2><strong>当前余额 ¥{{ prepaidMoney(store.selectedMember.balance) }}</strong></header>
+        <div class="mobile-member-summary"><span>充值本金<strong>¥{{ prepaidMoney(store.selectedMember.paidTotal) }}</strong></span><span>赠送总额<strong>¥{{ prepaidMoney(store.selectedMember.giftTotal) }}</strong></span><span>消费总额<strong>¥{{ prepaidMoney(store.selectedMember.consumedTotal) }}</strong></span></div>
+        <section><h3>充值批次</h3><article v-for="row in store.selectedMember.recharges" :key="row.id" data-testid="mobile-member-recharge" class="mobile-history-card"><strong>{{ row.isOpeningBalance ? '期初余额' : '普通充值' }} ¥{{ prepaidMoney(row.totalAmount) }}</strong><span>剩余 ¥{{ prepaidMoney(row.remainingAmount) }}</span><span>{{ row.rechargeDate }} · {{ row.reversedAt ? '已冲正' : '有效' }}</span><span>{{ row.remark || '无备注' }}</span></article></section>
+        <section><h3>消费与冲正</h3><article v-for="row in store.selectedMember.consumptions" :key="row.id" data-testid="mobile-member-consumption" class="mobile-history-card"><strong>{{ row.kind === 'REVERSAL' ? '消费冲正' : '预存款消费' }} ¥{{ prepaidMoney(row.amount) }}</strong><span>{{ row.sampleNumberSnapshot }} · {{ prepaidFormatElements(row.elementsSnapshot) }}</span><span>{{ prepaidPreciseDateTime(row.createdAt) }} · {{ consumptionStatus(row) }}</span></article></section>
+        <section><h3>账本审计</h3><article v-for="row in store.selectedMember.ledgerEntries" :key="row.id" data-testid="mobile-member-ledger" class="mobile-history-card"><strong>{{ ledgerKindLabel(row.kind) }} {{ signedMoney(row.balanceDelta) }}</strong><span>{{ row.reason || '无原因备注' }}</span><span>{{ prepaidPreciseDateTime(row.createdAt) }}</span></article></section>
+      </div>
+      <template #footer><button class="mobile-touch-target" type="button" @click="closeMobileDetail">关闭</button></template>
+    </MobileFullscreenDialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
+import MobileFilterDrawer from '@/components/mobile/MobileFilterDrawer.vue'
+import MobileFullscreenDialog from '@/components/mobile/MobileFullscreenDialog.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useSharedPrepaidRealtimeRegistration } from '@/composables/useSharedPrepaidRealtime'
 import { isSharedPrepaidReadCancelled, useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import type { PrepaidConsumptionRow, PrepaidLedgerKind } from '@/types/sharedPrepaid'
@@ -166,8 +209,10 @@ defineOptions({ name: 'PrepaidCustomersPage' })
 
 const pageSize = 20
 const store = useSharedPrepaidStore()
+const { isMobileLayout } = useMobileLayout()
 const phoneFilter = ref('')
 const filterError = ref('')
+const mobileFilterOpen = ref(false)
 
 const realtime = useSharedPrepaidRealtimeRegistration('members', {
   isDirty: () => false,
@@ -203,12 +248,26 @@ function applyFilter() {
   return loadMembers(1)
 }
 
+async function applyMobileFilter() {
+  await applyFilter()
+  if (!filterError.value) mobileFilterOpen.value = false
+}
+
+function resetMobileFilter() {
+  phoneFilter.value = ''
+  return applyMobileFilter()
+}
+
 async function openDetail(id: string) {
   try {
     await store.loadMemberDetail(id)
   } catch {
     // Detail failure is surfaced through the member page error state.
   }
+}
+
+function closeMobileDetail() {
+  store.selectedMember = null
 }
 
 async function loadMoreHistory(collection: 'recharges' | 'consumptions' | 'ledgerEntries') {
@@ -255,6 +314,17 @@ function ledgerKindLabel(kind: PrepaidLedgerKind) {
 .member-summary > div { display: grid; gap: 6px; padding: 12px 14px; background: #f8fafc; border: 1px solid #dce5ef; border-radius: 8px; }
 .member-summary span { color: #64748b; font-size: 13px; }
 .member-summary strong { font-size: 18px; }
+.mobile-member-list, .mobile-member-detail, .mobile-member-detail section { display: grid; gap: 12px; }
+.mobile-member-list { padding: 12px; }
+.mobile-member-card, .mobile-history-card { display: grid; gap: 8px; padding: 14px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
+.mobile-member-card header, .mobile-member-detail > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mobile-member-card p { margin: 0; color: #64748b; font-size: 13px; }
+.mobile-member-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mobile-member-summary span { display: grid; gap: 3px; padding: 9px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 12px; }
+.mobile-member-summary strong { color: #0f172a; font-size: 15px; }
+.mobile-member-detail h2, .mobile-member-detail h3 { margin: 0; }
+.mobile-history-card span { color: #64748b; font-size: 13px; overflow-wrap: anywhere; }
+.mobile-filter-drawer .filter-field :deep(.el-input) { width: 100%; min-height: 44px; }
 @media (max-width: 900px) { .customers-header { flex-direction: column; } .customer-filters { width: 100%; } .member-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .customer-filters :deep(.el-input) { width: 100%; } .member-summary { grid-template-columns: 1fr; } }
 </style>

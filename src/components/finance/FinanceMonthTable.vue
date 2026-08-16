@@ -15,13 +15,13 @@
       </el-table-column>
       <el-table-column label="支付截图" min-width="150">
         <template #default="{ row }">
-          <div v-if="getScreenshotUrls(row).length" class="thumb-list">
+          <div v-if="getFinanceScreenshotUrls(row).length" class="thumb-list">
             <el-image
-              v-for="url in getScreenshotUrls(row)"
+              v-for="url in getFinanceScreenshotUrls(row)"
               :key="url"
               :src="url"
               fit="cover"
-              :preview-src-list="getScreenshotUrls(row)"
+              :preview-src-list="getFinanceScreenshotUrls(row)"
               class="thumb"
             />
           </div>
@@ -44,6 +44,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { FinanceEntry } from '@/types/finance'
+import { getFinanceScreenshotUrls } from './useFinanceEntryDraft'
 
 const props = defineProps<{
   month: string
@@ -59,9 +60,6 @@ const emit = defineEmits<{
 
 const sortedEntries = computed(() => [...props.entries].sort((a, b) => b.paymentDate.localeCompare(a.paymentDate)))
 
-function getScreenshotUrls(row: FinanceEntry) {
-  return row.screenshotUrls?.length ? row.screenshotUrls : row.screenshotUrl ? [row.screenshotUrl] : []
-}
 </script>
 
 <style scoped lang="scss">

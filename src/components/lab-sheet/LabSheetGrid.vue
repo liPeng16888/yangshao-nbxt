@@ -264,6 +264,17 @@ import type { BlacklistRecord } from '@/types/blacklist'
 import type { LabSampleInput, PrepaidMemberPickerResult, SampleBlock, SamplePaymentStatus } from '@/types/labSheet'
 import { labSheetColumns } from '@/constants/labSheetTemplate'
 import { formatFormulaValue, parseNumericInput } from '@/utils/formulaEngine'
+import {
+  getSampleAmountLabel as getAmountLabel,
+  getSampleAmountPrecision as getAmountPrecision,
+  getSampleCalculationBlockMessage as getCalculationBlockMessage,
+  isCompletedSampleSensitiveHidden,
+  isSampleAmountRequired as isAmountRequired,
+  isSampleCalculationBlocked as isCalculationBlocked,
+  isSampleElementNoteRequired as isElementNoteRequired,
+  isSamplePaymentStatusRequired as isPaymentStatusRequired,
+  samplePaymentStatusOptions as sharedPaymentStatusOptions
+} from '@/utils/labSampleRules'
 
 const props = defineProps<{
   blocks: SampleBlock[]
@@ -294,11 +305,12 @@ const selectionMode = computed(() => Boolean(props.selectionMode))
 const selectedBlockIds = computed(() => props.selectedBlockIds || [])
 const highlightBlockId = computed(() => props.highlightBlockId || '')
 function isCompletedSensitiveHidden(blockId: string) {
-  return Boolean(props.blocks.find((block) => block.id === blockId)?.inputs.completed && !props.canViewCompletedSensitiveData)
+  const block = props.blocks.find((item) => item.id === blockId)
+  return block ? isCompletedSampleSensitiveHidden(block, Boolean(props.canViewCompletedSensitiveData)) : false
 }
 const scrollRef = ref<HTMLElement | null>(null)
 const gridRef = ref<HTMLElement | null>(null)
-const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款']
+const paymentStatusOptions: SamplePaymentStatus[] = sharedPaymentStatusOptions
 const prepaidPickerVisible = ref(false)
 const activePrepaidBlockId = ref('')
 const activePrepaidBlock = computed(() => (
@@ -442,71 +454,8 @@ function isDisabled(block: SampleBlock) {
   return Boolean(props.readonly || block.readonly)
 }
 
-function isAmountRequired(block: SampleBlock) {
-  return Boolean(
-    block.inputs.sampleNumber?.trim() ||
-      block.inputs.customerText?.trim() ||
-      block.inputs.customerIds?.length ||
-      block.inputs.customers?.length
-  )
-}
-
 function isPrepaidBlock(block: SampleBlock) {
   return block.inputs.paymentStatus === '预存款'
-}
-
-function getAmountLabel(block: SampleBlock) {
-  return isPrepaidBlock(block) ? '扣除金额' : '样品金额'
-}
-
-function getAmountPrecision(_block: SampleBlock) {
-  return 2
-}
-
-function hasSampleAmount(block: SampleBlock) {
-  if (typeof block.inputs.price !== 'number' || !Number.isFinite(block.inputs.price)) return false
-  return !isPrepaidBlock(block) || block.inputs.price > 0
-}
-
-function hasPrepaidMember(block: SampleBlock) {
-  return !isPrepaidBlock(block) || Boolean(block.inputs.prepaidMemberId && block.inputs.prepaidMemberPhone)
-}
-
-function hasPaymentStatus(block: SampleBlock) {
-  return Boolean(block.inputs.paymentStatus)
-}
-
-function hasElementNote(block: SampleBlock) {
-  return Boolean(block.inputs.elementNote?.trim())
-}
-
-function isPaymentStatusRequired(block: SampleBlock) {
-  return isAmountRequired(block)
-}
-
-function isElementNoteRequired(block: SampleBlock) {
-  return isAmountRequired(block)
-}
-
-function isCalculationBlocked(block: SampleBlock) {
-  return isAmountRequired(block) && (
-    !hasSampleAmount(block) || !hasPrepaidMember(block) || !hasPaymentStatus(block) || !hasElementNote(block)
-  )
-}
-
-function getCalculationBlockMessage(block: SampleBlock) {
-  const missingActions: string[] = []
-  if (!hasPrepaidMember(block)) missingActions.push('选择预存款会员')
-  if (!hasSampleAmount(block)) missingActions.push(isPrepaidBlock(block) ? '输入大于 0 的扣除金额' : '输入样品金额')
-  if (!hasPaymentStatus(block)) missingActions.push('选择费用状态')
-  if (!hasElementNote(block)) missingActions.push('选择化验元素')
-
-  if (missingActions.length === 1) return `请先${missingActions[0]}`
-  if (missingActions.length === 2) return `请先${missingActions[0]}并${missingActions[1]}`
-  if (missingActions.length > 2) {
-    return `请先${missingActions.slice(0, -1).join('、')}并${missingActions.at(-1)}`
-  }
-  return '请先完善样品金额、费用状态和化验元素'
 }
 
 function warnCalculationPrerequisite(message: string) {

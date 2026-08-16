@@ -74,8 +74,8 @@
           </div>
 
           <div class="form-actions">
-            <el-button data-testid="recharge-submit" type="primary" :loading="saving" @click="submitRecharge">确认充值</el-button>
-            <el-button :disabled="saving" @click="resetForm">重置</el-button>
+            <el-button data-testid="recharge-submit" type="primary" :class="{ 'mobile-touch-target': isMobileLayout }" :loading="saving" @click="submitRecharge">确认充值</el-button>
+            <el-button :class="{ 'mobile-touch-target': isMobileLayout }" :disabled="saving" @click="resetForm">重置</el-button>
           </div>
         </el-form>
 
@@ -101,7 +101,7 @@
           <h2>充值与期初明细</h2>
           <p class="muted">记录不可编辑或删除；主账号只能对本账号归属的未冲正充值创建反向冲正。</p>
         </div>
-        <div class="prepaid-filters">
+        <div v-if="!isMobileLayout" class="prepaid-filters">
           <label class="filter-field">
             <span>会员手机号筛选</span>
             <el-input v-model="filters.phone" data-testid="recharge-filter-phone" aria-label="会员手机号筛选" clearable placeholder="会员手机号" @keyup.enter="applyFilters" />
@@ -124,6 +124,23 @@
           <el-button data-testid="recharge-filter-submit" type="primary" :loading="store.loadingByPage.recharges" @click="applyFilters">查询</el-button>
         </div>
       </div>
+      <MobileFilterDrawer
+        v-if="isMobileLayout"
+        v-model="mobileFilterOpen"
+        data-testid="mobile-recharge-filter"
+        title="筛选充值明细"
+        :summary="rechargeFilterSummary"
+        fullscreen
+        @apply="applyMobileFilters"
+        @reset="resetRechargeFilters"
+      >
+        <div class="mobile-prepaid-filter-fields">
+          <label class="filter-field"><span>会员手机号</span><el-input v-model="filters.phone" data-testid="recharge-filter-phone" inputmode="tel" /></label>
+          <label class="filter-field"><span>归属主账号</span><el-input v-model="filters.ownerFrontendUserId" data-testid="recharge-filter-owner" /></label>
+          <label class="filter-field"><span>充值日期范围</span><el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" /></label>
+          <label class="filter-field"><span>记录类型</span><el-select v-model="filters.isOpeningBalance" clearable><el-option label="普通充值" :value="false" /><el-option label="期初余额" :value="true" /></el-select></label>
+        </div>
+      </MobileFilterDrawer>
       <el-alert
         v-if="filterError"
         data-testid="recharge-filter-error"
@@ -136,7 +153,19 @@
       <el-alert v-if="store.errorsByPage.recharges" class="prepaid-error" type="error" :closable="false" show-icon :title="store.errorsByPage.recharges">
         <template #default><el-button link type="primary" @click="loadHistory">重试</el-button></template>
       </el-alert>
-      <el-table :data="store.rechargesPage.items" border v-loading="store.loadingByPage.recharges" empty-text="暂无充值记录">
+      <div v-if="isMobileLayout" class="mobile-prepaid-card-list" aria-live="polite">
+        <article v-for="row in store.rechargesPage.items" :key="row.id" data-testid="mobile-recharge-card" class="mobile-prepaid-card">
+          <header><strong>{{ row.phone }}</strong><el-tag :type="row.isOpeningBalance ? 'warning' : 'success'">{{ row.isOpeningBalance ? '期初余额' : '普通充值' }}</el-tag></header>
+          <div class="mobile-prepaid-money-grid"><span>充值本金<strong>¥{{ prepaidMoney(row.paidAmount) }}</strong></span><span>赠送金额<strong>¥{{ prepaidMoney(row.giftAmount) }}</strong></span><span>批次总额<strong>¥{{ prepaidMoney(row.totalAmount) }}</strong></span><span>批次剩余<strong>¥{{ prepaidMoney(row.remainingAmount) }}</strong></span></div>
+          <p>充值日期 {{ row.rechargeDate }} · {{ row.reversedAt ? '已冲正' : '有效' }}</p>
+          <p>归属 {{ prepaidAccountLabel({ username: row.ownerUsername, account: row.ownerAccount }) }}</p>
+          <p>操作 {{ prepaidAccountLabel({ username: row.actorUsername, account: row.actorAccount }) }}</p>
+          <p>{{ prepaidPreciseDateTime(row.createdAt) }}<template v-if="row.remark"> · {{ row.remark }}</template></p>
+          <el-button v-if="canReverseRecharge(row)" :data-testid="`reverse-recharge-${row.id}`" class="mobile-touch-target" type="warning" plain @click="reverseRecharge(row)">冲正</el-button>
+        </article>
+        <el-empty v-if="!store.loadingByPage.recharges && !store.rechargesPage.items.length" description="暂无充值记录" />
+      </div>
+      <el-table v-else :data="store.rechargesPage.items" border v-loading="store.loadingByPage.recharges" empty-text="暂无充值记录">
         <el-table-column prop="phone" label="会员手机号" width="140" />
         <el-table-column label="记录类型" width="110">
           <template #default="{ row }"><el-tag :type="row.isOpeningBalance ? 'warning' : 'success'">{{ row.isOpeningBalance ? '期初余额' : '普通充值' }}</el-tag></template>
@@ -181,6 +210,8 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
+import MobileFilterDrawer from '@/components/mobile/MobileFilterDrawer.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useSharedPrepaidRealtimeRegistration } from '@/composables/useSharedPrepaidRealtime'
 import { useAuthStore } from '@/stores/auth'
 import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
@@ -212,11 +243,13 @@ interface RechargeForm {
 const pageSize = 20
 const store = useSharedPrepaidStore()
 const auth = useAuthStore()
+const { isMobileLayout } = useMobileLayout()
 const formRef = ref<FormInstance>()
 const saving = ref(false)
 const mutationError = ref('')
 const filterError = ref('')
 const lastResult = ref<PrepaidRechargeMutationResult | null>(null)
+const mobileFilterOpen = ref(false)
 const initialDate = todayInBeijing()
 const form = reactive<RechargeForm>({
   phone: String(store.rechargeDraft.phone || ''),
@@ -246,6 +279,15 @@ const hasUnsavedInput = computed(() => Boolean(
   form.phone || form.paidAmount.trim() || form.giftAmount.trim() || form.remark.trim() ||
   form.isOpeningBalance || form.rechargeDate !== initialDate
 ))
+const rechargeFilterSummary = computed(() => {
+  const active = [
+    filters.phone,
+    filters.ownerFrontendUserId,
+    filters.dateRange.length ? '日期' : '',
+    filters.isOpeningBalance === undefined ? '' : (filters.isOpeningBalance ? '期初余额' : '普通充值')
+  ].filter(Boolean)
+  return active.length ? `已选 ${active.join('·')}` : '全部充值记录'
+})
 
 const rules: FormRules<RechargeForm> = {
   phone: [
@@ -357,6 +399,16 @@ function applyFilters() {
   return loadHistory(1)
 }
 
+async function applyMobileFilters() {
+  await applyFilters()
+  if (!filterError.value) mobileFilterOpen.value = false
+}
+
+function resetRechargeFilters() {
+  Object.assign(filters, { phone: '', ownerFrontendUserId: '', dateRange: [], isOpeningBalance: undefined })
+  return applyMobileFilters()
+}
+
 function changePage(page: number) {
   return loadHistory(page)
 }
@@ -421,6 +473,16 @@ function nonNegativeNumber(value: unknown) {
 .prepaid-filters :deep(.el-date-editor) { width: 250px; }
 .prepaid-error { margin: 14px 16px 0; }
 .prepaid-pagination { display: flex; justify-content: flex-end; padding: 14px 16px; }
+.mobile-prepaid-filter-fields, .mobile-prepaid-card-list { display: grid; gap: 12px; }
+.mobile-prepaid-filter-fields :deep(.el-date-editor), .mobile-prepaid-filter-fields :deep(.el-input), .mobile-prepaid-filter-fields :deep(.el-select) { width: 100%; min-height: 44px; }
+.mobile-prepaid-card-list { padding: 12px; }
+.mobile-prepaid-card { display: grid; gap: 8px; padding: 14px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
+.mobile-prepaid-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mobile-prepaid-card p { margin: 0; color: #64748b; font-size: 13px; overflow-wrap: anywhere; }
+.mobile-prepaid-money-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mobile-prepaid-money-grid span { display: grid; gap: 3px; padding: 9px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 12px; }
+.mobile-prepaid-money-grid strong { color: #0f172a; font-size: 15px; }
+.prepaid-page:has(.mobile-prepaid-card-list) :deep(.el-form-item__content > .el-input), .prepaid-page:has(.mobile-prepaid-card-list) :deep(.el-form-item__content > .el-date-editor) { min-height: 44px; }
 @media (max-width: 1100px) { .prepaid-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .prepaid-history-header { flex-direction: column; } .prepaid-filters { justify-content: flex-start; width: 100%; } }
 @media (max-width: 640px) { .prepaid-form-grid { grid-template-columns: 1fr; } .prepaid-form-grid__wide { grid-column: auto; } .prepaid-filters > *, .prepaid-filters :deep(.el-date-editor) { width: 100%; } }
 </style>

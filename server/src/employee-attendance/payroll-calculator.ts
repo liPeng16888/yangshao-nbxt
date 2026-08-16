@@ -31,9 +31,19 @@ export interface PayrollCalculationResult {
   bonusAmount: number
   adjustmentAmount: number
   attendanceBonus: number
+  grossEarningsAmount: number
+  deductionAmount: number
   payableAmount: number
   issues: string[]
 }
+
+export interface PayrollAuthoritativeTotals {
+  grossEarningsAmount: number
+  deductionAmount: number
+}
+
+type PayrollTotalComponents = Pick<PayrollCalculationResult,
+  'attendanceBonus' | 'overtimePay' | 'commissionAmount' | 'bonusAmount' | 'leaveDeduction' | 'absenceDeduction'>
 
 const ZERO = new Prisma.Decimal(0)
 const MINUTES_PER_HOUR = new Prisma.Decimal(60)
@@ -89,6 +99,15 @@ export function calculatePayroll(input: PayrollCalculationInput): PayrollCalcula
       .minus(roundedAbsenceDeduction)
   )
 
+  const totals = derivePayrollTotals(input, {
+    attendanceBonus: earnedAttendanceBonus,
+    overtimePay: roundedOvertimePay,
+    commissionAmount,
+    bonusAmount,
+    leaveDeduction: roundedLeaveDeduction,
+    absenceDeduction: roundedAbsenceDeduction
+  })
+
   return {
     dailyRate: moneyNumber(dailyRate),
     excessLeaveDays: excessLeaveDays.toNumber(),
@@ -100,8 +119,38 @@ export function calculatePayroll(input: PayrollCalculationInput): PayrollCalcula
     bonusAmount,
     adjustmentAmount,
     attendanceBonus: earnedAttendanceBonus,
+    ...totals,
     payableAmount,
     issues
+  }
+}
+
+export function derivePayrollTotals(
+  input: PayrollCalculationInput,
+  result: PayrollTotalComponents
+): PayrollAuthoritativeTotals {
+  const adjustments = (input.adjustments || []).map((adjustment) => decimal(adjustment.amount))
+  const positiveAdjustments = adjustments
+    .filter((amount) => amount.isPositive())
+    .reduce((total, amount) => total.plus(amount), ZERO)
+  const negativeAdjustments = adjustments
+    .filter((amount) => amount.isNegative())
+    .reduce((total, amount) => total.plus(amount.abs()), ZERO)
+
+  return {
+    grossEarningsAmount: moneyNumber(
+      money(input.baseSalary)
+        .plus(result.attendanceBonus)
+        .plus(result.overtimePay)
+        .plus(result.commissionAmount)
+        .plus(result.bonusAmount)
+        .plus(positiveAdjustments)
+    ),
+    deductionAmount: moneyNumber(
+      decimal(result.leaveDeduction)
+        .plus(result.absenceDeduction)
+        .plus(negativeAdjustments)
+    )
   }
 }
 

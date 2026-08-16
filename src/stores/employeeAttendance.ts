@@ -14,6 +14,30 @@ export function syncPendingLeaveIssue(run: Pick<PayrollRun, 'issues' | 'issueCou
   run.issueCount = issues.length
 }
 
+interface LeaveLoadScope {
+  signal?: AbortSignal
+  isCurrent?: () => boolean
+}
+
+function abortError() { return new DOMException('The operation was aborted', 'AbortError') }
+
+function abortable<T>(action: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return action()
+  if (signal.aborted) return Promise.reject(abortError())
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const finish = (handler: () => void) => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', abort)
+      handler()
+    }
+    const abort = () => finish(() => reject(abortError()))
+    signal.addEventListener('abort', abort, { once: true })
+    action().then((value) => finish(() => resolve(value)), (reason) => finish(() => reject(reason)))
+  })
+}
+
 export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () => {
   const month = ref(dayjs().format('YYYY-MM'))
   const employeeId = ref('')
@@ -54,6 +78,15 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
     if (save) pendingSaves.value += 1; else pendingLoads.value += 1
     try { return await action() }
     finally { if (save) pendingSaves.value -= 1; else pendingLoads.value -= 1 }
+  }
+  async function runScopedLoad<T>(action: () => Promise<T>, signal?: AbortSignal) {
+    if (signal?.aborted) throw abortError()
+    pendingLoads.value += 1
+    let counted = true
+    const finishLoading = () => { if (counted) { counted = false; pendingLoads.value -= 1 } }
+    signal?.addEventListener('abort', finishLoading, { once: true })
+    try { return await abortable(action, signal) }
+    finally { signal?.removeEventListener('abort', finishLoading); finishLoading() }
   }
   const loadEmployees = () => run(async () => { employees.value = await api.getEmployees(); return employees.value })
   const loadOverview = () => run(async () => { overview.value = await api.getOverview(month.value); return overview.value })
@@ -117,18 +150,20 @@ export const useEmployeeAttendanceStore = defineStore('employeeAttendance', () =
       return attendance.value
     }
   }
-  const loadLeaves = async () => {
+  const loadLeaves = async (scope: LeaveLoadScope = {}) => {
     const version = ++leaveLoadVersion
     const query = { ...dateQuery(), employeeId: undefined, employeeIds: [...leaveEmployeeIds.value], status: leaveStatus.value || undefined }
+    const canCommit = () => version === leaveLoadVersion && !scope.signal?.aborted && (scope.isCurrent?.() ?? true)
     error.value = ''
     try {
-      const [types, rows] = await runQuiet(() => Promise.all([api.getLeaveTypes(), api.getLeaves(query)]))
-      if (version === leaveLoadVersion) {
+      const [types, rows] = await runScopedLoad(() => Promise.all([api.getLeaveTypes(), api.getLeaves(query)]), scope.signal)
+      if (canCommit()) {
         leaveTypes.value = types
         leaves.value = rows
       }
       return rows
     } catch (reason) {
+      if (scope.signal?.aborted || !canCommit()) return leaves.value
       if (version === leaveLoadVersion) {
         error.value = reason instanceof Error ? reason.message : '操作失败'
         throw reason

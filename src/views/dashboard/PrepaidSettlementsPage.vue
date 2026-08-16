@@ -6,7 +6,7 @@
         <h1>转账结算</h1>
         <p>双向毛额明细始终保留展示；净额仅用于确定最终付款方和实际转账金额。</p>
       </div>
-      <el-button :loading="store.loadingByPage.settlements" @click="loadPageData()">刷新</el-button>
+      <el-button :class="{ 'mobile-touch-target': isMobileLayout }" :loading="store.loadingByPage.settlements" @click="loadPageData()">刷新</el-button>
     </header>
 
     <el-alert
@@ -50,9 +50,9 @@
     <section class="panel">
       <div class="section-heading">
         <div><h2>应转明细</h2><p>仅“待结算”且从未关联结算单的明细可勾选；其他状态保留用于审计。</p></div>
-        <el-button v-if="store.settlementSelection.length" @click="clearSelection">清空已选</el-button>
+        <el-button v-if="store.settlementSelection.length" :class="{ 'mobile-touch-target': isMobileLayout }" @click="clearSelection">清空已选</el-button>
       </div>
-      <form class="filters" @submit.prevent="loadPayables(1)">
+      <form v-if="!isMobileLayout" class="filters" @submit.prevent="loadPayables(1)">
         <label>会员手机号<input v-model="payableFilters.phone" aria-label="会员手机号筛选" placeholder="支持部分手机号"></label>
         <label>方向
           <select v-model="payableFilters.direction" aria-label="应转方向筛选">
@@ -69,6 +69,14 @@
         <label>结束日期<input v-model="payableFilters.endDate" aria-label="应转结束日期" type="date"></label>
         <el-button native-type="submit" type="primary">筛选</el-button>
       </form>
+      <MobileFilterDrawer v-if="isMobileLayout" v-model="mobilePayableFilterOpen" data-testid="mobile-settlement-filter" title="筛选应转明细" :summary="payableFilterSummary" fullscreen @apply="applyMobilePayableFilters" @reset="resetPayableFilters">
+        <div class="mobile-settlement-filter-fields">
+          <label>会员手机号<input v-model="payableFilters.phone" inputmode="tel" placeholder="支持部分手机号"></label>
+          <label>方向<select v-model="payableFilters.direction"><option value="">全部方向</option><option value="OUTGOING">我方应付</option><option value="INCOMING">对方应付</option></select></label>
+          <label>状态<select v-model="payableFilters.status"><option value="">全部状态</option><option value="PENDING">待结算</option><option value="HELD">结算占用中</option><option value="COMPLETED">已完成</option><option value="REVERSED">已冲正</option></select></label>
+          <label>开始日期<input v-model="payableFilters.startDate" type="date"></label><label>结束日期<input v-model="payableFilters.endDate" type="date"></label>
+        </div>
+      </MobileFilterDrawer>
 
       <p v-if="store.loadingByPage.settlements && !store.settlementPayablesPage.items.length" role="status">正在加载应转明细…</p>
       <el-empty v-else-if="!counterpartyGroups.length" description="暂无符合条件的应转明细" />
@@ -107,6 +115,7 @@
           data-testid="settlement-create"
           type="primary"
           :disabled="!canCreatePreview"
+          :class="{ 'mobile-touch-target': isMobileLayout }"
           :loading="store.loadingByPage.settlements"
           @click="createSettlement"
         >{{ isZeroPreview ? '发起核对' : '创建结算单' }}</el-button>
@@ -115,7 +124,7 @@
 
     <section class="panel">
       <div class="section-heading"><div><h2>结算单历史</h2><p>包含付款、确认、驳回、取消、凭证和操作账号审计。</p></div></div>
-      <form class="filters" @submit.prevent="loadSettlements(1)">
+      <form v-if="!isMobileLayout" class="filters" @submit.prevent="loadSettlements(1)">
         <label>状态
           <select v-model="settlementFilters.status" aria-label="结算单状态筛选">
             <option value="">全部状态</option><option value="AWAITING_PAYMENT">待付款</option>
@@ -127,7 +136,22 @@
         <label>结束日期<input v-model="settlementFilters.endDate" aria-label="结算单结束日期" type="date"></label>
         <el-button native-type="submit" type="primary">筛选</el-button>
       </form>
-      <el-table v-loading="store.loadingByPage.settlements" :data="store.settlementsPage.items" border empty-text="暂无结算单">
+      <MobileFilterDrawer v-if="isMobileLayout" v-model="mobileSettlementFilterOpen" data-testid="mobile-settlement-filter" title="筛选结算单" :summary="settlementFilterSummary" fullscreen @apply="applyMobileSettlementFilters" @reset="resetSettlementFilters">
+        <div class="mobile-settlement-filter-fields">
+          <label>状态<select v-model="settlementFilters.status"><option value="">全部状态</option><option value="AWAITING_PAYMENT">待付款</option><option value="AWAITING_RECEIPT">待确认</option><option value="COMPLETED">已完成</option><option value="REJECTED">已驳回</option><option value="CANCELLED">已取消</option></select></label>
+          <label>开始日期<input v-model="settlementFilters.startDate" type="date"></label><label>结束日期<input v-model="settlementFilters.endDate" type="date"></label>
+        </div>
+      </MobileFilterDrawer>
+      <div v-if="isMobileLayout" class="mobile-settlement-list" aria-live="polite">
+        <article v-for="row in store.settlementsPage.items" :key="row.id" data-testid="mobile-settlement-card" class="mobile-settlement-card">
+          <header><strong>{{ settlementStatusLabel(row.status) }}</strong><span>{{ preciseDateTime(row.createdAt) }}</span></header>
+          <p>{{ accountLabel(row.accountA) }} ↔ {{ accountLabel(row.accountB) }}</p>
+          <div class="mobile-settlement-money"><span>A应付B<strong>¥{{ money1(row.aToBAmount) }}</strong></span><span>B应付A<strong>¥{{ money1(row.bToAAmount) }}</strong></span><span>实际转账<strong>¥{{ money1(row.netAmount) }}</strong></span></div>
+          <button :data-testid="`mobile-settlement-detail-${row.id}`" class="mobile-touch-target mobile-settlement-detail" type="button" @click="openDetail(row.id)">查看结算单详情</button>
+        </article>
+        <el-empty v-if="!store.loadingByPage.settlements && !store.settlementsPage.items.length" description="暂无结算单" />
+      </div>
+      <el-table v-else v-loading="store.loadingByPage.settlements" :data="store.settlementsPage.items" border empty-text="暂无结算单">
         <el-table-column prop="id" label="结算单" min-width="220" />
         <el-table-column label="双方账号" min-width="260"><template #default="{ row }">{{ accountLabel(row.accountA) }} ↔ {{ accountLabel(row.accountB) }}</template></el-table-column>
         <el-table-column label="A应付B" width="105"><template #default="{ row }">¥{{ money1(row.aToBAmount) }}</template></el-table-column>
@@ -160,7 +184,9 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, reactive, ref } from 'vue'
 
+import MobileFilterDrawer from '@/components/mobile/MobileFilterDrawer.vue'
 import PrepaidSettlementDetailDialog from '@/components/prepaid/PrepaidSettlementDetailDialog.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useSharedPrepaidRealtimeRegistration } from '@/composables/useSharedPrepaidRealtime'
 import { useAuthStore } from '@/stores/auth'
 import { isSharedPrepaidReadCancelled, useSharedPrepaidStore } from '@/stores/sharedPrepaid'
@@ -188,10 +214,13 @@ const payablePageSize = 20
 const settlementPageSize = 20
 const store = useSharedPrepaidStore()
 const auth = useAuthStore()
+const { isMobileLayout } = useMobileLayout()
 const mutationError = ref('')
 const payableFilterError = ref('')
 const detailOpen = ref(false)
 const activeCounterpartyId = ref('')
+const mobilePayableFilterOpen = ref(false)
+const mobileSettlementFilterOpen = ref(false)
 const payableFilters = reactive<{
   phone: string
   direction: PrepaidSettlementPayableDirection | ''
@@ -234,6 +263,14 @@ const canCreatePreview = computed(() => Boolean(
     isZeroPreview.value || store.settlementPreview.payerFrontendUserId === ownerId.value
   )
 ))
+const payableFilterSummary = computed(() => {
+  const count = [payableFilters.phone, payableFilters.direction, payableFilters.status, payableFilters.startDate, payableFilters.endDate].filter(Boolean).length
+  return count ? `已启用 ${count} 项应转筛选` : '全部应转明细'
+})
+const settlementFilterSummary = computed(() => {
+  const count = [settlementFilters.status, settlementFilters.startDate, settlementFilters.endDate].filter(Boolean).length
+  return count ? `已启用 ${count} 项结算单筛选` : '全部结算单'
+})
 
 const realtime = useSharedPrepaidRealtimeRegistration('settlements', {
   isDirty: () => store.dirtyByPage.settlements,
@@ -337,6 +374,26 @@ async function loadPayables(page = 1) {
 
 async function loadSettlements(page = 1) {
   try { await store.loadSettlements(settlementQuery(page)) } catch { /* persistent store error */ }
+}
+
+async function applyMobilePayableFilters() {
+  await loadPayables(1)
+  if (!payableFilterError.value) mobilePayableFilterOpen.value = false
+}
+
+function resetPayableFilters() {
+  Object.assign(payableFilters, { phone: '', direction: '', status: '', startDate: '', endDate: '' })
+  return applyMobilePayableFilters()
+}
+
+async function applyMobileSettlementFilters() {
+  await loadSettlements(1)
+  mobileSettlementFilterOpen.value = false
+}
+
+function resetSettlementFilters() {
+  Object.assign(settlementFilters, { status: '', startDate: '', endDate: '' })
+  return applyMobileSettlementFilters()
 }
 
 async function loadPageData(payablePage = 1, settlementPage = 1) {
@@ -493,9 +550,22 @@ function settlementStatusLabel(status: PrepaidSettlementStatus) {
 .net-preview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; padding: 16px; border: 1px solid #fdba74; border-radius: 12px; background: #fff7ed; }
 .net-preview > div { display: grid; gap: 4px; }
 .net-preview p, .net-preview button { grid-column: 1 / -1; }
+.mobile-settlement-filter-fields, .mobile-settlement-list { display: grid; gap: 12px; }
+.mobile-settlement-filter-fields label { display: grid; gap: 5px; color: #475569; font-size: 13px; }
+.mobile-settlement-filter-fields input, .mobile-settlement-filter-fields select { width: 100%; min-height: 44px; padding: 0 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; }
+.mobile-settlement-list { margin-top: 14px; }
+.mobile-settlement-card { display: grid; gap: 9px; padding: 14px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
+.mobile-settlement-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mobile-settlement-card p { margin: 0; color: #64748b; overflow-wrap: anywhere; }
+.mobile-settlement-money { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.mobile-settlement-money span { display: grid; gap: 3px; padding: 8px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 12px; }
+.mobile-settlement-money strong { color: #0f172a; font-size: 14px; }
+.mobile-settlement-detail { width: 100%; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #1d4ed8; }
 @media (max-width: 800px) {
   .settlements-page { padding: 14px; }
   .gross-line { grid-template-columns: 1fr; }
   .net-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gross-line__select { min-height: 44px; }
+  .mobile-settlement-money { grid-template-columns: 1fr; }
 }
 </style>

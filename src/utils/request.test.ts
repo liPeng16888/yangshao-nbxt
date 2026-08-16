@@ -54,4 +54,24 @@ describe('frontend request access-grant invalidation', () => {
     await expect(axiosMock.handlers.rejected!(error)).rejects.toBe(error)
     expect(localStorage.getItem('ys_access_guard_group_sessions')).toBeNull()
   })
+
+  it('rejects an intentional Axios cancellation without showing a global error', async () => {
+    const error = { code: 'ERR_CANCELED', name: 'CanceledError', message: 'canceled' }
+
+    await expect(axiosMock.handlers.rejected!(error)).rejects.toBe(error)
+    expect(message.error).not.toHaveBeenCalled()
+
+    const controller = new AbortController()
+    controller.abort()
+    const lateAdapterError = { message: 'obsolete request failed', config: { signal: controller.signal } }
+    await expect(axiosMock.handlers.rejected!(lateAdapterError)).rejects.toBe(lateAdapterError)
+    expect(message.error).not.toHaveBeenCalled()
+  })
+
+  it('still shows the latest real request failure', async () => {
+    const error = { response: { status: 500, data: { message: '收入账单加载失败' } } }
+
+    await expect(axiosMock.handlers.rejected!(error)).rejects.toBe(error)
+    expect(message.error).toHaveBeenCalledWith('收入账单加载失败')
+  })
 })

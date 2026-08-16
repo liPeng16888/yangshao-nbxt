@@ -18,6 +18,7 @@ import * as uploadModule from './uploads.service'
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x00, 0xff, 0xd9])
 const WEBP = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50])
+const GIF = Buffer.from('GIF89a')
 
 const tempRoots: string[] = []
 
@@ -86,7 +87,8 @@ describe('UploadsService raster image hardening', () => {
   it.each([
     { mimetype: 'image/png', buffer: PNG, extension: '.png' },
     { mimetype: 'image/jpeg', buffer: JPEG, extension: '.jpg' },
-    { mimetype: 'image/webp', buffer: WEBP, extension: '.webp' }
+    { mimetype: 'image/webp', buffer: WEBP, extension: '.webp' },
+    { mimetype: 'image/gif', buffer: GIF, extension: '.gif' }
   ])('accepts valid $mimetype bytes and chooses its own $extension filename', async ({ mimetype, buffer, extension }) => {
     const { root, rows, service } = await setup()
 

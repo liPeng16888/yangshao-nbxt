@@ -145,6 +145,11 @@ enum EmployeeAuditAction {
   REVEAL
 }
 
+enum CalculationDraftKind {
+  STANDARD_SAMPLE
+  COEFFICIENT
+}
+
 enum SharedPrepaidLedgerKind {
   RECHARGE
   CONSUMPTION
@@ -262,11 +267,12 @@ model User {
   cancelledSharedPrepaidSettlements   SharedPrepaidSettlement[]       @relation("SharedPrepaidSettlementCanceller")
   actedSharedPrepaidSettlementActions SharedPrepaidSettlementAction[] @relation("SharedPrepaidSettlementActionActor")
   ownedSharedPrepaidSettlementActions SharedPrepaidSettlementAction[] @relation("SharedPrepaidSettlementActionOwner")
-  ownedFrontendBusinessPreferences   FrontendBusinessPreference[]    @relation("FrontendBusinessPreferenceOwner")
-  updatedFrontendBusinessPreferences FrontendBusinessPreference[]    @relation("FrontendBusinessPreferenceActor")
+  ownedFrontendBusinessPreferences    FrontendBusinessPreference[]    @relation("FrontendBusinessPreferenceOwner")
+  updatedFrontendBusinessPreferences  FrontendBusinessPreference[]    @relation("FrontendBusinessPreferenceActor")
   parentFrontendUser                  User?                           @relation("FrontendSubAccounts", fields: [parentFrontendUserId], references: [id], onDelete: Restrict)
   frontendSubAccounts                 User[]                          @relation("FrontendSubAccounts")
   frontendSubAccountPermissions       FrontendSubAccountPermission[]
+  calculationDrafts                   FrontendCalculationDraft[]
 
   @@index([role])
   @@index([parentFrontendUserId])
@@ -301,6 +307,20 @@ model FrontendSubAccountPermission {
 
   @@unique([subAccountId, permission])
   @@index([subAccountId])
+}
+
+model FrontendCalculationDraft {
+  id             String               @id @default(uuid())
+  frontendUserId String
+  kind           CalculationDraftKind
+  payload        Json
+  revision       Int                  @default(1)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  frontendUser   User                 @relation(fields: [frontendUserId], references: [id], onDelete: Cascade)
+
+  @@unique([frontendUserId, kind])
+  @@index([frontendUserId])
 }
 
 model AccessGuardGroup {

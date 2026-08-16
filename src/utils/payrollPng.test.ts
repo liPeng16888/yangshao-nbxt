@@ -70,6 +70,8 @@ function makeItem(index = 1): PayrollItem {
         bonusAmount: 100,
         adjustmentAmount: -12.3,
         attendanceBonus: 300,
+        grossEarningsAmount: 6600.5,
+        deductionAmount: 12.3,
         payableAmount: 6588.2,
         issues: []
       }

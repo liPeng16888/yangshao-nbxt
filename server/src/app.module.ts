@@ -16,6 +16,7 @@ import { EmployeeAttendanceModule } from './employee-attendance/employee-attenda
 import { TenantRealtimeModule } from './realtime/tenant-realtime.module'
 import { SharedPrepaidModule } from './shared-prepaid/shared-prepaid.module'
 import { FrontendPreferencesModule } from './frontend-preferences/frontend-preferences.module'
+import { CalculationDraftModule } from './calculation-drafts/calculation-draft.module'
 
 @Module({
   imports: [
@@ -35,7 +36,8 @@ import { FrontendPreferencesModule } from './frontend-preferences/frontend-prefe
     EmployeeAttendanceModule,
     TenantRealtimeModule,
     SharedPrepaidModule,
-    FrontendPreferencesModule
+    FrontendPreferencesModule,
+    CalculationDraftModule
   ]
 })
 export class AppModule {}

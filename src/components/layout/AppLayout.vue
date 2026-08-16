@@ -1,8 +1,16 @@
 <template>
-  <div class="app-shell" :class="{ 'app-shell--sidebar-collapsed': sidebarCollapsed }">
-    <AppSidebar :collapsed="sidebarCollapsed" @toggle="toggleSidebar" />
+  <div
+    class="app-shell"
+    :class="{
+      'app-shell--sidebar-collapsed': sidebarCollapsed && !isMobileLayout,
+      'app-shell--mobile': isMobileLayout,
+      'app-shell--mobile-has-secondary-nav': isMobileLayout && showSecondaryNav
+    }"
+  >
+    <AppMobileShell v-if="isMobileLayout" />
+    <AppSidebar v-else :collapsed="sidebarCollapsed" @toggle="toggleSidebar" />
     <div class="app-main">
-      <AppTopbar />
+      <AppTopbar v-if="!isMobileLayout" />
       <main class="app-content">
         <el-alert
           v-if="tenantRealtime.hasRemoteChanges"
@@ -21,6 +29,8 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
+import { useMobileLayout } from '@/composables/useMobileLayout'
+import { useCustomerNavigation } from '@/composables/useCustomerNavigation'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { frontendPreferenceOwnerId, useFrontendPreferencesStore } from '@/stores/frontendPreferences'
@@ -31,6 +41,7 @@ import {
   collectLegacyPreferenceCandidates,
   markLegacyMigrationFinished
 } from '@/utils/frontendPreferenceMigration'
+import AppMobileShell from './AppMobileShell.vue'
 import AppSidebar from './AppSidebar.vue'
 import AppTopbar from './AppTopbar.vue'
 
@@ -49,6 +60,8 @@ const sharedPrepaid = useSharedPrepaidStore()
 const frontendPreferences = useFrontendPreferencesStore()
 let unregisterPreferences: (() => void) | undefined
 const migratingOwners = new Set<string>()
+const { isMobileLayout } = useMobileLayout()
+const { showSecondaryNav } = useCustomerNavigation()
 
 onMounted(() => {
   sidebarCollapsed.value = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'

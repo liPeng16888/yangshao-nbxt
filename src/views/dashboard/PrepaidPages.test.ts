@@ -1,4 +1,4 @@
-import { nextTick, type Component } from 'vue'
+import { nextTick, ref, type Component, type Ref } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ElementPlus, { ElDatePicker, ElMessageBox, ElPagination, ElSelect } from 'element-plus'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
@@ -16,6 +16,14 @@ import type {
 import PrepaidRechargePage from './PrepaidRechargePage.vue'
 import PrepaidCustomersPage from './PrepaidCustomersPage.vue'
 import PrepaidConsumptionsPage from './PrepaidConsumptionsPage.vue'
+
+const layoutMocks = vi.hoisted(() => ({
+  isMobileLayout: undefined as unknown as Ref<boolean>
+}))
+
+vi.mock('@/composables/useMobileLayout', () => ({
+  useMobileLayout: () => ({ isMobileLayout: layoutMocks.isMobileLayout })
+}))
 
 const api = vi.hoisted(() => ({
   createSharedPrepaidStreamTicket: vi.fn(),
@@ -149,6 +157,7 @@ function input(wrapper: VueWrapper, testId: string) {
 }
 
 beforeEach(() => {
+  layoutMocks.isMobileLayout = ref(false)
   vi.restoreAllMocks()
   const values = new Map<string, string>()
   vi.stubGlobal('localStorage', {
@@ -539,5 +548,54 @@ describe('PrepaidConsumptionsPage', () => {
       inputPattern: /\S+/
     }))
     expect(api.reversePrepaidConsumption).toHaveBeenCalledWith('consumption-1', { reason: '样品作废' }, expect.any(String))
+  })
+})
+
+describe('shared prepaid mobile layouts', () => {
+  it('renders recharge entry and history as touch cards without mounting the desktop table', async () => {
+    layoutMocks.isMobileLayout.value = true
+    const { wrapper } = mountPage(PrepaidRechargePage)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="mobile-recharge-filter"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="mobile-recharge-card"]')).toHaveLength(1)
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="recharge-submit"]').classes()).toContain('mobile-touch-target')
+    expect(wrapper.get('[data-testid="mobile-recharge-card"]').text()).toContain('13800000000')
+    expect(wrapper.get('[data-testid="mobile-recharge-card"]').text()).toContain('¥1100.00')
+  })
+
+  it('renders customer cards and opens immutable history in a full-screen mobile detail', async () => {
+    layoutMocks.isMobileLayout.value = true
+    const { wrapper } = mountPage(PrepaidCustomersPage)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="mobile-member-filter"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="mobile-member-card"]')).toHaveLength(1)
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    await wrapper.get('[data-testid="mobile-member-detail-member-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="mobile-member-detail"]').attributes('aria-label')).toContain('13800000000')
+    expect(wrapper.findAll('[data-testid="mobile-member-recharge"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="mobile-member-consumption"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="mobile-member-ledger"]')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="member-detail"] .el-table').exists()).toBe(false)
+  })
+
+  it('renders filterable expandable consumption cards and keeps the desktop table unmounted', async () => {
+    layoutMocks.isMobileLayout.value = true
+    const { wrapper } = mountPage(PrepaidConsumptionsPage)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="mobile-consumption-filter"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="mobile-consumption-card"]')).toHaveLength(1)
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    const card = wrapper.get('[data-testid="mobile-consumption-card"]')
+    expect(card.text()).toContain('A-001')
+    expect(card.text()).toContain('¥100.00')
+    await card.get('[data-testid="mobile-consumption-toggle"]').trigger('click')
+    expect(card.text()).toContain('充值批次 recharge-1')
+    expect(card.text()).toContain('应转金额 ¥90.90')
   })
 })

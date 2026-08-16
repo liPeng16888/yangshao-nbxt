@@ -28,7 +28,7 @@ export class UploadsController {
     limits: { files: UPLOAD_IMAGE_MAX_COUNT, fileSize: UPLOAD_IMAGE_MAX_BYTES },
     fileFilter: (_request, file, callback) => {
       if (!isAllowedUploadedImageMime(file.mimetype)) {
-        callback(new BadRequestException('只允许上传 JPEG、PNG 或 WebP 图片'), false)
+        callback(new BadRequestException('只允许上传 JPEG、PNG、WebP 或 GIF 图片'), false)
         return
       }
       callback(null, true)

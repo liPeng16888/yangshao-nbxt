@@ -3,6 +3,7 @@ import type { MonthlyBillDraft } from '@/types/monthlySettlementBill'
 import { recalculateMonthlyBillDraft } from './monthlySettlementBill'
 import {
   createMonthlyBillCanvasLayout,
+  createMonthlyBillPngBlob,
   downloadMonthlyBillAsPng
 } from './monthlySettlementBillPng'
 
@@ -76,6 +77,17 @@ afterEach(() => {
 })
 
 describe('monthly settlement bill PNG export', () => {
+  it('returns the same generated PNG blob for mobile preview and sharing', async () => {
+    mockCanvasContext()
+    const png = new Blob(['png-content'], { type: 'image/png' })
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback, type) => {
+      expect(type).toBe('image/png')
+      callback(png)
+    })
+
+    await expect(createMonthlyBillPngBlob(makeReadyDraft(2))).resolves.toBe(png)
+  })
+
   it('uses five stable columns and grows height for continuation rows', () => {
     const twoGroup = createMonthlyBillCanvasLayout(makeReadyDraft(2))
     const sevenGroup = createMonthlyBillCanvasLayout(makeReadyDraft(7))

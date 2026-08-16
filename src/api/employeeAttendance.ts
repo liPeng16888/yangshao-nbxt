@@ -35,6 +35,10 @@ const targetId = (target: VersionedTarget | string) => typeof target === 'string
 const targetVersion = (target: VersionedTarget | string) => typeof target === 'string' ? undefined : target.updatedAt
 
 const amount = (value: unknown) => Number(value || 0)
+const finiteAmount = (value: unknown) => {
+  const parsed = Number(value ?? 0)
+  return Number.isFinite(parsed) ? parsed : 0
+}
 const sensitiveEmployeeFields = ['idCard', 'bankCard', 'address', 'emergencyContact'] as const
 export function buildEmployeeMutationPayload(form: EmployeePayload, editing: boolean): EmployeePayload {
   const payload = { ...form }
@@ -185,7 +189,10 @@ export function normalizePayrollResponse(raw: any): PayrollRun | null {
         overtimeHours: amount(rawResult.overtimeHours ?? amount(rawInput.overtimeMinutes ?? item.overtimeMinutes) / 60),
         overtimePay: amount(rawResult.overtimePay ?? item.overtimePay), commissionAmount: amount(rawResult.commissionAmount ?? item.commissionAmount),
         bonusAmount: amount(rawResult.bonusAmount ?? item.bonusAmount), adjustmentAmount: amount(rawResult.adjustmentAmount ?? item.adjustmentAmount),
-        attendanceBonus: amount(rawResult.attendanceBonus ?? item.attendanceBonus), payableAmount: amount(rawResult.payableAmount ?? item.payableAmount), issues
+        attendanceBonus: amount(rawResult.attendanceBonus ?? item.attendanceBonus),
+        grossEarningsAmount: finiteAmount(rawResult.grossEarningsAmount),
+        deductionAmount: finiteAmount(rawResult.deductionAmount),
+        payableAmount: amount(rawResult.payableAmount ?? item.payableAmount), issues
       },
       generatedAt: item.calculationSnapshot?.generatedAt || item.updatedAt || raw.updatedAt || ''
     }

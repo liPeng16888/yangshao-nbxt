@@ -1,5 +1,69 @@
 <template>
-  <div class="page-stack">
+  <div class="page-stack" :class="{ 'mobile-page': isMobileLayout, 'mobile-medicine-page': isMobileLayout }">
+    <template v-if="isMobileLayout">
+      <section class="mobile-medicine-form-section">
+        <div v-if="itemsError" class="medicine-load-error mobile-medicine-items-error" data-testid="outbound-items-error" role="alert">
+          <span>{{ itemsError }}</span>
+          <el-button data-testid="outbound-items-retry" link type="primary" :loading="loading" @click="loadItems">重试</el-button>
+        </div>
+        <button
+          class="mobile-medicine-form-toggle mobile-touch-target"
+          data-testid="mobile-outbound-form-toggle"
+          type="button"
+          :aria-expanded="mobileFormExpanded"
+          aria-controls="mobile-outbound-form"
+          @click="mobileFormExpanded = !mobileFormExpanded"
+        >
+          <span><strong>药品出库</strong><small>服务端将在提交时再次核验库存</small></span>
+          <span aria-hidden="true">{{ mobileFormExpanded ? '⌃' : '⌄' }}</span>
+        </button>
+        <div id="mobile-outbound-form" v-show="mobileFormExpanded" data-testid="mobile-outbound-form" class="mobile-medicine-form" v-loading="loading">
+          <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent>
+            <div class="medicine-form-grid">
+              <el-form-item label="出库日期" prop="occurredOn">
+                <el-date-picker v-model="form.occurredOn" type="date" value-format="YYYY-MM-DD" />
+              </el-form-item>
+              <el-form-item label="药品名称" prop="medicineItemId">
+                <el-select v-model="form.medicineItemId" data-testid="outbound-item" filterable clearable placeholder="选择有库存药品">
+                  <el-option v-for="item in availableItems" :key="item.id" :label="itemLabel(item)" :value="item.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="当前库存"><div class="medicine-quantity-readout">{{ selectedItem ? `当前库存 ${formatMedicineQuantity(selectedItem.currentQuantity)} ${selectedItem.unitLabel}` : '请选择药品' }}</div></el-form-item>
+              <el-form-item label="单位"><div class="medicine-quantity-readout">{{ selectedItem?.unitLabel || '-' }}</div></el-form-item>
+              <el-form-item label="出库数量" prop="quantity" required>
+                <el-input v-model="form.quantity" data-testid="outbound-quantity" inputmode="decimal" placeholder="输入出库数量" />
+              </el-form-item>
+              <el-form-item label="出库后剩余">
+                <div class="medicine-quantity-readout" :class="{ 'medicine-quantity-readout--error': remainingQuantity !== null && remainingQuantity < 0 }">{{ remainingLabel }}</div>
+              </el-form-item>
+              <el-form-item class="medicine-form-grid__wide" label="备注">
+                <el-input v-model="form.remark" data-testid="outbound-remark" maxlength="120" show-word-limit placeholder="可填写出库备注" />
+              </el-form-item>
+            </div>
+            <MobileActionBar>
+              <el-button :disabled="saving" @click="resetForm">重置</el-button>
+              <el-button data-testid="outbound-submit" type="primary" :loading="saving" :disabled="!canSubmit" @click="handleSubmit">确认出库</el-button>
+            </MobileActionBar>
+          </el-form>
+        </div>
+      </section>
+
+      <MobileMedicineMovementList
+        kind="outbound"
+        :rows="movements"
+        :items="items"
+        :loading="historyLoading"
+        :error="historyError"
+        :selected-medicine-item-ids="historyMedicineItemIds"
+        :date-range="historyDateRange"
+        :correctable-ids="correctableMovementIds"
+        :corrected-movement-ids="Array.from(correctedMovementIds)"
+        @filter="applyMobileHistoryFilter"
+        @correct="openCorrection"
+        @retry="loadHistory"
+      />
+    </template>
+    <template v-else>
     <section class="panel">
       <div class="panel__header">
         <div>
@@ -86,8 +150,19 @@
         </el-table-column>
       </el-table>
     </section>
+    </template>
 
-    <el-dialog v-model="correctionVisible" title="更正出库记录" width="420px" :close-on-click-modal="false" @closed="resetCorrection">
+    <MobileFullscreenDialog v-if="isMobileLayout" v-model="correctionVisible" title="更正出库记录" :saving="correctionSaving" fullscreen @confirm="submitCorrection">
+      <p class="muted">将创建一条反向更正流水，原记录不会被修改。</p>
+      <el-input v-model="correctionReason" data-testid="correction-reason" type="textarea" :rows="3" maxlength="120" show-word-limit placeholder="填写更正原因" />
+      <template #footer="{ cancel }">
+        <div class="mobile-fullscreen-dialog__actions">
+          <button class="mobile-fullscreen-dialog__cancel mobile-touch-target" type="button" :disabled="correctionSaving" @click="cancel">取消</button>
+          <button data-testid="correction-submit" class="mobile-fullscreen-dialog__confirm mobile-touch-target" type="button" :disabled="correctionSaving" @click="submitCorrection">{{ correctionSaving ? '更正中…' : '确认更正' }}</button>
+        </div>
+      </template>
+    </MobileFullscreenDialog>
+    <el-dialog v-else v-model="correctionVisible" title="更正出库记录" width="420px" :close-on-click-modal="false" @closed="resetCorrection">
       <p class="muted">将创建一条反向更正流水，原记录不会被修改。</p>
       <el-input v-model="correctionReason" data-testid="correction-reason" type="textarea" :rows="3" maxlength="120" show-word-limit placeholder="填写更正原因" />
       <template #footer>
@@ -102,6 +177,10 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { correctMedicineMovement, createMedicineOutbound, getMedicineItems, getMedicineMovements } from '@/api/medicineInventory'
+import MobileMedicineMovementList from '@/components/medicine/MobileMedicineMovementList.vue'
+import MobileActionBar from '@/components/mobile/MobileActionBar.vue'
+import MobileFullscreenDialog from '@/components/mobile/MobileFullscreenDialog.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import type { MedicineInventoryItem, MedicineInventoryMovement } from '@/types/medicineInventory'
 import { formatDateTime, todayInBeijing } from '@/utils/date'
 import { formatMedicineQuantity, validateMedicineQuantity } from '@/utils/medicineInventory'
@@ -123,7 +202,14 @@ const correctionMovementId = ref('')
 const correctionReason = ref('')
 const historyMedicineItemIds = ref<string[]>([])
 const historyDateRange = ref<string[] | undefined>()
+const mobileFormExpanded = ref(false)
+const { isMobileLayout } = useMobileLayout()
+let itemsRequestId = 0
 let historyRequestId = 0
+let submitPending = false
+let correctionSubmitPending = false
+let pageActive = true
+let lifecycleEpoch = 0
 
 const form = reactive({
   occurredOn: todayInBeijing(),
@@ -148,6 +234,7 @@ const remainingLabel = computed(() => {
 const canSubmit = computed(() => Boolean(selectedItem.value && quantityValidation.value?.ok && remainingQuantity.value !== null && remainingQuantity.value >= 0 && !saving.value))
 const correctedMovementIds = computed(() => new Set(movements.value.flatMap((movement) => movement.correctionOfId ? [movement.correctionOfId] : [])))
 const hasUnsavedInput = computed(() => Boolean(form.medicineItemId || form.quantity.trim() || form.remark.trim() || correctionVisible.value))
+const correctableMovementIds = computed(() => movements.value.filter(isCorrectable).map((movement) => movement.id))
 
 const rules: FormRules<typeof form> = {
   occurredOn: [{ required: true, message: '请选择出库日期', trigger: 'change' }],
@@ -166,23 +253,35 @@ onMounted(() => {
   })
 })
 
-onBeforeUnmount(() => unregisterRealtime?.())
+onBeforeUnmount(() => {
+  unregisterRealtime?.()
+  pageActive = false
+  lifecycleEpoch += 1
+  itemsRequestId += 1
+  historyRequestId += 1
+})
 
 async function loadItems() {
+  const lifecycleToken = lifecycleEpoch
+  const requestId = ++itemsRequestId
   loading.value = true
   itemsError.value = ''
   try {
-    items.value = await getMedicineItems()
+    const result = await getMedicineItems()
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== itemsRequestId) return
+    items.value = result
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== itemsRequestId) return
     items.value = []
     itemsError.value = errorMessage(error, '药品库存加载失败，请稍后重试')
     ElMessage.error(itemsError.value)
   } finally {
-    loading.value = false
+    if (isLifecycleCurrent(lifecycleToken) && requestId === itemsRequestId) loading.value = false
   }
 }
 
 async function loadHistory() {
+  const lifecycleToken = lifecycleEpoch
   const requestId = ++historyRequestId
   const [startDate, endDate] = historyDateRange.value || []
   historyLoading.value = true
@@ -194,15 +293,15 @@ async function loadHistory() {
       ...(startDate ? { startDate } : {}),
       ...(endDate ? { endDate } : {})
     })
-    if (requestId !== historyRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== historyRequestId) return
     movements.value = result
   } catch (error) {
-    if (requestId !== historyRequestId) return
+    if (!isLifecycleCurrent(lifecycleToken) || requestId !== historyRequestId) return
     movements.value = []
     historyError.value = errorMessage(error, '出库明细加载失败，请稍后重试')
     ElMessage.error(historyError.value)
   } finally {
-    if (requestId === historyRequestId) historyLoading.value = false
+    if (isLifecycleCurrent(lifecycleToken) && requestId === historyRequestId) historyLoading.value = false
   }
 }
 
@@ -211,42 +310,90 @@ function handleHistoryDateRangeChange(value: string[] | undefined) {
   void loadHistory()
 }
 
+function applyMobileHistoryFilter(value: { medicineItemIds: string[]; dateRange?: string[] }) {
+  historyMedicineItemIds.value = value.medicineItemIds
+  historyDateRange.value = value.dateRange
+  void loadHistory()
+}
+
 async function handleSubmit() {
-  if (!canSubmit.value) return
+  if (!canSubmit.value || submitPending) return
+  const lifecycleToken = lifecycleEpoch
+  const item = selectedItem.value
+  const validatedQuantity = quantityValidation.value
+  const remaining = remainingQuantity.value
+  if (!item || !validatedQuantity?.ok || remaining === null || remaining < 0) return
+  const submission = {
+    occurredOn: form.occurredOn,
+    medicineItemId: item.id,
+    medicineName: item.name,
+    unit: item.unit,
+    unitLabel: item.unitLabel,
+    quantity: validatedQuantity.value,
+    remark: form.remark.trim()
+  }
+  const submittedDraft = { ...form }
+  submitPending = true
   const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid || !selectedItem.value || !quantityValidation.value?.ok || remainingQuantity.value === null || remainingQuantity.value < 0) return
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    submitPending = false
+    return
+  }
+  if (!valid) {
+    submitPending = false
+    return
+  }
 
   try {
-    await ElMessageBox.confirm(`确认出库 ${quantityValidation.value.value} ${selectedItem.value.unitLabel} 的“${selectedItem.value.name}”？`, '确认出库', {
+    await ElMessageBox.confirm(`确认出库 ${submission.quantity} ${submission.unitLabel} 的“${submission.medicineName}”？`, '确认出库', {
       confirmButtonText: '确认出库',
       cancelButtonText: '取消',
       type: 'warning'
     })
   } catch {
+    submitPending = false
+    return
+  }
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    submitPending = false
     return
   }
 
   saving.value = true
   try {
     await createMedicineOutbound({
-      occurredOn: form.occurredOn,
-      medicineItemId: selectedItem.value.id,
-      quantity: quantityValidation.value.value,
-      remark: form.remark.trim()
+      occurredOn: submission.occurredOn,
+      medicineItemId: submission.medicineItemId,
+      quantity: submission.quantity,
+      remark: submission.remark
     })
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('药品已出库')
-    resetForm()
+    if (matchesOutboundDraft(submittedDraft)) resetForm()
     await Promise.all([loadItems(), loadHistory()])
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     if (isConflict(error)) {
-      applyConflictQuantity(error)
-      ElMessage.error(errorMessage(error, '库存已发生变化，请核对当前库存后重新提交'))
+      if (applyConflictQuantity(submission.medicineItemId, submission.unit, error)) {
+        ElMessage.error(errorMessage(error, '库存已发生变化，请核对当前库存后重新提交'))
+      } else {
+        ElMessage.error('库存数据无效，已刷新库存，请核对后重试')
+        await loadItems()
+      }
       return
     }
     ElMessage.error(errorMessage(error, '药品出库失败，请稍后重试'))
   } finally {
-    saving.value = false
+    if (isLifecycleCurrent(lifecycleToken)) saving.value = false
+    submitPending = false
   }
+}
+
+function matchesOutboundDraft(submission: typeof form) {
+  return form.occurredOn === submission.occurredOn
+    && form.medicineItemId === submission.medicineItemId
+    && form.quantity === submission.quantity
+    && form.remark === submission.remark
 }
 
 function resetForm() {
@@ -256,11 +403,12 @@ function resetForm() {
   formRef.value?.clearValidate()
 }
 
-function applyConflictQuantity(error: unknown) {
-  const item = selectedItem.value
-  const latestQuantity = conflictQuantity(error)
-  if (!item || latestQuantity === null) return
+function applyConflictQuantity(medicineItemId: string, unit: MedicineInventoryItem['unit'], error: unknown) {
+  const item = items.value.find((candidate) => candidate.id === medicineItemId)
+  const latestQuantity = conflictQuantity(error, unit)
+  if (!item || latestQuantity === null) return false
   item.currentQuantity = latestQuantity
+  return true
 }
 
 function isCorrectable(movement: MedicineInventoryMovement) {
@@ -274,11 +422,15 @@ function openCorrection(movement: MedicineInventoryMovement) {
 }
 
 async function submitCorrection() {
+  if (correctionSubmitPending) return
   const reason = correctionReason.value.trim()
   if (!reason) {
     ElMessage.warning('请填写更正原因')
     return
   }
+  const lifecycleToken = lifecycleEpoch
+  const movementId = correctionMovementId.value
+  correctionSubmitPending = true
   try {
     await ElMessageBox.confirm('确认创建反向更正流水？原出库记录不会被修改。', '二次确认更正', {
       confirmButtonText: '确认更正',
@@ -286,20 +438,32 @@ async function submitCorrection() {
       type: 'warning'
     })
   } catch {
+    correctionSubmitPending = false
+    return
+  }
+  if (!isLifecycleCurrent(lifecycleToken)) {
+    correctionSubmitPending = false
     return
   }
 
   correctionSaving.value = true
   try {
-    await correctMedicineMovement(correctionMovementId.value, { reason })
+    await correctMedicineMovement(movementId, { reason })
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.success('更正流水已创建')
     correctionVisible.value = false
     await Promise.all([loadItems(), loadHistory()])
   } catch (error) {
+    if (!isLifecycleCurrent(lifecycleToken)) return
     ElMessage.error(errorMessage(error, '更正失败，请稍后重试'))
   } finally {
-    correctionSaving.value = false
+    if (isLifecycleCurrent(lifecycleToken)) correctionSaving.value = false
+    correctionSubmitPending = false
   }
+}
+
+function isLifecycleCurrent(token: number) {
+  return pageActive && token === lifecycleEpoch
 }
 
 function resetCorrection() {
@@ -336,15 +500,13 @@ function isConflict(error: unknown) {
   return (error as { response?: { status?: number } })?.response?.status === 409
 }
 
-function conflictQuantity(error: unknown) {
+function conflictQuantity(error: unknown, unit: MedicineInventoryItem['unit']) {
   const data = (error as { response?: { data?: { currentQuantity?: unknown; item?: { currentQuantity?: unknown }; message?: string | string[] } } })?.response?.data
   const explicitQuantity = data?.item?.currentQuantity ?? data?.currentQuantity
-  if (typeof explicitQuantity === 'number' && Number.isFinite(explicitQuantity)) return explicitQuantity
-  if (typeof explicitQuantity === 'string' && Number.isFinite(Number(explicitQuantity))) return Number(explicitQuantity)
-
-  const message = Array.isArray(data?.message) ? data.message.join('；') : data?.message
-  const match = message?.match(/当前库存为\s*([0-9]+(?:\.[0-9]{1,3})?)/)
-  return match ? Number(match[1]) : null
+  if (typeof explicitQuantity !== 'number' || !Number.isFinite(explicitQuantity) || explicitQuantity < 0) return null
+  if (explicitQuantity === 0) return 0
+  const validated = validateMedicineQuantity(unit, explicitQuantity)
+  return validated.ok ? Number(validated.value) : null
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -402,6 +564,67 @@ function errorMessage(error: unknown, fallback: string) {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.mobile-medicine-page {
+  padding-bottom: calc(76px + var(--mobile-page-action-bottom));
+}
+
+.mobile-medicine-form-section {
+  min-width: 0;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #d8e1eb;
+  border-radius: 12px;
+}
+
+.mobile-medicine-items-error {
+  margin: 10px 10px 0;
+}
+
+.mobile-medicine-form-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 12px;
+  color: #1f2937;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+
+.mobile-medicine-form-toggle > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.mobile-medicine-form-toggle small {
+  color: #64748b;
+  font-weight: 400;
+}
+
+.mobile-medicine-form {
+  padding: 12px;
+  border-top: 1px solid #e4ebf3;
+}
+
+.mobile-medicine-form :deep(.el-input),
+.mobile-medicine-form :deep(.el-select),
+.mobile-medicine-form :deep(.el-date-editor) {
+  width: 100%;
+}
+
+.mobile-medicine-form :deep(.el-input__wrapper),
+.mobile-medicine-form :deep(.el-select__wrapper),
+.mobile-medicine-form :deep(.el-date-editor) {
+  min-height: 44px;
+}
+
+.mobile-medicine-form :deep(.mobile-action-bar .el-button) {
+  flex: 1;
+  min-height: 44px;
 }
 
 @media (max-width: 980px) {

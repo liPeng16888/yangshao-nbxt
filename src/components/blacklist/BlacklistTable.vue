@@ -1,5 +1,5 @@
 <template>
-  <section class="panel">
+  <section class="panel blacklist-table">
     <div class="panel__header">
       <h2>黑名单列表</h2>
       <div class="table-search">
@@ -82,7 +82,6 @@ const props = defineProps<{
   keyword: string
   loading?: boolean
   highlightId?: string
-  currentUsername: string
   deletingId?: string
   updatingId?: string
 }>()
@@ -115,7 +114,7 @@ function emptyText(value?: string) {
 }
 
 function canManage(row: BlacklistRecord) {
-  return Boolean(props.currentUsername && row.uploadedBy === props.currentUsername)
+  return row.canManage === true
 }
 </script>
 

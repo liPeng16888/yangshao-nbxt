@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { compileString } from 'sass'
 import { describe, expect, it } from 'vitest'
 import type { IncomeStatusSummary } from '@/types/financeBills'
 import type { SampleDetectionReport as SampleDetectionReportData } from '@/types/report'
@@ -31,9 +34,13 @@ const report: SampleDetectionReportData = {
   ]
 }
 
-function mountReport() {
+const source = readFileSync(resolve(process.cwd(), 'src/components/report/SampleDetectionReport.vue'), 'utf8')
+const style = source.match(/<style scoped lang="scss">([\s\S]*?)<\/style>/)?.[1] || ''
+const compiledCss = compileString(style).css
+
+function mountReport(mobile = false) {
   return mount(SampleDetectionReport, {
-    props: { report },
+    props: { report, mobile },
     global: {
       stubs: {
         ReportSummaryCards: { template: '<div />' },
@@ -68,5 +75,27 @@ describe('SampleDetectionReport', () => {
     expect(wrapper.get('[data-testid="chart-option"]').text()).toContain('样品数量（个）')
     expect(wrapper.get('[data-testid="chart-option"]').text()).toContain('"data":[2]')
     expect(wrapper.get('[data-testid="chart-option"]').text()).not.toContain('当日总金额')
+  })
+
+  it('keeps status summaries in two mobile columns after the desktop 1200px cascade', () => {
+    const mobile = mountReport(true)
+    const desktop = mountReport(false)
+
+    expect(mobile.get('.status-grid').classes()).toContain('status-grid--mobile')
+    expect(desktop.get('.status-grid').classes()).not.toContain('status-grid--mobile')
+    expect(compiledCss.lastIndexOf('.status-grid.status-grid--mobile')).toBeGreaterThan(compiledCss.indexOf('@media (max-width: 1200px)'))
+    expect(compiledCss.slice(compiledCss.lastIndexOf('.status-grid.status-grid--mobile'))).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
+    expect(compiledCss).toContain('grid-template-columns: repeat(3, minmax(150px, 1fr))')
+    expect(compiledCss).toContain('grid-template-columns: repeat(5, minmax(150px, 1fr))')
+  })
+
+  it('enlarges chart metric actions only in the mobile report layout', () => {
+    const mobile = mountReport(true)
+    const desktop = mountReport(false)
+
+    expect(mobile.get('[data-testid="chart-metric-amount"]').classes()).toContain('mobile-touch-target')
+    expect(mobile.get('[data-testid="chart-metric-count"]').classes()).toContain('mobile-touch-target')
+    expect(desktop.get('[data-testid="chart-metric-amount"]').classes()).not.toContain('mobile-touch-target')
+    expect(desktop.get('[data-testid="chart-metric-count"]').classes()).not.toContain('mobile-touch-target')
   })
 })

@@ -9,19 +9,25 @@ export const useBlacklistStore = defineStore('blacklist', () => {
   const loading = ref(false)
   const deletingId = ref('')
   const updatingId = ref('')
+  let loadVersion = 0
+  let mutationVersion = 0
 
-  async function loadRecords(nextKeyword = keyword.value) {
+  async function loadRecords(nextKeyword = keyword.value, options: { signal?: AbortSignal } = {}) {
+    const currentLoad = ++loadVersion
+    const mutationAtStart = mutationVersion
     loading.value = true
+    keyword.value = nextKeyword
     try {
-      keyword.value = nextKeyword
-      records.value = await searchBlacklist(nextKeyword)
+      const nextRecords = await searchBlacklist(nextKeyword, options)
+      if (!options.signal?.aborted && currentLoad === loadVersion && mutationAtStart === mutationVersion) records.value = nextRecords
     } finally {
-      loading.value = false
+      if (currentLoad === loadVersion) loading.value = false
     }
   }
 
   async function addRecord(payload: BlacklistPayload) {
     const record = await createBlacklist(payload)
+    mutationVersion += 1
     records.value.unshift(record)
     return record
   }
@@ -32,6 +38,7 @@ export const useBlacklistStore = defineStore('blacklist', () => {
       const current = records.value.find((record) => record.id === id)
       if (!current) return
       await deleteBlacklist(id, current.updatedAt || '')
+      mutationVersion += 1
       records.value = records.value.filter((record) => record.id !== id)
     } finally {
       deletingId.value = ''
@@ -42,6 +49,7 @@ export const useBlacklistStore = defineStore('blacklist', () => {
     updatingId.value = id
     try {
       const record = await updateBlacklist(id, payload)
+      mutationVersion += 1
       const index = records.value.findIndex((item) => item.id === id)
       if (index >= 0) records.value[index] = record
       return record

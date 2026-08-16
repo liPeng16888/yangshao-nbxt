@@ -1,7 +1,11 @@
 <template>
   <div class="page-stack">
-    <ReportSummaryCards :items="summaryItems" />
-    <div class="report-grid">
+    <ReportSummaryCards :items="summaryItems" :mobile="mobile" />
+    <div
+      class="report-grid report-charts"
+      :class="{ 'mobile-report-charts--single-column': mobile }"
+      data-testid="mobile-report-charts"
+    >
       <section class="panel">
         <div class="panel__header">
           <h2>开支金额与笔数趋势</h2>
@@ -25,14 +29,16 @@
       <div class="panel__header">
         <h2>日期明细</h2>
       </div>
-      <el-table :data="report.rows" border>
-        <el-table-column prop="date" label="日期" />
-        <el-table-column prop="amount" label="开支金额">
-          <template #default="{ row }">¥{{ row.amount.toFixed(2) }}</template>
-        </el-table-column>
-        <el-table-column prop="count" label="开支笔数" />
-        <el-table-column prop="mainCategory" label="主要类目" />
-      </el-table>
+      <div class="report-table-scroll" :class="{ 'report-table-scroll--mobile': mobile }" aria-label="日期明细">
+        <el-table :data="report.rows" border>
+          <el-table-column prop="date" label="日期" />
+          <el-table-column prop="amount" label="开支金额">
+            <template #default="{ row }">¥{{ row.amount.toFixed(2) }}</template>
+          </el-table-column>
+          <el-table-column prop="count" label="开支笔数" />
+          <el-table-column prop="mainCategory" label="主要类目" />
+        </el-table>
+      </div>
     </section>
   </div>
 </template>
@@ -46,6 +52,7 @@ import ReportSummaryCards from './ReportSummaryCards.vue'
 
 const props = defineProps<{
   report: FinanceReport
+  mobile?: boolean
 }>()
 
 const summaryItems = computed(() => [
@@ -88,9 +95,20 @@ const categoryOption = computed<EChartsOption>(() => ({
   gap: 16px;
 }
 
+.mobile-report-charts--single-column {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.report-table-scroll--mobile {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 @media (max-width: 1100px) {
   .report-grid {
     grid-template-columns: 1fr;
   }
 }
+
 </style>

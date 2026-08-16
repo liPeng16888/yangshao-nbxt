@@ -6,6 +6,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import LabDataPage from './LabDataPage.vue'
 
 const mocks = vi.hoisted(() => ({
+  route: {
+    query: {} as Record<string, string>
+  },
   routerPush: vi.fn(),
   accessGuard: {
     loadGroups: vi.fn(),
@@ -19,6 +22,9 @@ const mocks = vi.hoisted(() => ({
     id: 'main-1', account: 'main-1', username: '主账号', role: 'FRONTEND_USER',
     dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false,
     permissions: []
+  },
+  mobileLayout: {
+    isMobileLayout: { __v_isRef: true, value: false }
   },
   labStore: {
     loading: false,
@@ -48,7 +54,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
+  useRoute: () => mocks.route,
   useRouter: () => ({ push: mocks.routerPush })
 }))
 
@@ -67,6 +73,10 @@ vi.mock('@/stores/frontendPreferences', () => ({
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({ get user() { return mocks.authUser } })
+}))
+
+vi.mock('@/composables/useMobileLayout', () => ({
+  useMobileLayout: () => mocks.mobileLayout
 }))
 
 function mountPage() {
@@ -136,6 +146,24 @@ function mountPage() {
     }
   })
 
+  const MobileLabSampleListStub = defineComponent({
+    props: {
+      blocks: { type: Array, default: () => [] },
+      readonly: { type: Boolean, default: false },
+      selectionMode: { type: Boolean, default: false },
+      selectedBlockIds: { type: Array, default: () => [] }
+    },
+    emits: ['selectionChange', 'saveNext'],
+    setup(props, { emit }) {
+      return () => h('div', { class: 'mobile-lab-list-stub', 'data-readonly': String(props.readonly) }, [
+        props.selectionMode
+          ? h('button', { class: 'mobile-select-block-1', onClick: () => emit('selectionChange', 'block-1', true) }, '选择001')
+          : null,
+        h('button', { class: 'mobile-save-next-stub', onClick: () => emit('saveNext', 'block-1') }, '保存下一项')
+      ])
+    }
+  })
+
   const SampleCompletionDialogStub = defineComponent({
     props: {
       visible: { type: Boolean, default: false }
@@ -162,23 +190,34 @@ function mountPage() {
   const LabReportDialogStub = defineComponent({
     props: {
       visible: { type: Boolean, default: false },
-      template: { type: Object, required: true }
+      template: { type: Object, required: true },
+      mobile: { type: Boolean, default: false }
     },
     setup(props) {
       return () => props.visible
-        ? h('div', { class: 'lab-report-dialog-stub', 'data-title': (props.template as any).title })
+        ? h('div', {
+            class: 'lab-report-dialog-stub',
+            'data-title': (props.template as any).title,
+            'data-mobile': String(props.mobile)
+          })
         : null
     }
   })
 
   const LabSmsDialogStub = defineComponent({
+    name: 'LabSmsDialog',
     props: {
       visible: { type: Boolean, default: false },
-      template: { type: Object, required: true }
+      template: { type: Object, required: true },
+      mobile: { type: Boolean, default: false }
     },
     setup(props) {
       return () => props.visible
-        ? h('div', { class: 'lab-sms-dialog-stub', 'data-prefix': (props.template as any).prefix })
+        ? h('div', {
+            class: 'lab-sms-dialog-stub',
+            'data-prefix': (props.template as any).prefix,
+            'data-mobile': String(props.mobile)
+          })
         : null
     }
   })
@@ -191,6 +230,7 @@ function mountPage() {
       },
       stubs: {
         LabSheetGrid: LabSheetGridStub,
+        MobileLabSampleList: MobileLabSampleListStub,
         LabParameterPanel: true,
         LabReportDialog: LabReportDialogStub,
         LabSmsDialog: LabSmsDialogStub,
@@ -268,6 +308,8 @@ describe('LabDataPage table layout', () => {
         parameterSnapshot: {}
       }
     ]
+    mocks.mobileLayout.isMobileLayout.value = false
+    mocks.route.query = {}
   })
 
   afterEach(() => {
@@ -382,6 +424,78 @@ describe('LabDataPage table layout', () => {
     expect(wrapper.find('.table-scroll-panel').exists()).toBe(false)
     expect(wrapper.find('.table-scrollbar').exists()).toBe(false)
     expect(wrapper.find('.append-panel').exists()).toBe(true)
+  })
+
+  it('mounts exactly one mobile card editor or desktop grid from the shared layout state', async () => {
+    const desktop = mountPage()
+    await settleMountedPage()
+    expect(desktop.find('.lab-grid-stub').exists()).toBe(true)
+    expect(desktop.find('.mobile-lab-list-stub').exists()).toBe(false)
+    expect(desktop.getComponent({ name: 'LabSmsDialog' }).props('mobile')).toBe(false)
+    desktop.unmount()
+
+    mocks.mobileLayout.isMobileLayout.value = true
+    const mobile = mountPage()
+    await settleMountedPage()
+    expect(mobile.find('.mobile-lab-list-stub').exists()).toBe(true)
+    expect(mobile.find('.lab-grid-stub').exists()).toBe(false)
+    expect(mobile.find('.append-submit').exists()).toBe(true)
+    expect(mobile.getComponent({ name: 'LabSmsDialog' }).props('mobile')).toBe(true)
+    mobile.unmount()
+  })
+
+  it('enlarges only the mobile append-count input to the shared touch target', async () => {
+    const desktop = mountPage()
+    await settleMountedPage()
+    expect(desktop.get('.append-input').classes()).not.toContain('mobile-touch-target')
+    desktop.unmount()
+
+    mocks.mobileLayout.isMobileLayout.value = true
+    const mobile = mountPage()
+    await settleMountedPage()
+    expect(mobile.get('.append-input').classes()).toContain('mobile-touch-target')
+    mobile.unmount()
+  })
+
+  it('scrolls a routed mobile sample header into view after expanding its card', async () => {
+    vi.useFakeTimers()
+    mocks.mobileLayout.isMobileLayout.value = true
+    mocks.route.query = { block: 'block-2' }
+    const card = document.createElement('article')
+    card.dataset.blockId = 'block-2'
+    const header = document.createElement('header')
+    header.className = 'mobile-sample-card__header'
+    const scrollIntoView = vi.fn()
+    header.scrollIntoView = scrollIntoView
+    card.appendChild(header)
+    document.body.appendChild(card)
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+    await vi.advanceTimersByTimeAsync(120)
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    wrapper.unmount()
+    card.remove()
+  })
+
+  it('moves mobile selection actions into a full-width bottom bar with the selected count', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await nextTick()
+    expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 0 个样品')
+
+    await wrapper.get('.mobile-select-block-1').trigger('click')
+    await nextTick()
+    expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 1 个样品')
+    expect(wrapper.get('.mobile-selection-primary').text()).toContain('填写已选1个样品')
+
+    await wrapper.get('.mobile-selection-primary').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.bulk-fill-dialog-stub').exists()).toBe(true)
   })
 
   it('makes the data grid readonly and hides append controls while parameters are being applied', async () => {

@@ -1,11 +1,20 @@
 import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
+import { ref, type Ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useAuthStore } from '@/stores/auth'
 import { useSharedPrepaidStore } from '@/stores/sharedPrepaid'
 import PrepaidSettlementsPage from './PrepaidSettlementsPage.vue'
+
+const layoutMocks = vi.hoisted(() => ({
+  isMobileLayout: undefined as unknown as Ref<boolean>
+}))
+
+vi.mock('@/composables/useMobileLayout', () => ({
+  useMobileLayout: () => ({ isMobileLayout: layoutMocks.isMobileLayout })
+}))
 
 const apiMocks = vi.hoisted(() => ({
   createSharedPrepaidStreamTicket: vi.fn().mockResolvedValue({ ticket: 'ticket', expiresAt: Date.now() + 30_000 }),
@@ -126,7 +135,8 @@ function mountPage(role: 'FRONTEND_USER' | 'FRONTEND_SUB_USER' = 'FRONTEND_USER'
 }
 
 describe('PrepaidSettlementsPage', () => {
-  beforeEach(() => {
+beforeEach(() => {
+  layoutMocks.isMobileLayout = ref(false)
     const values = new Map<string, string>()
     vi.stubGlobal('localStorage', {
       getItem: (key: string) => values.get(key) || null,
@@ -421,5 +431,20 @@ describe('PrepaidSettlementsPage', () => {
     expect(store.selectedSettlement).toBeNull()
     expect(wrapper.find('[data-testid="settlement-mutation-error"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain(accountAError.message)
+  })
+
+  it('renders mobile settlement cards and compact filters without mounting the desktop history table', async () => {
+    layoutMocks.isMobileLayout.value = true
+    apiMocks.getPrepaidSettlements.mockResolvedValue({
+      items: [settlementSummary()], total: 1, page: 1, pageSize: 20
+    })
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="mobile-settlement-filter"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="mobile-settlement-card"]')).toHaveLength(1)
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="mobile-settlement-card"]').text()).toContain('实际转账¥50.5')
+    expect(wrapper.get('[data-testid="mobile-settlement-detail-settlement-1"]').classes()).toContain('mobile-touch-target')
   })
 })

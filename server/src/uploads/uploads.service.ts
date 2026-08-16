@@ -26,6 +26,9 @@ const RASTER_FORMATS = {
   'image/webp': { extension: '.webp', matches: (buffer: Buffer) => (
     buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
     buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) },
+  'image/gif': { extension: '.gif', matches: (buffer: Buffer) => (
+    buffer.length >= 6 && ['GIF87a', 'GIF89a'].includes(buffer.subarray(0, 6).toString('ascii'))
   ) }
 } as const
 
@@ -96,7 +99,7 @@ export class UploadsService {
       throw new BadRequestException('单张图片不能超过 5 MB')
     }
     if (!isAllowedUploadedImageMime(file.mimetype)) {
-      throw new BadRequestException('只允许上传 JPEG、PNG 或 WebP 图片')
+      throw new BadRequestException('只允许上传 JPEG、PNG、WebP 或 GIF 图片')
     }
     const format = RASTER_FORMATS[file.mimetype]
     if (!format.matches(file.buffer)) {
