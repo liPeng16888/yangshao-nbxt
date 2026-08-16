@@ -1,5 +1,15 @@
 <template>
-  <el-dialog :model-value="visible" width="1120px" class="lab-report-dialog" :fullscreen="mobile" :title="dialogTitle" @close="handleDialogClose">
+  <el-dialog
+    :model-value="visible"
+    width="1120px"
+    class="lab-report-dialog"
+    :fullscreen="mobile"
+    :style="mobile ? mobileLabDialogFrameStyle : undefined"
+    :body-class="mobile ? mobileLabDialogBodyClass : undefined"
+    :footer-class="mobile ? mobileLabDialogFooterClass : undefined"
+    :title="dialogTitle"
+    @close="handleDialogClose"
+  >
     <div v-if="step === 'elements'" class="element-step" :class="{ 'element-step--mobile': mobile }">
       <el-alert
         title="优先使用数据计算中已选择的化验元素；未填写的样品保持空白，可在这里手动选择。"
@@ -191,6 +201,11 @@ import {
 } from '@/stores/frontendPreferences'
 import type { LabReportDraft, LabReportDraftRow, LabReportElementKey, LabReportTemplate } from '@/types/labReport'
 import type { SampleBlock } from '@/types/labSheet'
+import {
+  mobileLabDialogBodyClass,
+  mobileLabDialogFooterClass,
+  mobileLabDialogFrameStyle
+} from './mobileLabDialogLayout'
 import {
   createLabReportFilename,
   createLabReportPngBlob,
@@ -975,9 +990,14 @@ onBeforeUnmount(() => {
 }
 
 :global(.lab-report-dialog.is-fullscreen) {
-  height: 100dvh;
-  max-height: 100dvh;
-  margin: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
   overflow: hidden;
 }
 
@@ -985,13 +1005,16 @@ onBeforeUnmount(() => {
   padding-top: calc(12px + env(safe-area-inset-top));
 }
 
-:global(.lab-report-dialog.is-fullscreen .el-dialog__body) {
-  max-height: calc(100dvh - 116px);
+:global(.lab-report-dialog.is-fullscreen .lab-mobile-action-dialog__body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
   overscroll-behavior: contain;
 }
 
-:global(.lab-report-dialog.is-fullscreen .el-dialog__footer) {
+:global(.lab-report-dialog.is-fullscreen .lab-mobile-action-dialog__footer) {
+  flex: 0 0 auto;
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
 

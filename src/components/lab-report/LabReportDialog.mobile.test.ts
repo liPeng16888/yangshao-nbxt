@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import LabReportDialog from './LabReportDialog.vue'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
@@ -89,6 +90,24 @@ function makeBlock(): SampleBlock {
   }
 }
 
+const ElDialogStub = defineComponent({
+  name: 'ElDialog',
+  props: {
+    modelValue: { type: Boolean, default: false },
+    width: { type: String, default: '' },
+    fullscreen: { type: Boolean, default: false },
+    title: { type: String, default: '' },
+    bodyClass: { type: String, default: '' },
+    footerClass: { type: String, default: '' }
+  },
+  setup(props, { attrs, slots }) {
+    return () => h('div', { class: 'dialog-stub', style: attrs.style as string }, [
+      h('div', { class: props.bodyClass }, slots.default?.()),
+      h('footer', { class: props.footerClass }, slots.footer?.())
+    ])
+  }
+})
+
 function mountMobileReport() {
   const block = makeBlock()
   return mount(LabReportDialog, {
@@ -102,7 +121,7 @@ function mountMobileReport() {
     },
     global: {
       stubs: {
-        ElDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+        ElDialog: ElDialogStub,
         ElButton: { template: '<button type="button" @click="$emit(\'click\')"><slot /></button>' },
         ElAlert: true,
         ElCheckboxGroup: { template: '<div><slot /></div>' },
@@ -138,6 +157,21 @@ describe('mobile lab report sharing', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('keeps preview and close actions in a fixed mobile footer outside the scrolling body', () => {
+    const wrapper = mountMobileReport()
+    const dialog = wrapper.getComponent(ElDialogStub)
+
+    expect(dialog.props('fullscreen')).toBe(true)
+    expect(dialog.attributes('style')).toContain('display: flex')
+    expect(dialog.attributes('style')).toContain('flex-direction: column')
+    expect(dialog.props('bodyClass')).toBe('lab-mobile-action-dialog__body')
+    expect(dialog.props('footerClass')).toBe('lab-mobile-action-dialog__footer')
+    expect(wrapper.get('.lab-mobile-action-dialog__footer').text()).toContain('关闭')
+    expect(wrapper.get('.lab-mobile-action-dialog__footer').text()).toContain('生成预览')
+
+    wrapper.unmount()
   })
 
   it('shares the generated PNG file through the iPhone system share sheet', async () => {

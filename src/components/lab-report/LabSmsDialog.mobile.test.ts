@@ -11,10 +11,15 @@ const ElDialogStub = defineComponent({
     modelValue: { type: Boolean, default: false },
     width: { type: String, default: '' },
     fullscreen: { type: Boolean, default: false },
-    title: { type: String, default: '' }
+    title: { type: String, default: '' },
+    bodyClass: { type: String, default: '' },
+    footerClass: { type: String, default: '' }
   },
-  setup(_props, { slots }) {
-    return () => h('div', { class: 'dialog-stub' }, [slots.default?.(), slots.footer?.()])
+  setup(props, { attrs, slots }) {
+    return () => h('div', { class: 'dialog-stub', style: attrs.style as string }, [
+      h('div', { class: props.bodyClass }, slots.default?.()),
+      h('footer', { class: props.footerClass }, slots.footer?.())
+    ])
   }
 })
 
@@ -63,6 +68,12 @@ describe('LabSmsDialog responsive shell', () => {
       expect(dialog.props('fullscreen')).toBe(true)
       expect(wrapper.find('.element-step--mobile').exists()).toBe(true)
       expect(wrapper.find('.lab-sms-dialog-content--mobile').exists()).toBe(true)
+      expect(dialog.attributes('style')).toContain('display: flex')
+      expect(dialog.attributes('style')).toContain('flex-direction: column')
+      expect(dialog.props('bodyClass')).toBe('lab-mobile-action-dialog__body')
+      expect(dialog.props('footerClass')).toBe('lab-mobile-action-dialog__footer')
+      expect(wrapper.get('.lab-mobile-action-dialog__footer').text()).toContain('关闭')
+      expect(wrapper.get('.lab-mobile-action-dialog__footer').text()).toContain('生成短信')
     }
   )
 })

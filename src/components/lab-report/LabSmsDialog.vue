@@ -1,5 +1,15 @@
 <template>
-  <el-dialog :model-value="visible" width="960px" class="lab-sms-dialog" :fullscreen="mobile" :title="dialogTitle" @close="emit('close')">
+  <el-dialog
+    :model-value="visible"
+    width="960px"
+    class="lab-sms-dialog"
+    :fullscreen="mobile"
+    :style="mobile ? mobileLabDialogFrameStyle : undefined"
+    :body-class="mobile ? mobileLabDialogBodyClass : undefined"
+    :footer-class="mobile ? mobileLabDialogFooterClass : undefined"
+    :title="dialogTitle"
+    @close="emit('close')"
+  >
     <div
       v-if="step === 'elements'"
       class="element-step lab-sms-dialog-content"
@@ -71,6 +81,11 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { LabReportElementKey, LabReportSmsTemplate } from '@/types/labReport'
 import type { SampleBlock } from '@/types/labSheet'
+import {
+  mobileLabDialogBodyClass,
+  mobileLabDialogFooterClass,
+  mobileLabDialogFrameStyle
+} from './mobileLabDialogLayout'
 import {
   createLabReportSmsText,
   getBlockCustomerName,
@@ -344,14 +359,21 @@ async function copySmsText() {
 }
 
 :global(.lab-sms-dialog.is-fullscreen) {
-  height: 100dvh;
-  max-height: 100dvh;
-  margin: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
   overflow: hidden;
 }
 
-:global(.lab-sms-dialog.is-fullscreen .el-dialog__body) {
-  max-height: calc(100dvh - 116px);
+:global(.lab-sms-dialog.is-fullscreen .lab-mobile-action-dialog__body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -360,7 +382,8 @@ async function copySmsText() {
   padding-top: calc(12px + env(safe-area-inset-top));
 }
 
-:global(.lab-sms-dialog.is-fullscreen .el-dialog__footer) {
+:global(.lab-sms-dialog.is-fullscreen .lab-mobile-action-dialog__footer) {
+  flex: 0 0 auto;
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
 
