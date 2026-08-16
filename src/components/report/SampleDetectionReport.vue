@@ -26,6 +26,7 @@
           <el-button
             data-testid="chart-metric-amount"
             size="small"
+            :class="{ 'mobile-touch-target': mobile }"
             :type="chartMetric === 'amount' ? 'primary' : 'default'"
             @click="chartMetric = 'amount'"
           >
@@ -34,6 +35,7 @@
           <el-button
             data-testid="chart-metric-count"
             size="small"
+            :class="{ 'mobile-touch-target': mobile }"
             :type="chartMetric === 'count' ? 'primary' : 'default'"
             @click="chartMetric = 'count'"
           >

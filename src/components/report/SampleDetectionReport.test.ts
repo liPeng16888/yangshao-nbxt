@@ -88,4 +88,14 @@ describe('SampleDetectionReport', () => {
     expect(compiledCss).toContain('grid-template-columns: repeat(3, minmax(150px, 1fr))')
     expect(compiledCss).toContain('grid-template-columns: repeat(5, minmax(150px, 1fr))')
   })
+
+  it('enlarges chart metric actions only in the mobile report layout', () => {
+    const mobile = mountReport(true)
+    const desktop = mountReport(false)
+
+    expect(mobile.get('[data-testid="chart-metric-amount"]').classes()).toContain('mobile-touch-target')
+    expect(mobile.get('[data-testid="chart-metric-count"]').classes()).toContain('mobile-touch-target')
+    expect(desktop.get('[data-testid="chart-metric-amount"]').classes()).not.toContain('mobile-touch-target')
+    expect(desktop.get('[data-testid="chart-metric-count"]').classes()).not.toContain('mobile-touch-target')
+  })
 })

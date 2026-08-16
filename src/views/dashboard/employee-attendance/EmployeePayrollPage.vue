@@ -1,6 +1,17 @@
 <template>
   <PageShell class="employee-payroll-page" title="工资统计" description="生成月度工资草稿，查看计算快照，增加正负调整，确认后锁定源记录。" :show-employee="false" @refresh="load">
-    <template #actions><el-button type="primary" :loading="payrollBusy" :disabled="payrollBusy" @click="generate">生成/刷新草稿</el-button></template>
+    <template #actions>
+      <el-button
+        data-testid="payroll-generate"
+        type="primary"
+        :class="{ 'mobile-touch-target': isMobileLayout }"
+        :loading="payrollBusy"
+        :disabled="payrollBusy"
+        @click="generate"
+      >
+        生成/刷新草稿
+      </el-button>
+    </template>
     <el-empty v-if="!store.payroll" description="当月尚未生成工资草稿" />
     <MobilePayrollList v-else-if="isMobileLayout" :run="store.payroll" :busy="payrollBusy" :pending-ids="pendingIds" @adjust="openAdjustment" @remove-adjustment="removeAdjustment" @confirm="confirm" @reopen="reopen" @export-summary="openSummaryExport" @export-employee="openEmployeeExport" />
     <template v-else>

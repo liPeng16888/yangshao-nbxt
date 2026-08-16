@@ -90,7 +90,12 @@
     <section class="panel append-panel" v-if="!isPageReadonly">
       <div class="panel__body append-body">
         <span>增加样品数量</span>
-        <el-input v-model.trim="appendCount" placeholder="正整数" class="append-input" />
+        <el-input
+          v-model.trim="appendCount"
+          placeholder="正整数"
+          class="append-input"
+          :class="{ 'mobile-touch-target': isMobileLayout }"
+        />
         <el-button class="append-submit" type="primary" :icon="Plus" :loading="labStore.adding" @click="appendBlocks">确认增加</el-button>
       </div>
     </section>
@@ -755,6 +760,10 @@ async function scrollToHighlightedBlock(blockId: string) {
 
   .append-input {
     width: 100%;
+  }
+
+  :deep(.append-input .el-input__wrapper) {
+    min-height: 44px;
   }
 
   .append-submit {

@@ -3018,6 +3018,20 @@ describe('employee attendance navigation', () => {
     generate.mockRestore()
   })
 
+  it('enlarges only the mobile payroll generation action to the shared touch target', async () => {
+    attendanceLayout.mobile.value = true
+    const mobile = mount(EmployeePayrollPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    expect(mobile.get('[data-testid="payroll-generate"]').classes()).toContain('mobile-touch-target')
+    mobile.unmount()
+
+    attendanceLayout.mobile.value = false
+    const desktop = mount(EmployeePayrollPage, { global: { plugins: [createPinia(), ElementPlus] } })
+    await flushPromises()
+    expect(desktop.get('[data-testid="payroll-generate"]').classes()).not.toContain('mobile-touch-target')
+    desktop.unmount()
+  })
+
   it('commits exactly one new-month payroll load from the actual mobile PageShell apply flow', async () => {
     attendanceLayout.mobile.value = true
     const baseline = await attendanceApi.generatePayroll('2026-08')

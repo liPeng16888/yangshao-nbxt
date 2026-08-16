@@ -397,6 +397,19 @@ describe('LabDataPage table layout', () => {
     mobile.unmount()
   })
 
+  it('enlarges only the mobile append-count input to the shared touch target', async () => {
+    const desktop = mountPage()
+    await settleMountedPage()
+    expect(desktop.get('.append-input').classes()).not.toContain('mobile-touch-target')
+    desktop.unmount()
+
+    mocks.mobileLayout.isMobileLayout.value = true
+    const mobile = mountPage()
+    await settleMountedPage()
+    expect(mobile.get('.append-input').classes()).toContain('mobile-touch-target')
+    mobile.unmount()
+  })
+
   it('scrolls a routed mobile sample header into view after expanding its card', async () => {
     vi.useFakeTimers()
     mocks.mobileLayout.isMobileLayout.value = true

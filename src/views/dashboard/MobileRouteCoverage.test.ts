@@ -1,12 +1,34 @@
 import { mount, shallowMount } from '@vue/test-utils'
-import { defineComponent, nextTick, ref, type Ref } from 'vue'
+import { nextTick, ref, type Component, type Ref } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AppMobileShell from '@/components/layout/AppMobileShell.vue'
 import appRouter from '@/router'
 import { findCustomerNavigation } from '@/config/customerNavigation'
-import { featureForPath } from '@/router/guards'
+import { featureForPath, type AccessGuardFeature } from '@/router/guards'
+import BlacklistPage from './BlacklistPage.vue'
+import CoefficientCalculationPage from './CoefficientCalculationPage.vue'
+import CustomerOverviewPage from './CustomerOverviewPage.vue'
+import FinanceIncomePage from './FinanceIncomePage.vue'
+import FinanceMonthlySettlementPage from './FinanceMonthlySettlementPage.vue'
+import FinancePage from './FinancePage.vue'
+import FinancePrepaidAddPage from './FinancePrepaidAddPage.vue'
+import FinancePrepaidCustomersPage from './FinancePrepaidCustomersPage.vue'
+import FinanceUnsettledPage from './FinanceUnsettledPage.vue'
+import LabDataPage from './LabDataPage.vue'
+import LabReportPage from './LabReportPage.vue'
+import MedicineInventoryInboundPage from './MedicineInventoryInboundPage.vue'
+import MedicineInventoryOutboundPage from './MedicineInventoryOutboundPage.vue'
+import MedicineInventoryStockPage from './MedicineInventoryStockPage.vue'
+import ReportPage from './ReportPage.vue'
+import StandardSampleCalculationPage from './StandardSampleCalculationPage.vue'
+import EmployeeAttendanceRecordsPage from './employee-attendance/EmployeeAttendanceRecordsPage.vue'
+import EmployeeCompensationPage from './employee-attendance/EmployeeCompensationPage.vue'
+import EmployeeDirectoryPage from './employee-attendance/EmployeeDirectoryPage.vue'
+import EmployeeLeavePage from './employee-attendance/EmployeeLeavePage.vue'
+import EmployeePayrollPage from './employee-attendance/EmployeePayrollPage.vue'
+import EmployeeSchedulesPage from './employee-attendance/EmployeeSchedulesPage.vue'
 
 const mocks = vi.hoisted(() => ({
   isMobileLayout: undefined as unknown as Ref<boolean>,
@@ -32,35 +54,60 @@ vi.mock('@/stores/accessGuard', () => ({ useAccessGuardStore: () => mocks.access
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => mocks.auth }))
 vi.mock('@/stores/labSheet', () => ({ useLabSheetStore: () => mocks.labSheet }))
 
-const routes = [
-  '/data', '/data/standard-sample', '/data/coefficient',
-  '/lab-report/image-template', '/lab-report/sms-template',
-  '/employee-attendance/schedules', '/employee-attendance/employees', '/employee-attendance/records',
-  '/employee-attendance/leave', '/employee-attendance/compensation', '/employee-attendance/payroll',
-  '/finance/expenses', '/finance/income', '/finance/unsettled', '/finance/monthly-settlement',
-  '/finance/prepaid/add', '/finance/prepaid/customers',
-  '/medicine-inventory/stock', '/medicine-inventory/inbound', '/medicine-inventory/outbound',
-  '/reports', '/customers-overview', '/blacklist'
+interface OwningRouteContract {
+  path: string
+  name: string
+  component: Component
+  feature: AccessGuardFeature | null
+  owningTest: string
+  mobileRoot: string
+  desktopRoot: string
+}
+
+// This is the single expected route contract. Paths are never duplicated in a
+// second ordering list: every assertion joins these expectations to the real
+// normalized router record by route name.
+const routeContracts: OwningRouteContract[] = [
+  { path: '/data', name: 'data', component: LabDataPage, feature: null, owningTest: 'LabDataPage.test.ts', mobileRoot: '.mobile-lab-list-stub', desktopRoot: '.lab-grid-stub' },
+  { path: '/data/standard-sample', name: 'standardSampleCalculation', component: StandardSampleCalculationPage, feature: null, owningTest: 'StandardSampleCalculationPage.test.ts', mobileRoot: '[data-testid="standard-mobile-view"]', desktopRoot: '[data-testid="standard-desktop-view"]' },
+  { path: '/data/coefficient', name: 'coefficientCalculation', component: CoefficientCalculationPage, feature: null, owningTest: 'CoefficientCalculationPage.test.ts', mobileRoot: '[data-testid="coefficient-mobile-view"]', desktopRoot: '[data-testid="coefficient-desktop-view"]' },
+  { path: '/lab-report/image-template', name: 'labReportImageTemplate', component: LabReportPage, feature: null, owningTest: 'LabReportPage.mobile.test.ts', mobileRoot: '[data-testid="mobile-report-template"]', desktopRoot: '.report-section-tabs' },
+  { path: '/lab-report/sms-template', name: 'labReportSmsTemplate', component: LabReportPage, feature: null, owningTest: 'LabReportPage.mobile.test.ts', mobileRoot: '[data-testid="mobile-sms-template"]', desktopRoot: '.report-section-tabs' },
+  { path: '/employee-attendance/schedules', name: 'employeeAttendanceSchedules', component: EmployeeSchedulesPage, feature: 'EMPLOYEE_ATTENDANCE', owningTest: 'EmployeeAttendancePages.test.ts', mobileRoot: '[data-testid="mobile-calendar-day"]', desktopRoot: '[data-testid="monthly-schedule-calendar"]' },
+  { path: '/employee-attendance/employees', name: 'employeeAttendanceEmployees', component: EmployeeDirectoryPage, feature: 'EMPLOYEE_ATTENDANCE', owningTest: 'EmployeeAttendancePages.test.ts', mobileRoot: '[data-testid="mobile-employee-card"]', desktopRoot: '.el-table' },
+  { path: '/employee-attendance/records', name: 'employeeAttendanceRecords', component: EmployeeAttendanceRecordsPage, feature: 'EMPLOYEE_ATTENDANCE', owningTest: 'EmployeeAttendancePages.test.ts', mobileRoot: '[data-testid="mobile-attendance-record-card"]', desktopRoot: '.el-table' },
+  { path: '/employee-attendance/leave', name: 'employeeAttendanceLeave', component: EmployeeLeavePage, feature: 'EMPLOYEE_ATTENDANCE', owningTest: 'EmployeeAttendancePages.test.ts', mobileRoot: '[data-testid="mobile-leave-card"]', desktopRoot: '.el-table' },
+  { path: '/employee-attendance/compensation', name: 'employeeAttendanceCompensation', component: EmployeeCompensationPage, feature: 'EMPLOYEE_ATTENDANCE', owningTest: 'EmployeeAttendancePages.test.ts', mobileRoot: '[data-testid="mobile-commission-card"]', desktopRoot: '.el-table' },
+  { path: '/employee-attendance/payroll', name: 'employeeAttendancePayroll', component: EmployeePayrollPage, feature: 'EMPLOYEE_ATTENDANCE', owningTest: 'EmployeeAttendancePages.test.ts', mobileRoot: '[data-testid="mobile-payroll-card"]', desktopRoot: '.el-table' },
+  { path: '/finance/expenses', name: 'financeExpenses', component: FinancePage, feature: 'FINANCE', owningTest: 'FinancePage.mobile.test.ts', mobileRoot: '[data-testid="mobile-finance-entry-form"]', desktopRoot: '.expense-entry-table' },
+  { path: '/finance/income', name: 'financeIncome', component: FinanceIncomePage, feature: 'FINANCE', owningTest: 'FinanceIncomePage.mobile.test.ts', mobileRoot: '[data-testid="mobile-income-summary"]', desktopRoot: '.el-table' },
+  { path: '/finance/unsettled', name: 'financeUnsettled', component: FinanceUnsettledPage, feature: 'FINANCE', owningTest: 'FinanceUnsettledPage.test.ts', mobileRoot: '[data-testid="mobile-unsettled-card"]', desktopRoot: '.table-stub' },
+  { path: '/finance/monthly-settlement', name: 'financeMonthlySettlement', component: FinanceMonthlySettlementPage, feature: 'FINANCE', owningTest: 'FinanceMonthlySettlementPage.mobile.test.ts', mobileRoot: '[data-testid="mobile-monthly-summary-card"]', desktopRoot: '.el-table' },
+  { path: '/finance/prepaid/add', name: 'financePrepaidAdd', component: FinancePrepaidAddPage, feature: 'FINANCE', owningTest: 'FinancePrepaidPages.mobile.test.ts', mobileRoot: '[data-testid="mobile-prepaid-form"]', desktopRoot: '.el-table' },
+  { path: '/finance/prepaid/customers', name: 'financePrepaidCustomers', component: FinancePrepaidCustomersPage, feature: 'FINANCE', owningTest: 'FinancePrepaidPages.mobile.test.ts', mobileRoot: '[data-testid="mobile-prepaid-customer-card"]', desktopRoot: '.el-table' },
+  { path: '/medicine-inventory/stock', name: 'medicineInventoryStock', component: MedicineInventoryStockPage, feature: 'MEDICINE_INVENTORY', owningTest: 'MedicineInventoryPages.test.ts', mobileRoot: '[data-testid="mobile-medicine-stock-list"]', desktopRoot: '.inventory-control-band' },
+  { path: '/medicine-inventory/inbound', name: 'medicineInventoryInbound', component: MedicineInventoryInboundPage, feature: 'MEDICINE_INVENTORY', owningTest: 'MedicineInventoryPages.test.ts', mobileRoot: '[data-testid="mobile-inbound-form"]', desktopRoot: '.el-table' },
+  { path: '/medicine-inventory/outbound', name: 'medicineInventoryOutbound', component: MedicineInventoryOutboundPage, feature: 'MEDICINE_INVENTORY', owningTest: 'MedicineInventoryPages.test.ts', mobileRoot: '[data-testid="mobile-outbound-form"]', desktopRoot: '.el-table' },
+  { path: '/reports', name: 'reports', component: ReportPage, feature: 'REPORTS', owningTest: 'ReportPage.mobile.test.ts', mobileRoot: '[data-testid="mobile-report-filter"]', desktopRoot: 'ReportFilterBar' },
+  { path: '/customers-overview', name: 'customerOverview', component: CustomerOverviewPage, feature: 'CUSTOMER_OVERVIEW', owningTest: 'CustomerOverviewPage.test.ts', mobileRoot: '[data-testid="mobile-customer-card"]', desktopRoot: '.el-table' },
+  { path: '/blacklist', name: 'blacklist', component: BlacklistPage, feature: 'BLACKLIST', owningTest: 'BlacklistPage.mobile.test.ts', mobileRoot: '[data-testid="mobile-blacklist-card"]', desktopRoot: '.blacklist-table' }
 ]
 
-const routeOrder = new Map(routes.map((path, index) => [path, index]))
+const routeContractsByName = new Map(routeContracts.map((contract) => [contract.name, contract]))
 
 function customerRouteRecords() {
   return appRouter.getRoutes()
     .filter((route) => route.path !== '/' && route.path !== '/login' && route.meta.requiresAuth && !route.redirect)
-    .sort((left, right) => (routeOrder.get(left.path) ?? Number.MAX_SAFE_INTEGER) - (routeOrder.get(right.path) ?? Number.MAX_SAFE_INTEGER))
 }
-
-const RoutedPage = defineComponent({ template: '<section data-testid="routed-page-root" />' })
 
 function createCoverageRouter() {
   return createRouter({
     history: createMemoryHistory(),
-    routes: customerRouteRecords().map((route) => ({
-      path: route.path,
-      component: RoutedPage,
-      meta: route.meta
-    }))
+    routes: customerRouteRecords().map((route) => {
+      const component = route.components?.default
+      if (!component) throw new Error(`${route.path} is missing its real route component`)
+      return { path: route.path, component, meta: route.meta }
+    })
   })
 }
 
@@ -83,9 +130,30 @@ describe('mobile customer route coverage', () => {
   })
 
   it('derives all 23 customer pages from the real router', () => {
-    const coveredMobileRoutes = customerRouteRecords().map((route) => route.path)
+    const realPaths = new Set(customerRouteRecords().map((route) => route.path))
+    const contractedPaths = new Set(routeContracts.map((contract) => contract.path))
 
-    expect(coveredMobileRoutes).toEqual(routes)
+    expect(realPaths.size).toBe(23)
+    expect(contractedPaths.size).toBe(23)
+    expect(realPaths).toEqual(contractedPaths)
+  })
+
+  it('binds every real route to its owning component and exclusive root assertions', () => {
+    const realRecords = customerRouteRecords()
+    const realNames = new Set(realRecords.map((route) => String(route.name)))
+    const contractedNames = new Set(routeContracts.map((contract) => contract.name))
+
+    expect(realNames).toEqual(contractedNames)
+    for (const route of realRecords) {
+      const contract = routeContractsByName.get(String(route.name))
+      expect(contract, `${route.path} owning contract`).toBeDefined()
+      expect(route.path, `${route.path} canonical path`).toBe(contract!.path)
+      expect(route.components?.default, `${route.path} real route component`).toBe(contract!.component)
+      expect(contract!.owningTest, `${route.path} owning test`).toMatch(/\.test\.ts$/)
+      expect(contract!.mobileRoot, `${route.path} mobile root marker`).not.toBe(contract!.desktopRoot)
+      expect(contract!.mobileRoot.trim(), `${route.path} mobile root marker`).not.toBe('')
+      expect(contract!.desktopRoot.trim(), `${route.path} desktop root marker`).not.toBe('')
+    }
   })
 
   it('resolves the canonical secondary group and current item for every routed page', () => {
@@ -105,44 +173,46 @@ describe('mobile customer route coverage', () => {
 
   it('renders one mobile shell and routed page while excluding the desktop chrome on every route', async () => {
     const router = createCoverageRouter()
-    await router.push(routes[0])
+    await router.push(routeContracts[0]!.path)
     await router.isReady()
     const wrapper = shallowMount(AppLayout, { global: { plugins: [router] } })
 
-    for (const path of routes) {
-      await router.push(path)
+    for (const route of customerRouteRecords()) {
+      await router.push(route.path)
       await nextTick()
 
-      expect(wrapper.findAll('.app-shell--mobile'), `${path} mobile root`).toHaveLength(1)
-      expect(wrapper.findAllComponents({ name: 'AppMobileShell' }), `${path} mobile shell`).toHaveLength(1)
-      expect(wrapper.findAllComponents({ name: 'AppSidebar' }), `${path} desktop sidebar`).toHaveLength(0)
-      expect(wrapper.findAllComponents({ name: 'AppTopbar' }), `${path} desktop topbar`).toHaveLength(0)
-      expect(wrapper.findAllComponents({ name: 'RouterView' }), `${path} routed page outlet`).toHaveLength(1)
+      expect(wrapper.findAll('.app-shell--mobile'), `${route.path} mobile root`).toHaveLength(1)
+      expect(wrapper.findAllComponents({ name: 'AppMobileShell' }), `${route.path} mobile shell`).toHaveLength(1)
+      expect(wrapper.findAllComponents({ name: 'AppSidebar' }), `${route.path} desktop sidebar`).toHaveLength(0)
+      expect(wrapper.findAllComponents({ name: 'AppTopbar' }), `${route.path} desktop topbar`).toHaveLength(0)
+      expect(wrapper.findAllComponents({ name: 'RouterView' }), `${route.path} routed page outlet`).toHaveLength(1)
+      expect(router.currentRoute.value.matched.at(-1)?.components?.default, `${route.path} routed component`).toBe(route.components?.default)
     }
   })
 
   it('keeps one desktop shell and routed page while excluding mobile chrome on every route', async () => {
     mocks.isMobileLayout.value = false
     const router = createCoverageRouter()
-    await router.push(routes[0])
+    await router.push(routeContracts[0]!.path)
     await router.isReady()
     const wrapper = shallowMount(AppLayout, { global: { plugins: [router] } })
 
-    for (const path of routes) {
-      await router.push(path)
+    for (const route of customerRouteRecords()) {
+      await router.push(route.path)
       await nextTick()
 
-      expect(wrapper.findAll('.app-shell--mobile'), `${path} mobile root`).toHaveLength(0)
-      expect(wrapper.findAllComponents({ name: 'AppMobileShell' }), `${path} mobile shell`).toHaveLength(0)
-      expect(wrapper.findAllComponents({ name: 'AppSidebar' }), `${path} desktop sidebar`).toHaveLength(1)
-      expect(wrapper.findAllComponents({ name: 'AppTopbar' }), `${path} desktop topbar`).toHaveLength(1)
-      expect(wrapper.findAllComponents({ name: 'RouterView' }), `${path} routed page outlet`).toHaveLength(1)
+      expect(wrapper.findAll('.app-shell--mobile'), `${route.path} mobile root`).toHaveLength(0)
+      expect(wrapper.findAllComponents({ name: 'AppMobileShell' }), `${route.path} mobile shell`).toHaveLength(0)
+      expect(wrapper.findAllComponents({ name: 'AppSidebar' }), `${route.path} desktop sidebar`).toHaveLength(1)
+      expect(wrapper.findAllComponents({ name: 'AppTopbar' }), `${route.path} desktop topbar`).toHaveLength(1)
+      expect(wrapper.findAllComponents({ name: 'RouterView' }), `${route.path} routed page outlet`).toHaveLength(1)
+      expect(router.currentRoute.value.matched.at(-1)?.components?.default, `${route.path} routed component`).toBe(route.components?.default)
     }
   })
 
   it('renders the correct secondary rail and current item through the real mobile shell for every route', async () => {
     const router = createCoverageRouter()
-    await router.push(routes[0])
+    await router.push(routeContracts[0]!.path)
     await router.isReady()
     const wrapper = mount(AppMobileShell, {
       global: {
@@ -153,18 +223,18 @@ describe('mobile customer route coverage', () => {
       }
     })
 
-    for (const path of routes) {
-      await router.push(path)
+    for (const route of customerRouteRecords()) {
+      await router.push(route.path)
       await nextTick()
-      const navigation = findCustomerNavigation(path)!
+      const navigation = findCustomerNavigation(route.path)!
       const shouldShowRail = (navigation.section.children?.length ?? 0) > 1
 
-      expect(wrapper.findAll('.mobile-app-header'), `${path} mobile page root`).toHaveLength(1)
-      expect(wrapper.find('.mobile-secondary-nav').exists(), `${path} secondary rail`).toBe(shouldShowRail)
+      expect(wrapper.findAll('.mobile-app-header'), `${route.path} mobile page root`).toHaveLength(1)
+      expect(wrapper.find('.mobile-secondary-nav').exists(), `${route.path} secondary rail`).toBe(shouldShowRail)
       if (shouldShowRail) {
         const activeItems = wrapper.findAll('.mobile-secondary-nav__item.router-link-active')
-        expect(activeItems, `${path} current secondary item`).toHaveLength(1)
-        expect(activeItems[0]!.attributes('href'), `${path} current secondary target`).toBe(navigation.activeChild?.path)
+        expect(activeItems, `${route.path} current secondary item`).toHaveLength(1)
+        expect(activeItems[0]!.attributes('href'), `${route.path} current secondary target`).toBe(navigation.activeChild?.path)
       }
     }
   })
@@ -174,11 +244,9 @@ describe('mobile customer route coverage', () => {
   })
 
   it('keeps sensitive-route access features aligned with the server-facing groups', () => {
-    expect(featureForPath('/employee-attendance/payroll')).toBe('EMPLOYEE_ATTENDANCE')
-    expect(featureForPath('/finance/monthly-settlement')).toBe('FINANCE')
-    expect(featureForPath('/medicine-inventory/outbound')).toBe('MEDICINE_INVENTORY')
-    expect(featureForPath('/reports')).toBe('REPORTS')
-    expect(featureForPath('/customers-overview')).toBe('CUSTOMER_OVERVIEW')
-    expect(featureForPath('/blacklist')).toBe('BLACKLIST')
+    for (const route of customerRouteRecords()) {
+      const contract = routeContractsByName.get(String(route.name))!
+      expect(featureForPath(route.path), `${route.path} access feature`).toBe(contract.feature)
+    }
   })
 })
