@@ -42,6 +42,7 @@ const finiteAmount = (value: unknown) => {
 const sensitiveEmployeeFields = ['idCard', 'bankCard', 'address', 'emergencyContact'] as const
 export function buildEmployeeMutationPayload(form: EmployeePayload, editing: boolean): EmployeePayload {
   const payload = { ...form }
+  if (!payload.terminationDate?.trim()) delete payload.terminationDate
   if (editing) for (const field of sensitiveEmployeeFields) if (!payload[field]?.trim()) delete payload[field]
   return payload
 }

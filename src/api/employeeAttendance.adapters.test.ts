@@ -155,6 +155,18 @@ describe('employee attendance real API adapters', () => {
     expect(payload).not.toHaveProperty('emergencyContact')
   })
 
+  it('omits a blank optional termination date while preserving an explicit date', () => {
+    const blankDate = buildEmployeeMutationPayload({
+      employeeNumber: 'YG002', name: '李四', hireDate: '2026-08-17', terminationDate: ''
+    }, false)
+    const explicitDate = buildEmployeeMutationPayload({
+      employeeNumber: 'YG003', name: '王五', hireDate: '2026-08-17', terminationDate: '2026-08-31'
+    }, false)
+
+    expect(blankDate).not.toHaveProperty('terminationDate')
+    expect(explicitDate).toHaveProperty('terminationDate', '2026-08-31')
+  })
+
   it('keeps masked sensitive values out of editable plaintext keys', () => {
     const row = normalizeEmployeeResponse({ id: 'e1', employeeNumber: '001', name: '张三', hireDate: '2026-01-01', idCard: '410****1234', bankCard: '622****7890', address: '洛***区', emergencyContact: '张***001', baseSalary: '6000.00' }) as unknown as Record<string, unknown>
     expect(row).toMatchObject({ idCardMasked: '410****1234', bankCardMasked: '622****7890', baseSalary: 6000 })
