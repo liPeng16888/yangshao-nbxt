@@ -228,6 +228,16 @@ async function settleMountedPage() {
   await nextTick()
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 describe('LabDataPage table layout', () => {
   beforeEach(() => {
     mocks.labStore.loadCurrentSheet.mockReset()
@@ -378,6 +388,117 @@ describe('LabDataPage table layout', () => {
     wrapper.unmount()
   })
 
+  it('starts request loads for rapid history A to history B navigation', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-08-20', readonly: false }
+    mocks.labStore.loadSheetByDate.mockImplementation(async (date: string) => {
+      mocks.labStore.sheet = { date, readonly: date !== '2026-08-20' }
+      return true
+    })
+    const historyA = deferred<LabSampleChangeRequestSummary[]>()
+    const historyB = deferred<LabSampleChangeRequestSummary[]>()
+    mocks.changeRequestStore.load.mockImplementation((filters?: { date?: string }) => {
+      if (filters?.date === '2026-06-24') return historyA.promise
+      if (filters?.date === '2026-06-25') return historyB.promise
+      return Promise.resolve([])
+    })
+    const wrapper = mountPage()
+    await settleMountedPage()
+    mocks.changeRequestStore.load.mockClear()
+    const datePicker = wrapper.find('.date-picker-stub')
+
+    void datePicker.setValue('2026-06-24')
+    for (let index = 0; index < 4; index += 1) await Promise.resolve()
+    expect(mocks.changeRequestStore.load).toHaveBeenNthCalledWith(1, { date: '2026-06-24' })
+    void datePicker.setValue('2026-06-25')
+    for (let index = 0; index < 4; index += 1) await Promise.resolve()
+
+    expect(mocks.changeRequestStore.load).toHaveBeenNthCalledWith(2, { date: '2026-06-25' })
+    historyB.resolve([])
+    historyA.resolve([])
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('resets an in-flight history request when navigation returns to the current day', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-08-20', readonly: false }
+    mocks.labStore.loadSheetByDate.mockImplementation(async (date: string) => {
+      mocks.labStore.sheet = { date, readonly: date !== '2026-08-20' }
+      return true
+    })
+    const historyLoad = deferred<LabSampleChangeRequestSummary[]>()
+    mocks.changeRequestStore.load.mockImplementation((filters?: { date?: string }) => filters?.date ? historyLoad.promise : Promise.resolve([]))
+    const wrapper = mountPage()
+    await settleMountedPage()
+    mocks.changeRequestStore.reset.mockClear()
+    const datePicker = wrapper.find('.date-picker-stub')
+
+    void datePicker.setValue('2026-06-24')
+    await nextTick()
+    await datePicker.setValue('2026-08-20')
+    await nextTick()
+
+    expect(mocks.changeRequestStore.reset).toHaveBeenCalled()
+    historyLoad.resolve([])
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('invalidates late request responses when the page unmounts', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-06-24', readonly: true }
+    const historyLoad = deferred<LabSampleChangeRequestSummary[]>()
+    mocks.changeRequestStore.load.mockReturnValue(historyLoad.promise)
+    const wrapper = mountPage()
+    for (let index = 0; index < 4; index += 1) await Promise.resolve()
+    expect(mocks.changeRequestStore.load).toHaveBeenCalledWith({ date: '2026-06-24' })
+    mocks.changeRequestStore.reset.mockClear()
+
+    wrapper.unmount()
+
+    expect(mocks.changeRequestStore.reset).toHaveBeenCalledTimes(1)
+    historyLoad.resolve([])
+    await flushPromises()
+  })
+
+  it('loads complete account request history when the drawer opens on the current day', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-08-20', readonly: false }
+    const wrapper = mountPage()
+    await settleMountedPage()
+    mocks.changeRequestStore.load.mockClear()
+
+    await findButtonByText(wrapper, '修改申请记录').trigger('click')
+    await flushPromises()
+
+    expect(mocks.changeRequestStore.load).toHaveBeenCalledWith()
+    expect(wrapper.getComponent({ name: 'LabSampleChangeRequestDrawer' }).props('modelValue')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('keeps the drawer open and reports an unfiltered history load failure', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-08-20', readonly: false }
+    const wrapper = mountPage()
+    await settleMountedPage()
+    mocks.changeRequestStore.load.mockRejectedValue(new Error('记录网络错误'))
+    const error = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+
+    await findButtonByText(wrapper, '修改申请记录').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.getComponent({ name: 'LabSampleChangeRequestDrawer' }).props('modelValue')).toBe(true)
+    expect(error).toHaveBeenCalledWith('记录网络错误')
+    wrapper.unmount()
+    error.mockRestore()
+  })
+
   it('keeps a failed submission open and exposes submitting true then false for dialog retry', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
@@ -420,9 +541,14 @@ describe('LabDataPage table layout', () => {
     const wrapper = mountPage()
     await settleMountedPage()
 
+    expect(mocks.changeRequestStore.load).toHaveBeenCalledWith({ date: '2026-06-24' })
+
     await findButtonByText(wrapper, '修改申请记录').trigger('click')
+    await flushPromises()
     const drawer = wrapper.getComponent({ name: 'LabSampleChangeRequestDrawer' })
     expect(drawer.props('modelValue')).toBe(true)
+    expect(mocks.changeRequestStore.load).toHaveBeenCalledWith()
+    expect(wrapper.get('.lab-grid-stub').attributes('data-readonly')).toBe('true')
     drawer.vm.$emit('select', 'request-1')
     await flushPromises()
     expect(mocks.changeRequestStore.loadDetail).toHaveBeenCalledWith('request-1')

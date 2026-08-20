@@ -239,6 +239,7 @@ onBeforeUnmount(() => {
   clearBusinessDayTimers()
   unbindBusinessDayListeners()
   labStore.disconnectRealtime()
+  changeRequestStore.reset()
 })
 
 watch(
@@ -448,8 +449,13 @@ async function submitSampleChangeRequest(payload: CreateLabSampleChangeRequestPa
   }
 }
 
-function openChangeRequestDrawer() {
+async function openChangeRequestDrawer() {
   sampleChangeDrawerVisible.value = true
+  try {
+    await changeRequestStore.load()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '修改申请记录加载失败，请稍后重试')
+  }
 }
 
 async function openSampleChangeRequestDetail(id: string) {

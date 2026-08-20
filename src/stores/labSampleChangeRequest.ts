@@ -20,18 +20,28 @@ export const useLabSampleChangeRequestStore = defineStore('labSampleChangeReques
   const submitting = ref(false)
   const loadingDetail = ref(false)
   const withdrawing = ref(false)
+  let listGeneration = 0
+  let detailGeneration = 0
 
   const pendingByBlock = computed<Record<string, LabSampleChangeRequestSummary>>(() => Object.fromEntries(
     requests.value.filter((row) => row.status === 'PENDING').map((row) => [row.blockId, row])
   ))
 
   async function load(filters: LabSampleChangeRequestFilters = {}) {
+    const generation = ++listGeneration
+    detailGeneration += 1
+    detail.value = null
+    loadingDetail.value = false
     loading.value = true
     try {
-      requests.value = await listLabSampleChangeRequests(filters)
+      const rows = await listLabSampleChangeRequests(filters)
+      if (generation === listGeneration) requests.value = rows
+      return rows
+    } catch (error) {
+      if (generation === listGeneration) throw error
       return requests.value
     } finally {
-      loading.value = false
+      if (generation === listGeneration) loading.value = false
     }
   }
 
@@ -47,12 +57,18 @@ export const useLabSampleChangeRequestStore = defineStore('labSampleChangeReques
   }
 
   async function loadDetail(id: string) {
+    const generation = ++detailGeneration
+    detail.value = null
     loadingDetail.value = true
     try {
-      detail.value = await getLabSampleChangeRequest(id)
+      const loadedDetail = await getLabSampleChangeRequest(id)
+      if (generation === detailGeneration) detail.value = loadedDetail
+      return loadedDetail
+    } catch (error) {
+      if (generation === detailGeneration) throw error
       return detail.value
     } finally {
-      loadingDetail.value = false
+      if (generation === detailGeneration) loadingDetail.value = false
     }
   }
 
@@ -69,6 +85,8 @@ export const useLabSampleChangeRequestStore = defineStore('labSampleChangeReques
   }
 
   function reset() {
+    listGeneration += 1
+    detailGeneration += 1
     requests.value = []
     detail.value = null
     loading.value = false
