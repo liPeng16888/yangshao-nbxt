@@ -29,7 +29,8 @@ function mountPreview() {
     readonly: false,
     inputs,
     results: calculateSampleResults(inputs, defaultLabParameters),
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
   return mount(LabSmsDialog, {
     props: {

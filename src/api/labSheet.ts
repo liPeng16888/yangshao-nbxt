@@ -1,15 +1,29 @@
 import request, { useMocks } from '@/utils/request'
 import { readAccessGuardSessions, selectAccessGuardGrant } from '@/api/accessGuard'
-import type { LabParameter, LabSheet, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
+import type {
+  CreateSampleRetestsPayload,
+  DeleteSampleRetestPayload,
+  LabParameter,
+  LabSheet,
+  SampleBlock,
+  SampleBlockSavePayload,
+  SampleRetest,
+  SaveSampleRetestPayload,
+  VoidSampleRetestPayload
+} from '@/types/labSheet'
 import {
   mockAddSampleBlocks,
+  mockCreateSampleRetests,
   mockCurrentLabSheet,
   mockCurrentParameters,
+  mockDeleteSampleRetest,
   mockApplyParametersFromIndex,
   mockLabHistory,
   mockLabSheetByDate,
   mockSaveSampleBlock,
-  mockUpdateParameters
+  mockSaveSampleRetest,
+  mockUpdateParameters,
+  mockVoidSampleRetest
 } from '@/mocks/db'
 
 const CLIENT_ID_KEY = 'ys_lab_sheet_client_id'
@@ -86,13 +100,21 @@ function accessGrantHeaders() {
   } catch { return undefined }
 }
 
+function retestWriteOptions() {
+  return { headers: { ...clientHeaders().headers, ...(accessGrantHeaders()?.headers || {}) } }
+}
+
+function canViewCompletedSampleData() {
+  return Boolean(accessGrantHeaders()?.headers['X-YS-Access-Grant'])
+}
+
 export async function getCurrentLabSheet(): Promise<LabSheet> {
-  if (useMocks) return mockCurrentLabSheet()
+  if (useMocks) return mockCurrentLabSheet(canViewCompletedSampleData())
   return request.get('/lab-sheets/current', accessGrantHeaders())
 }
 
 export async function getLabSheetByDate(date: string): Promise<LabSheet> {
-  if (useMocks) return mockLabSheetByDate(date)
+  if (useMocks) return mockLabSheetByDate(date, canViewCompletedSampleData())
   return request.get('/lab-sheets', { params: { date }, ...accessGrantHeaders() })
 }
 
@@ -130,6 +152,44 @@ export async function addSampleBlocks(sheetId: string, count: number): Promise<L
 export async function saveSampleBlock(sheetId: string, block: SampleBlockSavePayload): Promise<SampleBlock> {
   if (useMocks) return mockSaveSampleBlock(sheetId, block)
   return request.put(`/lab-sheets/${sheetId}/cells`, block, { headers: { ...clientHeaders().headers, ...(accessGrantHeaders()?.headers || {}) } })
+}
+
+export async function createSampleRetests(
+  sheetId: string,
+  payload: CreateSampleRetestsPayload
+): Promise<SampleRetest[]> {
+  if (useMocks) return mockCreateSampleRetests(sheetId, payload, canViewCompletedSampleData())
+  return request.post(`/lab-sheets/${sheetId}/sample-retests`, payload, retestWriteOptions())
+}
+
+export async function saveSampleRetest(
+  sheetId: string,
+  retestId: string,
+  payload: SaveSampleRetestPayload
+): Promise<SampleRetest> {
+  if (useMocks) return mockSaveSampleRetest(sheetId, retestId, payload, canViewCompletedSampleData())
+  return request.put(`/lab-sheets/${sheetId}/sample-retests/${retestId}`, payload, retestWriteOptions())
+}
+
+export async function deleteSampleRetest(
+  sheetId: string,
+  retestId: string,
+  payload: DeleteSampleRetestPayload
+): Promise<{ id: string; sampleBlockId: string; deleted: true }> {
+  if (useMocks) return mockDeleteSampleRetest(sheetId, retestId, payload, canViewCompletedSampleData())
+  return request.delete(`/lab-sheets/${sheetId}/sample-retests/${retestId}`, {
+    ...retestWriteOptions(),
+    data: payload
+  })
+}
+
+export async function voidSampleRetest(
+  sheetId: string,
+  retestId: string,
+  payload: VoidSampleRetestPayload
+): Promise<SampleRetest> {
+  if (useMocks) return mockVoidSampleRetest(sheetId, retestId, payload, canViewCompletedSampleData())
+  return request.patch(`/lab-sheets/${sheetId}/sample-retests/${retestId}/void`, payload, retestWriteOptions())
 }
 
 export async function getLabSheetHistory(): Promise<Array<{ id: string; date: string; readonly: boolean }>> {

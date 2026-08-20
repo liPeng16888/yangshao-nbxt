@@ -91,6 +91,60 @@ export interface LabFormulaResult {
   burnLoss: number
 }
 
+export const sampleRetestInputFields = [
+  'ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust',
+  'sulfur', 'densityRaw', 'whiteness', 'calciumRaw', 'magnesiumRaw', 'carbon',
+  'titaniumRaw', 'waterSample', 'bottleWater', 'bottleWaterSample', 'moisture',
+  'crucible', 'sampleWeight', 'burnedCrucibleSample'
+] as const
+
+export type SampleRetestInputField = typeof sampleRetestInputFields[number]
+export type SampleRetestInput = Partial<Pick<LabSampleInput, SampleRetestInputField>>
+export type SampleRetestStatus = 'ACTIVE' | 'VOID'
+
+export interface SampleRetest {
+  id: string
+  sampleBlockId: string
+  sequence: number
+  status: SampleRetestStatus
+  everFilled: boolean
+  readonly: boolean
+  sensitiveFieldsHidden?: boolean
+  inputs: SampleRetestInput
+  results: LabFormulaResult
+  parameterSnapshot: LabParameterSnapshot
+  voidReason?: string | null
+  createdById: string
+  updatedById: string
+  voidedById?: string | null
+  createdAt: string
+  updatedAt: string
+  voidedAt?: string | null
+}
+
+export interface CreateSampleRetestsPayload {
+  sampleBlockIds: string[]
+  idempotencyKey: string
+}
+
+export interface SaveSampleRetestPayload {
+  idempotencyKey: string
+  baseUpdatedAt?: string
+  baseInputs?: SampleRetestInput
+  changedFields: SampleRetestInput
+}
+
+export interface DeleteSampleRetestPayload {
+  idempotencyKey: string
+  baseUpdatedAt: string
+}
+
+export interface VoidSampleRetestPayload {
+  idempotencyKey: string
+  baseUpdatedAt: string
+  reason?: string
+}
+
 export interface SampleBlock {
   id: string
   index: number
@@ -100,6 +154,7 @@ export interface SampleBlock {
   inputs: LabSampleInput
   results: LabFormulaResult
   parameterSnapshot: LabParameterSnapshot
+  retests: SampleRetest[]
 }
 
 export interface LabChangeLogField {

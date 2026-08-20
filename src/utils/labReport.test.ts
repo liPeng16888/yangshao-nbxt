@@ -59,7 +59,8 @@ function makeBlock(): SampleBlock {
       moisture: 0,
       burnLoss: 0
     },
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
 }
 

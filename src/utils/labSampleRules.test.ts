@@ -22,7 +22,8 @@ function block(inputs: SampleBlock['inputs']): SampleBlock {
     parameterSnapshot: {
       ironBlank: 0, ironFactor: 0, siliconBlank: 0, siliconFactor: 0,
       aluminumFactor1: 0, aluminumFactor2: 0, calciumFactor: 0, magnesiumFactor: 0, titaniumFactor: 0
-    }
+    },
+    retests: []
   }
 }
 

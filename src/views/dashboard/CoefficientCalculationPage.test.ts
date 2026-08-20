@@ -162,7 +162,8 @@ function makeBlock(index: number): SampleBlock {
     readonly: false,
     inputs: { sequence: String(index).padStart(3, '0') },
     results: {} as LabFormulaResult,
-    parameterSnapshot: { ...defaultLabParameters }
+    parameterSnapshot: { ...defaultLabParameters },
+    retests: []
   }
 }
 

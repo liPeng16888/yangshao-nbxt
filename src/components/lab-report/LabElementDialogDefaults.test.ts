@@ -28,7 +28,8 @@ function makeBlock(id: string, elementNote: string): SampleBlock {
     readonly: false,
     inputs,
     results: calculateSampleResults(inputs, defaultLabParameters),
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
 }
 

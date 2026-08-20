@@ -15,7 +15,21 @@ import type {
   MedicineUnit
 } from '@/types/medicineInventory'
 import type { DateRange, FinanceReport, SampleDetectionReport } from '@/types/report'
-import type { LabParameter, LabParameterKey, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
+import type {
+  CreateSampleRetestsPayload,
+  DeleteSampleRetestPayload,
+  LabParameter,
+  LabParameterKey,
+  LabSheet,
+  LabSampleInput,
+  SampleBlock,
+  SampleBlockSavePayload,
+  SampleRetest,
+  SampleRetestInput,
+  SaveSampleRetestPayload,
+  VoidSampleRetestPayload
+} from '@/types/labSheet'
+import { sampleRetestInputFields } from '@/types/labSheet'
 import { defaultLabParameters, DEFAULT_SAMPLE_BLOCK_COUNT } from '@/constants/labSheetTemplate'
 import { financeCategoryRules } from '@/constants/reportCategories'
 import { calculateSampleResults } from '@/utils/formulaEngine'
@@ -23,6 +37,7 @@ import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
 import { businessDateInBeijing, getReportRange, todayInBeijing } from '@/utils/date'
 import { medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
 import { hasLabDetectionInput } from '@/utils/sampleReport'
+import { hasRetestInput } from '@/utils/sampleRetest'
 import { getMockSharedPrepaidOwnerId, listMockSharedPrepaidIncomeRecharges } from './sharedPrepaidLedger'
 import type {
   CreateFrontendSubAccountPayload,
@@ -131,6 +146,14 @@ let medicineInventoryMovements: MedicineInventoryMovement[] = []
 let medicineCommonNames: MedicineCommonName[] = []
 
 const labSheets = new Map<string, LabSheet>()
+const mockLabSheetOwnerById = new Map<string, string>()
+const mockNextRetestSequenceByBlockId = new Map<string, number>()
+const mockRetestWriteRequests = new Map<string, {
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID'
+  fingerprint: string
+  response: unknown
+}>()
+let mockRetestIdCounter = 0
 
 function clone<T>(value: T): T {
   if (value === undefined) return value
@@ -170,7 +193,8 @@ function createEmptyBlock(index: number, parameters: LabParameter, date: string)
     updatedAt: dayjs().toISOString(),
     inputs,
     results: calculateSampleResults(inputs, parameters),
-    parameterSnapshot: clone(parameters)
+    parameterSnapshot: clone(parameters),
+    retests: []
   }
 }
 
@@ -195,12 +219,16 @@ function ensureSheet(date = businessDateInBeijing()) {
       parameters: clone(initialParameters),
       sampleBlocks
     })
+    mockLabSheetOwnerById.set(`sheet-${date}`, currentUser.dataOwnerId || currentUser.id)
   }
   const sheet = labSheets.get(date)!
   const readonly = date !== businessDateInBeijing()
   sheet.readonly = readonly
   sheet.sampleBlocks.forEach((block) => {
     block.readonly = readonly
+    block.retests.forEach((retest) => {
+      retest.readonly = readonly || retest.status === 'VOID'
+    })
   })
   return sheet
 }
@@ -321,12 +349,12 @@ export async function mockDeleteFrontendSubAccount(id: string) {
   return delay({ ok: true })
 }
 
-export async function mockCurrentLabSheet() {
-  return delay(ensureSheet())
+export async function mockCurrentLabSheet(canViewCompletedSensitiveData = false) {
+  return delay(publicMockLabSheet(ensureSheet(), canViewCompletedSensitiveData))
 }
 
-export async function mockLabSheetByDate(date: string) {
-  return delay(ensureSheet(date))
+export async function mockLabSheetByDate(date: string, canViewCompletedSensitiveData = false) {
+  return delay(publicMockLabSheet(ensureSheet(date), canViewCompletedSensitiveData))
 }
 
 export async function mockCurrentParameters() {
@@ -404,6 +432,341 @@ export async function mockSaveSampleBlock(sheetId: string, block: SampleBlockSav
   if (index >= 0) sheet.sampleBlocks[index] = nextBlock
   else sheet.sampleBlocks.push(nextBlock)
   return delay(nextBlock)
+}
+
+function currentDataOwnerId() {
+  return currentUser.dataOwnerId || currentUser.id
+}
+
+function findWritableMockSheet(sheetId: string) {
+  const sheet = Array.from(labSheets.values()).find((item) => item.id === sheetId)
+  if (!sheet || mockLabSheetOwnerById.get(sheet.id) !== currentDataOwnerId()) {
+    throw new Error('未找到表格')
+  }
+  if (sheet.date !== businessDateInBeijing()) {
+    throw new Error('历史日期表格仅支持查看，不能修改')
+  }
+  return sheet
+}
+
+function normalizeMockRetestInputs(value: unknown): SampleRetestInput {
+  const row = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  return Object.fromEntries(sampleRetestInputFields
+    .filter((field) => Object.prototype.hasOwnProperty.call(row, field))
+    .map((field) => {
+      const item = row[field]
+      return [field, typeof item === 'number' && Number.isFinite(item) ? item : null]
+    })) as SampleRetestInput
+}
+
+function createEmptyMockRetestInputs(): SampleRetestInput {
+  return Object.fromEntries(sampleRetestInputFields.map((field) => [field, null])) as SampleRetestInput
+}
+
+function normalizeMockRetestParameters(parameters: LabParameter) {
+  return Object.keys(defaultLabParameters).reduce<LabParameter>((next, key) => {
+    const value = parameters[key as LabParameterKey]
+    next[key as LabParameterKey] = typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : defaultLabParameters[key as LabParameterKey]
+    return next
+  }, { ...defaultLabParameters })
+}
+
+function nextMockRetestTimestamp(previous?: string) {
+  const previousTime = previous ? Date.parse(previous) : Number.NaN
+  const now = Date.now()
+  return new Date(Number.isFinite(previousTime) && previousTime >= now ? previousTime + 1 : now).toISOString()
+}
+
+function stableMockJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
+  if (typeof value === 'number') return JSON.stringify(Number.isFinite(value) ? value : null)
+  if (Array.isArray(value)) return `[${value.map((item) => stableMockJson(item === undefined ? null : item)).join(',')}]`
+  if (value && typeof value === 'object') {
+    const row = value as Record<string, unknown>
+    return `{${Object.keys(row).sort().filter((key) => row[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableMockJson(row[key])}`).join(',')}}`
+  }
+  return JSON.stringify(String(value))
+}
+
+function retestFingerprint(
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID',
+  sheetId: string,
+  payload: unknown,
+  retestId?: string
+) {
+  return stableMockJson({
+    operation,
+    actorUserId: currentUser.id,
+    dataOwnerId: currentDataOwnerId(),
+    sheetId,
+    ...(retestId ? { sampleRetestId: retestId } : {}),
+    payload
+  })
+}
+
+function requireMockIdempotencyKey(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('缺少幂等请求编号')
+  const key = value.trim()
+  if (key.length > 200) throw new Error('幂等请求编号过长')
+  return key
+}
+
+function requireMockBaseUpdatedAt(value: unknown) {
+  if (typeof value !== 'string' || !value.trim() || !Number.isFinite(Date.parse(value))) {
+    throw new Error('缺少或无效的复样版本时间')
+  }
+  return value.trim()
+}
+
+function resolveMockRetestWrite<T>(
+  idempotencyKey: string,
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID',
+  fingerprint: string
+): T | null {
+  const request = mockRetestWriteRequests.get(idempotencyKey)
+  if (!request) return null
+  if (request.operation !== operation || request.fingerprint !== fingerprint) {
+    throw new Error('幂等请求编号已用于不同的复样操作')
+  }
+  return clone(request.response) as T
+}
+
+function recordMockRetestWrite(
+  idempotencyKey: string,
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID',
+  fingerprint: string,
+  response: unknown
+) {
+  mockRetestWriteRequests.set(idempotencyKey, { operation, fingerprint, response: clone(response) })
+}
+
+function findMockRetest(sheet: LabSheet, retestId: string, canViewCompletedSensitiveData: boolean) {
+  for (const block of sheet.sampleBlocks) {
+    const retest = block.retests.find((item) => item.id === retestId)
+    if (!retest) continue
+    if (block.inputs.completed && !canViewCompletedSensitiveData) {
+      throw new Error('已完成样品需要验证后才能修改复样')
+    }
+    return { block, retest }
+  }
+  throw new Error('未找到复样')
+}
+
+function assertMockRetestActive(retest: SampleRetest) {
+  if (retest.status !== 'ACTIVE') throw new Error('已作废的复样不能再修改')
+}
+
+function assertMockExactRetestVersion(retest: SampleRetest, baseUpdatedAt: string) {
+  if (Date.parse(retest.updatedAt) !== Date.parse(baseUpdatedAt)) {
+    throw new Error('该复样已被修改，请刷新后重试')
+  }
+}
+
+function publicMockRetest(
+  retest: SampleRetest,
+  block: SampleBlock,
+  sheet: LabSheet,
+  canViewCompletedSensitiveData: boolean
+) {
+  const hidden = Boolean(block.inputs.completed && !canViewCompletedSensitiveData)
+  const inputs = hidden
+    ? Object.fromEntries(Object.keys(retest.inputs).map((field) => [field, null]))
+    : retest.inputs
+  const results = hidden
+    ? Object.fromEntries(Object.keys(retest.results).map((field) => [field, null]))
+    : retest.results
+  return clone({
+    ...retest,
+    readonly: sheet.readonly || retest.status === 'VOID',
+    sensitiveFieldsHidden: hidden,
+    inputs,
+    results
+  }) as SampleRetest
+}
+
+function publicMockLabSheet(sheet: LabSheet, canViewCompletedSensitiveData: boolean): LabSheet {
+  return clone({
+    ...sheet,
+    sampleBlocks: sheet.sampleBlocks.map((block) => ({
+      ...block,
+      retests: block.retests.map((retest) => publicMockRetest(
+        retest,
+        block,
+        sheet,
+        canViewCompletedSensitiveData
+      ))
+    }))
+  })
+}
+
+export async function mockCreateSampleRetests(
+  sheetId: string,
+  payload: CreateSampleRetestsPayload,
+  canViewCompletedSensitiveData = false
+) {
+  const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
+  if (!Array.isArray(payload.sampleBlockIds) || payload.sampleBlockIds.length < 1 || payload.sampleBlockIds.length > 100) {
+    throw new Error('请选择 1 至 100 个样品')
+  }
+  const sampleBlockIds = payload.sampleBlockIds.map((id) => {
+    if (typeof id !== 'string' || !id.trim()) throw new Error('样品编号不能为空')
+    return id.trim()
+  })
+  if (new Set(sampleBlockIds).size !== sampleBlockIds.length) throw new Error('样品选择不能重复')
+
+  const sheet = findWritableMockSheet(sheetId)
+  const blocks = sampleBlockIds.map((id) => sheet.sampleBlocks.find((block) => block.id === id))
+  if (blocks.some((block) => !block)) throw new Error('未找到样品')
+  if (!canViewCompletedSensitiveData && blocks.some((block) => block!.inputs.completed)) {
+    throw new Error('已完成样品需要验证后才能创建复样')
+  }
+
+  const fingerprint = retestFingerprint('CREATE', sheetId, { sampleBlockIds, idempotencyKey })
+  const duplicate = resolveMockRetestWrite<SampleRetest[]>(idempotencyKey, 'CREATE', fingerprint)
+  if (duplicate) return delay(duplicate)
+
+  const parameterSnapshot = normalizeMockRetestParameters(sheet.parameters)
+  const created = blocks.map((block) => {
+    const parent = block!
+    const sequence = mockNextRetestSequenceByBlockId.get(parent.id)
+      ?? (parent.retests.reduce((highest, retest) => Math.max(highest, retest.sequence), 0) + 1)
+    mockNextRetestSequenceByBlockId.set(parent.id, sequence + 1)
+    const inputs = createEmptyMockRetestInputs()
+    const timestamp = nextMockRetestTimestamp()
+    const retest: SampleRetest = {
+      id: `mock-retest-${++mockRetestIdCounter}`,
+      sampleBlockId: parent.id,
+      sequence,
+      status: 'ACTIVE',
+      everFilled: false,
+      readonly: false,
+      sensitiveFieldsHidden: false,
+      inputs,
+      results: calculateSampleResults(inputs, parameterSnapshot),
+      parameterSnapshot: clone(parameterSnapshot),
+      voidReason: null,
+      createdById: currentUser.id,
+      updatedById: currentUser.id,
+      voidedById: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      voidedAt: null
+    }
+    parent.retests.push(retest)
+    return publicMockRetest(retest, parent, sheet, canViewCompletedSensitiveData)
+  })
+  recordMockRetestWrite(idempotencyKey, 'CREATE', fingerprint, created)
+  return delay(created)
+}
+
+export async function mockSaveSampleRetest(
+  sheetId: string,
+  retestId: string,
+  payload: SaveSampleRetestPayload,
+  canViewCompletedSensitiveData = false
+) {
+  const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
+  const changedFields = normalizeMockRetestInputs(payload.changedFields)
+  const baseInputs = normalizeMockRetestInputs(payload.baseInputs)
+  const baseUpdatedAt = typeof payload.baseUpdatedAt === 'string' ? payload.baseUpdatedAt.trim() : undefined
+  const fingerprintPayload = {
+    idempotencyKey,
+    ...(baseUpdatedAt ? { baseUpdatedAt } : {}),
+    ...(payload.baseInputs === undefined ? {} : { baseInputs }),
+    changedFields
+  }
+  const sheet = findWritableMockSheet(sheetId)
+  const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
+  const fingerprint = retestFingerprint('SAVE', sheetId, fingerprintPayload, retestId)
+  const duplicate = resolveMockRetestWrite<SampleRetest>(idempotencyKey, 'SAVE', fingerprint)
+  if (duplicate) return delay(duplicate)
+
+  assertMockRetestActive(context.retest)
+  const baseTime = baseUpdatedAt ? Date.parse(baseUpdatedAt) : Number.NaN
+  if (Number.isFinite(baseTime) && Date.parse(context.retest.updatedAt) > baseTime) {
+    const conflicts = Object.keys(changedFields).filter((field) => (
+      !Object.prototype.hasOwnProperty.call(baseInputs, field) ||
+      (context.retest.inputs[field as keyof SampleRetestInput] ?? null) !==
+        (baseInputs[field as keyof SampleRetestInput] ?? null)
+    ))
+    if (conflicts.length) throw new Error('该复样已被另一台设备修改，请确认后再保存')
+  }
+
+  const nextInputs = { ...context.retest.inputs, ...changedFields }
+  context.retest.inputs = nextInputs
+  context.retest.results = calculateSampleResults(nextInputs, context.retest.parameterSnapshot)
+  context.retest.everFilled = context.retest.everFilled || hasRetestInput(nextInputs)
+  context.retest.updatedById = currentUser.id
+  context.retest.updatedAt = nextMockRetestTimestamp(context.retest.updatedAt)
+  const response = publicMockRetest(context.retest, context.block, sheet, canViewCompletedSensitiveData)
+  recordMockRetestWrite(idempotencyKey, 'SAVE', fingerprint, response)
+  return delay(response)
+}
+
+export async function mockDeleteSampleRetest(
+  sheetId: string,
+  retestId: string,
+  payload: DeleteSampleRetestPayload,
+  canViewCompletedSensitiveData = false
+) {
+  const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
+  const baseUpdatedAt = requireMockBaseUpdatedAt(payload.baseUpdatedAt)
+  const fingerprint = retestFingerprint('DELETE', sheetId, { idempotencyKey, baseUpdatedAt }, retestId)
+  const sheet = findWritableMockSheet(sheetId)
+  const duplicate = resolveMockRetestWrite<{ id: string; sampleBlockId: string; deleted: true }>(
+    idempotencyKey, 'DELETE', fingerprint
+  )
+  if (duplicate) return delay(duplicate)
+
+  const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
+  assertMockRetestActive(context.retest)
+  assertMockExactRetestVersion(context.retest, baseUpdatedAt)
+  if (context.retest.everFilled || hasRetestInput(context.retest.inputs)) {
+    throw new Error('已录入数据的复样只能作废')
+  }
+  context.block.retests = context.block.retests.filter((item) => item.id !== retestId)
+  const response = { id: retestId, sampleBlockId: context.block.id, deleted: true as const }
+  recordMockRetestWrite(idempotencyKey, 'DELETE', fingerprint, response)
+  return delay(response)
+}
+
+export async function mockVoidSampleRetest(
+  sheetId: string,
+  retestId: string,
+  payload: VoidSampleRetestPayload,
+  canViewCompletedSensitiveData = false
+) {
+  const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
+  const baseUpdatedAt = requireMockBaseUpdatedAt(payload.baseUpdatedAt)
+  if (payload.reason !== undefined && payload.reason !== null && typeof payload.reason !== 'string') {
+    throw new Error('作废原因格式错误')
+  }
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() || null : null
+  const fingerprint = retestFingerprint('VOID', sheetId, { idempotencyKey, baseUpdatedAt, reason }, retestId)
+  const sheet = findWritableMockSheet(sheetId)
+  const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
+  const duplicate = resolveMockRetestWrite<SampleRetest>(idempotencyKey, 'VOID', fingerprint)
+  if (duplicate) return delay(duplicate)
+
+  assertMockRetestActive(context.retest)
+  assertMockExactRetestVersion(context.retest, baseUpdatedAt)
+  if (!context.retest.everFilled) throw new Error('未录入数据的复样可以直接删除')
+  const timestamp = nextMockRetestTimestamp(context.retest.updatedAt)
+  context.retest.status = 'VOID'
+  context.retest.readonly = true
+  context.retest.voidReason = reason
+  context.retest.voidedAt = timestamp
+  context.retest.voidedById = currentUser.id
+  context.retest.updatedById = currentUser.id
+  context.retest.updatedAt = timestamp
+  const response = publicMockRetest(context.retest, context.block, sheet, canViewCompletedSensitiveData)
+  recordMockRetestWrite(idempotencyKey, 'VOID', fingerprint, response)
+  return delay(response)
 }
 
 function requireCompleteLabParameters(parameters: unknown): LabParameter {

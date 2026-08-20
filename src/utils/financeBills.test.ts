@@ -38,7 +38,8 @@ function makeBlock(id: string, price: number | null, paymentStatus = ''): Sample
       moisture: 0,
       burnLoss: 0
     },
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
 }
 

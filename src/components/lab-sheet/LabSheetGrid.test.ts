@@ -68,7 +68,8 @@ function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock 
     readonly: false,
     inputs,
     results: calculateSampleResults(inputs, defaultLabParameters),
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
 }
 

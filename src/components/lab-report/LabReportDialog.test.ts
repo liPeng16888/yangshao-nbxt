@@ -81,7 +81,8 @@ function makeBlock(): SampleBlock {
     readonly: false,
     inputs,
     results: calculateSampleResults(inputs, defaultLabParameters),
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
 }
 

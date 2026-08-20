@@ -78,7 +78,8 @@ function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock 
     updatedAt: '2026-06-25T00:00:00.000Z',
     inputs,
     results: calculateSampleResults(inputs, defaultLabParameters),
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
 }
 

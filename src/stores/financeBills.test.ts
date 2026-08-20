@@ -43,7 +43,8 @@ function makeBlock(paymentStatus: SampleBlock['inputs']['paymentStatus'], id = '
       moisture: 0,
       burnLoss: 0
     },
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
 }
 

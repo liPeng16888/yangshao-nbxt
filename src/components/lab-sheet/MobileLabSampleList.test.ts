@@ -14,7 +14,8 @@ function makeBlock(id: string, index: number, inputs: LabSampleInput = {}): Samp
     readonly: false,
     inputs: { sequence: String(index).padStart(3, '0'), ...inputs },
     results: calculateSampleResults(inputs, defaultLabParameters),
-    parameterSnapshot: { ...defaultLabParameters }
+    parameterSnapshot: { ...defaultLabParameters },
+    retests: []
   }
 }
 
