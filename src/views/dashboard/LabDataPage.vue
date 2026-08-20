@@ -49,6 +49,13 @@
           </el-button>
         </div>
         <div v-if="!isMobileLayout || !selectionMode" class="toolbar-right">
+          <el-button
+            :loading="labStore.saving || creatingRetests"
+            :disabled="isPageReadonly || creatingRetests"
+            @click="openSampleRetestDialog"
+          >
+            样品复样
+          </el-button>
           <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
             标记样品完成
           </el-button>
@@ -82,6 +89,7 @@
       :selection-mode="selectionMode"
       :selected-block-ids="selectedReportBlockIds"
       :highlight-block-id="highlightBlockId"
+      :highlight-retest-id="highlightRetestId"
       :can-view-completed-sensitive-data="canViewCompletedSensitiveData"
       @update="labStore.patchBlock"
       @field-commit="labStore.commitBlockFieldChange"
@@ -97,6 +105,7 @@
       :selection-mode="selectionMode"
       :selected-block-ids="selectedReportBlockIds"
       :highlight-block-id="highlightBlockId"
+      :highlight-retest-id="highlightRetestId"
       :can-view-completed-sensitive-data="canViewCompletedSensitiveData"
       @update="labStore.patchBlock"
       @field-commit="labStore.commitBlockFieldChange"
@@ -151,6 +160,14 @@
       @close="completionDialogVisible = false"
     />
 
+    <SampleRetestDialog
+      :visible="retestDialogVisible"
+      :blocks="labStore.sampleBlocks"
+      :saving="labStore.saving || labStore.autoSaving || creatingRetests"
+      @create="applySampleRetestCreation"
+      @close="retestDialogVisible = false"
+    />
+
     <LabReportDialog
       :visible="reportDialogVisible"
       :blocks="labStore.sampleBlocks"
@@ -187,6 +204,7 @@ import LabParameterPanel from '@/components/lab-sheet/LabParameterPanel.vue'
 import LabSheetGrid from '@/components/lab-sheet/LabSheetGrid.vue'
 import MobileLabSampleList from '@/components/lab-sheet/MobileLabSampleList.vue'
 import SampleCompletionDialog from '@/components/lab-sheet/SampleCompletionDialog.vue'
+import SampleRetestDialog from '@/components/lab-sheet/SampleRetestDialog.vue'
 import LabReportDialog from '@/components/lab-report/LabReportDialog.vue'
 import LabSmsDialog from '@/components/lab-report/LabSmsDialog.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
@@ -222,8 +240,11 @@ const reportDialogVisible = ref(false)
 const smsDialogVisible = ref(false)
 const bulkFillDialogVisible = ref(false)
 const completionDialogVisible = ref(false)
+const retestDialogVisible = ref(false)
+const creatingRetests = ref(false)
 const switchingBusinessDay = ref(false)
 const highlightBlockId = ref('')
+const highlightRetestId = ref('')
 const reportTemplate = ref<LabReportTemplate>({
   ...defaultLabReportTemplate,
   statements: [...defaultLabReportTemplate.statements]
@@ -405,6 +426,7 @@ async function checkBusinessDayBoundary() {
     }
     selectedDate.value = labStore.sheet?.date || businessDate
     highlightBlockId.value = ''
+    highlightRetestId.value = ''
     scheduleBusinessDayBoundary()
   } catch {
     ElMessage.error('新业务日表格加载失败，已保留当前表格')
@@ -425,6 +447,7 @@ function handleBusinessDayVisibilityChange() {
 async function loadSheetFromRoute() {
   const queryDate = typeof route.query.date === 'string' ? route.query.date : ''
   const queryBlock = typeof route.query.block === 'string' ? route.query.block : ''
+  highlightRetestId.value = ''
   if (queryDate) {
     const allowed = await requestHistoricalDateAccess(queryDate, () => loadRouteSheetFromQuery(queryDate, queryBlock))
     if (!allowed) {
@@ -469,6 +492,7 @@ async function loadRouteSheetFromQuery(queryDate: string, queryBlock: string) {
 async function loadSelectedDate(value: string) {
   selectedDate.value = value
   highlightBlockId.value = ''
+  highlightRetestId.value = ''
   const loaded = await labStore.loadSheetByDate(value)
   if (!loaded) {
     selectedDate.value = labStore.sheet?.date || businessDateInBeijing()
@@ -553,6 +577,29 @@ function openSampleCompletionDialog() {
     return
   }
   completionDialogVisible.value = true
+}
+
+function openSampleRetestDialog() {
+  if (isPageReadonly.value) {
+    ElMessage.warning('历史副表只读，不能创建复样')
+    return
+  }
+  retestDialogVisible.value = true
+}
+
+async function applySampleRetestCreation(payload: { sampleBlockIds: string[] }) {
+  if (creatingRetests.value) return
+  creatingRetests.value = true
+  try {
+    const created = await labStore.createRetests(payload.sampleBlockIds)
+    retestDialogVisible.value = false
+    highlightRetestId.value = created[0]?.id || ''
+    ElMessage.success(`已创建 ${created.length} 组复样`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '复样创建失败')
+  } finally {
+    creatingRetests.value = false
+  }
 }
 
 async function applySampleCompletion(payload: { blockIds: string[]; completed: boolean }) {

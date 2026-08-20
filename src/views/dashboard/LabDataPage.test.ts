@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => ({
     retryFailedSaves: vi.fn(),
     confirmConflictOverwrite: vi.fn(),
     appendSampleBlocks: vi.fn(),
+    createRetests: vi.fn(),
     disconnectRealtime: vi.fn()
   }
 }))
@@ -85,12 +86,17 @@ function mountPage() {
       blocks: { type: Array, default: () => [] },
       readonly: { type: Boolean, default: false },
       selectionMode: { type: Boolean, default: false },
-      selectedBlockIds: { type: Array, default: () => [] }
+      selectedBlockIds: { type: Array, default: () => [] },
+      highlightRetestId: { type: String, default: '' }
     },
     emits: ['selectionChange'],
     setup(props, { emit }) {
       return () =>
-        h('div', { class: 'lab-grid-stub', 'data-readonly': String(props.readonly) }, [
+        h('div', {
+          class: 'lab-grid-stub',
+          'data-readonly': String(props.readonly),
+          'data-highlight-retest-id': props.highlightRetestId
+        }, [
           props.selectionMode
             ? h(
                 'button',
@@ -151,11 +157,16 @@ function mountPage() {
       blocks: { type: Array, default: () => [] },
       readonly: { type: Boolean, default: false },
       selectionMode: { type: Boolean, default: false },
-      selectedBlockIds: { type: Array, default: () => [] }
+      selectedBlockIds: { type: Array, default: () => [] },
+      highlightRetestId: { type: String, default: '' }
     },
     emits: ['selectionChange', 'saveNext'],
     setup(props, { emit }) {
-      return () => h('div', { class: 'mobile-lab-list-stub', 'data-readonly': String(props.readonly) }, [
+      return () => h('div', {
+        class: 'mobile-lab-list-stub',
+        'data-readonly': String(props.readonly),
+        'data-highlight-retest-id': props.highlightRetestId
+      }, [
         props.selectionMode
           ? h('button', { class: 'mobile-select-block-1', onClick: () => emit('selectionChange', 'block-1', true) }, '选择001')
           : null,
@@ -184,6 +195,30 @@ function mountPage() {
               )
             ])
           : null
+    }
+  })
+
+  const SampleRetestDialogStub = defineComponent({
+    name: 'SampleRetestDialog',
+    props: {
+      visible: { type: Boolean, default: false },
+      saving: { type: Boolean, default: false }
+    },
+    emits: ['create', 'close'],
+    setup(props, { emit }) {
+      return () => props.visible
+        ? h('div', {
+            class: 'sample-retest-dialog-stub',
+            'data-saving': String(props.saving)
+          }, [
+            h('button', {
+              class: 'sample-retest-create',
+              type: 'button',
+              disabled: props.saving,
+              onClick: () => emit('create', { sampleBlockIds: ['block-1'] })
+            }, '创建001复样')
+          ])
+        : null
     }
   })
 
@@ -236,6 +271,7 @@ function mountPage() {
         LabSmsDialog: LabSmsDialogStub,
         BulkSampleFillDialog: BulkSampleFillDialogStub,
         SampleCompletionDialog: SampleCompletionDialogStub,
+        SampleRetestDialog: SampleRetestDialogStub,
         BlacklistHitDialog: true,
         ElDatePicker: {
           props: ['modelValue'],
@@ -275,6 +311,10 @@ describe('LabDataPage table layout', () => {
     mocks.labStore.confirmConflictOverwrite.mockReset()
     mocks.labStore.confirmConflictOverwrite.mockResolvedValue({ success: true, failedBlockIds: [], conflictBlockIds: [] })
     mocks.labStore.appendSampleBlocks.mockResolvedValue(undefined)
+    mocks.labStore.createRetests.mockReset()
+    mocks.labStore.createRetests.mockResolvedValue([
+      { id: 'retest-1', sampleBlockId: 'block-1', sequence: 1 }
+    ])
     mocks.labStore.disconnectRealtime.mockReset()
     mocks.accessGuard.loadGroups.mockReset()
     mocks.accessGuard.requestFeatureAccess.mockReset()
@@ -297,7 +337,8 @@ describe('LabDataPage table layout', () => {
         readonly: false,
         inputs: { sequence: '001', price: null, paymentStatus: '' },
         results: {},
-        parameterSnapshot: {}
+        parameterSnapshot: {},
+        retests: []
       },
       {
         id: 'block-2',
@@ -305,7 +346,8 @@ describe('LabDataPage table layout', () => {
         readonly: false,
         inputs: { sequence: '002', price: null, paymentStatus: '' },
         results: {},
-        parameterSnapshot: {}
+        parameterSnapshot: {},
+        retests: []
       }
     ]
     mocks.mobileLayout.isMobileLayout.value = false
@@ -764,6 +806,97 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
   })
 
+  it('places 样品复样 immediately before 标记样品完成 and creates the selected parents', async () => {
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+    const labels = wrapper.findAll('.toolbar-right button').map((button) => button.text())
+
+    expect(labels.indexOf('样品复样')).toBe(labels.indexOf('标记样品完成') - 1)
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(mocks.labStore.createRetests).toHaveBeenCalledWith(['block-1'])
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('retest-1')
+    expect(successSpy).toHaveBeenCalledWith('已创建 1 组复样')
+    successSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('locks the creation dialog until the request settles', async () => {
+    let resolveCreation: (value: any[]) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((resolve) => { resolveCreation = resolve }))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('.sample-retest-dialog-stub').attributes('data-saving')).toBe('true')
+    expect(wrapper.get('.sample-retest-create').attributes('disabled')).toBeDefined()
+    resolveCreation([{ id: 'retest-1', sampleBlockId: 'block-1', sequence: 1 }])
+    await Promise.resolve()
+    await nextTick()
+    wrapper.unmount()
+  })
+
+  it('keeps the selected dialog open and reports a creation error', async () => {
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    mocks.labStore.createRetests.mockRejectedValue(new Error('没有复样权限'))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    expect(wrapper.get('.sample-retest-dialog-stub').attributes('data-saving')).toBe('false')
+    expect(errorSpy).toHaveBeenCalledWith('没有复样权限')
+    errorSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('passes the first created retest highlight to the mobile sample list', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.mobile-lab-list-stub').attributes('data-highlight-retest-id')).toBe('retest-1')
+    wrapper.unmount()
+  })
+
+  it('clears the created retest highlight when switching dates', async () => {
+    mocks.labStore.loadSheetByDate.mockResolvedValue(true)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('retest-1')
+
+    await wrapper.get('.date-picker-stub').setValue('2026-06-23')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('')
+    wrapper.unmount()
+  })
+
   it('reads the latest shared report template immediately before opening the report dialog', async () => {
     mocks.preferenceValue.mockImplementation((section: string, fallback: unknown) => (
       section === 'LAB_REPORT_TEMPLATE'
@@ -852,6 +985,7 @@ describe('LabDataPage table layout', () => {
     await settleMountedPage()
 
     expect(findButtonByText(wrapper, '标记样品完成').attributes('disabled')).toBeDefined()
+    expect(findButtonByText(wrapper, '样品复样').attributes('disabled')).toBeDefined()
   })
 
   it('retries unsaved fields from the toolbar after a save failure', async () => {
