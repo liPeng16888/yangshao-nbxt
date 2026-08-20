@@ -16,24 +16,73 @@ export interface FrontendOption {
 
 export type AdminSampleRetestStatus = 'ACTIVE' | 'VOID'
 
+export type AdminSampleRetestInput = Readonly<{
+  ironRaw: number | null
+  siliconRaw: number | null
+  siliconAdjust: number | null
+  aluminumRaw: number | null
+  aluminumAdjust: number | null
+  sulfur: number | null
+  densityRaw: number | null
+  whiteness: number | null
+  calciumRaw: number | null
+  magnesiumRaw: number | null
+  carbon: number | null
+  titaniumRaw: number | null
+  waterSample: number | null
+  bottleWater: number | null
+  bottleWaterSample: number | null
+  moisture: number | null
+  crucible: number | null
+  sampleWeight: number | null
+  burnedCrucibleSample: number | null
+}>
+
+export type AdminSampleRetestResult = Readonly<{
+  iron: number
+  silicon: number
+  aluminum: number
+  aluminumSiliconRatio: number
+  total: number
+  density: number
+  calcium: number
+  magnesium: number
+  titanium: number
+  bottleDensity: number
+  moisture: number
+  burnLoss: number
+}>
+
+export type AdminSampleRetestParameterSnapshot = Readonly<{
+  ironBlank: number
+  ironFactor: number
+  siliconBlank: number
+  siliconFactor: number
+  aluminumFactor1: number
+  aluminumFactor2: number
+  calciumFactor: number
+  magnesiumFactor: number
+  titaniumFactor: number
+}>
+
 export interface AdminSampleRetest {
-  id: string
-  sampleBlockId: string
-  sequence: number
-  status: AdminSampleRetestStatus
-  everFilled: boolean
-  readonly: true
-  sensitiveFieldsHidden: boolean
-  inputs: Record<string, number | null>
-  results: Record<string, number | null>
-  parameterSnapshot: Record<string, number>
-  voidReason: string | null
-  createdById: string
-  updatedById: string
-  voidedById: string | null
-  createdAt: string
-  updatedAt: string
-  voidedAt: string | null
+  readonly id: string
+  readonly sampleBlockId: string
+  readonly sequence: number
+  readonly status: AdminSampleRetestStatus
+  readonly everFilled: boolean
+  readonly readonly: true
+  readonly sensitiveFieldsHidden: boolean
+  readonly inputs: AdminSampleRetestInput
+  readonly results: AdminSampleRetestResult
+  readonly parameterSnapshot: AdminSampleRetestParameterSnapshot
+  readonly voidReason: string | null
+  readonly createdById: string
+  readonly updatedById: string
+  readonly voidedById: string | null
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly voidedAt: string | null
 }
 
 export interface AdminDataCustomer {

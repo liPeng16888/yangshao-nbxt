@@ -88,14 +88,42 @@ const sheetFixture: AdminDataLabSheet = {
     results: { iron: 27.94 }, parameterSnapshot: { ironFactor: 29.1 },
     retests: [{
       id: 'retest-1', sampleBlockId: 'block-1', sequence: 1, status: 'ACTIVE', everFilled: true,
-      readonly: true, sensitiveFieldsHidden: false, inputs: { ironRaw: 1.2 }, results: { iron: 33.76 },
-      parameterSnapshot: { ironBlank: 0.04, ironFactor: 29.1 }, voidReason: null,
+      readonly: true, sensitiveFieldsHidden: false,
+      inputs: {
+        ironRaw: 1.2, siliconRaw: null, siliconAdjust: null, aluminumRaw: null, aluminumAdjust: null,
+        sulfur: null, densityRaw: null, whiteness: null, calciumRaw: null, magnesiumRaw: null, carbon: null,
+        titaniumRaw: null, waterSample: null, bottleWater: null, bottleWaterSample: null, moisture: null,
+        crucible: null, sampleWeight: null, burnedCrucibleSample: null
+      },
+      results: {
+        iron: 33.76, silicon: 0, aluminum: 0, aluminumSiliconRatio: 0, total: 33.76,
+        density: 0, calcium: 0, magnesium: 0, titanium: 0, bottleDensity: 0, moisture: 0, burnLoss: 0
+      },
+      parameterSnapshot: {
+        ironBlank: 0.04, ironFactor: 29.1, siliconBlank: 0.027, siliconFactor: 13,
+        aluminumFactor1: 0.502, aluminumFactor2: 4.98, calciumFactor: 1.15,
+        magnesiumFactor: 0.556, titaniumFactor: 0.57
+      }, voidReason: null,
       createdById: 'front-1', updatedById: 'front-1', voidedById: null,
       createdAt: '2026-08-20T08:00:00+08:00', updatedAt: '2026-08-20T08:30:00+08:00', voidedAt: null
     }, {
       id: 'retest-2', sampleBlockId: 'block-1', sequence: 2, status: 'VOID', everFilled: true,
-      readonly: true, sensitiveFieldsHidden: false, inputs: { ironRaw: 1.3 }, results: { iron: 36.67 },
-      parameterSnapshot: { ironBlank: 0.04, ironFactor: 29.1 }, voidReason: '复核无效',
+      readonly: true, sensitiveFieldsHidden: false,
+      inputs: {
+        ironRaw: 1.3, siliconRaw: null, siliconAdjust: null, aluminumRaw: null, aluminumAdjust: null,
+        sulfur: null, densityRaw: null, whiteness: null, calciumRaw: null, magnesiumRaw: null, carbon: null,
+        titaniumRaw: null, waterSample: null, bottleWater: null, bottleWaterSample: null, moisture: null,
+        crucible: null, sampleWeight: null, burnedCrucibleSample: null
+      },
+      results: {
+        iron: 36.67, silicon: 0, aluminum: 0, aluminumSiliconRatio: 0, total: 36.67,
+        density: 0, calcium: 0, magnesium: 0, titanium: 0, bottleDensity: 0, moisture: 0, burnLoss: 0
+      },
+      parameterSnapshot: {
+        ironBlank: 0.04, ironFactor: 29.1, siliconBlank: 0.027, siliconFactor: 13,
+        aluminumFactor1: 0.502, aluminumFactor2: 4.98, calciumFactor: 1.15,
+        magnesiumFactor: 0.556, titaniumFactor: 0.57
+      }, voidReason: '复核无效',
       createdById: 'front-1', updatedById: 'front-1', voidedById: 'front-1',
       createdAt: '2026-08-20T09:00:00+08:00', updatedAt: '2026-08-20T09:30:00+08:00', voidedAt: '2026-08-20T10:00:00+08:00'
     }]

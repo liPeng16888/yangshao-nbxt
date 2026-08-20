@@ -41,7 +41,10 @@ function makeRetest(sequence: number, status: 'ACTIVE' | 'VOID') {
   }
 }
 
-function makeSheet() {
+function makeSheet(options: {
+  inputs?: Record<string, unknown>
+  retests?: ReturnType<typeof makeRetest>[]
+} = {}) {
   return {
     id: 'sheet-1',
     frontendUserId: 'front-1',
@@ -52,17 +55,17 @@ function makeSheet() {
     sampleBlocks: [{
       id: 'block-1',
       index: 1,
-      inputs: { sequence: '001', sampleNumber: '样品甲', completed: true },
+      inputs: options.inputs ?? { sequence: '001', sampleNumber: '样品甲', completed: true },
       results: { iron: 1 },
       parameterSnapshot: defaultLabParameters,
-      retests: [makeRetest(1, 'ACTIVE'), makeRetest(2, 'VOID')]
+      retests: options.retests ?? [makeRetest(1, 'ACTIVE'), makeRetest(2, 'VOID')]
     }]
   }
 }
 
-function makeService(options: { denied?: boolean } = {}) {
+function makeService(options: { denied?: boolean; sheets?: ReturnType<typeof makeSheet>[] } = {}) {
   const prisma = {
-    labSheet: { findMany: vi.fn().mockResolvedValue([makeSheet()]) },
+    labSheet: { findMany: vi.fn().mockResolvedValue(options.sheets ?? [makeSheet()]) },
     customer: { findMany: vi.fn().mockResolvedValue([]) }
   }
   const access = {
@@ -118,6 +121,38 @@ describe('AdminDataService lab sheet retests', () => {
     })).rejects.toThrow('没有访问部分前端账号的权限')
 
     expect(prisma.labSheet.findMany).not.toHaveBeenCalled()
+  })
+
+  it('retains a sheet and blank parent block when the block has active or void retests', async () => {
+    const blankParentWithRetests = makeSheet({
+      inputs: { sequence: '001', completed: false },
+      retests: [makeRetest(1, 'ACTIVE'), makeRetest(2, 'VOID')]
+    })
+    const { service } = makeService({ sheets: [blankParentWithRetests] })
+
+    const result = await service.labSheets(subAdmin, {
+      frontendUserIds: ['front-1'],
+      date: '2026-08-20'
+    })
+
+    expect(result).toHaveLength(1)
+    expect(result[0].sampleBlocks).toHaveLength(1)
+    expect(result[0].sampleBlocks[0].retests.map((row) => row.status)).toEqual(['ACTIVE', 'VOID'])
+  })
+
+  it('continues omitting a truly blank parent block and sheet when no retest exists', async () => {
+    const trulyBlank = makeSheet({
+      inputs: { sequence: '001', completed: false },
+      retests: []
+    })
+    const { service } = makeService({ sheets: [trulyBlank] })
+
+    const result = await service.labSheets(subAdmin, {
+      frontendUserIds: ['front-1'],
+      date: '2026-08-20'
+    })
+
+    expect(result).toEqual([])
   })
 
   it('keeps the existing admin lab-sheet route GET-only and registers no admin retest mutation', () => {

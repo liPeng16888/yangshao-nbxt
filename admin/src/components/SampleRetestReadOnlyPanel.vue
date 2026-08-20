@@ -57,7 +57,12 @@
 
 <script setup lang="ts">
 import dayjs from 'dayjs'
-import type { AdminSampleRetest } from '../types'
+import type {
+  AdminSampleRetest,
+  AdminSampleRetestInput,
+  AdminSampleRetestParameterSnapshot,
+  AdminSampleRetestResult
+} from '../types'
 
 defineProps<{ retests: AdminSampleRetest[] }>()
 
@@ -80,8 +85,8 @@ const parameterLabels: Record<string, string> = {
   magnesiumFactor: '镁系数', titaniumFactor: '钛系数'
 }
 
-function entries(values: Record<string, number | null>) {
-  return Object.entries(values)
+function entries(values: AdminSampleRetestInput | AdminSampleRetestResult | AdminSampleRetestParameterSnapshot) {
+  return Object.entries(values) as Array<[string, number | null]>
 }
 
 function fieldLabel(field: string) {

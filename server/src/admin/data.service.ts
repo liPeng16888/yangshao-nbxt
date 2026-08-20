@@ -62,7 +62,7 @@ export class AdminDataService {
         readonly: true,
         parameters: sheet.parameters,
         sampleBlocks: sheet.sampleBlocks
-          .filter((block) => hasVisibleSampleBlockInput(block.inputs as Record<string, unknown>))
+          .filter((block) => block.retests.length > 0 || hasVisibleSampleBlockInput(block.inputs as Record<string, unknown>))
           .map((block) => ({
             id: block.id,
             index: block.index,

@@ -15,6 +15,7 @@ import type {
   AdminAttendanceSchedules,
   AdminScheduleAttendanceOverview,
   AdminAttendanceCalendarDay,
+  AdminDataLabSheet,
   AdminCustomerOverviewRow,
   AdminFrontendAccount,
   AdminEmployeeAttendanceQuery,
@@ -23,6 +24,9 @@ import type {
   AdminMedicineInventoryMovement,
   AdminRevealedAttendanceEmployee,
   AdminRevealedAttendanceEmployeeResponse,
+  AdminSampleRetestInput,
+  AdminSampleRetestParameterSnapshot,
+  AdminSampleRetestResult,
   AdminUser,
   FrontendOption
 } from './types'
@@ -541,7 +545,16 @@ function isSharedPrepaidAdminPath(url: string) {
 }
 
 function isAdminRetestWritePath(url: string) {
-  return url.startsWith('/admin/data-statistics/lab-sheets') || url.includes('/sample-retests')
+  let pathname: string
+  try {
+    pathname = new URL(url, 'http://admin.local').pathname
+  } catch {
+    pathname = url.split(/[?#]/, 1)[0]
+  }
+  const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
+  return normalized === '/admin/data-statistics/lab-sheets'
+    || normalized.startsWith('/admin/data-statistics/lab-sheets/')
+    || normalized.split('/').includes('sample-retests')
 }
 
 function mockSharedPrepaidIds(config?: AdminRequestConfig) {
@@ -754,13 +767,31 @@ function mockAttendanceFilter<T extends Record<string, unknown>>(rows: T[], conf
   })
 }
 
-const mockSheet = {
+const mockAdminRetestInputs: AdminSampleRetestInput = {
+  ironRaw: null, siliconRaw: null, siliconAdjust: null, aluminumRaw: null, aluminumAdjust: null,
+  sulfur: null, densityRaw: null, whiteness: null, calciumRaw: null, magnesiumRaw: null,
+  carbon: null, titaniumRaw: null, waterSample: null, bottleWater: null, bottleWaterSample: null,
+  moisture: null, crucible: null, sampleWeight: null, burnedCrucibleSample: null
+}
+
+const mockAdminRetestResults: AdminSampleRetestResult = {
+  iron: 0, silicon: 0, aluminum: 0, aluminumSiliconRatio: 0, total: 0, density: 0,
+  calcium: 0, magnesium: 0, titanium: 0, bottleDensity: 0, moisture: 0, burnLoss: 0
+}
+
+const mockAdminRetestParameters: AdminSampleRetestParameterSnapshot = {
+  ironBlank: 0.04, ironFactor: 29.1, siliconBlank: 0.027, siliconFactor: 13,
+  aluminumFactor1: 0.502, aluminumFactor2: 4.98, calciumFactor: 1.15,
+  magnesiumFactor: 0.556, titaniumFactor: 0.57
+}
+
+const mockSheet: AdminDataLabSheet = {
   id: 'sheet-1',
   frontendUserId: 'front-1',
   name: '凯里化验室',
   date: '2026-06-25',
   readonly: true,
-  parameters: {},
+  parameters: { ...mockAdminRetestParameters },
   sampleBlocks: [
     {
       id: 'block-1',
@@ -807,20 +838,23 @@ const mockSheet = {
         moisture: 2,
         burnLoss: 18
       },
+      parameterSnapshot: { ...mockAdminRetestParameters },
       retests: [
         {
           id: 'retest-1', sampleBlockId: 'block-1', sequence: 1, status: 'ACTIVE', everFilled: true,
           readonly: true, sensitiveFieldsHidden: false,
-          inputs: { ironRaw: 1.2, siliconRaw: 2.1 }, results: { iron: 33.76, silicon: 26.95 },
-          parameterSnapshot: { ironBlank: 0.04, ironFactor: 29.1, siliconBlank: 0.027, siliconFactor: 13 },
+          inputs: { ...mockAdminRetestInputs, ironRaw: 1.2, siliconRaw: 2.1 },
+          results: { ...mockAdminRetestResults, iron: 33.76, silicon: 26.95, total: 60.71 },
+          parameterSnapshot: { ...mockAdminRetestParameters },
           voidReason: null, createdById: 'front-1', updatedById: 'front-1', voidedById: null,
           createdAt: '2026-08-20T08:00:00+08:00', updatedAt: '2026-08-20T08:30:00+08:00', voidedAt: null
         },
         {
           id: 'retest-2', sampleBlockId: 'block-1', sequence: 2, status: 'VOID', everFilled: true,
           readonly: true, sensitiveFieldsHidden: false,
-          inputs: { ironRaw: 1.3, siliconRaw: 2.2 }, results: { iron: 36.67, silicon: 28.25 },
-          parameterSnapshot: { ironBlank: 0.04, ironFactor: 29.1, siliconBlank: 0.027, siliconFactor: 13 },
+          inputs: { ...mockAdminRetestInputs, ironRaw: 1.3, siliconRaw: 2.2 },
+          results: { ...mockAdminRetestResults, iron: 36.67, silicon: 28.25, total: 64.92 },
+          parameterSnapshot: { ...mockAdminRetestParameters },
           voidReason: '复核无效', createdById: 'front-1', updatedById: 'front-1', voidedById: 'front-1',
           createdAt: '2026-08-20T09:00:00+08:00', updatedAt: '2026-08-20T09:30:00+08:00', voidedAt: '2026-08-20T10:00:00+08:00'
         }
@@ -857,6 +891,7 @@ const mockSheet = {
         magnesium: 0.44,
         titanium: 0.86
       },
+      parameterSnapshot: { ...mockAdminRetestParameters },
       retests: []
     }
   ]
@@ -869,6 +904,13 @@ function hasVisibleSampleInput(inputs: Record<string, unknown>) {
     if (typeof value === 'string') return value.trim() !== ''
     return Array.isArray(value) ? value.length > 0 : Boolean(value)
   })
+}
+
+function mockAdminDataIds(config?: AdminRequestConfig) {
+  const permitted = mockAuthorizedFrontendIds()
+  const requested = String(config?.params?.frontendUserIds || '').split(',').map((id) => id.trim()).filter(Boolean)
+  if (requested.some((id) => !permitted.includes(id))) throw new Error('没有访问部分前端账号的权限')
+  return requested.length ? requested : permitted
 }
 
 function parseHistoryFields(value: unknown) {
@@ -938,8 +980,11 @@ const mockRequest = {
       return mockEmployeeAttendance.audit.filter((row) => ids.includes(row.frontendUserId) && (!month || String(row.createdAt).slice(0, 7) === month))
     }
     if (url === '/admin/data-statistics/lab-sheets') {
+      const ids = mockAdminDataIds(config)
+      const date = String(config?.params?.date || mockSheet.date)
+      if (!ids.includes(mockSheet.frontendUserId) || date !== mockSheet.date) return []
       const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
-      return sampleBlocks.length ? [{ ...mockSheet, date: config?.params?.date || mockSheet.date, sampleBlocks }] : []
+      return sampleBlocks.length ? [{ ...mockSheet, sampleBlocks }] : []
     }
     if (url === '/admin/customer-overview') {
       const selectedIds = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
