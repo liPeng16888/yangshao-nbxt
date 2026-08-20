@@ -8,6 +8,7 @@ import { RemindersService } from '../reminders/reminders.service'
 import { currentMonthInBeijing, datesBetween, todayInBeijing } from '../common/date'
 import { toMoney } from '../common/money'
 import { calculateResults, defaultLabParameters } from '../common/lab'
+import { samplePayerName } from '../common/sample-payer'
 
 const incomeStatuses = ['已结款', '未结款', '月结款', '预存款', '未选择'] as const
 const paidMonthlySettlementRemark = '此款项已结清'
@@ -1154,14 +1155,7 @@ export class FinanceService {
   }
 
   private getCustomerName(inputs: Record<string, unknown>) {
-    if (typeof inputs.customerText === 'string' && inputs.customerText.trim()) return inputs.customerText.trim()
-    if (Array.isArray(inputs.customers)) {
-      const names = inputs.customers
-        .map((item) => (item && typeof item === 'object' && 'name' in item ? String((item as { name?: unknown }).name || '') : ''))
-        .filter(Boolean)
-      if (names.length) return names.join('、')
-    }
-    return '无信息'
+    return samplePayerName(inputs)
   }
 
   private getCustomerDisplayName(inputs: Record<string, unknown>) {

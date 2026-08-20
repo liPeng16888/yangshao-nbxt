@@ -37,6 +37,15 @@ enum ReminderType {
   MONTHLY_PAYMENT
   FINANCE_DELETE_APPROVED
   FINANCE_DELETE_REJECTED
+  LAB_SAMPLE_CHANGE_APPROVED
+  LAB_SAMPLE_CHANGE_REJECTED
+}
+
+enum LabSampleChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
 }
 
 enum FinanceDeletionRequestType {
@@ -139,6 +148,9 @@ model User {
   createdReminders                Reminder[]                   @relation("ReminderCreator")
   financeDeletionRequests         FinanceDeletionRequest[]     @relation("FrontendFinanceDeletionRequests")
   reviewedFinanceDeletionRequests FinanceDeletionRequest[]     @relation("ReviewedFinanceDeletionRequests")
+  frontendLabSampleChangeRequests LabSampleChangeRequest[]     @relation("FrontendLabSampleChangeRequests")
+  requestedLabSampleChangeRequests LabSampleChangeRequest[]    @relation("RequestedLabSampleChangeRequests")
+  reviewedLabSampleChangeRequests LabSampleChangeRequest[]     @relation("ReviewedLabSampleChangeRequests")
   inviteCodes                     InviteCode[]                 @relation("InviteCreator")
   usedInviteCodes                 InviteCode[]                 @relation("InviteUser")
   createdSubPerms                 SubAdminFrontendPermission[] @relation("PermissionCreator")
@@ -267,6 +279,7 @@ model LabSheet {
   sampleBlocks    SampleBlock[]
   changeLogs      CellChangeLog[]
   abnormalRecords AbnormalRecord[]
+  changeRequests  LabSampleChangeRequest[]
 
   @@unique([frontendUserId, date])
   @@index([date])
@@ -286,6 +299,7 @@ model SampleBlock {
   sheet           LabSheet         @relation(fields: [sheetId], references: [id], onDelete: Cascade)
   changeLogs      CellChangeLog[]
   abnormalRecords AbnormalRecord[]
+  changeRequests  LabSampleChangeRequest[]
 
   @@unique([sheetId, index])
   @@index([sheetId])
@@ -300,13 +314,50 @@ model CellChangeLog {
   oldValue       Json?
   newValue       Json?
   changedById    String
+  changeRequestId String?
   changedAt      DateTime @default(now())
 
-  sheet LabSheet    @relation(fields: [sheetId], references: [id], onDelete: Cascade)
-  block SampleBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  sheet         LabSheet               @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  block         SampleBlock            @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  changeRequest LabSampleChangeRequest? @relation(fields: [changeRequestId], references: [id], onDelete: SetNull)
 
   @@index([frontendUserId, changedAt])
   @@index([blockId, field])
+}
+
+model LabSampleChangeRequest {
+  id                 String                       @id @default(uuid())
+  frontendUserId     String
+  requestedById      String
+  sheetId            String
+  blockId            String
+  date               String
+  blockIndex         Int
+  baseBlockUpdatedAt DateTime
+  sourceSnapshot     Json
+  requestedChanges   Json
+  previewResults     Json
+  reason             String
+  status             LabSampleChangeRequestStatus @default(PENDING)
+  reviewRemark       String?
+  reviewedById       String?
+  reviewedAt         DateTime?
+  withdrawnAt        DateTime?
+  settlementEffects  Json?
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  frontendUser User         @relation("FrontendLabSampleChangeRequests", fields: [frontendUserId], references: [id], onDelete: Restrict)
+  requestedBy  User         @relation("RequestedLabSampleChangeRequests", fields: [requestedById], references: [id], onDelete: Restrict)
+  reviewedBy   User?        @relation("ReviewedLabSampleChangeRequests", fields: [reviewedById], references: [id])
+  sheet        LabSheet     @relation(fields: [sheetId], references: [id], onDelete: Restrict)
+  block        SampleBlock  @relation(fields: [blockId], references: [id], onDelete: Restrict)
+  changeLogs   CellChangeLog[]
+
+  @@index([frontendUserId, status, createdAt])
+  @@index([status, createdAt])
+  @@index([sheetId, blockId])
+  @@index([reviewedById])
 }
 
 model AbnormalRecord {
