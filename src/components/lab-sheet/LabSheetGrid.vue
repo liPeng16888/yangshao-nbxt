@@ -46,7 +46,15 @@
     </div>
     <div ref="scrollRef" class="lab-grid-scroll" @focusin="handleFieldFocusIn" @focusout="handleFieldFocusOut" @scroll="emitScrollState">
       <div class="lab-grid-zoom-stage" :style="zoomStageStyle">
-        <div ref="gridRef" class="lab-grid" :style="{ gridTemplateColumns: gridColumns, transform: `scale(${zoomScale})` }">
+        <div
+          ref="gridRef"
+          class="lab-grid"
+          :style="{
+            gridTemplateColumns: gridColumns,
+            transform: `scale(${zoomScale})`,
+            '--sample-retest-row-height': SAMPLE_RETEST_ROW_HEIGHT
+          }"
+        >
           <template v-for="block in blocks" :key="block.id">
             <div v-for="column in labSheetColumns" :key="`${block.id}-h-${column.key}`" class="cell cell--header">
               {{ column.label }}
@@ -59,11 +67,24 @@
                 'cell--selection-target': selectionMode,
                 'cell--highlight': block.id === highlightBlockId
               }"
-              :style="{ gridRow: `span ${getBlockRowSpan(block)}` }"
+              :style="{
+                gridRow: `span ${getBlockRowSpan(block)}`,
+                boxSizing: 'border-box',
+                minHeight: '0'
+              }"
               :data-block-id="block.id"
               @click="handleSequenceCellClick(block.id, $event)"
             >
-              <div class="sample-sequence-stack" :style="{ gridTemplateRows: getCustomerGridRows(block) }">
+              <div
+                class="sample-sequence-stack"
+                :style="{
+                  gridTemplateRows: getCustomerGridRows(block),
+                  boxSizing: 'border-box',
+                  height: 'calc(100% + 1px)',
+                  minHeight: '0',
+                  marginTop: '-1px'
+                }"
+              >
                 <div class="sample-sequence-primary" style="grid-row: 1 / span 2">
                   <div class="sequence-editor" :data-block-id="block.id" data-field="sequence">
                     <el-checkbox
@@ -84,7 +105,12 @@
                   :key="`${retest.id}-identity`"
                   class="sample-retest-identity"
                   :class="{ 'is-void': retest.status === 'VOID' }"
-                  :style="{ gridRow: `${retestIndex + 3} / span 1` }"
+                  :style="{
+                    gridRow: `${retestIndex + 3} / span 1`,
+                    boxSizing: 'border-box',
+                    height: 'var(--sample-retest-row-height)',
+                    minHeight: '0'
+                  }"
                   :data-retest-identity-id="retest.id"
                   :aria-label="`复样${retest.sequence}，${retest.status === 'VOID' ? '已作废' : '有效'}`"
                 >
@@ -95,9 +121,22 @@
             </div>
             <div
               class="cell cell--input cell--customer cell--split"
-              :style="{ gridRow: `span ${getBlockRowSpan(block)}` }"
+              :style="{
+                gridRow: `span ${getBlockRowSpan(block)}`,
+                boxSizing: 'border-box',
+                minHeight: '0'
+              }"
             >
-              <div class="sample-customer-stack" :style="{ gridTemplateRows: getCustomerGridRows(block) }">
+              <div
+                class="sample-customer-stack"
+                :style="{
+                  gridTemplateRows: getCustomerGridRows(block),
+                  boxSizing: 'border-box',
+                  height: 'calc(100% + 1px)',
+                  minHeight: '0',
+                  marginTop: '-1px'
+                }"
+              >
                 <div class="sample-number-editor" :data-block-id="block.id" data-field="sampleNumber">
                   <el-input
                     size="small"
@@ -355,7 +394,7 @@ export type LabGridScrollState = {
 }
 
 const gridColumns = computed(() => labSheetColumns.map((column) => `${column.width}px`).join(' '))
-const RETEST_BAND_ROW_HEIGHT_PX = 62
+const SAMPLE_RETEST_ROW_HEIGHT = '62px'
 
 function getBlockRowSpan(block: SampleBlock) {
   return 3 + block.retests.length
@@ -365,7 +404,7 @@ function getCustomerGridRows(block: SampleBlock) {
   return [
     '36px',
     '36px',
-    ...block.retests.map(() => `${RETEST_BAND_ROW_HEIGHT_PX}px`),
+    ...block.retests.map(() => 'var(--sample-retest-row-height)'),
     '36px'
   ].join(' ')
 }
@@ -945,15 +984,20 @@ const FormulaCell = defineComponent({
 }
 
 .cell--split {
+  box-sizing: border-box;
   align-items: stretch;
+  min-height: 0;
   padding: 0;
 }
 
 .sample-sequence-stack,
 .sample-customer-stack {
+  box-sizing: border-box;
   display: grid;
+  height: calc(100% + 1px);
   width: 100%;
-  min-height: 100%;
+  min-height: 0;
+  margin-top: -1px;
 }
 
 .sample-sequence-primary {
@@ -963,9 +1007,11 @@ const FormulaCell = defineComponent({
 }
 
 .sample-retest-identity {
+  box-sizing: border-box;
   display: flex;
+  height: var(--sample-retest-row-height);
   min-width: 0;
-  min-height: 62px;
+  min-height: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;

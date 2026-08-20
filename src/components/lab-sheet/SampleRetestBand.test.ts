@@ -95,6 +95,34 @@ describe('SampleRetestBand', () => {
     expect(wrapper.find('.sample-retest-band__identity').exists()).toBe(false)
   })
 
+  it('fits the bordered band and every inner region inside one inherited 62px row', () => {
+    const host = document.createElement('div')
+    host.style.setProperty('--sample-retest-row-height', '62px')
+    document.body.append(host)
+    const wrapper = mount(SampleRetestBand, {
+      attachTo: host,
+      props: { parent: makeParent(), retest: makeRetest() }
+    })
+
+    const bandStyle = getComputedStyle(wrapper.element)
+    const cellStyle = getComputedStyle(wrapper.get('[data-retest-column="C"]').element)
+    const metaStyle = getComputedStyle(wrapper.get('.sample-retest-band__meta').element)
+
+    expect(host.style.getPropertyValue('--sample-retest-row-height')).toBe('62px')
+    expect(bandStyle.boxSizing).toBe('border-box')
+    expect(bandStyle.height).toBe('var(--sample-retest-row-height, 62px)')
+    expect(bandStyle.minHeight).toBe('var(--sample-retest-row-height, 62px)')
+    expect(cellStyle.boxSizing).toBe('border-box')
+    expect(cellStyle.height).toBe('100%')
+    expect(cellStyle.minHeight).toBe('0')
+    expect(metaStyle.boxSizing).toBe('border-box')
+    expect(metaStyle.height).toBe('var(--sample-retest-row-height, 62px)')
+    expect(metaStyle.minHeight).toBe('0')
+    expect(metaStyle.top).toBe('-1px')
+    expect(metaStyle.bottom).toBe('auto')
+    wrapper.unmount()
+  })
+
   it('exposes its sequence accessibly while showing snapshot, save status, and no comparison judgement', () => {
     const wrapper = mount(SampleRetestBand, {
       props: { parent: makeParent(), retest: makeRetest() }

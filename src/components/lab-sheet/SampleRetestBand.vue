@@ -7,12 +7,27 @@
       'is-locked': locked,
       'is-highlighted': highlighted
     }"
-    :style="{ gridTemplateColumns: gridColumns, gridColumn: '3 / -1' }"
+    :style="{
+      gridTemplateColumns: gridColumns,
+      gridColumn: '3 / -1',
+      boxSizing: 'border-box',
+      height: retestRowHeight,
+      minHeight: retestRowHeight
+    }"
     :data-retest-id="retest.id"
     :aria-label="`复样${retest.sequence}`"
     :aria-busy="actionPending ? 'true' : undefined"
   >
-    <div class="sample-retest-band__meta">
+    <div
+      class="sample-retest-band__meta"
+      :style="{
+        boxSizing: 'border-box',
+        height: retestRowHeight,
+        minHeight: '0',
+        top: '-1px',
+        bottom: 'auto'
+      }"
+    >
       <span>参数快照 {{ formatTimestamp(retest.parameterSnapshot.savedAt || retest.createdAt) }}</span>
       <span>{{ retest.status === 'VOID' ? voidStatusText : `已保存 ${formatTimestamp(retest.updatedAt)}` }}</span>
       <span v-if="sensitiveHidden" class="sample-retest-band__locked-message">数据已加密</span>
@@ -43,6 +58,7 @@
       :key="column.key"
       class="sample-retest-band__cell"
       :class="{ 'is-enabled': isColumnEnabled(column) }"
+      style="box-sizing: border-box; height: 100%; min-height: 0"
       :data-retest-column="column.key"
     >
       <template v-if="isColumnEnabled(column)">
@@ -96,6 +112,7 @@ const emit = defineEmits<{
 const rootRef = ref<HTMLElement | null>(null)
 const focusedValues = new Map<SampleRetestInputField, unknown>()
 const gridColumns = labSheetColumns.slice(2).map((column) => `${column.width}px`).join(' ')
+const retestRowHeight = 'var(--sample-retest-row-height, 62px)'
 const sensitiveHidden = computed(() => Boolean(
   props.sensitiveHidden || props.parent.sensitiveFieldsHidden || props.retest.sensitiveFieldsHidden
 ))
@@ -188,7 +205,10 @@ watch(
 .sample-retest-band {
   position: relative;
   display: grid;
+  box-sizing: border-box;
+  height: var(--sample-retest-row-height, 62px);
   min-width: 0;
+  min-height: var(--sample-retest-row-height, 62px);
   overflow: visible;
   color: #172033;
   background: #f8fbff;
@@ -199,8 +219,10 @@ watch(
 
 .sample-retest-band__meta,
 .sample-retest-band__cell {
+  box-sizing: border-box;
+  height: 100%;
   min-width: 0;
-  min-height: 62px;
+  min-height: 0;
   border-left: 1px solid #111827;
 }
 
@@ -211,7 +233,7 @@ watch(
 .sample-retest-band__meta {
   position: absolute;
   top: -1px;
-  bottom: -1px;
+  bottom: auto;
   z-index: 1;
   box-sizing: border-box;
   display: flex;
@@ -263,7 +285,7 @@ watch(
 
 .sample-retest-band__cell {
   display: grid;
-  grid-template-rows: 31px 31px;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   background: #f4f7fb;
 }
 
@@ -276,7 +298,7 @@ watch(
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  min-height: 31px;
+  min-height: 0;
   padding: 2px 4px;
   text-align: center;
   border: 0;

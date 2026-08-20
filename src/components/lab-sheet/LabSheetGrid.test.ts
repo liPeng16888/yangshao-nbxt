@@ -926,6 +926,53 @@ describe('LabSheetGrid', () => {
     expect(wrapper.find('[data-field="price"]').exists()).toBe(true)
   })
 
+  it.each([1, 3])('keeps %i retest rows on one inherited border-box height without cumulative drift', (retestCount) => {
+    const wrapper = mount(LabSheetGrid, {
+      attachTo: document.body,
+      props: { blocks: [makeBlockWithRetests(retestCount)] },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+    const grid = wrapper.get('.lab-grid')
+    const sequenceStack = wrapper.get('.sample-sequence-stack')
+    const customerStack = wrapper.get('.sample-customer-stack')
+    const splitCells = [sequenceStack.element.parentElement!, customerStack.element.parentElement!]
+    const expectedRows = [
+      '36px',
+      '36px',
+      ...Array.from({ length: retestCount }, () => 'var(--sample-retest-row-height)'),
+      '36px'
+    ].join(' ')
+
+    expect((grid.element as HTMLElement).style.getPropertyValue('--sample-retest-row-height')).toBe('62px')
+    expect((sequenceStack.element as HTMLElement).style.gridTemplateRows).toBe(expectedRows)
+    expect((customerStack.element as HTMLElement).style.gridTemplateRows).toBe(expectedRows)
+    ;[sequenceStack, customerStack].forEach((stack) => {
+      const style = getComputedStyle(stack.element)
+      expect(style.boxSizing).toBe('border-box')
+      expect(style.height).toBe('calc(100% + 1px)')
+      expect(style.minHeight).toBe('0')
+      expect(style.marginTop).toBe('-1px')
+    })
+    splitCells.forEach((cell) => {
+      const style = getComputedStyle(cell)
+      expect(style.boxSizing).toBe('border-box')
+      expect(style.minHeight).toBe('0')
+    })
+    wrapper.findAll('[data-retest-identity-id]').forEach((identity) => {
+      const style = getComputedStyle(identity.element)
+      expect(style.boxSizing).toBe('border-box')
+      expect(style.height).toBe('var(--sample-retest-row-height)')
+      expect(style.minHeight).toBe('0')
+    })
+    wrapper.findAll('[data-retest-id]').forEach((band) => {
+      const style = getComputedStyle(band.element)
+      expect(style.boxSizing).toBe('border-box')
+      expect(style.height).toBe('var(--sample-retest-row-height, 62px)')
+    })
+    expect((wrapper.get('[data-field="recipientCustomerText"]').element as HTMLElement).style.gridRow).toBe('-2 / -1')
+    wrapper.unmount()
+  })
+
   it('passes the highlight and forwards exact retest event signatures', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
