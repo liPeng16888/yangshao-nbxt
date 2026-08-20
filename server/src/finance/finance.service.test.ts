@@ -82,6 +82,46 @@ describe('FinanceService shared prepaid income', () => {
   })
 })
 
+describe('FinanceService sample retest isolation', () => {
+  it('keeps active and void retests out of sample counts and income amounts', async () => {
+    const prisma = {
+      labSheet: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'sheet-1',
+          date: '2026-08-20',
+          frontendUserId: 'front-1',
+          frontendUser: { id: 'front-1', username: 'lab', account: 'lab', displayRemark: null },
+          sampleBlocks: [{
+            id: 'block-1',
+            index: 1,
+            inputs: {
+              sampleNumber: 'A-001',
+              customerText: '客户甲',
+              price: 80,
+              paymentStatus: '未结款',
+              ironRaw: 1
+            },
+            results: { iron: 29.1 },
+            retests: [
+              { id: 'retest-1', status: 'ACTIVE', inputs: { ironRaw: 99 }, results: { iron: 9999 } },
+              { id: 'retest-2', status: 'VOID', inputs: { ironRaw: 88 }, results: { iron: 8888 } }
+            ]
+          }]
+        }])
+      },
+      sharedPrepaidRecharge: { findMany: vi.fn().mockResolvedValue([]) }
+    }
+    const service = new FinanceService(prisma as never, {} as never, {} as never)
+
+    const report = await service.getFrontendIncomeReport('front-1', '2026-08')
+
+    expect(report.statusSummaries.find((row) => row.status === '未结款')).toMatchObject({ count: 1, amount: 80 })
+    expect(report).toMatchObject({ totalSamples: 1, totalAmount: 80 })
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0]).toMatchObject({ sampleCount: 1, totalAmount: 80 })
+  })
+})
+
 describe('FinanceService admin income cards', () => {
   it('keeps daily detail scoped while week/month cards use all authorized active rows', async () => {
     vi.useFakeTimers()

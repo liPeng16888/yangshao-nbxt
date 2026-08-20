@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CustomerOverviewService } from './customer-overview.service'
 
-function makeBlock(id: string, inputs: Record<string, unknown>) {
-  return { id, index: Number(id.replace(/\D/g, '')) || 1, inputs }
+function makeBlock(
+  id: string,
+  inputs: Record<string, unknown>,
+  retests: Array<{ id: string; status: string; inputs: Record<string, unknown>; results: Record<string, unknown> }> = []
+) {
+  return { id, index: Number(id.replace(/\D/g, '')) || 1, inputs, retests }
 }
 
 function makeSheet(
@@ -94,6 +98,27 @@ describe('CustomerOverviewService', () => {
     const rows = await service.getRows(['front-1'])
 
     expect(rows[0]).toMatchObject({ customerKey: 'text:手工客户', sampleCount: 1, totalAmount: 0 })
+  })
+
+  it('keeps active and void retests out of customer sample counts and totals', async () => {
+    prisma.customer.findMany.mockResolvedValue([])
+    prisma.labSheet.findMany.mockResolvedValue([
+      makeSheet('front-1', '2026-08-20', [
+        makeBlock(
+          'block-1',
+          { customerText: '客户甲', price: 80, ironRaw: 1 },
+          [
+            { id: 'retest-1', status: 'ACTIVE', inputs: { ironRaw: 99 }, results: { iron: 9999 } },
+            { id: 'retest-2', status: 'VOID', inputs: { ironRaw: 88 }, results: { iron: 8888 } }
+          ]
+        )
+      ], '前台一')
+    ])
+
+    const rows = await service.getRows(['front-1'])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ customer: '客户甲', sampleCount: 1, totalAmount: 80 })
   })
 
   it('excludes blank customers and samples without detection input', async () => {
