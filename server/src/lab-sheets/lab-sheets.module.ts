@@ -6,11 +6,12 @@ import { LabSheetStreamAuthService } from './lab-sheet-stream-auth.service'
 import { LabSheetsController } from './lab-sheets.controller'
 import { LabSheetsStreamController } from './lab-sheets-stream.controller'
 import { LabSheetsService } from './lab-sheets.service'
+import { SampleRetestsService } from './sample-retests.service'
 
 @Module({
   imports: [AuthModule, SharedPrepaidModule],
   controllers: [LabSheetsController, LabSheetsStreamController],
-  providers: [LabSheetsService, LabSheetRealtimeService, LabSheetStreamAuthService],
-  exports: [LabSheetsService]
+  providers: [LabSheetsService, SampleRetestsService, LabSheetRealtimeService, LabSheetStreamAuthService],
+  exports: [LabSheetsService, SampleRetestsService]
 })
 export class LabSheetsModule {}

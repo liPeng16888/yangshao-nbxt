@@ -7,12 +7,14 @@ export interface ServerSentEvent {
 }
 
 export interface LabSheetRealtimeEvent {
-  type: 'connected' | 'block-saved' | 'parameters-updated' | 'sheet-reloaded'
+  type: 'connected' | 'block-saved' | 'parameters-updated' | 'sheet-reloaded' | 'retests-changed'
   frontendUserId: string
   date: string
   sheetId?: string
   sourceClientId?: string
   changedById?: string
+  sampleBlockId?: string
+  sampleRetestId?: string
   updatedAt: string
   parameters?: typeof defaultLabParameters & { savedAt?: string }
 }
