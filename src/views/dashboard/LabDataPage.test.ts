@@ -197,19 +197,37 @@ function mountPage() {
       readonly: { type: Boolean, default: false },
       selectionMode: { type: Boolean, default: false },
       selectedBlockIds: { type: Array, default: () => [] },
-      highlightRetestId: { type: String, default: '' }
+      highlightRetestId: { type: String, default: '' },
+      pendingRetestActionIds: { type: Array, default: () => [] }
     },
-    emits: ['selectionChange', 'saveNext'],
+    emits: ['selectionChange', 'saveNext', 'retestUpdate', 'retestFieldCommit', 'retestDelete', 'retestVoid'],
     setup(props, { emit }) {
       return () => h('div', {
         class: 'mobile-lab-list-stub',
         'data-readonly': String(props.readonly),
-        'data-highlight-retest-id': props.highlightRetestId
+        'data-highlight-retest-id': props.highlightRetestId,
+        'data-pending-retest-actions': props.pendingRetestActionIds.join(',')
       }, [
         props.selectionMode
           ? h('button', { class: 'mobile-select-block-1', onClick: () => emit('selectionChange', 'block-1', true) }, '选择001')
           : null,
-        h('button', { class: 'mobile-save-next-stub', onClick: () => emit('saveNext', 'block-1') }, '保存下一项')
+        h('button', { class: 'mobile-save-next-stub', onClick: () => emit('saveNext', 'block-1') }, '保存下一项'),
+        h('button', {
+          class: 'mobile-retest-update-stub',
+          onClick: () => emit('retestUpdate', 'block-1', 'retest-1', { ironRaw: 1 })
+        }, '手机修改复样'),
+        h('button', {
+          class: 'mobile-retest-commit-stub',
+          onClick: () => emit('retestFieldCommit', 'block-1', 'retest-1', 'ironRaw', null, 0)
+        }, '手机提交复样'),
+        h('button', {
+          class: 'mobile-retest-delete-stub',
+          onClick: () => emit('retestDelete', 'block-1', 'retest-1')
+        }, '手机删除复样'),
+        h('button', {
+          class: 'mobile-retest-void-stub',
+          onClick: () => emit('retestVoid', 'block-2', 'retest-2')
+        }, '手机作废复样')
       ])
     }
   })
@@ -558,6 +576,7 @@ describe('LabDataPage table layout', () => {
     expect(wrapper.get('.mobile-toolbar-summary').attributes('aria-expanded')).toBe('true')
     expect(wrapper.get('.toolbar-content').text()).toContain('生成化验报告')
     expect(wrapper.get('.toolbar-content').text()).toContain('生成化验短信')
+    expect(wrapper.get('.toolbar-content').text()).toContain('样品复样')
 
     await wrapper.get('.mobile-toolbar-summary').trigger('click')
     await nextTick()
@@ -891,6 +910,34 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.persistRetest).toHaveBeenCalledTimes(2)
     expect(mocks.labStore.persistRetest).toHaveBeenNthCalledWith(1, 'block-1', 'retest-1')
     expect(mocks.labStore.persistRetest).toHaveBeenNthCalledWith(2, 'block-1', 'retest-1')
+    wrapper.unmount()
+  })
+
+  it('routes mobile retest edits and lifecycle actions through the same guarded page handlers', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '手机原因', action: 'confirm' } as any)
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.mobile-retest-update-stub').trigger('click')
+    await wrapper.get('.mobile-retest-commit-stub').trigger('click')
+    await wrapper.get('.mobile-retest-delete-stub').trigger('click')
+    await wrapper.get('.mobile-retest-void-stub').trigger('click')
+    await vi.waitFor(() => {
+      expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledTimes(1)
+      expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mocks.labStore.patchRetest).toHaveBeenCalledWith('block-1', 'retest-1', { ironRaw: 1 })
+    expect(mocks.labStore.persistRetest).toHaveBeenCalledWith('block-1', 'retest-1')
+    expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledWith('block-1', 'retest-1')
+    expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledWith('block-2', 'retest-2', '手机原因')
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(promptSpy).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('.mobile-lab-list-stub').attributes('data-pending-retest-actions')).toBe('')
+    confirmSpy.mockRestore()
+    promptSpy.mockRestore()
     wrapper.unmount()
   })
 

@@ -237,6 +237,18 @@
           </section>
         </template>
 
+        <MobileSampleRetests
+          :parent="block"
+          :readonly="readonly"
+          :sensitive-hidden="isSensitiveHidden(block)"
+          :highlight-retest-id="highlightRetestId"
+          :pending-retest-action-ids="pendingRetestActionIds"
+          @update="(retestId, patch) => emit('retestUpdate', block.id, retestId, patch)"
+          @field-commit="(retestId, field, oldValue, newValue) => emit('retestFieldCommit', block.id, retestId, field, oldValue, newValue)"
+          @delete="(retestId) => emit('retestDelete', block.id, retestId)"
+          @void="(retestId) => emit('retestVoid', block.id, retestId)"
+        />
+
         <button class="mobile-save-next" type="button" @click="saveAndOpenNext(block)">
           {{ isDisabled(block) ? '查看下一项' : '保存并录入下一项' }}
         </button>
@@ -249,8 +261,16 @@
 import { nextTick, ref, watch } from 'vue'
 import CustomerCellEditor from './CustomerCellEditor.vue'
 import LabElementSelector from './LabElementSelector.vue'
+import MobileSampleRetests from './MobileSampleRetests.vue'
 import type { BlacklistRecord } from '@/types/blacklist'
-import type { LabFormulaResult, LabSampleInput, SampleBlock, SamplePaymentStatus } from '@/types/labSheet'
+import type {
+  LabFormulaResult,
+  LabSampleInput,
+  SampleBlock,
+  SamplePaymentStatus,
+  SampleRetestInput,
+  SampleRetestInputField
+} from '@/types/labSheet'
 import { formatFormulaValue, parseNumericInput } from '@/utils/formulaEngine'
 import {
   getSampleAmountLabel,
@@ -342,6 +362,8 @@ const props = defineProps<{
   selectionMode?: boolean
   selectedBlockIds?: string[]
   highlightBlockId?: string
+  highlightRetestId?: string
+  pendingRetestActionIds?: string[]
   canViewCompletedSensitiveData?: boolean
 }>()
 
@@ -351,9 +373,13 @@ const emit = defineEmits<{
   blacklistHit: [records: BlacklistRecord[]]
   selectionChange: [blockId: string, checked: boolean]
   saveNext: [blockId: string]
+  retestUpdate: [sampleBlockId: string, retestId: string, patch: Partial<SampleRetestInput>]
+  retestFieldCommit: [sampleBlockId: string, retestId: string, field: SampleRetestInputField, oldValue: unknown, newValue: unknown]
+  retestDelete: [sampleBlockId: string, retestId: string]
+  retestVoid: [sampleBlockId: string, retestId: string]
 }>()
 
-const initiallyExpandedBlockId = props.highlightBlockId || props.blocks[0]?.id || ''
+const initiallyExpandedBlockId = props.highlightBlockId || findRetestParentId(props.highlightRetestId) || props.blocks[0]?.id || ''
 const expandedBlockIds = ref(new Set(initiallyExpandedBlockId ? [initiallyExpandedBlockId] : []))
 const expandedGroupKeysByBlock = ref(new Map<string, Set<string>>())
 const focusedFieldValues = new Map<string, unknown>()
@@ -364,6 +390,18 @@ watch(
   (blockId) => {
     if (!blockId || !props.blocks.some((block) => block.id === blockId)) return
     expandBlock(blockId)
+  }
+)
+
+watch(
+  () => [
+    props.highlightRetestId || '',
+    props.blocks.flatMap((block) => block.retests.map((retest) => `${block.id}:${retest.id}`)).join('|')
+  ] as const,
+  ([retestId]) => {
+    if (!retestId) return
+    const blockId = findRetestParentId(retestId)
+    if (blockId) expandBlock(blockId, false)
   }
 )
 
@@ -395,12 +433,17 @@ function toggleBlock(blockId: string) {
   void scrollToBlock(blockId)
 }
 
-function expandBlock(blockId: string) {
+function expandBlock(blockId: string, shouldScroll = true) {
   if (!expandedBlockIds.value.has(blockId)) {
     resetGroups(blockId)
     expandedBlockIds.value = new Set([...expandedBlockIds.value, blockId])
   }
-  void scrollToBlock(blockId)
+  if (shouldScroll) void scrollToBlock(blockId)
+}
+
+function findRetestParentId(retestId?: string) {
+  if (!retestId) return ''
+  return props.blocks.find((block) => block.retests.some((retest) => retest.id === retestId))?.id || ''
 }
 
 function isGroupExpanded(blockId: string, groupKey: string) {
@@ -553,6 +596,7 @@ async function scrollToBlock(blockId: string) {
     element.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
 }
+
 </script>
 
 <style scoped lang="scss">

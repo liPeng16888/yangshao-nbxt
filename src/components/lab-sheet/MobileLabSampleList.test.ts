@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
 import { defineComponent, h, nextTick, ref } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
-import type { LabSampleInput, SampleBlock } from '@/types/labSheet'
+import type { LabSampleInput, SampleBlock, SampleRetest } from '@/types/labSheet'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import MobileLabSampleList from './MobileLabSampleList.vue'
 
@@ -19,7 +19,31 @@ function makeBlock(id: string, index: number, inputs: LabSampleInput = {}): Samp
   }
 }
 
-function mountList(overrides: Record<string, unknown> = {}) {
+function makeRetest(sampleBlockId: string, sequence: number, overrides: Partial<SampleRetest> = {}): SampleRetest {
+  const inputs: SampleRetest['inputs'] = sequence === 1 ? {} : { ironRaw: 0.5 }
+  return {
+    id: `retest-${sequence}`,
+    sampleBlockId,
+    sequence,
+    status: 'ACTIVE',
+    everFilled: sequence !== 1,
+    readonly: false,
+    sensitiveFieldsHidden: false,
+    inputs,
+    results: calculateSampleResults(inputs, defaultLabParameters),
+    parameterSnapshot: { ...defaultLabParameters, savedAt: '2026-08-20T09:15:00.000Z' },
+    voidReason: null,
+    createdById: 'main-1',
+    updatedById: 'main-1',
+    voidedById: null,
+    createdAt: '2026-08-20T09:15:00.000Z',
+    updatedAt: '2026-08-20T09:16:00.000Z',
+    voidedAt: null,
+    ...overrides
+  }
+}
+
+function mountList(overrides: Record<string, unknown> = {}, attachTo?: Element) {
   const blocks = [
     makeBlock('block-1', 1, {
       sampleNumber: '铝土矿 A', customerText: '张总', price: 20, paymentStatus: '未结款', elementNote: '铁、硅、铝',
@@ -31,6 +55,7 @@ function mountList(overrides: Record<string, unknown> = {}) {
     makeBlock('block-2', 2)
   ]
   return mount(MobileLabSampleList, {
+    attachTo,
     props: {
       blocks,
       readonly: false,
@@ -98,7 +123,23 @@ function mountListWithLiveUpdates() {
   })
 }
 
+function installScrollIntoViewMock() {
+  const mock = vi.fn()
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    writable: true,
+    value: mock
+  })
+  return mock
+}
+
 describe('MobileLabSampleList', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+    vi.restoreAllMocks()
+    delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+  })
+
   it('opens one sample with sample information and all five calculation groups collapsed by default', async () => {
     const wrapper = mountList()
 
@@ -288,6 +329,76 @@ describe('MobileLabSampleList', () => {
     await getGroupToggle(wrapper, '样品信息').trigger('click')
 
     expect(wrapper.findAll('.mobile-customer-editor')).toHaveLength(2)
+  })
+
+  it('forwards mobile retest edits, zero commits, delete, and void with the parent block id', async () => {
+    const parent = makeBlock('block-1', 1, { sampleNumber: '复样样品', elementNote: '铁' })
+    parent.retests = [makeRetest(parent.id, 1), makeRetest(parent.id, 2)]
+    const wrapper = mountList({ blocks: [parent] })
+
+    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    const input = wrapper.get('[data-retest-id="retest-1"] input[data-retest-field="ironRaw"]')
+    await input.trigger('focus')
+    await input.setValue('0')
+    await input.trigger('blur')
+    await wrapper.get('[data-testid="delete-retest-retest-1"]').trigger('click')
+    await wrapper.get('[data-testid="void-retest-retest-2"]').trigger('click')
+
+    expect(wrapper.emitted('retestUpdate')).toContainEqual(['block-1', 'retest-1', { ironRaw: 0 }])
+    expect(wrapper.emitted('retestFieldCommit')).toContainEqual(['block-1', 'retest-1', 'ironRaw', null, 0])
+    expect(wrapper.emitted('retestDelete')).toContainEqual(['block-1', 'retest-1'])
+    expect(wrapper.emitted('retestVoid')).toContainEqual(['block-1', 'retest-2'])
+  })
+
+  it('expands the highlighted retest parent and retest area, then focuses the enabled input', async () => {
+    const scrollSpy = installScrollIntoViewMock()
+    const first = makeBlock('block-1', 1, { elementNote: '铁' })
+    const second = makeBlock('block-2', 2, { elementNote: '铁' })
+    second.retests = [makeRetest(second.id, 2)]
+    const wrapper = mountList({
+      blocks: [first, second],
+      highlightRetestId: 'retest-2'
+    }, document.body)
+    await nextTick()
+    await nextTick()
+
+    expect(expandedBlockIds(wrapper)).toContain('block-2')
+    expect(wrapper.get('[data-testid="mobile-retests-toggle"]').attributes('aria-expanded')).toBe('true')
+    expect((document.activeElement as HTMLElement | null)?.closest('[data-retest-id]')?.getAttribute('data-retest-id')).toBe('retest-2')
+    expect(scrollSpy).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps completed retest values out of the DOM until the existing access grant is present', async () => {
+    const parent = makeBlock('block-1', 1, { completed: true, elementNote: '铁' })
+    parent.retests = [makeRetest(parent.id, 1, {
+      inputs: { ironRaw: 91.234 },
+      results: { ...calculateSampleResults({ ironRaw: 91.234 }, defaultLabParameters), iron: 88.765 }
+    })]
+    const wrapper = mountList({ blocks: [parent], canViewCompletedSensitiveData: false })
+
+    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    expect(wrapper.text()).toContain('数据已加密')
+    expect(wrapper.find('[data-retest-id] input').exists()).toBe(false)
+    expect(wrapper.html()).not.toContain('91.234')
+    expect(wrapper.html()).not.toContain('88.765')
+
+    await wrapper.setProps({ canViewCompletedSensitiveData: true })
+    expect(wrapper.find('[data-retest-id] input[data-retest-field="ironRaw"]').exists()).toBe(true)
+  })
+
+  it('passes history and lifecycle pending locks through to mobile retest cards', async () => {
+    const parent = makeBlock('block-1', 1, { elementNote: '铁' })
+    parent.retests = [makeRetest(parent.id, 2)]
+    const wrapper = mountList({
+      blocks: [parent],
+      readonly: true,
+      pendingRetestActionIds: ['retest-2']
+    })
+    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+
+    expect(wrapper.get('[data-retest-id="retest-2"] input').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="void-retest-retest-2"]').exists()).toBe(false)
   })
 })
 
