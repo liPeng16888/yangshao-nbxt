@@ -24,6 +24,7 @@ import type {
   AdminMedicineInventoryMovement,
   AdminRevealedAttendanceEmployee,
   AdminRevealedAttendanceEmployeeResponse,
+  AdminSampleRetest,
   AdminSampleRetestInput,
   AdminSampleRetestParameterSnapshot,
   AdminSampleRetestResult,
@@ -439,6 +440,15 @@ function mockAuthorizedFrontendIds() {
   return (sub?.permissions || []).map((item) => item.id)
 }
 
+function mockTodayInBeijing() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date())
+}
+
 function mockAttendanceIds(config?: AdminRequestConfig) {
   const permitted = mockAuthorizedFrontendIds()
   const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
@@ -473,7 +483,7 @@ function mockAdminScheduleAttendanceOverview(config?: AdminRequestConfig): Admin
   if (employeeId && !employee) throw new Error('员工不存在或无权查看')
   const monthRows = mockEmployeeAttendance.attendance.filter((row) => ids.includes(row.frontendUserId) && row.date.startsWith(month))
   const pendingLeaves = mockEmployeeAttendance.leaves.filter((row) => ids.includes(row.frontendUserId) && row.status === 'PENDING' && row.startDate <= `${month}-31` && row.endDate >= `${month}-01`).length
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  const today = mockTodayInBeijing()
   const activeIds = new Set(mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE' && row.hireDate <= today && (!row.terminationDate || String(row.terminationDate) >= today)).map((row) => row.id))
   const todayClassifications = mockEmployeeAttendance.schedules.days
     .filter((row) => ids.includes(row.frontendUserId) && activeIds.has(row.employeeId) && row.date === today && row.isWorkday && row.scheduledMinutes > 0)
@@ -785,6 +795,29 @@ const mockAdminRetestParameters: AdminSampleRetestParameterSnapshot = {
   magnesiumFactor: 0.556, titaniumFactor: 0.57
 }
 
+function mockAdminRetests(blockId: string, idPrefix = 'retest'): AdminSampleRetest[] {
+  return [
+    {
+      id: `${idPrefix}-1`, sampleBlockId: blockId, sequence: 1, status: 'ACTIVE', everFilled: true,
+      readonly: true, sensitiveFieldsHidden: false,
+      inputs: { ...mockAdminRetestInputs, ironRaw: 1.2, siliconRaw: 2.1 },
+      results: { ...mockAdminRetestResults, iron: 33.756, silicon: 26.949, total: 60.705 },
+      parameterSnapshot: { ...mockAdminRetestParameters },
+      voidReason: null, createdById: 'front-1', updatedById: 'front-1', voidedById: null,
+      createdAt: '2026-08-20T08:00:00+08:00', updatedAt: '2026-08-20T08:30:00+08:00', voidedAt: null
+    },
+    {
+      id: `${idPrefix}-2`, sampleBlockId: blockId, sequence: 2, status: 'VOID', everFilled: true,
+      readonly: true, sensitiveFieldsHidden: false,
+      inputs: { ...mockAdminRetestInputs, ironRaw: 1.3, siliconRaw: 2.2 },
+      results: { ...mockAdminRetestResults, iron: 36.666, silicon: 28.249, total: 64.915 },
+      parameterSnapshot: { ...mockAdminRetestParameters },
+      voidReason: '复核无效', createdById: 'front-1', updatedById: 'front-1', voidedById: 'front-1',
+      createdAt: '2026-08-20T09:00:00+08:00', updatedAt: '2026-08-20T09:30:00+08:00', voidedAt: '2026-08-20T10:00:00+08:00'
+    }
+  ]
+}
+
 const mockSheet: AdminDataLabSheet = {
   id: 'sheet-1',
   frontendUserId: 'front-1',
@@ -839,26 +872,7 @@ const mockSheet: AdminDataLabSheet = {
         burnLoss: 18
       },
       parameterSnapshot: { ...mockAdminRetestParameters },
-      retests: [
-        {
-          id: 'retest-1', sampleBlockId: 'block-1', sequence: 1, status: 'ACTIVE', everFilled: true,
-          readonly: true, sensitiveFieldsHidden: false,
-          inputs: { ...mockAdminRetestInputs, ironRaw: 1.2, siliconRaw: 2.1 },
-          results: { ...mockAdminRetestResults, iron: 33.76, silicon: 26.95, total: 60.71 },
-          parameterSnapshot: { ...mockAdminRetestParameters },
-          voidReason: null, createdById: 'front-1', updatedById: 'front-1', voidedById: null,
-          createdAt: '2026-08-20T08:00:00+08:00', updatedAt: '2026-08-20T08:30:00+08:00', voidedAt: null
-        },
-        {
-          id: 'retest-2', sampleBlockId: 'block-1', sequence: 2, status: 'VOID', everFilled: true,
-          readonly: true, sensitiveFieldsHidden: false,
-          inputs: { ...mockAdminRetestInputs, ironRaw: 1.3, siliconRaw: 2.2 },
-          results: { ...mockAdminRetestResults, iron: 36.67, silicon: 28.25, total: 64.92 },
-          parameterSnapshot: { ...mockAdminRetestParameters },
-          voidReason: '复核无效', createdById: 'front-1', updatedById: 'front-1', voidedById: 'front-1',
-          createdAt: '2026-08-20T09:00:00+08:00', updatedAt: '2026-08-20T09:30:00+08:00', voidedAt: '2026-08-20T10:00:00+08:00'
-        }
-      ]
+      retests: mockAdminRetests('block-1')
     },
     {
       id: 'block-2',
@@ -891,6 +905,24 @@ const mockSheet: AdminDataLabSheet = {
         magnesium: 0.44,
         titanium: 0.86
       },
+      parameterSnapshot: { ...mockAdminRetestParameters },
+      retests: []
+    },
+    {
+      id: 'block-retests-only',
+      index: 3,
+      readonly: true,
+      inputs: { sequence: '003', completed: false },
+      results: {},
+      parameterSnapshot: { ...mockAdminRetestParameters },
+      retests: mockAdminRetests('block-retests-only', 'retest-only')
+    },
+    {
+      id: 'block-blank',
+      index: 4,
+      readonly: true,
+      inputs: { sequence: '004', completed: false },
+      results: {},
       parameterSnapshot: { ...mockAdminRetestParameters },
       retests: []
     }
@@ -981,9 +1013,9 @@ const mockRequest = {
     }
     if (url === '/admin/data-statistics/lab-sheets') {
       const ids = mockAdminDataIds(config)
-      const date = String(config?.params?.date || mockSheet.date)
+      const date = String(config?.params?.date || mockTodayInBeijing())
       if (!ids.includes(mockSheet.frontendUserId) || date !== mockSheet.date) return []
-      const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
+      const sampleBlocks = mockSheet.sampleBlocks.filter((block) => block.retests.length > 0 || hasVisibleSampleInput(block.inputs))
       return sampleBlocks.length ? [{ ...mockSheet, sampleBlocks }] : []
     }
     if (url === '/admin/customer-overview') {

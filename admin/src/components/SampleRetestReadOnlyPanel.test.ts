@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { adminLogin, request } from '../api'
 import type { AdminDataLabSheet, AdminSampleRetest } from '../types'
 import SampleRetestReadOnlyPanel from './SampleRetestReadOnlyPanel.vue'
@@ -117,6 +117,56 @@ describe('admin retest mock read-only contract', () => {
     expect(Object.values(active.results).every((value) => typeof value === 'number')).toBe(true)
     expect(Object.keys(active.parameterSnapshot).sort()).toEqual(retestParameterKeys)
     expect(Object.values(active.parameterSnapshot).every((value) => typeof value === 'number')).toBe(true)
+    expect(active.results).toEqual({
+      iron: 33.756,
+      silicon: 26.949,
+      aluminum: 0,
+      aluminumSiliconRatio: 0,
+      total: 60.705,
+      density: 0,
+      calcium: 0,
+      magnesium: 0,
+      titanium: 0,
+      bottleDensity: 0,
+      moisture: 0,
+      burnLoss: 0
+    })
+    const panel = mount(SampleRetestReadOnlyPanel, { props: { retests: [active] } })
+    expect(panel.text()).toContain('33.756')
+    expect(panel.text()).toContain('26.949')
+    expect(panel.text()).toContain('60.705')
+  })
+
+  it('keeps a blank parent with active and void retests while omitting a blank parent without retests', async () => {
+    const sheets = await request.get('/admin/data-statistics/lab-sheets', {
+      params: { frontendUserIds: 'front-1', date: '2026-06-25' }
+    }) as AdminDataLabSheet[]
+
+    const blockIds = sheets[0].sampleBlocks.map((block) => block.id)
+    expect(blockIds).toContain('block-retests-only')
+    expect(blockIds).not.toContain('block-blank')
+    const retestOnlyBlock = sheets[0].sampleBlocks.find((block) => block.id === 'block-retests-only')!
+    expect(retestOnlyBlock.inputs).toEqual({ sequence: '003', completed: false })
+    expect(retestOnlyBlock.retests.map((row) => row.status)).toEqual(['ACTIVE', 'VOID'])
+  })
+
+  it('defaults an omitted date to the Beijing calendar date rather than the historical fixture date', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-06-24T15:30:00.000Z'))
+      await expect(request.get('/admin/data-statistics/lab-sheets', {
+        params: { frontendUserIds: 'front-1' }
+      })).resolves.toEqual([])
+
+      vi.setSystemTime(new Date('2026-06-24T16:30:00.000Z'))
+      const sheets = await request.get('/admin/data-statistics/lab-sheets', {
+        params: { frontendUserIds: 'front-1' }
+      }) as AdminDataLabSheet[]
+      expect(sheets).toHaveLength(1)
+      expect(sheets[0].date).toBe('2026-06-25')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('uses authorized tenant scope and fixture dates without fabricating another account or date', async () => {
