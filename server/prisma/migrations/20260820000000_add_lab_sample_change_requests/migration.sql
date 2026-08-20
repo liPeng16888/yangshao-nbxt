@@ -37,7 +37,7 @@ CREATE INDEX "LabSampleChangeRequest_reviewedById_idx" ON "LabSampleChangeReques
 
 ALTER TABLE "LabSampleChangeRequest" ADD CONSTRAINT "LabSampleChangeRequest_frontendUserId_fkey" FOREIGN KEY ("frontendUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "LabSampleChangeRequest" ADD CONSTRAINT "LabSampleChangeRequest_requestedById_fkey" FOREIGN KEY ("requestedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "LabSampleChangeRequest" ADD CONSTRAINT "LabSampleChangeRequest_reviewedById_fkey" FOREIGN KEY ("reviewedById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "LabSampleChangeRequest" ADD CONSTRAINT "LabSampleChangeRequest_reviewedById_fkey" FOREIGN KEY ("reviewedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "LabSampleChangeRequest" ADD CONSTRAINT "LabSampleChangeRequest_sheetId_fkey" FOREIGN KEY ("sheetId") REFERENCES "LabSheet"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "LabSampleChangeRequest" ADD CONSTRAINT "LabSampleChangeRequest_blockId_fkey" FOREIGN KEY ("blockId") REFERENCES "SampleBlock"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "CellChangeLog" ADD CONSTRAINT "CellChangeLog_changeRequestId_fkey" FOREIGN KEY ("changeRequestId") REFERENCES "LabSampleChangeRequest"("id") ON DELETE SET NULL ON UPDATE CASCADE;

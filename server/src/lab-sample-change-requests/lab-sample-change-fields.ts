@@ -52,10 +52,11 @@ export function normalizeRequestedChanges(value: unknown): RequestedLabSampleCha
     }
 
     if (key === 'paymentStatus') {
-      if (typeof rawValue !== 'string' || !paymentStatuses.has(rawValue)) {
+      const paymentStatus = typeof rawValue === 'string' ? rawValue.trim() : rawValue
+      if (typeof paymentStatus !== 'string' || !paymentStatuses.has(paymentStatus)) {
         throw new BadRequestException('付款状态无效')
       }
-      changes.paymentStatus = rawValue as RequestedLabSampleChanges['paymentStatus']
+      changes.paymentStatus = paymentStatus as RequestedLabSampleChanges['paymentStatus']
       continue
     }
 
@@ -76,9 +77,11 @@ export function applyRequestedChanges(
 
   if (changes.payerCustomer) {
     const customerById = new Map(canonicalCustomers.map((customer) => [customer.id, customer]))
-    const customers = changes.payerCustomer.customerIds
-      .map((customerId) => customerById.get(customerId))
-      .filter((customer): customer is CanonicalCustomer => Boolean(customer))
+    const customers = changes.payerCustomer.customerIds.map((customerId) => {
+      const customer = customerById.get(customerId)
+      if (!customer) throw new BadRequestException('付款客户无效')
+      return customer
+    })
 
     nextInputs.customerId = changes.payerCustomer.customerIds[0] || null
     nextInputs.customerIds = changes.payerCustomer.customerIds

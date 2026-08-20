@@ -349,7 +349,7 @@ model LabSampleChangeRequest {
 
   frontendUser User         @relation("FrontendLabSampleChangeRequests", fields: [frontendUserId], references: [id], onDelete: Restrict)
   requestedBy  User         @relation("RequestedLabSampleChangeRequests", fields: [requestedById], references: [id], onDelete: Restrict)
-  reviewedBy   User?        @relation("ReviewedLabSampleChangeRequests", fields: [reviewedById], references: [id])
+  reviewedBy   User?        @relation("ReviewedLabSampleChangeRequests", fields: [reviewedById], references: [id], onDelete: Restrict)
   sheet        LabSheet     @relation(fields: [sheetId], references: [id], onDelete: Restrict)
   block        SampleBlock  @relation(fields: [blockId], references: [id], onDelete: Restrict)
   changeLogs   CellChangeLog[]
