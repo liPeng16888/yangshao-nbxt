@@ -354,6 +354,7 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
     } }))
     expect(rows[0]).not.toHaveProperty('sourceSnapshot')
     expect(rows[0]).not.toHaveProperty('settlementEffects')
+    expect(rows[0]).not.toHaveProperty('frontendUserId')
     expect(rows[0]).toMatchObject({ id: 'request-1', blockId: 'block-1', sampleName: '旧样品', changedFieldLabels: ['样品编号'] })
   })
 
@@ -502,6 +503,7 @@ describe('LabSampleChangeRequestsService admin review', () => {
     expect(transaction.reminder.create.mock.calls[0][0].data.content)
       .toBe('2026-08-19 第 1 个样品的修改申请已通过。')
     expect(approved).toMatchObject({
+      frontendUserId: 'front-1',
       status: LabSampleChangeRequestStatus.APPROVED,
       previewResults: expect.objectContaining({ iron: 50 }),
       actualResults: expect.objectContaining({ iron: 50 })
@@ -714,7 +716,7 @@ describe('LabSampleChangeRequestsService admin review', () => {
     expect(transaction.reminder.create).toHaveBeenCalledWith({ data: expect.objectContaining({
       type: ReminderType.LAB_SAMPLE_CHANGE_REJECTED, sourceType: 'lab_sample_change_request', sourceId: 'request-1'
     }) })
-    expect(rejected.status).toBe(LabSampleChangeRequestStatus.REJECTED)
+    expect(rejected).toMatchObject({ frontendUserId: 'front-1', status: LabSampleChangeRequestStatus.REJECTED })
   })
 
   it('filters the admin list to AdminAccessService-authorized frontend accounts', async () => {
@@ -732,7 +734,7 @@ describe('LabSampleChangeRequestsService admin review', () => {
       orderBy: { createdAt: 'desc' }
     })
     expect(rows[0]).not.toHaveProperty('sourceSnapshot')
-    expect(rows[0]).toMatchObject({ id: 'request-1', blockId: 'block-1' })
+    expect(rows[0]).toMatchObject({ id: 'request-1', blockId: 'block-1', frontendUserId: 'front-1' })
   })
 
   it('returns authorized admin detail with snapshots and settlement effects', async () => {
@@ -744,7 +746,7 @@ describe('LabSampleChangeRequestsService admin review', () => {
 
     expect(adminAccess.getAllowedFrontendUserIds).toHaveBeenCalledWith(subAdmin, ['front-1'])
     expect(detail).toMatchObject({
-      id: 'request-1', sourceSnapshot: expect.any(Object), requestedChanges: expect.any(Object), previewResults: expect.any(Object),
+      id: 'request-1', frontendUserId: 'front-1', sourceSnapshot: expect.any(Object), requestedChanges: expect.any(Object), previewResults: expect.any(Object),
       settlementEffects: [expect.objectContaining({ recordId: 'settle-1' })]
     })
   })

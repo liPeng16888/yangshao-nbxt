@@ -14,6 +14,82 @@ export interface FrontendOption {
   disabled: boolean
 }
 
+export type AdminLabSampleChangeRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN'
+
+export interface AdminLabSampleChangeRequestReview {
+  remark: string | null
+  reviewedAt: string | null
+}
+
+export interface AdminLabSampleChangeRequestFrontendAccount {
+  id: string
+  account: string
+  username: string
+  displayRemark?: string | null
+}
+
+export interface AdminLabSampleChangeRequestSummary {
+  id: string
+  frontendUserId: string
+  frontendUser?: AdminLabSampleChangeRequestFrontendAccount
+  blockId: string
+  date: string
+  blockIndex: number
+  sampleName: string
+  changedFieldLabels: string[]
+  reason: string
+  status: AdminLabSampleChangeRequestStatus
+  review: AdminLabSampleChangeRequestReview | null
+  withdrawnAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AdminLabSampleChangeSourceSnapshot {
+  inputs: Record<string, unknown>
+  results: Record<string, number>
+  parameterSnapshot: Record<string, number>
+  updatedAt: string
+}
+
+export type AdminLabSampleChangeRawField =
+  | 'ironRaw' | 'siliconRaw' | 'siliconAdjust' | 'aluminumRaw' | 'aluminumAdjust'
+  | 'sulfur' | 'densityRaw' | 'whiteness' | 'calciumRaw' | 'magnesiumRaw' | 'carbon'
+  | 'titaniumRaw' | 'waterSample' | 'bottleWater' | 'bottleWaterSample' | 'moisture'
+  | 'crucible' | 'sampleWeight' | 'burnedCrucibleSample'
+
+export type AdminLabSampleRequestedChanges = {
+  sampleNumber?: string
+  payerCustomer?: { customerIds: string[]; customerText: string }
+  price?: number | null
+  paymentStatus?: string
+  elementNote?: string
+} & Partial<Record<AdminLabSampleChangeRawField, number | null>>
+
+export interface AdminLabSampleSettlementEffect {
+  recordId: string
+  month: string
+  customer: string
+  oldStatus: 'PAID' | 'PARTIAL'
+  oldPaidAmount: number | null
+  oldRemark: string | null
+  newStatus: 'UNPAID'
+}
+
+export interface AdminLabSampleChangeRequestDetail extends AdminLabSampleChangeRequestSummary {
+  sourceSnapshot: AdminLabSampleChangeSourceSnapshot
+  requestedChanges: AdminLabSampleRequestedChanges
+  previewResults: Record<string, number>
+  actualResults?: Record<string, number>
+  settlementEffects: AdminLabSampleSettlementEffect[]
+}
+
+export interface AdminLabSampleChangeRequestQuery {
+  frontendUserIds?: string[]
+  status?: AdminLabSampleChangeRequestStatus
+  date?: string
+}
+
 export interface ApiPageState {
   loading: boolean
 }

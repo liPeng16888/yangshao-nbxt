@@ -4,6 +4,11 @@ import { ElMessage } from 'element-plus'
 import type {
   AdminAttendanceAuditRow,
   AdminAttendanceAuditQuery,
+  AdminLabSampleChangeRequestDetail,
+  AdminLabSampleChangeRequestQuery,
+  AdminLabSampleChangeRequestSummary,
+  AdminLabSampleRequestedChanges,
+  AdminLabSampleSettlementEffect,
   AdminAttendanceRecord,
   AdminAttendanceRevealPayload,
   AdminBonusRecord,
@@ -95,6 +100,49 @@ const mockFrontendOptions: FrontendOption[] = [
   { id: 'front-1', account: 'kaili001', name: '凯里化验室', disabled: false },
   { id: 'front-2', account: 'yangshao002', name: '仰韶客户二', disabled: false }
 ]
+
+const mockLabParameters = {
+  ironBlank: 0,
+  ironFactor: 25,
+  siliconBlank: 0.027,
+  siliconFactor: 13,
+  aluminumFactor1: 0.502,
+  aluminumFactor2: 4.98,
+  calciumFactor: 1.15,
+  magnesiumFactor: 0.556,
+  titaniumFactor: 0.57
+}
+
+const mockPayerCustomers: Record<string, { id: string; name: string; phone: string; wechat: string; wechatNickname: string }> = {
+  'customer-li-si': { id: 'customer-li-si', name: '李四', phone: '13800000002', wechat: 'lisi-wx', wechatNickname: '李总' },
+  'customer-wang-wu': { id: 'customer-wang-wu', name: '王五', phone: '13800000003', wechat: 'wangwu-wx', wechatNickname: '王总' }
+}
+
+const mockSampleChangeSourceInputs = {
+  sequence: '002',
+  sampleNumber: '粉矿',
+  customerText: '李四',
+  customerId: 'customer-li-si',
+  customerIds: ['customer-li-si'],
+  customers: [mockPayerCustomers['customer-li-si']],
+  price: 100,
+  paymentStatus: '月结款',
+  ironRaw: 0.34,
+  siliconRaw: 1.05,
+  aluminumRaw: 2.7,
+  sulfur: 0.08,
+  calciumRaw: 0.8,
+  magnesiumRaw: 1.6,
+  titaniumRaw: 1.5
+}
+
+const mockSampleChangeSourceResults = calculateMockLabResults(mockSampleChangeSourceInputs, mockLabParameters)
+const mockSampleChangeRequestedChanges: AdminLabSampleRequestedChanges = {
+  sampleNumber: '新样品',
+  payerCustomer: { customerIds: ['customer-wang-wu'], customerText: '王五' },
+  price: 120,
+  ironRaw: 2
+}
 
 const mockRows = {
   customerOverview: [
@@ -207,6 +255,36 @@ const mockRows = {
   monthlyCustomers: [
     { frontendUserId: 'front-1', name: '凯里化验室', customer: '李四', firstDate: '2026-06-01', lastDate: '2026-06-25', amount: 1280, sampleCount: 16, remark: '示例月结客户' }
   ],
+  monthlySettlements: [
+    { id: 'settle-li-si', recordId: 'settle-li-si', month: '2026-06', frontendUserId: 'front-1', name: '凯里化验室', customer: '李四', amount: 100, sampleCount: 1, status: 'PAID', settlementStatus: '已结款', paidAmount: 100 as number | null, remark: '已结清' },
+    { id: 'settle-wang-wu', recordId: 'settle-wang-wu', month: '2026-06', frontendUserId: 'front-1', name: '凯里化验室', customer: '王五', amount: 120, sampleCount: 1, status: 'PARTIAL', settlementStatus: '部分结款', paidAmount: 20 as number | null, remark: '部分结款' }
+  ],
+  labSampleChangeRequests: [
+    {
+      id: 'sample-change-request-1',
+      frontendUserId: 'front-1',
+      blockId: 'block-2',
+      date: '2026-06-25',
+      blockIndex: 2,
+      sampleName: '粉矿',
+      changedFieldLabels: ['样品编号', '付款客户', '价格', '铁'],
+      reason: '客户要求更正原始记录',
+      status: 'PENDING',
+      review: null,
+      withdrawnAt: null,
+      createdAt: '2026-08-20T01:00:00.000Z',
+      updatedAt: '2026-08-20T01:00:00.000Z',
+      sourceSnapshot: {
+        inputs: { ...mockSampleChangeSourceInputs },
+        results: { ...mockSampleChangeSourceResults },
+        parameterSnapshot: { ...mockLabParameters },
+        updatedAt: '2026-06-25T08:00:00.000Z'
+      },
+      requestedChanges: { ...mockSampleChangeRequestedChanges },
+      previewResults: calculateMockLabResults({ ...mockSampleChangeSourceInputs, sampleNumber: '新样品', price: 120, ironRaw: 2 }, mockLabParameters),
+      settlementEffects: []
+    }
+  ] as AdminLabSampleChangeRequestDetail[],
   prepaidRecharges: [
     { id: 'p-1', rechargeDate: '2026-06-25', createdAt: '2026-06-25 10:30:00', frontendUserId: 'front-1', name: '凯里化验室', customer: '王总', amount: 1000, usableTimes: 10, remark: '预存款示例' }
   ],
@@ -505,33 +583,9 @@ const mockSheet = {
       id: 'block-2',
       index: 2,
       readonly: true,
-      inputs: {
-        sequence: '002',
-        sampleNumber: '粉矿',
-        customerText: '李四',
-        customerId: 'customer-li-si',
-        customerIds: ['customer-li-si'],
-        customers: [{ id: 'customer-li-si', name: '李四', phone: '13800000002', wechat: 'lisi-wx', wechatNickname: '李总' }],
-        price: 100,
-        paymentStatus: '月结款',
-        ironRaw: 0.34,
-        siliconRaw: 1.05,
-        aluminumRaw: 2.7,
-        sulfur: 0.08,
-        calciumRaw: 0.8,
-        magnesiumRaw: 1.6,
-        titaniumRaw: 1.5
-      },
-      results: {
-        iron: 8.64,
-        silicon: 13.3,
-        aluminum: 59.75,
-        aluminumSiliconRatio: 4.49,
-        total: 81.69,
-        calcium: 0.92,
-        magnesium: 0.44,
-        titanium: 0.86
-      }
+      inputs: { ...mockSampleChangeSourceInputs },
+      results: { ...mockSampleChangeSourceResults },
+      parameterSnapshot: { ...mockLabParameters }
     }
   ]
 }
@@ -550,6 +604,145 @@ function parseHistoryFields(value: unknown) {
   return Array.from(new Set(raw.split(',').map((field) => field.trim()).filter(Boolean)))
 }
 
+function calculateMockLabResults(inputs: Record<string, unknown>, parameters: Record<string, number>) {
+  const result: Record<string, number> = {
+    iron: 0, silicon: 0, aluminum: 0, aluminumSiliconRatio: 0, total: 0, density: 0,
+    calcium: 0, magnesium: 0, titanium: 0, bottleDensity: 0, moisture: 0, burnLoss: 0
+  }
+  const number = (key: string) => typeof inputs[key] === 'number' && Number.isFinite(inputs[key]) ? inputs[key] as number : null
+  const optional = (key: string) => number(key) || 0
+  const round = (value: number, precision = 4) => Number.isFinite(value)
+    ? Math.round((value + Number.EPSILON) * 10 ** precision) / 10 ** precision
+    : 0
+  const divide = (left: number, right: number) => Number.isFinite(left) && Number.isFinite(right) && right !== 0 ? left / right : 0
+  if (number('ironRaw') !== null) result.iron = round((number('ironRaw')! - parameters.ironBlank) * parameters.ironFactor)
+  if (number('siliconRaw') !== null) result.silicon = round((number('siliconRaw')! - parameters.siliconBlank) * parameters.siliconFactor + optional('siliconAdjust'))
+  if (number('aluminumRaw') !== null) result.aluminum = round(((((number('aluminumRaw')! * parameters.aluminumFactor1 - 18) * parameters.aluminumFactor2) + result.iron * 0.6383) * -1) - optional('aluminumAdjust'))
+  result.aluminumSiliconRatio = round(divide(result.aluminum, result.silicon))
+  result.total = round(result.aluminum + result.silicon + result.iron)
+  if (number('densityRaw') !== null) result.density = round(divide(80, number('densityRaw')!))
+  if (number('calciumRaw') !== null) result.calcium = round(number('calciumRaw')! * parameters.calciumFactor)
+  if (number('magnesiumRaw') !== null && number('calciumRaw') !== null) result.magnesium = round((number('magnesiumRaw')! - number('calciumRaw')!) * parameters.magnesiumFactor)
+  if (number('titaniumRaw') !== null) result.titanium = round(number('titaniumRaw')! * parameters.titaniumFactor)
+  if (number('waterSample') !== null && number('bottleWater') !== null && number('bottleWaterSample') !== null) {
+    result.bottleDensity = round(divide(number('waterSample')!, number('waterSample')! + number('bottleWater')! - number('bottleWaterSample')!) * 0.99823)
+  }
+  if (number('moisture') !== null) result.moisture = round(number('moisture')!)
+  if (number('sampleWeight') !== null && number('crucible') !== null && number('burnedCrucibleSample') !== null) {
+    result.burnLoss = round(divide(number('sampleWeight')! + number('crucible')! - number('burnedCrucibleSample')!, number('sampleWeight')!) * 100)
+  }
+  return result
+}
+
+function cloneMock<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function mockLabRequestSummary(row: AdminLabSampleChangeRequestDetail): AdminLabSampleChangeRequestSummary {
+  const { sourceSnapshot: _sourceSnapshot, requestedChanges: _requestedChanges, previewResults: _previewResults, actualResults: _actualResults, settlementEffects: _settlementEffects, ...summary } = row
+  return cloneMock(summary)
+}
+
+function assertMockLabRequestAccess(row: AdminLabSampleChangeRequestSummary) {
+  if (!mockAuthorizedFrontendIds().includes(row.frontendUserId)) throw new Error('没有访问该前端账号的权限')
+}
+
+function mockLabRequestIds(config?: AdminRequestConfig) {
+  return mockAttendanceIds(config)
+}
+
+function mockPendingLabRequest(id: string) {
+  const row = mockRows.labSampleChangeRequests.find((item) => item.id === id)
+  if (!row) throw new Error('未找到修改申请')
+  assertMockLabRequestAccess(row)
+  if (row.status !== 'PENDING') throw new Error('修改申请状态已变更，请刷新后重试')
+  return row
+}
+
+function applyMockLabRequestedChanges(inputs: Record<string, unknown>, changes: AdminLabSampleRequestedChanges) {
+  const nextInputs = { ...inputs }
+  const directFields = new Set([
+    'sampleNumber', 'price', 'paymentStatus', 'elementNote', 'ironRaw', 'siliconRaw', 'siliconAdjust',
+    'aluminumRaw', 'aluminumAdjust', 'sulfur', 'densityRaw', 'whiteness', 'calciumRaw', 'magnesiumRaw',
+    'carbon', 'titaniumRaw', 'waterSample', 'bottleWater', 'bottleWaterSample', 'moisture', 'crucible',
+    'sampleWeight', 'burnedCrucibleSample'
+  ])
+  for (const [field, value] of Object.entries(changes)) {
+    if (field === 'payerCustomer') continue
+    if (!directFields.has(field)) throw new Error(`不允许修改字段: ${field}`)
+    nextInputs[field] = value
+  }
+  if (changes.payerCustomer) {
+    const ids = changes.payerCustomer.customerIds
+    const customers = ids.map((id) => mockPayerCustomers[id]).filter(Boolean)
+    if (customers.length !== ids.length) throw new Error('付款客户无效')
+    nextInputs.customerId = ids[0] || null
+    nextInputs.customerIds = ids
+    nextInputs.customers = customers
+    nextInputs.customerText = customers.map((customer) => customer.name).join('、') || changes.payerCustomer.customerText
+  }
+  return nextInputs
+}
+
+function approveMockLabRequest(id: string, reviewRemark = '') {
+  const row = mockPendingLabRequest(id)
+  const block = mockSheet.sampleBlocks.find((item) => item.id === row.blockId)
+  if (!block || mockSheet.frontendUserId !== row.frontendUserId) throw new Error('未找到样品')
+  const sourceInputs = row.sourceSnapshot.inputs
+  const sourceParameters = row.sourceSnapshot.parameterSnapshot
+  const currentParameters = 'parameterSnapshot' in block ? block.parameterSnapshot : {}
+  if (JSON.stringify(block.inputs) !== JSON.stringify(sourceInputs) || JSON.stringify(currentParameters) !== JSON.stringify(sourceParameters)) {
+    throw new Error('样品数据已变化')
+  }
+  const nextInputs = applyMockLabRequestedChanges(block.inputs, row.requestedChanges)
+  const results = calculateMockLabResults(nextInputs, sourceParameters)
+  const payerChanged = Object.prototype.hasOwnProperty.call(row.requestedChanges, 'payerCustomer')
+  const affectsMonthly = (Object.prototype.hasOwnProperty.call(row.requestedChanges, 'price')
+      || Object.prototype.hasOwnProperty.call(row.requestedChanges, 'paymentStatus')
+      || payerChanged)
+    && (sourceInputs.paymentStatus === '月结款' || nextInputs.paymentStatus === '月结款')
+  const customers = Array.from(new Set([String(sourceInputs.customerText || ''), String(nextInputs.customerText || '')].filter(Boolean)))
+  const settlementEffects: AdminLabSampleSettlementEffect[] = []
+  if (affectsMonthly) {
+    for (const settlement of mockRows.monthlySettlements) {
+      if (settlement.frontendUserId !== row.frontendUserId || settlement.month !== row.date.slice(0, 7) || !customers.includes(settlement.customer)) continue
+      if (settlement.status !== 'PAID' && settlement.status !== 'PARTIAL') continue
+      settlementEffects.push({
+        recordId: settlement.recordId,
+        month: settlement.month,
+        customer: settlement.customer,
+        oldStatus: settlement.status,
+        oldPaidAmount: settlement.paidAmount,
+        oldRemark: settlement.remark,
+        newStatus: 'UNPAID'
+      })
+      settlement.status = 'UNPAID'
+      settlement.settlementStatus = '未结款'
+      settlement.paidAmount = null
+      settlement.remark = '因历史样品修改审批，需按新汇总重新核对'
+    }
+  }
+  block.inputs = nextInputs as typeof block.inputs
+  block.results = results
+  row.status = 'APPROVED'
+  row.review = { remark: reviewRemark || null, reviewedAt: new Date().toISOString() }
+  row.previewResults = results
+  row.actualResults = results
+  row.settlementEffects = settlementEffects
+  row.updatedAt = new Date().toISOString()
+  return cloneMock(row)
+}
+
+function rejectMockLabRequest(id: string, reviewRemark: string) {
+  const row = mockPendingLabRequest(id)
+  const reason = reviewRemark.trim()
+  if (!reason) throw new Error('请填写拒绝原因')
+  row.status = 'REJECTED'
+  row.review = { remark: reason, reviewedAt: new Date().toISOString() }
+  row.updatedAt = new Date().toISOString()
+  return cloneMock(row)
+}
+
 const mockRequest = {
   async get(url: string, config?: AdminRequestConfig) {
     if (isEmployeeAttendanceAdminPath(url) && url !== '/admin/employee-attendance/schedules') assertExclusiveAttendanceDateFilter(config)
@@ -562,6 +755,23 @@ const mockRequest = {
         name: row.displayRemark || row.username || row.account,
         disabled: row.disabled
       }))
+    }
+    if (url === '/admin/lab-sheet-change-requests') {
+      const frontendUserIds = mockLabRequestIds(config)
+      const status = String(config?.params?.status || '')
+      const date = String(config?.params?.date || '')
+      return mockRows.labSampleChangeRequests
+        .filter((row) => frontendUserIds.includes(row.frontendUserId) && (!status || row.status === status) && (!date || row.date === date))
+        .slice()
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .map(mockLabRequestSummary)
+    }
+    const labRequestDetailMatch = url.match(/^\/admin\/lab-sheet-change-requests\/([^/]+)$/)
+    if (labRequestDetailMatch) {
+      const row = mockRows.labSampleChangeRequests.find((item) => item.id === labRequestDetailMatch[1])
+      if (!row) throw new Error('未找到修改申请')
+      assertMockLabRequestAccess(row)
+      return cloneMock(row)
     }
     if (url === '/admin/employee-attendance/overview') {
       const ids = mockAttendanceIds(config)
@@ -679,7 +889,7 @@ const mockRequest = {
     if (url === '/admin/finance/unsettled') return mockRows.unsettled
     if (url === '/admin/finance/monthly-daily') return mockRows.monthlyDaily
     if (url === '/admin/finance/monthly-bills') {
-      return { summaryRows: [{ id: '2026-06__front-1__李四', recordId: 'mrs-1', month: '2026-06', frontendUserId: 'front-1', name: '凯里化验室', customer: '李四', amount: 1280, sampleCount: 16, settlementStatus: '未结款', paidAmount: null, remark: '' }] }
+      return { summaryRows: cloneMock(mockRows.monthlySettlements) }
     }
     if (url === '/admin/finance/monthly-customers') return mockRows.monthlyCustomers
     if (url === '/admin/finance/prepaid-recharges') return mockRows.prepaidRecharges
@@ -717,6 +927,10 @@ const mockRequest = {
       })
       return { ...employee, ...mockEmployeeAttendance.sensitive[employee.id] }
     }
+    const approveLabRequestMatch = url.match(/^\/admin\/lab-sheet-change-requests\/([^/]+)\/approve$/)
+    if (approveLabRequestMatch) return approveMockLabRequest(approveLabRequestMatch[1], String(payload?.reviewRemark || '').trim())
+    const rejectLabRequestMatch = url.match(/^\/admin\/lab-sheet-change-requests\/([^/]+)\/reject$/)
+    if (rejectLabRequestMatch) return rejectMockLabRequest(rejectLabRequestMatch[1], String(payload?.reviewRemark || ''))
     if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     const approveDeletionMatch = url.match(/^\/admin\/finance\/delete-requests\/(.+)\/approve$/)
     if (approveDeletionMatch) {
@@ -814,6 +1028,36 @@ export function getFrontendOptions() {
 
 export function buildFrontendIds(ids: string[]) {
   return ids.join(',')
+}
+
+export function getAdminLabSampleChangeRequests(query: AdminLabSampleChangeRequestQuery) {
+  return request.get<any, AdminLabSampleChangeRequestSummary[]>('/admin/lab-sheet-change-requests', {
+    params: {
+      ...(query.frontendUserIds?.length ? { frontendUserIds: buildFrontendIds(query.frontendUserIds) } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.date ? { date: query.date } : {})
+    }
+  })
+}
+
+export function getAdminLabSampleChangeRequest(id: string) {
+  return request.get<any, AdminLabSampleChangeRequestDetail>(`/admin/lab-sheet-change-requests/${id}`)
+}
+
+export function approveAdminLabSampleChangeRequest(id: string, reviewRemark?: string) {
+  return request.post<Record<string, string>, AdminLabSampleChangeRequestDetail>(
+    `/admin/lab-sheet-change-requests/${id}/approve`,
+    reviewRemark === undefined ? {} : { reviewRemark }
+  )
+}
+
+export function rejectAdminLabSampleChangeRequest(id: string, reviewRemark: string) {
+  const reason = reviewRemark.trim()
+  if (!reason) return Promise.reject(new Error('请填写拒绝原因'))
+  return request.post<{ reviewRemark: string }, AdminLabSampleChangeRequestDetail>(
+    `/admin/lab-sheet-change-requests/${id}/reject`,
+    { reviewRemark: reason }
+  )
 }
 
 export function getAdminCustomerOverview(frontendUserIds: string[]) {

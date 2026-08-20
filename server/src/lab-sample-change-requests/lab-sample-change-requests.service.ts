@@ -195,7 +195,7 @@ export class LabSampleChangeRequestsService {
       },
       orderBy: { createdAt: 'desc' }
     })
-    return rows.map((row) => this.toSummary(row as RequestRow))
+    return rows.map((row) => this.toAdminSummary(row as RequestRow))
   }
 
   async getForAdmin(admin: CurrentUser, id: string) {
@@ -371,9 +371,13 @@ export class LabSampleChangeRequestsService {
     }
   }
 
+  private toAdminSummary(row: RequestRow) {
+    return { ...this.toSummary(row), frontendUserId: row.frontendUserId }
+  }
+
   private toDetail(row: RequestRow) {
     return {
-      ...this.toSummary(row),
+      ...this.toAdminSummary(row),
       sourceSnapshot: row.sourceSnapshot,
       requestedChanges: row.requestedChanges,
       previewResults: row.previewResults,
