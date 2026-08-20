@@ -7,7 +7,7 @@
       'is-locked': locked,
       'is-highlighted': highlighted
     }"
-    :style="{ gridTemplateColumns: gridColumns }"
+    :style="{ gridTemplateColumns: gridColumns, gridColumn: '3 / -1' }"
     :data-retest-id="retest.id"
     :aria-label="`复样${retest.sequence}`"
   >
@@ -94,7 +94,7 @@ const emit = defineEmits<{
 
 const rootRef = ref<HTMLElement | null>(null)
 const focusedValues = new Map<SampleRetestInputField, unknown>()
-const gridColumns = labSheetColumns.map((column) => `${column.width}px`).join(' ')
+const gridColumns = labSheetColumns.slice(2).map((column) => `${column.width}px`).join(' ')
 const sensitiveHidden = computed(() => Boolean(
   props.sensitiveHidden || props.parent.sensitiveFieldsHidden || props.retest.sensitiveFieldsHidden
 ))
@@ -155,7 +155,9 @@ function handleInput(field: SampleRetestInputField, event: Event) {
 }
 
 function handleBlur(field: SampleRetestInputField, event: Event) {
-  const oldValue = focusedValues.get(field) ?? props.retest.inputs[field] ?? null
+  const oldValue = focusedValues.has(field)
+    ? focusedValues.get(field)
+    : props.retest.inputs[field] ?? null
   const newValue = eventValue(event)
   focusedValues.delete(field)
   if (JSON.stringify(oldValue ?? null) !== JSON.stringify(newValue ?? null)) {
@@ -163,13 +165,19 @@ function handleBlur(field: SampleRetestInputField, event: Event) {
   }
 }
 
+let highlightGeneration = 0
+
 watch(
   () => props.highlighted,
   async (highlighted) => {
+    const generation = ++highlightGeneration
     if (!highlighted) return
     await nextTick()
-    rootRef.value?.scrollIntoView?.({ behavior: 'smooth', block: 'center', inline: 'nearest' })
-    rootRef.value?.querySelector<HTMLInputElement>('input[data-retest-field]:not(:disabled)')?.focus()
+    await nextTick()
+    const root = rootRef.value
+    if (generation !== highlightGeneration || !props.highlighted || !root?.isConnected) return
+    root.scrollIntoView?.({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    root.querySelector<HTMLInputElement>('input[data-retest-field]:not(:disabled)')?.focus()
   },
   { immediate: true }
 )
@@ -177,9 +185,10 @@ watch(
 
 <style scoped lang="scss">
 .sample-retest-band {
+  position: relative;
   display: grid;
-  grid-column: 1 / -1;
   min-width: 0;
+  overflow: visible;
   color: #172033;
   background: #f8fbff;
   border-top: 1px solid #111827;
@@ -201,6 +210,11 @@ watch(
 
 .sample-retest-band__identity,
 .sample-retest-band__meta {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  z-index: 1;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -208,9 +222,13 @@ watch(
   gap: 3px;
   padding: 4px 6px;
   text-align: center;
+  border-top: 1px solid #111827;
+  border-bottom: 1px solid #111827;
 }
 
 .sample-retest-band__identity {
+  left: -318px;
+  width: 78px;
   color: #174a7a;
   background: #edf7ff;
 
@@ -224,6 +242,8 @@ watch(
 }
 
 .sample-retest-band__meta {
+  left: -240px;
+  width: 240px;
   align-items: stretch;
   color: #64748b;
   font-size: 10px;

@@ -886,6 +886,34 @@ describe('LabSheetGrid', () => {
     expect(order.indexOf('retest-2')).toBeLessThan(order.indexOf('price'))
   })
 
+  it.each([
+    [0, 3],
+    [1, 4],
+    [2, 5]
+  ])('reserves exact C-W rows for %i retests while A-B keep the amount row aligned', (retestCount, expectedParentSpan) => {
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [makeBlockWithRetests(retestCount)] },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+    const sequenceCell = wrapper.get('[data-block-id="block-1"][data-field="sequence"]')
+      .element.parentElement as HTMLElement
+    const customerCell = wrapper.get('.cell--customer')
+    const customerStack = wrapper.get('.sample-customer-stack')
+    const recipientRow = wrapper.get('[data-field="recipientCustomerText"]')
+    const bands = wrapper.findAll('[data-retest-id]')
+
+    expect(sequenceCell.style.gridRow).toBe(`span ${expectedParentSpan}`)
+    expect((customerCell.element as HTMLElement).style.gridRow).toBe(`span ${expectedParentSpan}`)
+    expect((customerStack.element as HTMLElement).style.gridTemplateRows.split(' ')).toHaveLength(expectedParentSpan)
+    expect((recipientRow.element as HTMLElement).style.gridRow).toBe('-2 / -1')
+    expect(bands).toHaveLength(retestCount)
+    bands.forEach((band) => {
+      expect((band.element as HTMLElement).style.gridColumn).toBe('3 / -1')
+      expect((band.element as HTMLElement).style.gridTemplateColumns.split(' ')).toHaveLength(21)
+    })
+    expect(wrapper.find('[data-field="price"]').exists()).toBe(true)
+  })
+
   it('passes the highlight and forwards exact retest event signatures', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: { blocks: [makeBlockWithRetests(1)], highlightRetestId: 'retest-1' },

@@ -268,6 +268,7 @@ let businessDayBoundaryTimer: number | undefined
 let businessDayPreflushTimer: number | undefined
 let retestCreationGeneration = 0
 let retestActionGeneration = 0
+const activeRetestLifecycleActions = new Map<string, number>()
 
 const isPageReadonly = computed(() => Boolean(
   labStore.sheet?.readonly || switchingBusinessDay.value || labStore.applyingParameters
@@ -661,6 +662,7 @@ function isCurrentRetestCreationOperation(generation: number, context: RetestCre
 function invalidateRetestCreationContext() {
   retestCreationGeneration += 1
   retestActionGeneration += 1
+  activeRetestLifecycleActions.clear()
   creatingRetests.value = false
   retestDialogVisible.value = false
   highlightRetestId.value = ''
@@ -678,52 +680,75 @@ function handleRetestFieldCommit(
 }
 
 async function handleRetestDelete(sampleBlockId: string, retestId: string) {
-  const operationGeneration = ++retestActionGeneration
+  const operationGeneration = beginRetestLifecycleAction(retestId)
+  if (operationGeneration === null) return
   const operationContext = captureRetestCreationContext()
   try {
-    await ElMessageBox.confirm('确认删除这条空白复样吗？', '删除复样', {
-      type: 'warning',
-      confirmButtonText: '确认删除',
-      cancelButtonText: '取消'
-    })
-  } catch {
-    return
-  }
-  if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
-  try {
-    const deleted = await labStore.deleteRetestRecord(sampleBlockId, retestId)
-    if (!deleted || !isCurrentRetestActionOperation(operationGeneration, operationContext)) return
-    if (highlightRetestId.value === retestId) highlightRetestId.value = ''
-    ElMessage.success('空白复样已删除')
-  } catch (error) {
+    try {
+      await ElMessageBox.confirm('确认删除这条空白复样吗？', '删除复样', {
+        type: 'warning',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消'
+      })
+    } catch {
+      return
+    }
     if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
-    ElMessage.error(error instanceof Error ? error.message : '复样删除失败')
+    try {
+      const deleted = await labStore.deleteRetestRecord(sampleBlockId, retestId)
+      if (!deleted || !isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+      if (highlightRetestId.value === retestId) highlightRetestId.value = ''
+      ElMessage.success('空白复样已删除')
+    } catch (error) {
+      if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+      ElMessage.error(error instanceof Error ? error.message : '复样删除失败')
+    }
+  } finally {
+    finishRetestLifecycleAction(retestId, operationGeneration)
   }
 }
 
 async function handleRetestVoid(sampleBlockId: string, retestId: string) {
-  const operationGeneration = ++retestActionGeneration
+  const operationGeneration = beginRetestLifecycleAction(retestId)
+  if (operationGeneration === null) return
   const operationContext = captureRetestCreationContext()
-  let reason = ''
   try {
-    const response = await ElMessageBox.prompt('作废后不可恢复，可选填写作废原因。', '作废复样', {
-      type: 'warning',
-      confirmButtonText: '确认作废',
-      cancelButtonText: '取消',
-      inputPlaceholder: '可选：填写作废原因'
-    })
-    reason = response.value || ''
-  } catch {
-    return
-  }
-  if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
-  try {
-    const voided = await labStore.voidRetestRecord(sampleBlockId, retestId, reason)
-    if (!voided || !isCurrentRetestActionOperation(operationGeneration, operationContext)) return
-    ElMessage.success('复样已作废')
-  } catch (error) {
+    let reason = ''
+    try {
+      const response = await ElMessageBox.prompt('作废后不可恢复，可选填写作废原因。', '作废复样', {
+        type: 'warning',
+        confirmButtonText: '确认作废',
+        cancelButtonText: '取消',
+        inputPlaceholder: '可选：填写作废原因'
+      })
+      reason = response.value || ''
+    } catch {
+      return
+    }
     if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
-    ElMessage.error(error instanceof Error ? error.message : '复样作废失败')
+    try {
+      const voided = await labStore.voidRetestRecord(sampleBlockId, retestId, reason)
+      if (!voided || !isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+      ElMessage.success('复样已作废')
+    } catch (error) {
+      if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+      ElMessage.error(error instanceof Error ? error.message : '复样作废失败')
+    }
+  } finally {
+    finishRetestLifecycleAction(retestId, operationGeneration)
+  }
+}
+
+function beginRetestLifecycleAction(retestId: string) {
+  if (activeRetestLifecycleActions.has(retestId)) return null
+  const generation = ++retestActionGeneration
+  activeRetestLifecycleActions.set(retestId, generation)
+  return generation
+}
+
+function finishRetestLifecycleAction(retestId: string, generation: number) {
+  if (activeRetestLifecycleActions.get(retestId) === generation) {
+    activeRetestLifecycleActions.delete(retestId)
   }
 }
 

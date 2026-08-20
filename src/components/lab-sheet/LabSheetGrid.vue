@@ -53,12 +53,13 @@
             </div>
 
             <div
-              class="cell cell--input cell--rowspan-3 cell--green"
+              class="cell cell--input cell--green"
               :class="{
                 'cell--completed': block.inputs.completed,
                 'cell--selection-target': selectionMode,
                 'cell--highlight': block.id === highlightBlockId
               }"
+              :style="{ gridRow: `span ${getBlockRowSpan(block)}` }"
               :data-block-id="block.id"
               @click="handleSequenceCellClick(block.id, $event)"
             >
@@ -76,8 +77,11 @@
                 />
               </div>
             </div>
-            <div class="cell cell--input cell--rowspan-3 cell--customer cell--split">
-              <div class="sample-customer-stack">
+            <div
+              class="cell cell--input cell--customer cell--split"
+              :style="{ gridRow: `span ${getBlockRowSpan(block)}` }"
+            >
+              <div class="sample-customer-stack" :style="{ gridTemplateRows: getCustomerGridRows(block) }">
                 <div class="sample-number-editor" :data-block-id="block.id" data-field="sampleNumber">
                   <el-input
                     size="small"
@@ -101,7 +105,12 @@
                     />
                   </div>
                 </div>
-                <div class="customer-role-row" :data-block-id="block.id" data-field="recipientCustomerText">
+                <div
+                  class="customer-role-row"
+                  style="grid-row: -2 / -1"
+                  :data-block-id="block.id"
+                  data-field="recipientCustomerText"
+                >
                   <div class="customer-editor-wrap">
                     <CustomerCellEditor
                       customer-role="recipient"
@@ -328,6 +337,21 @@ export type LabGridScrollState = {
 }
 
 const gridColumns = computed(() => labSheetColumns.map((column) => `${column.width}px`).join(' '))
+const RETEST_BAND_ROW_HEIGHT_PX = 62
+
+function getBlockRowSpan(block: SampleBlock) {
+  return 3 + block.retests.length
+}
+
+function getCustomerGridRows(block: SampleBlock) {
+  return [
+    '36px',
+    '36px',
+    ...block.retests.map(() => `${RETEST_BAND_ROW_HEIGHT_PX}px`),
+    '36px'
+  ].join(' ')
+}
+
 const selectionMode = computed(() => Boolean(props.selectionMode))
 const selectedBlockIds = computed(() => props.selectedBlockIds || [])
 const highlightBlockId = computed(() => props.highlightBlockId || '')
@@ -910,7 +934,6 @@ const FormulaCell = defineComponent({
   display: grid;
   width: 100%;
   min-height: 100%;
-  grid-template-rows: 36px 36px 36px;
 }
 
 .sample-number-editor,

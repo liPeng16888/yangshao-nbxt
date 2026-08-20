@@ -1,8 +1,8 @@
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, reactive } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import SampleRetestBand from './SampleRetestBand.vue'
-import { defaultLabParameters } from '@/constants/labSheetTemplate'
+import { defaultLabParameters, labSheetColumns } from '@/constants/labSheetTemplate'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import type { SampleBlock, SampleRetest } from '@/types/labSheet'
 
@@ -88,8 +88,10 @@ describe('SampleRetestBand', () => {
       'sample-retest-band__input',
       'sample-retest-band__result'
     ])
-    expect(wrapper.attributes('style')).toContain('78px')
-    expect(wrapper.attributes('style')).toContain('240px')
+    expect((wrapper.element as HTMLElement).style.gridColumn).toBe('3 / -1')
+    expect((wrapper.element as HTMLElement).style.gridTemplateColumns).toBe(
+      labSheetColumns.slice(2).map((column) => `${column.width}px`).join(' ')
+    )
   })
 
   it('shows the sequence, parameter snapshot time, save status, and no comparison judgement', () => {
@@ -117,6 +119,25 @@ describe('SampleRetestBand', () => {
 
     expect(wrapper.emitted('update')).toContainEqual(['retest-1', { ironRaw: 1.25 }])
     expect(wrapper.emitted('fieldCommit')).toContainEqual(['retest-1', 'ironRaw', 1, 1.25])
+  })
+
+  it.each([
+    ['a positive number', '1.25', 1.25],
+    ['zero', '0', 0]
+  ] as const)('keeps explicit null as the old value when blank input changes to %s', async (_label, inputValue, expectedValue) => {
+    const retest = reactive(makeRetest({ inputs: {} }))
+    const wrapper = mount(SampleRetestBand, {
+      props: { parent: makeParent(), retest }
+    })
+    const input = wrapper.get('input[data-retest-field="ironRaw"]')
+
+    await input.trigger('focus')
+    await input.setValue(inputValue)
+    retest.inputs.ironRaw = expectedValue
+    await nextTick()
+    await input.trigger('blur')
+
+    expect(wrapper.emitted('fieldCommit')).toContainEqual(['retest-1', 'ironRaw', null, expectedValue])
   })
 
   it('offers delete only while blank and void only after data has ever been saved', async () => {
@@ -201,6 +222,26 @@ describe('SampleRetestBand', () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center', inline: 'nearest' })
     expect(document.activeElement).toBe(wrapper.get('input[data-retest-field="ironRaw"]').element)
     expect(wrapper.classes()).toContain('is-highlighted')
+    wrapper.unmount()
+  })
+
+  it('does not scroll or focus when highlight is cleared before the scheduled tick', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView
+    })
+    const wrapper = mount(SampleRetestBand, {
+      attachTo: document.body,
+      props: { parent: makeParent(), retest: makeRetest(), highlighted: true }
+    })
+
+    const clearHighlight = wrapper.setProps({ highlighted: false })
+    await clearHighlight
+    await nextTick()
+
+    expect(scrollIntoView).not.toHaveBeenCalled()
+    expect(document.activeElement).not.toBe(wrapper.get('input[data-retest-field="ironRaw"]').element)
     wrapper.unmount()
   })
 })
