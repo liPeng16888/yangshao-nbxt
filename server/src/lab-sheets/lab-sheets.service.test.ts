@@ -5,7 +5,7 @@ import { LabCellChangeService } from './lab-cell-change.service'
 import { LabSheetsService } from './lab-sheets.service'
 
 function makeBlock(index: number, inputs: Record<string, unknown> = {}, parameters = defaultLabParameters) {
-  const nextInputs = { ...createEmptyInputs(index), ...inputs }
+  const nextInputs: Record<string, unknown> = { ...createEmptyInputs(index), ...inputs }
   return {
     id: `block-${index}`,
     index,
