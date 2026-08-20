@@ -241,12 +241,13 @@
           :parent="block"
           :readonly="readonly"
           :sensitive-hidden="isSensitiveHidden(block)"
-          :highlight-retest-id="highlightRetestId"
+          :highlight-retest-id="retestHighlightForBlock(block.id)"
           :pending-retest-action-ids="pendingRetestActionIds"
           @update="(retestId, patch) => emit('retestUpdate', block.id, retestId, patch)"
           @field-commit="(retestId, field, oldValue, newValue) => emit('retestFieldCommit', block.id, retestId, field, oldValue, newValue)"
           @delete="(retestId) => emit('retestDelete', block.id, retestId)"
           @void="(retestId) => emit('retestVoid', block.id, retestId)"
+          @highlight-consumed="handleRetestHighlightConsumed"
         />
 
         <button class="mobile-save-next" type="button" @click="saveAndOpenNext(block)">
@@ -384,6 +385,7 @@ const expandedBlockIds = ref(new Set(initiallyExpandedBlockId ? [initiallyExpand
 const expandedGroupKeysByBlock = ref(new Map<string, Set<string>>())
 const focusedFieldValues = new Map<string, unknown>()
 const numericInputDrafts = ref(new Map<string, string>())
+const effectiveRetestHighlightId = ref('')
 let consumedRetestHighlightId = ''
 
 watch(
@@ -400,13 +402,22 @@ watch(
     () => props.blocks.flatMap((block) => block.retests.map((retest) => `${block.id}:${retest.id}`)).join('|')
   ],
   ([retestId], [previousRetestId]) => {
-    if (retestId !== previousRetestId) consumedRetestHighlightId = ''
-    if (!retestId) return
+    if (retestId !== previousRetestId) {
+      consumedRetestHighlightId = ''
+      effectiveRetestHighlightId.value = ''
+    }
+    if (!retestId) {
+      effectiveRetestHighlightId.value = ''
+      return
+    }
     if (consumedRetestHighlightId === retestId) return
     const blockId = findRetestParentId(retestId)
-    if (!blockId) return
+    if (!blockId) {
+      effectiveRetestHighlightId.value = ''
+      return
+    }
     expandBlock(blockId, false)
-    consumedRetestHighlightId = retestId
+    effectiveRetestHighlightId.value = retestId
   },
   { immediate: true }
 )
@@ -450,6 +461,17 @@ function expandBlock(blockId: string, shouldScroll = true) {
 function findRetestParentId(retestId?: string) {
   if (!retestId) return ''
   return props.blocks.find((block) => block.retests.some((retest) => retest.id === retestId))?.id || ''
+}
+
+function retestHighlightForBlock(blockId: string) {
+  const retestId = effectiveRetestHighlightId.value
+  return findRetestParentId(retestId) === blockId ? retestId : ''
+}
+
+function handleRetestHighlightConsumed(retestId: string) {
+  if (props.highlightRetestId !== retestId || effectiveRetestHighlightId.value !== retestId) return
+  consumedRetestHighlightId = retestId
+  effectiveRetestHighlightId.value = ''
 }
 
 function isGroupExpanded(blockId: string, groupKey: string) {

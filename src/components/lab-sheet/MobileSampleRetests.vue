@@ -150,6 +150,7 @@ const emit = defineEmits<{
   fieldCommit: [retestId: string, field: SampleRetestInputField, oldValue: unknown, newValue: unknown]
   delete: [retestId: string]
   void: [retestId: string]
+  highlightConsumed: [retestId: string]
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
@@ -283,6 +284,7 @@ watch(
     card.scrollIntoView?.({ behavior: 'smooth', block: 'center', inline: 'nearest' })
     card.querySelector<HTMLInputElement>('input[data-retest-field]:not(:disabled)')?.focus()
     consumedHighlightRetestId = highlightRetestId
+    emit('highlightConsumed', highlightRetestId)
   },
   { immediate: true }
 )

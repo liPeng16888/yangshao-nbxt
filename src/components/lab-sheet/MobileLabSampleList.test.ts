@@ -406,6 +406,50 @@ describe('MobileLabSampleList', () => {
     wrapper.unmount()
   })
 
+  it('does not replay a consumed retest highlight when its parent is collapsed, replaced, and reopened', async () => {
+    const scrollSpy = installScrollIntoViewMock()
+    const focusSpy = vi.spyOn(HTMLInputElement.prototype, 'focus')
+    const parent = makeBlock('block-1', 1, { elementNote: '铁' })
+    parent.retests = [makeRetest(parent.id, 1)]
+    const wrapper = mountList({
+      blocks: [parent],
+      highlightRetestId: 'retest-1'
+    }, document.body)
+    const retestScrollCount = () => scrollSpy.mock.instances.filter((element) => (
+      element instanceof HTMLElement && element.dataset.retestId === 'retest-1'
+    )).length
+
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.get('[data-testid="mobile-retests-toggle"]').attributes('aria-expanded')).toBe('true')
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+    expect(retestScrollCount()).toBe(1)
+
+    await wrapper.get('.mobile-sample-card__toggle').trigger('click')
+    expect(wrapper.find('[data-testid="mobile-retests-toggle"]').exists()).toBe(false)
+    await wrapper.setProps({
+      blocks: [{
+        ...parent,
+        inputs: { ...parent.inputs },
+        retests: parent.retests.map((retest) => ({
+          ...retest,
+          inputs: { ...retest.inputs },
+          results: { ...retest.results }
+        }))
+      }]
+    })
+    await wrapper.get('.mobile-sample-card__toggle').trigger('click')
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="mobile-retests-toggle"]').attributes('aria-expanded')).toBe('false')
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+    expect(retestScrollCount()).toBe(1)
+    wrapper.unmount()
+  })
+
   it('keeps completed retest values out of the DOM until the existing access grant is present', async () => {
     const parent = makeBlock('block-1', 1, { completed: true, elementNote: '铁' })
     parent.retests = [makeRetest(parent.id, 1, {
