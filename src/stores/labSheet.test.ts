@@ -590,6 +590,7 @@ describe('labSheet store auto save', () => {
     resolveFirst(makeRetest('retest-1', { ironRaw: 1 }, { updatedAt: '2026-06-25T00:00:01.000Z' }))
     await vi.runAllTimersAsync()
     expect(apiMocks.saveSampleRetest).toHaveBeenCalledTimes(2)
+    expect(store.autoSaving).toBe(false)
   })
 
   it('keeps one retest failure visible when a different concurrent retest succeeds later', async () => {
@@ -808,6 +809,46 @@ describe('labSheet store auto save', () => {
     expect(store.sampleBlocks[0].retests.map((item) => item.id)).toEqual(['retest-1', 'retest-created'])
   })
 
+  it('reuses one prepared create payload after an ambiguous network failure', async () => {
+    const created = makeRetest('retest-created')
+    apiMocks.createSampleRetests
+      .mockRejectedValueOnce(new Error('connection reset after request'))
+      .mockResolvedValueOnce([created])
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    await expect(store.createRetests(['block-1'])).rejects.toThrow('connection reset after request')
+    const firstPayload = apiMocks.createSampleRetests.mock.calls[0][1]
+    const retried = await store.createRetests(['block-1'])
+
+    expect(apiMocks.createSampleRetests).toHaveBeenCalledTimes(2)
+    expect(apiMocks.createSampleRetests.mock.calls[1][1]).toBe(firstPayload)
+    expect(apiMocks.createSampleRetests.mock.calls[1][1].idempotencyKey).toBe(firstPayload.idempotencyKey)
+    expect(retried).toEqual([created])
+    expect(store.sampleBlocks[0].retests.map((item) => item.id)).toEqual(['retest-created'])
+  })
+
+  it('clears a successful prepared create and gives a materially different intent a new key', async () => {
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSegmentedSheet(2))
+    apiMocks.createSampleRetests.mockImplementation(async (_sheetId: string, payload: { sampleBlockIds: string[] }) => (
+      payload.sampleBlockIds.map((sampleBlockId, index) => makeRetest(`created-${apiMocks.createSampleRetests.mock.calls.length}-${index}`, {}, {
+        sampleBlockId
+      }))
+    ))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    await store.createRetests(['block-1'])
+    const completedKey = apiMocks.createSampleRetests.mock.calls[0][1].idempotencyKey
+    await store.createRetests(['block-1'])
+    const repeatedAfterSuccessKey = apiMocks.createSampleRetests.mock.calls[1][1].idempotencyKey
+    await store.createRetests(['block-2'])
+    const differentIntentKey = apiMocks.createSampleRetests.mock.calls[2][1].idempotencyKey
+
+    expect(repeatedAfterSuccessKey).not.toBe(completedKey)
+    expect(differentIntentKey).not.toBe(repeatedAfterSuccessKey)
+  })
+
   it('ignores edits to readonly, void, and protected retests and rejects historical creation', async () => {
     const current = makeSheetWithRetests(
       makeRetest('readonly-retest', {}, { readonly: true }),
@@ -895,6 +936,117 @@ describe('labSheet store auto save', () => {
     expect(store.pendingAutoSaveCount).toBe(0)
   })
 
+  it('does not let an older parent save overwrite a newer retest save', async () => {
+    let resolveParentSave!: (value: SampleBlock) => void
+    const parentSave = new Promise<SampleBlock>((resolve) => { resolveParentSave = resolve })
+    const staleParent = makeBlock({ sampleNumber: 'PARENT-SAVED' })
+    staleParent.updatedAt = '2026-06-25T00:00:01.000Z'
+    staleParent.retests = [makeRetest('retest-1')]
+    const newerRetest = makeRetest('retest-1', { ironRaw: 8 }, {
+      updatedAt: '2026-06-25T00:00:02.000Z'
+    })
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(makeRetest()))
+    apiMocks.saveSampleBlock.mockReturnValue(parentSave)
+    apiMocks.saveSampleRetest.mockResolvedValue(newerRetest)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { sampleNumber: 'PARENT-SAVED' })
+    store.patchRetest('block-1', 'retest-1', { ironRaw: 8 })
+
+    const flushed = store.persistAllBlocks({ silent: true })
+    await vi.waitFor(() => {
+      expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(1)
+      expect(store.sampleBlocks[0].retests[0].updatedAt).toBe('2026-06-25T00:00:02.000Z')
+    })
+    resolveParentSave(staleParent)
+    await flushed
+
+    expect(store.sampleBlocks[0].retests[0].inputs.ironRaw).toBe(8)
+    expect(store.sampleBlocks[0].retests[0].updatedAt).toBe('2026-06-25T00:00:02.000Z')
+  })
+
+  it('does not let an older parent save resurrect a deleted retest', async () => {
+    let resolveParentSave!: (value: SampleBlock) => void
+    const parentSave = new Promise<SampleBlock>((resolve) => { resolveParentSave = resolve })
+    const staleParent = makeBlock({ sampleNumber: 'PARENT-SAVED' })
+    staleParent.updatedAt = '2026-06-25T00:00:01.000Z'
+    staleParent.retests = [makeRetest('retest-1')]
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(makeRetest()))
+    apiMocks.saveSampleBlock.mockReturnValue(parentSave)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { sampleNumber: 'PARENT-SAVED' })
+
+    const parentFlush = store.persistAllBlocks({ silent: true })
+    await vi.waitFor(() => expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(1))
+    await expect(store.deleteRetestRecord('block-1', 'retest-1')).resolves.toBe(true)
+    expect(store.sampleBlocks[0].retests).toEqual([])
+    resolveParentSave(staleParent)
+    await parentFlush
+
+    expect(store.sampleBlocks[0].retests).toEqual([])
+  })
+
+  it('does not let an older parent save revert a voided retest to active', async () => {
+    let resolveParentSave!: (value: SampleBlock) => void
+    const parentSave = new Promise<SampleBlock>((resolve) => { resolveParentSave = resolve })
+    const staleParent = makeBlock({ sampleNumber: 'PARENT-SAVED' })
+    staleParent.updatedAt = '2026-06-25T00:00:01.000Z'
+    staleParent.retests = [makeRetest('retest-1')]
+    const voided = makeRetest('retest-1', {}, {
+      status: 'VOID',
+      readonly: true,
+      updatedAt: '2026-06-25T00:00:03.000Z',
+      voidedAt: '2026-06-25T00:00:03.000Z'
+    })
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(makeRetest()))
+    apiMocks.saveSampleBlock.mockReturnValue(parentSave)
+    apiMocks.voidSampleRetest.mockResolvedValue(voided)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchBlock('block-1', { sampleNumber: 'PARENT-SAVED' })
+
+    const parentFlush = store.persistAllBlocks({ silent: true })
+    await vi.waitFor(() => expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(1))
+    await expect(store.voidRetestRecord('block-1', 'retest-1')).resolves.toEqual(voided)
+    resolveParentSave(staleParent)
+    await parentFlush
+
+    expect(store.sampleBlocks[0].retests[0]).toEqual(voided)
+  })
+
+  it('accepts a terminal void DTO from a 409 and discards the local dirty draft', async () => {
+    const voided = makeRetest('retest-1', {}, {
+      status: 'VOID',
+      readonly: true,
+      voidReason: '已由另一台设备作废',
+      updatedAt: '2026-06-25T00:00:02.000Z',
+      voidedAt: '2026-06-25T00:00:02.000Z'
+    })
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(makeRetest()))
+    apiMocks.saveSampleRetest.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          code: 'SAMPLE_RETEST_INPUT_CONFLICT',
+          fields: ['ironRaw'],
+          retest: voided
+        }
+      }
+    })
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchRetest('block-1', 'retest-1', { ironRaw: 77 })
+
+    await vi.advanceTimersByTimeAsync(900)
+
+    expect(store.sampleBlocks[0].retests[0]).toEqual(voided)
+    expect(store.pendingAutoSaveCount).toBe(0)
+    expect(store.conflictBlockIds).not.toContain('retest-1')
+    await expect(store.persistAllBlocks({ silent: true })).resolves.toMatchObject({ success: true })
+    await expect(store.loadSheetByDate('2026-06-24')).resolves.toBe(true)
+  })
+
   it('treats retests-changed as untrusted and refetches the authorized sheet', async () => {
     const source = makeEventSource()
     const remote = makeRetest('retest-server', { ironRaw: 8 })
@@ -963,6 +1115,105 @@ describe('labSheet store auto save', () => {
       expect(store.autoSaveStatus).toBe('conflict')
       expect(store.conflictBlockIds).toContain('retest-1')
     })
+  })
+
+  it('accepts a protected redacted realtime DTO and removes sensitive local work', async () => {
+    const source = makeEventSource()
+    const redacted = makeRetest('retest-1', {}, {
+      readonly: true,
+      sensitiveFieldsHidden: true,
+      everFilled: true,
+      updatedAt: '2026-06-25T00:00:02.000Z'
+    })
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(makeRetest()))
+    apiMocks.getLabSheetByDate.mockResolvedValue(makeSheetWithRetests(redacted))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchRetest('block-1', 'retest-1', { ironRaw: 88 })
+
+    source.onmessage?.({ data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent)
+
+    await vi.waitFor(() => {
+      expect(store.sampleBlocks[0].retests[0]).toEqual(redacted)
+      expect(store.pendingAutoSaveCount).toBe(0)
+      expect(store.conflictBlockIds).not.toContain('retest-1')
+    })
+    await vi.advanceTimersByTimeAsync(900)
+    expect(apiMocks.saveSampleRetest).not.toHaveBeenCalled()
+    expect(Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index)))
+      .not.toEqual(expect.arrayContaining([expect.stringContaining('ys_lab_draft:v1:front-1:front-1:2026-06-25:sheet-1')]))
+    await expect(store.persistAllBlocks({ silent: true })).resolves.toMatchObject({ success: true })
+  })
+
+  it('retires an in-flight retest save when realtime makes the row terminal', async () => {
+    const source = makeEventSource()
+    let resolveOldSave!: (value: SampleRetest) => void
+    const oldSave = new Promise<SampleRetest>((resolve) => { resolveOldSave = resolve })
+    const voided = makeRetest('retest-1', {}, {
+      status: 'VOID',
+      readonly: true,
+      updatedAt: '2026-06-25T00:00:02.000Z',
+      voidedAt: '2026-06-25T00:00:02.000Z'
+    })
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(makeRetest()))
+    apiMocks.getLabSheetByDate.mockResolvedValue(makeSheetWithRetests(voided))
+    apiMocks.saveSampleRetest.mockReturnValue(oldSave)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchRetest('block-1', 'retest-1', { ironRaw: 4 })
+    await vi.advanceTimersByTimeAsync(900)
+    expect(apiMocks.saveSampleRetest).toHaveBeenCalledTimes(1)
+
+    source.onmessage?.({ data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent)
+    await vi.waitFor(() => expect(store.sampleBlocks[0].retests[0]).toEqual(voided))
+    await expect(store.persistAllBlocks({ silent: true })).resolves.toMatchObject({ success: true })
+
+    resolveOldSave(makeRetest('retest-1', { ironRaw: 4 }, {
+      updatedAt: '2026-06-25T00:00:03.000Z'
+    }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.sampleBlocks[0].retests[0]).toEqual(voided)
+    expect(store.pendingAutoSaveCount).toBe(0)
+  })
+
+  it('ignores an older overlapping retest refetch after a newer response is applied', async () => {
+    const source = makeEventSource()
+    let resolveOlderPull!: (value: LabSheet) => void
+    const olderPull = new Promise<LabSheet>((resolve) => { resolveOlderPull = resolve })
+    const older = makeSheetWithRetests(makeRetest('retest-1', { ironRaw: 1 }, {
+      updatedAt: '2026-06-25T00:00:01.000Z'
+    }))
+    const newer = makeSheetWithRetests(makeRetest('retest-1', { ironRaw: 9 }, {
+      updatedAt: '2026-06-25T00:00:03.000Z'
+    }))
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(makeRetest()))
+    apiMocks.getLabSheetByDate
+      .mockReturnValueOnce(olderPull)
+      .mockResolvedValueOnce(newer)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    const message = { data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent
+    source.onmessage?.(message)
+    source.onmessage?.(message)
+    await vi.waitFor(() => expect(store.sampleBlocks[0].retests[0].inputs.ironRaw).toBe(9))
+    resolveOlderPull(older)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.sampleBlocks[0].retests[0].inputs.ironRaw).toBe(9)
+    expect(store.sampleBlocks[0].retests[0].updatedAt).toBe('2026-06-25T00:00:03.000Z')
   })
 
   it('does not let an old-sheet retest refetch overwrite a newly loaded date', async () => {
