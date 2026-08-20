@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
+import { businessDateInBeijing } from './date'
 import type { LabSampleInput, SampleBlock } from '@/types/labSheet'
 import {
   buildSampleChangePatch,
@@ -53,9 +54,40 @@ describe('lab sample change request draft utilities', () => {
   })
 
   it('requires a historical visible sample and never exposes sensitive-hidden data', () => {
-    expect(isHistoricalSampleChangeEligible(makeBlock({ sampleNumber: '历史样品' }))).toBe(true)
-    expect(isHistoricalSampleChangeEligible(makeBlock({}, { sensitiveFieldsHidden: true }))).toBe(false)
-    expect(isHistoricalSampleChangeEligible(makeBlock({ sampleNumber: '' }, { sensitiveFieldsHidden: false }))).toBe(false)
-    expect(isHistoricalSampleChangeEligible(makeBlock({ sampleNumber: '今日样品' }, { readonly: false }))).toBe(false)
+    const businessDate = businessDateInBeijing()
+    const futureDate = new Date(`${businessDate}T00:00:00.000Z`)
+    futureDate.setUTCDate(futureDate.getUTCDate() + 1)
+    expect(isHistoricalSampleChangeEligible(makeBlock({ sampleNumber: '历史样品' }), '2000-01-01')).toBe(true)
+    expect(isHistoricalSampleChangeEligible(makeBlock({}, { sensitiveFieldsHidden: true }), '2000-01-01')).toBe(false)
+    expect(isHistoricalSampleChangeEligible(makeBlock({ sampleNumber: '' }, { sensitiveFieldsHidden: false }), '2000-01-01')).toBe(false)
+    expect(isHistoricalSampleChangeEligible(makeBlock({ sampleNumber: '未来样品' }), futureDate.toISOString().slice(0, 10))).toBe(false)
+  })
+
+  it('normalizes strings and payer identities so blank-only edits are no-ops', () => {
+    const block = makeBlock({ sampleNumber: '', elementNote: '', paymentStatus: '', customerIds: [], customerText: '' })
+    const blankDraft = createSampleChangeDraft(block)
+    blankDraft.sampleNumber = '  '
+    blankDraft.elementNote = '  '
+    blankDraft.paymentStatus = '  ' as never
+    blankDraft.customerIds = [' ', '']
+    blankDraft.customerText = '  '
+    expect(buildSampleChangePatch(block, blankDraft)).toEqual({})
+
+    const draft = createSampleChangeDraft(block)
+    draft.sampleNumber = '  新样品  '
+    draft.elementNote = '  元素备注  '
+    draft.paymentStatus = ' 月结款 ' as never
+    draft.customerIds = [' c-1 ', '', 'c-1', 'c-2 ']
+    draft.customerText = '  伪造名称  '
+    expect(buildSampleChangePatch(block, draft)).toEqual({
+      sampleNumber: '新样品', elementNote: '元素备注', paymentStatus: '月结款',
+      payerCustomer: { customerIds: ['c-1', 'c-2'], customerText: '伪造名称' }
+    })
+  })
+
+  it('rejects non-finite numeric drafts instead of creating an invalid payload', () => {
+    const draft = createSampleChangeDraft(makeBlock({ ironRaw: 1 }))
+    draft.ironRaw = Number.POSITIVE_INFINITY
+    expect(() => buildSampleChangePatch(makeBlock({ ironRaw: 1 }), draft)).toThrow('必须是有限数字或空值')
   })
 })

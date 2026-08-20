@@ -350,7 +350,11 @@ export async function mockCreateLabSampleChangeRequest(payload: CreateLabSampleC
   }
 
   const changes = validateMockChanges(payload.changes)
-  const nextInputs = applyMockChanges(block.inputs, changes)
+  const payerCustomers = changes.payerCustomer ? canonicalMockPayerCustomers(changes.payerCustomer.customerIds) : []
+  if (changes.payerCustomer) {
+    changes.payerCustomer.customerText = payerCustomers.map((customer) => customer.name).join('、')
+  }
+  const nextInputs = applyMockChanges(block.inputs, changes, payerCustomers)
   if (!Object.keys(changes).length || !mockInputsDiffer(block.inputs, nextInputs, changes)) {
     throw new Error('请至少修改一项内容')
   }
@@ -417,25 +421,78 @@ function validateMockChanges(changes: LabSampleChangePatch): LabSampleChangePatc
   if (!changes || typeof changes !== 'object' || Array.isArray(changes) || Object.keys(changes).some((field) => !allowed.has(field))) {
     throw new Error('修改内容无效')
   }
-  return clone(changes)
+  const normalized: LabSampleChangePatch = {}
+  for (const [field, value] of Object.entries(changes)) {
+    if (field === 'sampleNumber' || field === 'elementNote') {
+      if (typeof value !== 'string') throw new Error(`${field} 必须是文本`)
+      normalized[field] = value.trim()
+    } else if (field === 'paymentStatus') {
+      const paymentStatus = typeof value === 'string' ? value.trim() : value
+      if (typeof paymentStatus !== 'string' || !['已结款', '未结款', '月结款', '预存款', ''].includes(paymentStatus)) {
+        throw new Error('付款状态无效')
+      }
+      normalized.paymentStatus = paymentStatus as NonNullable<LabSampleChangePatch['paymentStatus']>
+    } else if (field === 'payerCustomer') {
+      normalized.payerCustomer = normalizeMockPayer(value)
+    } else {
+      if (value !== null && (typeof value !== 'number' || !Number.isFinite(value))) {
+        throw new Error(`${field} 必须是有限数字或空值`)
+      }
+      normalized[field as 'price'] = value
+    }
+  }
+  return normalized
 }
 
-function applyMockChanges(inputs: LabSampleInput, changes: LabSampleChangePatch): LabSampleInput {
+function normalizeMockPayer(value: unknown): NonNullable<LabSampleChangePatch['payerCustomer']> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('付款客户无效')
+  const payer = value as Record<string, unknown>
+  if (Object.keys(payer).some((field) => field !== 'customerIds' && field !== 'customerText') || !Array.isArray(payer.customerIds) || typeof payer.customerText !== 'string') {
+    throw new Error('付款客户无效')
+  }
+  const customerIds = Array.from(new Set(payer.customerIds.map((id) => {
+    if (typeof id !== 'string') throw new Error('付款客户无效')
+    return id.trim()
+  }).filter(Boolean)))
+  return { customerIds, customerText: payer.customerText.trim() }
+}
+
+function canonicalMockPayerCustomers(customerIds: string[]) {
+  const customerById = new Map(customers.map((customer) => [customer.id, customer]))
+  const canonical = customerIds.map((id) => customerById.get(id))
+  if (canonical.some((customer) => !customer)) throw new Error('付款客户无效')
+  return canonical as NonNullable<LabSampleInput['customers']>
+}
+
+function applyMockChanges(inputs: LabSampleInput, changes: LabSampleChangePatch, payerCustomers: NonNullable<LabSampleInput['customers']>): LabSampleInput {
   const { payerCustomer, ...scalarChanges } = changes
   const next = { ...clone(inputs), ...scalarChanges }
   if (payerCustomer) {
     next.customerId = payerCustomer.customerIds[0] || undefined
     next.customerIds = [...payerCustomer.customerIds]
+    next.customers = clone(payerCustomers)
     next.customerText = payerCustomer.customerText
   }
   return next
 }
 
 function mockInputsDiffer(inputs: LabSampleInput, nextInputs: LabSampleInput, changes: LabSampleChangePatch) {
-  if (changes.payerCustomer && JSON.stringify({ customerIds: inputs.customerIds || [], customerText: inputs.customerText || '' }) !== JSON.stringify(changes.payerCustomer)) return true
+  if (changes.payerCustomer && JSON.stringify(mockPayerValue(inputs)) !== JSON.stringify(changes.payerCustomer)) return true
   return Object.keys(changes)
     .filter((field) => field !== 'payerCustomer')
-    .some((field) => JSON.stringify(inputs[field as keyof LabSampleInput] ?? null) !== JSON.stringify(nextInputs[field as keyof LabSampleInput] ?? null))
+    .some((field) => mockNormalizedValue(field, inputs[field as keyof LabSampleInput]) !== mockNormalizedValue(field, nextInputs[field as keyof LabSampleInput]))
+}
+
+function mockPayerValue(inputs: LabSampleInput) {
+  return {
+    customerIds: Array.from(new Set((inputs.customerIds || []).map((id) => id.trim()).filter(Boolean))),
+    customerText: typeof inputs.customerText === 'string' ? inputs.customerText.trim() : ''
+  }
+}
+
+function mockNormalizedValue(field: string, value: unknown) {
+  if (field === 'sampleNumber' || field === 'elementNote' || field === 'paymentStatus') return typeof value === 'string' ? value.trim() : ''
+  return value === undefined ? null : value
 }
 
 function hasVisibleMockSampleInput(inputs: LabSampleInput) {

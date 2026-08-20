@@ -163,7 +163,10 @@ export class LabSampleChangeRequestsService {
     if (this.record(this.record(request.sourceSnapshot).inputs).completed) {
       await this.auth.assertAccessGrant(user.id, grants.completedData, 'COMPLETED_SAMPLE_DATA')
     }
-    return { ...this.toSummary(request), sourceSnapshot: request.sourceSnapshot, requestedChanges: request.requestedChanges, previewResults: request.previewResults }
+    return {
+      ...this.toSummary(request), sourceSnapshot: request.sourceSnapshot, requestedChanges: request.requestedChanges,
+      previewResults: request.previewResults, settlementEffects: Array.isArray(request.settlementEffects) ? request.settlementEffects : []
+    }
   }
 
   async withdrawForFrontend(user: CurrentUser, id: string, _grants: FrontendGrants) {

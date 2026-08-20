@@ -1,8 +1,9 @@
 import { LAB_SAMPLE_CHANGE_RAW_FIELDS, labSampleChangeFieldLabels } from '@/constants/labSampleChangeRequest'
 import type { LabSampleInput, SampleBlock } from '@/types/labSheet'
 import type { LabSampleChangeDiffRow, LabSampleChangePatch } from '@/types/labSampleChangeRequest'
+import { businessDateInBeijing } from './date'
 
-const scalarFields = ['sampleNumber', 'price', 'paymentStatus', 'elementNote'] as const
+const paymentStatuses = new Set(['已结款', '未结款', '月结款', '预存款', ''])
 
 export function createSampleChangeDraft(block: SampleBlock): LabSampleInput {
   return clone(block.inputs)
@@ -10,18 +11,22 @@ export function createSampleChangeDraft(block: SampleBlock): LabSampleInput {
 
 export function buildSampleChangePatch(source: SampleBlock, draft: LabSampleInput): LabSampleChangePatch {
   const changes: LabSampleChangePatch = {}
-  for (const field of scalarFields) {
-    if (!same(source.inputs[field], draft[field])) {
-      Object.assign(changes, { [field]: draft[field] })
-    }
-  }
-  if (!samePayer(source.inputs, draft)) {
-    changes.payerCustomer = { customerIds: [...(draft.customerIds || [])], customerText: draft.customerText || '' }
+  const sampleNumber = normalizedText(draft.sampleNumber)
+  if (normalizedText(source.inputs.sampleNumber) !== sampleNumber) changes.sampleNumber = sampleNumber
+  const price = normalizedNumber(draft.price)
+  if (normalizedNumber(source.inputs.price) !== price) changes.price = price
+  const paymentStatus = normalizedPaymentStatus(draft.paymentStatus)
+  if (normalizedPaymentStatus(source.inputs.paymentStatus) !== paymentStatus) changes.paymentStatus = paymentStatus
+  const elementNote = normalizedText(draft.elementNote)
+  if (normalizedText(source.inputs.elementNote) !== elementNote) changes.elementNote = elementNote
+  const sourcePayer = payerValue(source.inputs)
+  const draftPayer = payerValue(draft)
+  if (!same(sourcePayer, draftPayer)) {
+    changes.payerCustomer = draftPayer
   }
   for (const field of LAB_SAMPLE_CHANGE_RAW_FIELDS) {
-    if (!same(source.inputs[field], draft[field])) {
-      changes[field] = draft[field] ?? null
-    }
+    const value = normalizedNumber(draft[field])
+    if (normalizedNumber(source.inputs[field]) !== value) changes[field] = value
   }
   return changes
 }
@@ -34,22 +39,24 @@ export function sampleChangeDiffRows(source: SampleBlock, draft: LabSampleInput)
     return {
       field: typedField,
       label: labSampleChangeFieldLabels[typedField],
-      oldValue: payer ? payerValue(source.inputs) : source.inputs[typedField as keyof LabSampleInput] ?? null,
+      oldValue: payer ? payerValue(source.inputs) : normalizedFieldValue(source.inputs, typedField),
       newValue: payer ? payerValue(draft) : patch[typedField]
     }
   })
 }
 
-export function isHistoricalSampleChangeEligible(block: SampleBlock): boolean {
-  return block.readonly && !block.sensitiveFieldsHidden && hasVisibleBusinessInput(block.inputs)
+export function isHistoricalSampleChangeEligible(block: SampleBlock, sheetDate: string): boolean {
+  return sheetDate < businessDateInBeijing() && !block.sensitiveFieldsHidden && hasVisibleBusinessInput(block.inputs)
 }
 
 function payerValue(inputs: LabSampleInput) {
-  return { customerIds: [...(inputs.customerIds || [])], customerText: inputs.customerText || '' }
-}
-
-function samePayer(left: LabSampleInput, right: LabSampleInput) {
-  return same(payerValue(left), payerValue(right))
+  return {
+    customerIds: Array.from(new Set((inputs.customerIds || [])
+      .filter((id): id is string => typeof id === 'string')
+      .map((id) => id.trim())
+      .filter(Boolean))),
+    customerText: normalizedText(inputs.customerText)
+  }
 }
 
 function hasVisibleBusinessInput(inputs: LabSampleInput) {
@@ -65,6 +72,28 @@ function hasVisibleBusinessInput(inputs: LabSampleInput) {
 
 function same(left: unknown, right: unknown) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
+}
+
+function normalizedText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizedPaymentStatus(value: unknown) {
+  const paymentStatus = normalizedText(value)
+  if (!paymentStatuses.has(paymentStatus)) throw new Error('付款状态无效')
+  return paymentStatus as NonNullable<LabSampleChangePatch['paymentStatus']>
+}
+
+function normalizedNumber(value: unknown) {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('数值必须是有限数字或空值')
+  return value
+}
+
+function normalizedFieldValue(inputs: LabSampleInput, field: keyof LabSampleChangePatch) {
+  if (field === 'sampleNumber' || field === 'elementNote') return normalizedText(inputs[field])
+  if (field === 'paymentStatus') return normalizedPaymentStatus(inputs[field])
+  return normalizedNumber(inputs[field as keyof LabSampleInput])
 }
 
 function clone<T>(value: T): T {

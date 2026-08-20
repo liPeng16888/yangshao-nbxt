@@ -335,6 +335,16 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
     expect(auth.assertAccessGrant).toHaveBeenCalledWith('front-1', 'completed-grant', 'COMPLETED_SAMPLE_DATA')
   })
 
+  it('returns settlement effects in frontend detail but not summaries', async () => {
+    prisma.labSampleChangeRequest.findFirst.mockResolvedValue(makeRequest({
+      settlementEffects: [{ recordId: 'settle-1', oldStatus: MonthlySettlementStatus.PAID }]
+    }))
+
+    const detail = await service.getForFrontend(frontendUser, 'request-1', grants)
+
+    expect(detail.settlementEffects).toEqual([expect.objectContaining({ recordId: 'settle-1' })])
+  })
+
   it('scopes frontend lists and hides source snapshots from summaries', async () => {
     prisma.labSampleChangeRequest.findMany.mockResolvedValue([makeRequest()])
     const rows = await service.listForFrontend(frontendUser, { date: historicalDate, status: LabSampleChangeRequestStatus.PENDING }, grants)
@@ -343,6 +353,7 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
       frontendUserId: 'front-1', date: historicalDate, status: LabSampleChangeRequestStatus.PENDING
     } }))
     expect(rows[0]).not.toHaveProperty('sourceSnapshot')
+    expect(rows[0]).not.toHaveProperty('settlementEffects')
     expect(rows[0]).toMatchObject({ id: 'request-1', blockId: 'block-1', sampleName: '旧样品', changedFieldLabels: ['样品编号'] })
   })
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 
 let db: typeof import('./db')
@@ -7,6 +7,10 @@ describe('segmented parameter mock database validation', () => {
   beforeEach(async () => {
     vi.resetModules()
     db = await import('./db')
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it.each([0, -1, 1.5, Number.NaN, '1', true, [1]])(
@@ -119,5 +123,45 @@ describe('segmented parameter mock database validation', () => {
       segmentedApplication: true
     })
     expect(saved.results.iron).toBe(20)
+  })
+
+  it('matches server request lifecycle validation, canonical customers, filtering, and immutable details', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    const resolve = async <T>(promise: Promise<T>) => {
+      await vi.runAllTimersAsync()
+      return promise
+    }
+    const current = await resolve(db.mockCurrentLabSheet())
+    const seeded = await resolve(db.mockSaveSampleBlock(current.id, {
+      id: current.sampleBlocks[0].id,
+      changedFields: { sampleNumber: '旧样品', price: 80, ironRaw: 1 }
+    }))
+    vi.setSystemTime(new Date('2026-08-21T04:00:00.000Z'))
+    const basePayload = {
+      blockId: seeded.id, baseUpdatedAt: seeded.updatedAt!, reason: ' 原始记录更正 ',
+      changes: { payerCustomer: { customerIds: [' c-2 ', '', 'c-1', 'c-2'], customerText: '伪造名称' }, sampleNumber: ' 新样品 ' }
+    }
+
+    await expect(db.mockCreateLabSampleChangeRequest({ ...basePayload, changes: { ironRaw: Number.NaN } })).rejects.toThrow()
+    await expect(db.mockCreateLabSampleChangeRequest({ ...basePayload, changes: { paymentStatus: '非法状态' as never } })).rejects.toThrow()
+    await expect(db.mockCreateLabSampleChangeRequest({ ...basePayload, changes: { payerCustomer: { customerIds: 'c-1', customerText: '' } as never } })).rejects.toThrow()
+
+    const created = await resolve(db.mockCreateLabSampleChangeRequest(basePayload))
+    expect(created).toMatchObject({ status: 'PENDING', reason: '原始记录更正', sampleName: '旧样品' })
+    const detail = await resolve(db.mockGetLabSampleChangeRequest(created.id))
+    expect(detail.requestedChanges).toMatchObject({
+      sampleNumber: '新样品', payerCustomer: { customerIds: ['c-2', 'c-1'], customerText: '三门峡选矿厂、洛阳矿业样品 001' }
+    })
+    detail.sourceSnapshot.inputs.sampleNumber = '篡改'
+    expect((await resolve(db.mockGetLabSampleChangeRequest(created.id))).sourceSnapshot.inputs.sampleNumber).toBe('旧样品')
+    await expect(db.mockCreateLabSampleChangeRequest(basePayload)).rejects.toThrow('样品已有待处理修改申请')
+    expect(await resolve(db.mockListLabSampleChangeRequests({ date: '2026-08-20', status: 'PENDING' }))).toHaveLength(1)
+
+    const withdrawn = await resolve(db.mockWithdrawLabSampleChangeRequest(created.id))
+    expect(withdrawn.status).toBe('WITHDRAWN')
+    expect(await resolve(db.mockListLabSampleChangeRequests({ status: 'WITHDRAWN' }))).toHaveLength(1)
+    await expect(db.mockWithdrawLabSampleChangeRequest(created.id)).rejects.toThrow('未找到待撤回的修改申请')
+    expect((await resolve(db.mockCreateLabSampleChangeRequest(basePayload)).then((row) => row.status))).toBe('PENDING')
   })
 })
