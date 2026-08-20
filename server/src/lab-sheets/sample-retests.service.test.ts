@@ -74,11 +74,15 @@ class FakePrisma {
   readonly blocks = new Map<string, Block>()
   readonly retests: Retest[] = []
   readonly requests = new Map<string, WriteRequest>()
+  readonly attemptedWriteRequests: WriteRequest[] = []
+  readonly p2002Error = { code: 'P2002', meta: { target: ['idempotencyKey'] } }
   failCreateForBlockId: string | null = null
+  uniqueRaceWinnerFactory: ((loser: WriteRequest) => WriteRequest | null) | null = null
   private nextRetestId = 1
+  private committedRaceWinner: WriteRequest | null | undefined
   readonly sampleRetestWriteRequest = {
     findUnique: async ({ where }: { where: { idempotencyKey: string } }): Promise<WriteRequest | null> => (
-      structuredClone(this.requests.get(where.idempotencyKey) ?? null)
+      this.readOutsideRequest(where.idempotencyKey)
     )
   }
 
@@ -116,6 +120,11 @@ class FakePrisma {
       requestsBefore.forEach(([key, request]) => this.requests.set(key, request))
       this.nextRetestId = nextRetestIdBefore
       this.log.push('transaction-rollback')
+      if (error === this.p2002Error && this.committedRaceWinner !== undefined) {
+        const winner = this.committedRaceWinner
+        this.committedRaceWinner = undefined
+        if (winner) this.requests.set(winner.idempotencyKey, structuredClone(winner))
+      }
       throw error
     }
   }
@@ -174,8 +183,15 @@ class FakePrisma {
         },
         create: async ({ data }: { data: WriteRequest }) => {
           this.log.push('create-request')
+          this.attemptedWriteRequests.push(structuredClone(data))
+          if (this.uniqueRaceWinnerFactory) {
+            const createWinner = this.uniqueRaceWinnerFactory
+            this.uniqueRaceWinnerFactory = null
+            this.committedRaceWinner = createWinner(structuredClone(data))
+            throw this.p2002Error
+          }
           if (this.requests.has(data.idempotencyKey)) {
-            throw { code: 'P2002', meta: { target: ['idempotencyKey'] } }
+            throw this.p2002Error
           }
           const stored = structuredClone(data)
           this.requests.set(data.idempotencyKey, stored)
@@ -185,6 +201,10 @@ class FakePrisma {
     }
   }
 
+  private readOutsideRequest(idempotencyKey: string) {
+    this.log.push('read-request-outside')
+    return structuredClone(this.requests.get(idempotencyKey) ?? null)
+  }
 }
 
 class FakeRealtime {
@@ -215,6 +235,27 @@ function getBlock(prisma: FakePrisma, id: string) {
   const block = prisma.blocks.get(id)
   if (!block) throw new Error(`missing fake block ${id}`)
   return block
+}
+
+function getLastAttemptedWriteRequest(prisma: FakePrisma) {
+  const request = prisma.attemptedWriteRequests.at(-1)
+  if (!request) throw new Error('missing attempted fake write request')
+  return request
+}
+
+function makeRaceWinner(
+  loser: WriteRequest,
+  overrides: Partial<Pick<WriteRequest, 'operation' | 'requestFingerprint'>> = {}
+): WriteRequest {
+  const response = structuredClone(loser.responseSnapshot)
+  if (!Array.isArray(response) || response.length !== 1) throw new Error('unexpected fake response snapshot')
+  const first = response[0]
+  if (!first || typeof first !== 'object' || Array.isArray(first)) throw new Error('unexpected fake response row')
+  return {
+    ...structuredClone(loser),
+    ...overrides,
+    responseSnapshot: [{ ...first, id: 'winner-retest', sequence: 41 }]
+  }
 }
 
 describe('SampleRetestsService.createRetests', () => {
@@ -314,6 +355,82 @@ describe('SampleRetestsService.createRetests', () => {
       .rejects.toMatchObject({ status: 409 })
   })
 
+  it('returns the immutable committed winner after losing the write-request unique-key race', async () => {
+    const { prisma, realtime, service } = setup()
+    prisma.uniqueRaceWinnerFactory = (loser) => makeRaceWinner(loser)
+    const payload = { sampleBlockIds: ['block-1'], idempotencyKey: 'matching-race' }
+
+    const recovered = await service.createRetests(frontendUser, 'sheet-1', payload, 'loser-client', true)
+
+    expect(recovered).toMatchObject([{ id: 'winner-retest', sampleBlockId: 'block-1', sequence: 41 }])
+    expect(prisma.log).toContain('transaction-rollback')
+    expect(prisma.log.at(-1)).toBe('read-request-outside')
+    expect(prisma.retests).toEqual([])
+    expect(getBlock(prisma, 'block-1').nextRetestSequence).toBe(3)
+    expect(prisma.requests.size).toBe(1)
+    expect(realtime.events).toEqual([])
+
+    recovered[0].sequence = 99
+    recovered[0].inputs.ironRaw = 99
+    const retry = await service.createRetests(frontendUser, 'sheet-1', payload, 'retry-client', true)
+    expect(retry[0].sequence).toBe(41)
+    expect(retry[0].inputs.ironRaw).toBeNull()
+    expect(prisma.retests).toEqual([])
+    expect(realtime.events).toEqual([])
+  })
+
+  it('rejects a P2002 race winner with a mismatched request fingerprint', async () => {
+    const { prisma, realtime, service } = setup()
+    prisma.uniqueRaceWinnerFactory = (loser) => makeRaceWinner(loser, {
+      requestFingerprint: 'different-request-fingerprint'
+    })
+
+    await expect(service.createRetests(frontendUser, 'sheet-1', {
+      sampleBlockIds: ['block-1'], idempotencyKey: 'mismatched-race'
+    }, undefined, true)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'SAMPLE_RETEST_IDEMPOTENCY_CONFLICT' })
+    })
+    expect(prisma.log.at(-1)).toBe('read-request-outside')
+    expect(prisma.retests).toEqual([])
+    expect(getBlock(prisma, 'block-1').nextRetestSequence).toBe(3)
+    expect(realtime.events).toEqual([])
+  })
+
+  it('rejects a P2002 race winner whose fingerprint belongs to another actor', async () => {
+    const payload = { sampleBlockIds: ['block-1'], idempotencyKey: 'actor-race' }
+    const probe = setup()
+    probe.prisma.uniqueRaceWinnerFactory = () => null
+    await expect(probe.service.createRetests(frontendUser, 'sheet-1', payload, undefined, true))
+      .rejects.toBe(probe.prisma.p2002Error)
+    const mainActorFingerprint = getLastAttemptedWriteRequest(probe.prisma).requestFingerprint
+
+    const { prisma, service } = setup()
+    prisma.uniqueRaceWinnerFactory = (loser) => makeRaceWinner(loser, {
+      requestFingerprint: mainActorFingerprint
+    })
+    await expect(service.createRetests({ ...frontendUser, id: 'sub-1' }, 'sheet-1', payload, undefined, true))
+      .rejects.toMatchObject({
+        status: 409,
+        response: expect.objectContaining({ code: 'SAMPLE_RETEST_IDEMPOTENCY_CONFLICT' })
+      })
+    expect(prisma.log.at(-1)).toBe('read-request-outside')
+  })
+
+  it('rethrows P2002 when the outer reader cannot find a committed write request', async () => {
+    const { prisma, realtime, service } = setup()
+    prisma.uniqueRaceWinnerFactory = () => null
+
+    await expect(service.createRetests(frontendUser, 'sheet-1', {
+      sampleBlockIds: ['block-1'], idempotencyKey: 'missing-race-winner'
+    }, undefined, true)).rejects.toBe(prisma.p2002Error)
+    expect(prisma.log.at(-1)).toBe('read-request-outside')
+    expect(prisma.requests.size).toBe(0)
+    expect(prisma.retests).toEqual([])
+    expect(getBlock(prisma, 'block-1').nextRetestSequence).toBe(3)
+    expect(realtime.events).toEqual([])
+  })
+
   it.each([
     ['an empty selection', { sampleBlockIds: [], idempotencyKey: 'key' }],
     ['more than 100 parents', { sampleBlockIds: Array.from({ length: 101 }, (_, index) => `block-${index}`), idempotencyKey: 'key' }],
@@ -335,6 +452,16 @@ describe('SampleRetestsService.createRetests', () => {
 
     await expect(service.createRetests(frontendUser, 'sheet-1', {
       sampleBlockIds: ['block-1'], idempotencyKey: 'cross-tenant'
+    }, undefined, true)).rejects.toBeInstanceOf(NotFoundException)
+    expect(prisma.log).toEqual(['transaction-begin', 'lock-sheet', 'read-sheet', 'transaction-rollback'])
+    expect(prisma.retests).toEqual([])
+  })
+
+  it('returns not found for a missing sheet after taking the requested sheet lock', async () => {
+    const { prisma, service } = setup()
+
+    await expect(service.createRetests(frontendUser, 'missing-sheet', {
+      sampleBlockIds: ['block-1'], idempotencyKey: 'missing-sheet'
     }, undefined, true)).rejects.toBeInstanceOf(NotFoundException)
     expect(prisma.log).toEqual(['transaction-begin', 'lock-sheet', 'read-sheet', 'transaction-rollback'])
     expect(prisma.retests).toEqual([])
