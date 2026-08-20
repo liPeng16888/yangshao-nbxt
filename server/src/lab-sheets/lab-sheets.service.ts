@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CurrentUser } from '../auth/current-user'
 import { businessDateInBeijing } from '../common/date'
-import { calculateResults, createEmptyInputs, defaultLabParameters, defaultSampleBlockCount, editableInputFields, hasLabDetectionInput } from '../common/lab'
+import { calculateResults, createEmptyInputs, defaultLabParameters, defaultSampleBlockCount, editableInputFields, hasLabDetectionInput, normalizeLabParameters } from '../common/lab'
 import { LabSheetRealtimeService } from './lab-sheet-realtime.service'
 import { collapseConsecutiveFieldChanges } from '../common/change-log'
 import {
@@ -12,6 +12,7 @@ import {
   type SharedPrepaidSampleMutation
 } from '../shared-prepaid/shared-prepaid-ledger.service'
 import { SharedPrepaidRealtimeService } from '../shared-prepaid/shared-prepaid-realtime.service'
+import { toSampleRetestDto, type SampleRetestRow } from './sample-retest.dto'
 
 const prepaidTupleFields = ['paymentStatus', 'price', 'prepaidMemberId', 'prepaidMemberPhone']
 
@@ -89,7 +90,7 @@ export class LabSheetsService {
     const updatedSheet = await this.withSheetWriteLock(current.id, async (tx) => {
       const sheet = await tx.labSheet.findUnique({
         where: { id: current.id },
-        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+        include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
       })
       if (!sheet || sheet.frontendUserId !== frontendUserId) throw new NotFoundException('未找到表格')
       this.assertSheetEditable(sheet)
@@ -123,7 +124,7 @@ export class LabSheetsService {
       }
       const reloaded = await tx.labSheet.findUnique({
         where: { id: sheet.id },
-        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+        include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
       })
       if (!reloaded) throw new NotFoundException('未找到表格')
       return reloaded
@@ -154,7 +155,7 @@ export class LabSheetsService {
     const updatedSheet = await this.withSheetWriteLock(sheetId, async (tx) => {
       const sheet = await tx.labSheet.findUnique({
         where: { id: sheetId },
-        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+        include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
       })
       if (!sheet || sheet.frontendUserId !== frontendUserId) throw new NotFoundException('未找到表格')
       this.assertSheetEditable(sheet)
@@ -176,7 +177,7 @@ export class LabSheetsService {
       })
       const reloaded = await tx.labSheet.findUnique({
         where: { id: sheet.id },
-        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+        include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
       })
       if (!reloaded) throw new NotFoundException('未找到表格')
       return reloaded
@@ -372,7 +373,7 @@ export class LabSheetsService {
   async ensureSheet(frontendUserId: string, date: string) {
     const existing = await this.prisma.labSheet.findUnique({
       where: { frontendUserId_date: { frontendUserId, date } },
-      include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+      include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
     })
     if (existing) return existing
     const initialParameters = await this.getInitialParametersForNewSheet(frontendUserId, date)
@@ -396,7 +397,7 @@ export class LabSheetsService {
           })
         }
       },
-      include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+      include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
     })
   }
 
@@ -413,12 +414,7 @@ export class LabSheetsService {
   }
 
   private normalizeLabParameters(parameters: unknown) {
-    if (!this.isPlainObject(parameters)) return { ...defaultLabParameters }
-    return Object.entries(defaultLabParameters).reduce<typeof defaultLabParameters>((next, [key, defaultValue]) => {
-      const value = parameters[key]
-      next[key as keyof typeof defaultLabParameters] = typeof value === 'number' && Number.isFinite(value) ? value : defaultValue
-      return next
-    }, { ...defaultLabParameters })
+    return normalizeLabParameters(parameters)
   }
 
   private requireCompleteLabParameters(parameters: unknown) {
@@ -659,7 +655,7 @@ export class LabSheetsService {
     }
   }
 
-  private toBlockDto(block: { id: string; index: number; readonly: boolean; updatedAt?: Date; inputs: unknown; results: unknown; parameterSnapshot: unknown }, sheetReadonly = false, canViewCompletedSensitiveData = false) {
+  private toBlockDto(block: { id: string; index: number; readonly: boolean; updatedAt?: Date; inputs: unknown; results: unknown; parameterSnapshot: unknown; retests?: SampleRetestRow[] }, sheetReadonly = false, canViewCompletedSensitiveData = false) {
     const inputs = (block.inputs || {}) as Record<string, unknown>
     const results = calculateResults(inputs, this.normalizeLabParameters(block.parameterSnapshot))
     const completed = Boolean(inputs.completed)
@@ -672,7 +668,12 @@ export class LabSheetsService {
       sensitiveFieldsHidden: hidden,
       inputs: hidden ? this.redactCompletedInputs(inputs) : inputs,
       results: hidden ? this.redactCompletedResults(results) : results,
-      parameterSnapshot: block.parameterSnapshot
+      parameterSnapshot: block.parameterSnapshot,
+      retests: (block.retests || []).map((retest) => toSampleRetestDto(retest, {
+        parentCompleted: completed,
+        sheetReadonly,
+        canViewCompletedSensitiveData
+      }))
     }
   }
 

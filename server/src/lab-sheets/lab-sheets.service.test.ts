@@ -11,7 +11,29 @@ function makeBlock(index: number, inputs: Record<string, unknown> = {}, paramete
     readonly: false,
     inputs: nextInputs,
     results: {},
-    parameterSnapshot: parameters
+    parameterSnapshot: parameters,
+    retests: [] as Array<Record<string, unknown>>
+  }
+}
+
+function makeRetest(sequence: number, overrides: Record<string, unknown> = {}) {
+  return {
+    id: `retest-${sequence}`,
+    sampleBlockId: 'block-1',
+    sequence,
+    inputs: { ironRaw: sequence },
+    results: { iron: 999 },
+    parameterSnapshot: { ...defaultLabParameters, ironFactor: 10 },
+    everFilled: true,
+    status: 'ACTIVE',
+    voidReason: null,
+    createdById: 'user-1',
+    updatedById: 'user-1',
+    voidedById: null,
+    createdAt: new Date('2026-08-20T00:00:00.000Z'),
+    updatedAt: new Date('2026-08-20T00:00:00.000Z'),
+    voidedAt: null,
+    ...overrides
   }
 }
 
@@ -233,6 +255,34 @@ describe('LabSheetsService default sheet selection', () => {
 
     expect((result.sampleBlocks[0].results as Record<string, unknown>).moisture).toBe(4.268)
     expect((result.sampleBlocks[0].results as Record<string, unknown>).bottleDensity).toBe(1.9965)
+  })
+
+  it('includes active and void retests in sequence order when reading a customer sheet', async () => {
+    const today = businessDateInBeijing()
+    const block = makeBlock(1)
+    block.retests = [
+      makeRetest(1),
+      makeRetest(2, { status: 'VOID', voidReason: 'duplicate' })
+    ]
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+
+    const result = await service.getSheetForFrontendUser('front-1', today, true)
+
+    expect(result.sampleBlocks[0].retests.map((retest: { sequence: number }) => retest.sequence)).toEqual([1, 2])
+    expect(result.sampleBlocks[0].retests[1]).toMatchObject({ status: 'VOID', readonly: true })
+    expect(prisma.labSheet.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
+    }))
+  })
+
+  it('marks all retests readonly when reading a historical sheet', async () => {
+    const block = makeBlock(1)
+    block.retests = [makeRetest(1)]
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet('2026-06-30', [block]))
+
+    const result = await service.getSheetForFrontendUser('front-1', '2026-06-30', true)
+
+    expect(result.sampleBlocks[0].retests[0]).toMatchObject({ readonly: true })
   })
 
   it('returns today sheet when today is empty even if history has data', async () => {
@@ -1155,6 +1205,28 @@ describe('LabSheetsService default sheet selection', () => {
     }))
     expect(result.parameters).toMatchObject({ ironBlank: 0.1, ironFactor: 20 })
     expect(realtime.publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not rewrite an existing retest snapshot when applying parameters by segment', async () => {
+    const today = businessDateInBeijing()
+    const previousParameters = { ...defaultLabParameters, ironFactor: 10 }
+    const nextParameters = { ...defaultLabParameters, ironFactor: 25 }
+    const block = makeBlock(1, { ironRaw: 1 }, previousParameters)
+    block.retests = [makeRetest(1, { parameterSnapshot: previousParameters })]
+    const current = makeSheet(today, [block], previousParameters)
+    prisma.labSheet.findUnique.mockResolvedValue(current)
+    transaction.labSheet.findUnique.mockResolvedValue(current)
+
+    const result = await service.applyCurrentParametersFromIndex(
+      'front-1',
+      { parameters: nextParameters, startIndex: 1 }
+    )
+
+    expect((result.sampleBlocks[0].retests[0].parameterSnapshot as Record<string, unknown>).ironFactor).toBe(10)
+    expect(transaction.sampleBlock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'block-1' },
+      data: expect.not.objectContaining({ retests: expect.anything() })
+    }))
   })
 
   it('redacts completed sample data in apply responses without a grant and publishes only a safe refresh signal', async () => {
