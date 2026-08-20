@@ -63,21 +63,27 @@ describe('admin employee attendance mock contract', () => {
   })
 
   it('returns the account-scoped combined calendar through the new GET-only contract', async () => {
-    const result = await getAdminScheduleAttendanceOverview({
-      frontendUserIds: ['front-1'], employeeId: 'emp-1', month: '2026-08',
-      startDate: '2099-01-01', endDate: '2099-01-31', status: 'NOPE'
-    })
-    expect(result).toMatchObject({ month: '2026-08', readonly: true, employee: { id: 'emp-1', name: '张三' } })
-    expect(result.days).toHaveLength(31)
-    expect(result.days.find((day) => day.date === '2026-08-04')).toMatchObject({ status: 'NORMAL', backgroundTone: 'normal', displayMinutes: 600 })
-    expect(result.days.find((day) => day.date === '2026-08-08')).toMatchObject({ status: 'OVERTIME', backgroundTone: 'normal', durationTone: 'overtime', displayMinutes: 630 })
-    expect(result.days.find((day) => day.date === '2026-08-06')).toMatchObject({ status: 'SHORT', durationTone: 'short', displayMinutes: 540, shortageMinutes: 60 })
-    expect(result.days.find((day) => day.date === '2026-08-07')).toMatchObject({ status: 'LEAVE', backgroundTone: 'leave', workedMinutes: 360, approvedLeaveMinutes: 240, displayMinutes: 600, leaveReason: '照顾家人' })
-    expect(result.days.find((day) => day.date === '2026-08-09')).toMatchObject({ status: 'ABSENT', backgroundTone: 'absent', absenceReason: '无故未到' })
-    expect(result.days.find((day) => day.date === '2026-08-20')).toMatchObject({ status: 'FUTURE', backgroundTone: 'future', schedule: { segments: [{ startTime: '08:00', endTime: '18:00' }] } })
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-19T04:00:00Z'))
+    try {
+      const result = await getAdminScheduleAttendanceOverview({
+        frontendUserIds: ['front-1'], employeeId: 'emp-1', month: '2026-08',
+        startDate: '2099-01-01', endDate: '2099-01-31', status: 'NOPE'
+      })
+      expect(result).toMatchObject({ month: '2026-08', readonly: true, employee: { id: 'emp-1', name: '张三' } })
+      expect(result.days).toHaveLength(31)
+      expect(result.days.find((day) => day.date === '2026-08-04')).toMatchObject({ status: 'NORMAL', backgroundTone: 'normal', displayMinutes: 600 })
+      expect(result.days.find((day) => day.date === '2026-08-08')).toMatchObject({ status: 'OVERTIME', backgroundTone: 'normal', durationTone: 'overtime', displayMinutes: 630 })
+      expect(result.days.find((day) => day.date === '2026-08-06')).toMatchObject({ status: 'SHORT', durationTone: 'short', displayMinutes: 540, shortageMinutes: 60 })
+      expect(result.days.find((day) => day.date === '2026-08-07')).toMatchObject({ status: 'LEAVE', backgroundTone: 'leave', workedMinutes: 360, approvedLeaveMinutes: 240, displayMinutes: 600, leaveReason: '照顾家人' })
+      expect(result.days.find((day) => day.date === '2026-08-09')).toMatchObject({ status: 'ABSENT', backgroundTone: 'absent', absenceReason: '无故未到' })
+      expect(result.days.find((day) => day.date === '2026-08-20')).toMatchObject({ status: 'FUTURE', backgroundTone: 'future', schedule: { segments: [{ startTime: '08:00', endTime: '18:00' }] } })
 
-    await adminLogin({ account: 'sub001', password: 'sub123456' })
-    await expect(getAdminScheduleAttendanceOverview({ frontendUserIds: ['front-2'], employeeId: 'emp-3', month: '2026-08' })).rejects.toThrow('没有访问部分前端账号的权限')
+      await adminLogin({ account: 'sub001', password: 'sub123456' })
+      await expect(getAdminScheduleAttendanceOverview({ frontendUserIds: ['front-2'], employeeId: 'emp-3', month: '2026-08' })).rejects.toThrow('没有访问部分前端账号的权限')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('derives the combined Mock today cards from the same Shanghai snapshot', async () => {
