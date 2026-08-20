@@ -1,3 +1,4 @@
+import { Logger, UnprocessableEntityException } from '@nestjs/common'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createEmptyInputs, defaultLabParameters } from '../common/lab'
 import { businessDateInBeijing } from '../common/date'
@@ -273,6 +274,26 @@ describe('LabSheetsService default sheet selection', () => {
     expect(prisma.labSheet.findUnique).toHaveBeenCalledWith(expect.objectContaining({
       include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
     }))
+  })
+
+  it('rejects a corrupted retest snapshot from the customer sheet read boundary', async () => {
+    const today = businessDateInBeijing()
+    const block = makeBlock(1)
+    block.retests = [makeRetest(1, { parameterSnapshot: { ironFactor: 10 } })]
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    const log = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+
+    try {
+      await expect(service.getSheetForFrontendUser('front-1', today, true)).rejects.toMatchObject({
+        status: 422,
+        response: expect.objectContaining({ code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID' })
+      })
+      await expect(service.getSheetForFrontendUser('front-1', today, true)).rejects.toBeInstanceOf(
+        UnprocessableEntityException
+      )
+    } finally {
+      log.mockRestore()
+    }
   })
 
   it('marks all retests readonly when reading a historical sheet', async () => {

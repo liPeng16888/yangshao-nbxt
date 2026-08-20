@@ -1,4 +1,7 @@
-import { calculateResults, normalizeLabDetectionInputs, normalizeLabParameters } from '../common/lab'
+import { Logger, UnprocessableEntityException } from '@nestjs/common'
+import { calculateResults, normalizeLabDetectionInputs, validateStoredLabParameters } from '../common/lab'
+
+const logger = new Logger('SampleRetestDto')
 
 export type SampleRetestRow = {
   id: string
@@ -38,7 +41,18 @@ function toIso(value: Date) {
 
 export function toSampleRetestDto(row: SampleRetestRow, options: SampleRetestDtoOptions) {
   const inputs = normalizeLabDetectionInputs(row.inputs)
-  const results = calculateResults(inputs, normalizeLabParameters(row.parameterSnapshot))
+  const parameters = validateStoredLabParameters(row.parameterSnapshot)
+  if (!parameters) {
+    logger.error('复样参数快照无效', {
+      sampleBlockId: row.sampleBlockId,
+      sampleRetestId: row.id
+    })
+    throw new UnprocessableEntityException({
+      code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID',
+      message: '复样参数快照无效，无法读取'
+    })
+  }
+  const results = calculateResults(inputs, parameters)
   const hidden = options.parentCompleted && !options.canViewCompletedSensitiveData
   return {
     id: row.id,

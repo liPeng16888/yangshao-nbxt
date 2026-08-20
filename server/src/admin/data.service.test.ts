@@ -1,5 +1,5 @@
 import 'reflect-metadata'
-import { ForbiddenException, RequestMethod } from '@nestjs/common'
+import { ForbiddenException, Logger, RequestMethod } from '@nestjs/common'
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { UserRole } from '@prisma/client'
 import { describe, expect, it, vi } from 'vitest'
@@ -110,6 +110,27 @@ describe('AdminDataService lab sheet retests', () => {
     ])
     expect(result[0].sampleBlocks[0].retests[0].results.iron).toBe(10.56)
     expect(customerOverviewService.getRows).not.toHaveBeenCalled()
+  })
+
+  it('rejects a corrupted retest snapshot from the admin read-only boundary', async () => {
+    const corrupted = makeSheet({
+      retests: [makeRetest(1, 'ACTIVE')]
+    })
+    corrupted.sampleBlocks[0].retests[0].parameterSnapshot = null as never
+    const { service } = makeService({ sheets: [corrupted] })
+    const log = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+
+    try {
+      await expect(service.labSheets(subAdmin, {
+        frontendUserIds: ['front-1'],
+        date: '2026-08-20'
+      })).rejects.toMatchObject({
+        status: 422,
+        response: expect.objectContaining({ code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID' })
+      })
+    } finally {
+      log.mockRestore()
+    }
   })
 
   it('does not query retests after the existing access service rejects a disallowed tenant', async () => {

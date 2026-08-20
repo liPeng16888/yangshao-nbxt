@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { Logger, UnprocessableEntityException } from '@nestjs/common'
+import { describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '../common/lab'
 import { toSampleRetestDto } from './sample-retest.dto'
 
@@ -58,5 +59,48 @@ describe('toSampleRetestDto', () => {
       sheetReadonly: true,
       canViewCompletedSensitiveData: true
     }).readonly).toBe(true)
+  })
+
+  it.each([
+    ['missing', null],
+    ['incomplete', { ironFactor: 10 }],
+    ['nonfinite', { ...defaultLabParameters, ironFactor: Number.POSITIVE_INFINITY }]
+  ])('rejects a %s persisted snapshot on DTO reads without logging sensitive values', (_case, parameterSnapshot) => {
+    const row = makeRetest({
+      inputs: { ironRaw: 4321 },
+      results: { iron: 8765 },
+      parameterSnapshot
+    })
+    const log = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+
+    try {
+      let thrown: unknown
+      try {
+        toSampleRetestDto(row, {
+          parentCompleted: false,
+          sheetReadonly: false,
+          canViewCompletedSensitiveData: true
+        })
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBeInstanceOf(UnprocessableEntityException)
+      expect(thrown).toMatchObject({
+        status: 422,
+        response: {
+          code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID',
+          message: '复样参数快照无效，无法读取'
+        }
+      })
+      const logged = JSON.stringify(log.mock.calls)
+      expect(logged).toContain('block-1')
+      expect(logged).toContain('retest-1')
+      expect(logged).not.toContain('4321')
+      expect(logged).not.toContain('8765')
+      expect(logged).not.toContain('ironFactor')
+    } finally {
+      log.mockRestore()
+    }
   })
 })
