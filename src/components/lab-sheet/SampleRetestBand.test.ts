@@ -92,16 +92,15 @@ describe('SampleRetestBand', () => {
     expect((wrapper.element as HTMLElement).style.gridTemplateColumns).toBe(
       labSheetColumns.slice(2).map((column) => `${column.width}px`).join(' ')
     )
+    expect(wrapper.find('.sample-retest-band__identity').exists()).toBe(false)
   })
 
-  it('shows the sequence, parameter snapshot time, save status, and no comparison judgement', () => {
+  it('exposes its sequence accessibly while showing snapshot, save status, and no comparison judgement', () => {
     const wrapper = mount(SampleRetestBand, {
       props: { parent: makeParent(), retest: makeRetest() }
     })
 
     expect(wrapper.attributes('aria-label')).toBe('复样1')
-    expect(wrapper.text()).toContain('复样1')
-    expect(wrapper.text()).toContain('有效')
     expect(wrapper.text()).toContain('参数快照')
     expect(wrapper.text()).toContain('已保存')
     expect(wrapper.text()).not.toMatch(/差值|偏差|合格/)
@@ -167,6 +166,23 @@ describe('SampleRetestBand', () => {
 
     expect(wrapper.find('[data-testid="delete-retest-retest-1"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="void-retest-retest-1"]').text()).toBe('作废')
+  })
+
+  it.each([
+    ['delete', makeRetest({ inputs: {} }), 'delete-retest-retest-1'],
+    ['void', makeRetest({ everFilled: true }), 'void-retest-retest-1']
+  ] as const)('disables the %s lifecycle action and exposes busy state while it is pending', async (_action, retest, testId) => {
+    const wrapper = mount(SampleRetestBand, {
+      props: { parent: makeParent(), retest, actionPending: true }
+    })
+    const button = wrapper.get(`[data-testid="${testId}"]`)
+
+    expect(wrapper.attributes('aria-busy')).toBe('true')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(button.text()).toBe('处理中…')
+    await button.trigger('click')
+    expect(wrapper.emitted('delete')).toBeUndefined()
+    expect(wrapper.emitted('void')).toBeUndefined()
   })
 
   it.each([

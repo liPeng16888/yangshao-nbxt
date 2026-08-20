@@ -106,6 +106,7 @@
       :selected-block-ids="selectedReportBlockIds"
       :highlight-block-id="highlightBlockId"
       :highlight-retest-id="highlightRetestId"
+      :pending-retest-action-ids="pendingRetestActionIds"
       :can-view-completed-sensitive-data="canViewCompletedSensitiveData"
       @update="labStore.patchBlock"
       @field-commit="labStore.commitBlockFieldChange"
@@ -259,6 +260,7 @@ const creatingRetests = ref(false)
 const switchingBusinessDay = ref(false)
 const highlightBlockId = ref('')
 const highlightRetestId = ref('')
+const pendingRetestActionIds = ref<string[]>([])
 const reportTemplate = ref<LabReportTemplate>({
   ...defaultLabReportTemplate,
   statements: [...defaultLabReportTemplate.statements]
@@ -663,6 +665,7 @@ function invalidateRetestCreationContext() {
   retestCreationGeneration += 1
   retestActionGeneration += 1
   activeRetestLifecycleActions.clear()
+  pendingRetestActionIds.value = []
   creatingRetests.value = false
   retestDialogVisible.value = false
   highlightRetestId.value = ''
@@ -693,14 +696,14 @@ async function handleRetestDelete(sampleBlockId: string, retestId: string) {
     } catch {
       return
     }
-    if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+    if (!isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
     try {
       const deleted = await labStore.deleteRetestRecord(sampleBlockId, retestId)
-      if (!deleted || !isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+      if (!deleted || !isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
       if (highlightRetestId.value === retestId) highlightRetestId.value = ''
       ElMessage.success('空白复样已删除')
     } catch (error) {
-      if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+      if (!isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
       ElMessage.error(error instanceof Error ? error.message : '复样删除失败')
     }
   } finally {
@@ -725,13 +728,13 @@ async function handleRetestVoid(sampleBlockId: string, retestId: string) {
     } catch {
       return
     }
-    if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+    if (!isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
     try {
       const voided = await labStore.voidRetestRecord(sampleBlockId, retestId, reason)
-      if (!voided || !isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+      if (!voided || !isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
       ElMessage.success('复样已作废')
     } catch (error) {
-      if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+      if (!isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
       ElMessage.error(error instanceof Error ? error.message : '复样作废失败')
     }
   } finally {
@@ -743,17 +746,19 @@ function beginRetestLifecycleAction(retestId: string) {
   if (activeRetestLifecycleActions.has(retestId)) return null
   const generation = ++retestActionGeneration
   activeRetestLifecycleActions.set(retestId, generation)
+  pendingRetestActionIds.value = [...pendingRetestActionIds.value, retestId]
   return generation
 }
 
 function finishRetestLifecycleAction(retestId: string, generation: number) {
   if (activeRetestLifecycleActions.get(retestId) === generation) {
     activeRetestLifecycleActions.delete(retestId)
+    pendingRetestActionIds.value = pendingRetestActionIds.value.filter((id) => id !== retestId)
   }
 }
 
-function isCurrentRetestActionOperation(generation: number, context: RetestCreationContext) {
-  return generation === retestActionGeneration &&
+function isCurrentRetestActionOperation(retestId: string, generation: number, context: RetestCreationContext) {
+  return activeRetestLifecycleActions.get(retestId) === generation &&
     JSON.stringify(context) === JSON.stringify(captureRetestCreationContext())
 }
 

@@ -53,7 +53,7 @@
             </div>
 
             <div
-              class="cell cell--input cell--green"
+              class="cell cell--input cell--green cell--split"
               :class="{
                 'cell--completed': block.inputs.completed,
                 'cell--selection-target': selectionMode,
@@ -63,18 +63,34 @@
               :data-block-id="block.id"
               @click="handleSequenceCellClick(block.id, $event)"
             >
-              <div class="sequence-editor" :data-block-id="block.id" data-field="sequence">
-                <el-checkbox
-                  v-if="selectionMode"
-                  :model-value="selectedBlockIds.includes(block.id)"
-                  @change="(checked: string | number | boolean) => handleSelectionChange(block.id, checked)"
-                />
-                <el-input
-                  size="small"
-                  :disabled="isDisabled(block)"
-                  :model-value="block.inputs.sequence"
-                  @update:model-value="(value) => updateText(block.id, 'sequence', value)"
-                />
+              <div class="sample-sequence-stack" :style="{ gridTemplateRows: getCustomerGridRows(block) }">
+                <div class="sample-sequence-primary" style="grid-row: 1 / span 2">
+                  <div class="sequence-editor" :data-block-id="block.id" data-field="sequence">
+                    <el-checkbox
+                      v-if="selectionMode"
+                      :model-value="selectedBlockIds.includes(block.id)"
+                      @change="(checked: string | number | boolean) => handleSelectionChange(block.id, checked)"
+                    />
+                    <el-input
+                      size="small"
+                      :disabled="isDisabled(block)"
+                      :model-value="block.inputs.sequence"
+                      @update:model-value="(value) => updateText(block.id, 'sequence', value)"
+                    />
+                  </div>
+                </div>
+                <div
+                  v-for="(retest, retestIndex) in block.retests"
+                  :key="`${retest.id}-identity`"
+                  class="sample-retest-identity"
+                  :class="{ 'is-void': retest.status === 'VOID' }"
+                  :style="{ gridRow: `${retestIndex + 3} / span 1` }"
+                  :data-retest-identity-id="retest.id"
+                  :aria-label="`复样${retest.sequence}，${retest.status === 'VOID' ? '已作废' : '有效'}`"
+                >
+                  <strong>复样{{ retest.sequence }}</strong>
+                  <span>{{ retest.status === 'VOID' ? '已作废' : '有效' }}</span>
+                </div>
               </div>
             </div>
             <div
@@ -175,6 +191,7 @@
               :readonly="readonly"
               :sensitive-hidden="isCompletedSensitiveHidden(block.id)"
               :highlighted="retest.id === highlightRetestId"
+              :action-pending="pendingRetestActionIds.includes(retest.id)"
               @update="(retestId, patch) => emit('retestUpdate', block.id, retestId, patch)"
               @field-commit="(retestId, field, oldValue, newValue) => emit('retestFieldCommit', block.id, retestId, field, oldValue, newValue)"
               @delete="(retestId) => emit('retestDelete', block.id, retestId)"
@@ -314,6 +331,7 @@ const props = defineProps<{
   selectedBlockIds?: string[]
   highlightBlockId?: string
   highlightRetestId?: string
+  pendingRetestActionIds?: string[]
   canViewCompletedSensitiveData?: boolean
 }>()
 
@@ -356,6 +374,7 @@ const selectionMode = computed(() => Boolean(props.selectionMode))
 const selectedBlockIds = computed(() => props.selectedBlockIds || [])
 const highlightBlockId = computed(() => props.highlightBlockId || '')
 const highlightRetestId = computed(() => props.highlightRetestId || '')
+const pendingRetestActionIds = computed(() => props.pendingRetestActionIds || [])
 function isCompletedSensitiveHidden(blockId: string) {
   const block = props.blocks.find((item) => item.id === blockId)
   return block ? isCompletedSampleSensitiveHidden(block, Boolean(props.canViewCompletedSensitiveData)) : false
@@ -930,10 +949,44 @@ const FormulaCell = defineComponent({
   padding: 0;
 }
 
+.sample-sequence-stack,
 .sample-customer-stack {
   display: grid;
   width: 100%;
   min-height: 100%;
+}
+
+.sample-sequence-primary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.sample-retest-identity {
+  display: flex;
+  min-width: 0;
+  min-height: 62px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: #174a7a;
+  background: #edf7ff;
+  border-top: 1px solid #111827;
+  border-bottom: 1px solid #111827;
+
+  strong {
+    font-size: 14px;
+  }
+
+  span {
+    font-size: 11px;
+  }
+
+  &.is-void {
+    color: #64748b;
+    background: #eef2f6;
+  }
 }
 
 .sample-number-editor,

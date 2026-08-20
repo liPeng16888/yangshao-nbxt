@@ -94,7 +94,8 @@ function mountPage() {
       readonly: { type: Boolean, default: false },
       selectionMode: { type: Boolean, default: false },
       selectedBlockIds: { type: Array, default: () => [] },
-      highlightRetestId: { type: String, default: '' }
+      highlightRetestId: { type: String, default: '' },
+      pendingRetestActionIds: { type: Array, default: () => [] }
     },
     emits: ['selectionChange', 'retestUpdate', 'retestFieldCommit', 'retestDelete', 'retestVoid'],
     setup(props, { emit }) {
@@ -102,7 +103,8 @@ function mountPage() {
         h('div', {
           class: 'lab-grid-stub',
           'data-readonly': String(props.readonly),
-          'data-highlight-retest-id': props.highlightRetestId
+          'data-highlight-retest-id': props.highlightRetestId,
+          'data-pending-retest-actions': props.pendingRetestActionIds.join(',')
         }, [
           props.selectionMode
             ? h(
@@ -139,7 +141,12 @@ function mountPage() {
             class: 'retest-void-stub',
             type: 'button',
             onClick: () => emit('retestVoid', 'block-1', 'retest-1')
-          }, '作废复样')
+          }, '作废复样'),
+          h('button', {
+            class: 'retest-void-second-stub',
+            type: 'button',
+            onClick: () => emit('retestVoid', 'block-2', 'retest-2')
+          }, '作废第二条复样')
         ])
     }
   })
@@ -906,14 +913,19 @@ describe('LabDataPage table layout', () => {
   })
 
   it('does not delete when the confirmation is cancelled', async () => {
+    let rejectConfirm: (reason: Error) => void = () => undefined
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm')
-      .mockRejectedValueOnce(new Error('cancel'))
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectConfirm = reject }) as any)
       .mockResolvedValueOnce('confirm' as any)
     const wrapper = mountPage()
     await settleMountedPage()
 
     await wrapper.get('.retest-delete-stub').trigger('click')
-    await Promise.resolve()
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('retest-1')
+    rejectConfirm(new Error('cancel'))
+    await vi.waitFor(() => {
+      expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('')
+    })
 
     expect(mocks.labStore.deleteRetestRecord).not.toHaveBeenCalled()
     await wrapper.get('.retest-delete-stub').trigger('click')
@@ -937,6 +949,7 @@ describe('LabDataPage table layout', () => {
     await vi.waitFor(() => {
       expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledTimes(1)
     })
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('retest-1')
     await wrapper.get('.retest-delete-stub').trigger('click')
     await wrapper.get('.retest-void-stub').trigger('click')
 
@@ -945,8 +958,9 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledTimes(1)
     expect(mocks.labStore.voidRetestRecord).not.toHaveBeenCalled()
     resolveDelete(true)
-    await Promise.resolve()
-    await nextTick()
+    await vi.waitFor(() => {
+      expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('')
+    })
     confirmSpy.mockRestore()
     promptSpy.mockRestore()
     wrapper.unmount()
@@ -966,6 +980,7 @@ describe('LabDataPage table layout', () => {
     await vi.waitFor(() => {
       expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(1)
     })
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('retest-1')
     await wrapper.get('.retest-void-stub').trigger('click')
     expect(promptSpy).toHaveBeenCalledTimes(1)
     expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(1)
@@ -974,6 +989,7 @@ describe('LabDataPage table layout', () => {
     await vi.waitFor(() => {
       expect(errorSpy).toHaveBeenCalledWith('作废失败')
     })
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('')
     await wrapper.get('.retest-void-stub').trigger('click')
     await vi.waitFor(() => {
       expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(2)
@@ -981,6 +997,43 @@ describe('LabDataPage table layout', () => {
     expect(promptSpy).toHaveBeenCalledTimes(2)
     promptSpy.mockRestore()
     errorSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('keeps concurrent lifecycle actions for different retests independently current', async () => {
+    let resolveConfirm: (value: string) => void = () => undefined
+    let resolvePrompt: (value: { value: string; action: string }) => void = () => undefined
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(
+      new Promise((resolve) => { resolveConfirm = resolve }) as any
+    )
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockReturnValue(
+      new Promise((resolve) => { resolvePrompt = resolve }) as any
+    )
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    await wrapper.get('.retest-void-second-stub').trigger('click')
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('retest-1,retest-2')
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(promptSpy).toHaveBeenCalledTimes(1)
+
+    resolveConfirm('confirm')
+    resolvePrompt({ value: '独立原因', action: 'confirm' })
+    await vi.waitFor(() => {
+      expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledTimes(1)
+      expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledWith('block-1', 'retest-1')
+    expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledWith('block-2', 'retest-2', '独立原因')
+    expect(successSpy).toHaveBeenCalledWith('空白复样已删除')
+    expect(successSpy).toHaveBeenCalledWith('复样已作废')
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('')
+    confirmSpy.mockRestore()
+    promptSpy.mockRestore()
+    successSpy.mockRestore()
     wrapper.unmount()
   })
 

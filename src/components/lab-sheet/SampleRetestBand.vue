@@ -10,12 +10,8 @@
     :style="{ gridTemplateColumns: gridColumns, gridColumn: '3 / -1' }"
     :data-retest-id="retest.id"
     :aria-label="`复样${retest.sequence}`"
+    :aria-busy="actionPending ? 'true' : undefined"
   >
-    <div class="sample-retest-band__identity">
-      <strong>复样{{ retest.sequence }}</strong>
-      <span>{{ retest.status === 'VOID' ? '已作废' : '有效' }}</span>
-    </div>
-
     <div class="sample-retest-band__meta">
       <span>参数快照 {{ formatTimestamp(retest.parameterSnapshot.savedAt || retest.createdAt) }}</span>
       <span>{{ retest.status === 'VOID' ? voidStatusText : `已保存 ${formatTimestamp(retest.updatedAt)}` }}</span>
@@ -24,17 +20,21 @@
         <button
           v-if="isBlank"
           type="button"
+          :disabled="actionPending"
+          :aria-busy="actionPending ? 'true' : undefined"
           :data-testid="`delete-retest-${retest.id}`"
           :aria-label="`删除空白复样${retest.sequence}`"
           @click="emit('delete', retest.id)"
-        >删除</button>
+        >{{ actionPending ? '处理中…' : '删除' }}</button>
         <button
           v-else
           type="button"
+          :disabled="actionPending"
+          :aria-busy="actionPending ? 'true' : undefined"
           :data-testid="`void-retest-${retest.id}`"
           :aria-label="`作废复样${retest.sequence}`"
           @click="emit('void', retest.id)"
-        >作废</button>
+        >{{ actionPending ? '处理中…' : '作废' }}</button>
       </div>
     </div>
 
@@ -83,6 +83,7 @@ const props = defineProps<{
   readonly?: boolean
   sensitiveHidden?: boolean
   highlighted?: boolean
+  actionPending?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -196,7 +197,6 @@ watch(
   transition: background-color 160ms ease, box-shadow 160ms ease;
 }
 
-.sample-retest-band__identity,
 .sample-retest-band__meta,
 .sample-retest-band__cell {
   min-width: 0;
@@ -208,7 +208,6 @@ watch(
   border-right: 1px solid #111827;
 }
 
-.sample-retest-band__identity,
 .sample-retest-band__meta {
   position: absolute;
   top: -1px;
@@ -224,21 +223,6 @@ watch(
   text-align: center;
   border-top: 1px solid #111827;
   border-bottom: 1px solid #111827;
-}
-
-.sample-retest-band__identity {
-  left: -318px;
-  width: 78px;
-  color: #174a7a;
-  background: #edf7ff;
-
-  strong {
-    font-size: 14px;
-  }
-
-  span {
-    font-size: 11px;
-  }
 }
 
 .sample-retest-band__meta {
@@ -263,6 +247,12 @@ watch(
     border-radius: 4px;
     cursor: pointer;
     font-size: 11px;
+
+    &:disabled {
+      color: #64748b;
+      background: #f1f5f9;
+      cursor: wait;
+    }
   }
 }
 
@@ -332,7 +322,6 @@ input.sample-retest-band__input {
 .sample-retest-band.is-locked {
   background: #f1f5f9;
 
-  .sample-retest-band__identity,
   .sample-retest-band__cell,
   .sample-retest-band__cell.is-enabled {
     color: #64748b;

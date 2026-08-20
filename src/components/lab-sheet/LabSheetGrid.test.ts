@@ -895,14 +895,25 @@ describe('LabSheetGrid', () => {
       props: { blocks: [makeBlockWithRetests(retestCount)] },
       global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
     })
-    const sequenceCell = wrapper.get('[data-block-id="block-1"][data-field="sequence"]')
-      .element.parentElement as HTMLElement
+    const sequenceStack = wrapper.get('.sample-sequence-stack')
+    const sequenceCell = sequenceStack.element.parentElement as HTMLElement
+    const sequencePrimary = wrapper.get('.sample-sequence-primary')
+    const identities = wrapper.findAll('[data-retest-identity-id]')
     const customerCell = wrapper.get('.cell--customer')
     const customerStack = wrapper.get('.sample-customer-stack')
     const recipientRow = wrapper.get('[data-field="recipientCustomerText"]')
     const bands = wrapper.findAll('[data-retest-id]')
 
     expect(sequenceCell.style.gridRow).toBe(`span ${expectedParentSpan}`)
+    expect((sequenceStack.element as HTMLElement).style.gridTemplateRows.split(' ')).toHaveLength(expectedParentSpan)
+    expect((sequencePrimary.element as HTMLElement).style.gridRow).toBe('1 / span 2')
+    expect(identities).toHaveLength(retestCount)
+    identities.forEach((identity, index) => {
+      expect((identity.element as HTMLElement).style.gridRow).toBe(`${index + 3} / span 1`)
+      expect(identity.attributes('aria-label')).toContain(`复样${index + 1}`)
+      expect(identity.text()).toContain(`复样${index + 1}`)
+      expect(identity.text()).toContain('有效')
+    })
     expect((customerCell.element as HTMLElement).style.gridRow).toBe(`span ${expectedParentSpan}`)
     expect((customerStack.element as HTMLElement).style.gridTemplateRows.split(' ')).toHaveLength(expectedParentSpan)
     expect((recipientRow.element as HTMLElement).style.gridRow).toBe('-2 / -1')
@@ -910,18 +921,24 @@ describe('LabSheetGrid', () => {
     bands.forEach((band) => {
       expect((band.element as HTMLElement).style.gridColumn).toBe('3 / -1')
       expect((band.element as HTMLElement).style.gridTemplateColumns.split(' ')).toHaveLength(21)
+      expect(band.find('.sample-retest-band__identity').exists()).toBe(false)
     })
     expect(wrapper.find('[data-field="price"]').exists()).toBe(true)
   })
 
   it('passes the highlight and forwards exact retest event signatures', async () => {
     const wrapper = mount(LabSheetGrid, {
-      props: { blocks: [makeBlockWithRetests(1)], highlightRetestId: 'retest-1' },
+      props: {
+        blocks: [makeBlockWithRetests(1)],
+        highlightRetestId: 'retest-1',
+        pendingRetestActionIds: ['retest-1']
+      },
       global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
     })
     const band = wrapper.findComponent({ name: 'SampleRetestBand' })
 
     expect(band.props('highlighted')).toBe(true)
+    expect(band.props('actionPending')).toBe(true)
     band.vm.$emit('update', 'retest-1', { ironRaw: 1 })
     band.vm.$emit('fieldCommit', 'retest-1', 'ironRaw', null, 1)
     band.vm.$emit('delete', 'retest-1')
