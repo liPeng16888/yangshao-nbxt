@@ -26,6 +26,7 @@ import type {
   SampleBlockSavePayload,
   SampleRetest,
   SampleRetestInput,
+  SampleRetestResult,
   SaveSampleRetestPayload,
   VoidSampleRetestPayload
 } from '@/types/labSheet'
@@ -154,6 +155,16 @@ const mockRetestWriteRequests = new Map<string, {
   response: unknown
 }>()
 let mockRetestIdCounter = 0
+
+export interface MockSampleRetestAccess {
+  protected: boolean
+  allowed: boolean
+}
+
+const UNPROTECTED_SAMPLE_RETEST_ACCESS: MockSampleRetestAccess = {
+  protected: false,
+  allowed: true
+}
 
 function clone<T>(value: T): T {
   if (value === undefined) return value
@@ -349,12 +360,12 @@ export async function mockDeleteFrontendSubAccount(id: string) {
   return delay({ ok: true })
 }
 
-export async function mockCurrentLabSheet(canViewCompletedSensitiveData = false) {
-  return delay(publicMockLabSheet(ensureSheet(), canViewCompletedSensitiveData))
+export async function mockCurrentLabSheet(access = UNPROTECTED_SAMPLE_RETEST_ACCESS) {
+  return delay(publicMockLabSheet(ensureSheet(), canViewCompletedSampleData(access)))
 }
 
-export async function mockLabSheetByDate(date: string, canViewCompletedSensitiveData = false) {
-  return delay(publicMockLabSheet(ensureSheet(date), canViewCompletedSensitiveData))
+export async function mockLabSheetByDate(date: string, access = UNPROTECTED_SAMPLE_RETEST_ACCESS) {
+  return delay(publicMockLabSheet(ensureSheet(date), canViewCompletedSampleData(access)))
 }
 
 export async function mockCurrentParameters() {
@@ -436,6 +447,10 @@ export async function mockSaveSampleBlock(sheetId: string, block: SampleBlockSav
 
 function currentDataOwnerId() {
   return currentUser.dataOwnerId || currentUser.id
+}
+
+function canViewCompletedSampleData(access: MockSampleRetestAccess) {
+  return !access.protected || access.allowed
 }
 
 function findWritableMockSheet(sheetId: string) {
@@ -536,6 +551,17 @@ function resolveMockRetestWrite<T>(
   return clone(request.response) as T
 }
 
+function assertNoMismatchedMockRetestWrite(
+  idempotencyKey: string,
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID',
+  fingerprint: string
+) {
+  const request = mockRetestWriteRequests.get(idempotencyKey)
+  if (request && (request.operation !== operation || request.fingerprint !== fingerprint)) {
+    throw new Error('幂等请求编号已用于不同的复样操作')
+  }
+}
+
 function recordMockRetestWrite(
   idempotencyKey: string,
   operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID',
@@ -572,21 +598,26 @@ function publicMockRetest(
   block: SampleBlock,
   sheet: LabSheet,
   canViewCompletedSensitiveData: boolean
-) {
+): SampleRetest {
   const hidden = Boolean(block.inputs.completed && !canViewCompletedSensitiveData)
-  const inputs = hidden
-    ? Object.fromEntries(Object.keys(retest.inputs).map((field) => [field, null]))
-    : retest.inputs
-  const results = hidden
-    ? Object.fromEntries(Object.keys(retest.results).map((field) => [field, null]))
-    : retest.results
-  return clone({
+  const inputs: SampleRetestInput = { ...retest.inputs }
+  if (hidden) {
+    for (const field of sampleRetestInputFields) {
+      if (Object.prototype.hasOwnProperty.call(inputs, field)) inputs[field] = null
+    }
+  }
+  const results: SampleRetestResult = { ...retest.results }
+  if (hidden) {
+    for (const field of Object.keys(results) as Array<keyof SampleRetestResult>) results[field] = null
+  }
+  const response: SampleRetest = {
     ...retest,
     readonly: sheet.readonly || retest.status === 'VOID',
     sensitiveFieldsHidden: hidden,
     inputs,
     results
-  }) as SampleRetest
+  }
+  return clone(response)
 }
 
 function publicMockLabSheet(sheet: LabSheet, canViewCompletedSensitiveData: boolean): LabSheet {
@@ -607,7 +638,7 @@ function publicMockLabSheet(sheet: LabSheet, canViewCompletedSensitiveData: bool
 export async function mockCreateSampleRetests(
   sheetId: string,
   payload: CreateSampleRetestsPayload,
-  canViewCompletedSensitiveData = false
+  access = UNPROTECTED_SAMPLE_RETEST_ACCESS
 ) {
   const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
   if (!Array.isArray(payload.sampleBlockIds) || payload.sampleBlockIds.length < 1 || payload.sampleBlockIds.length > 100) {
@@ -622,6 +653,7 @@ export async function mockCreateSampleRetests(
   const sheet = findWritableMockSheet(sheetId)
   const blocks = sampleBlockIds.map((id) => sheet.sampleBlocks.find((block) => block.id === id))
   if (blocks.some((block) => !block)) throw new Error('未找到样品')
+  const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
   if (!canViewCompletedSensitiveData && blocks.some((block) => block!.inputs.completed)) {
     throw new Error('已完成样品需要验证后才能创建复样')
   }
@@ -668,7 +700,7 @@ export async function mockSaveSampleRetest(
   sheetId: string,
   retestId: string,
   payload: SaveSampleRetestPayload,
-  canViewCompletedSensitiveData = false
+  access = UNPROTECTED_SAMPLE_RETEST_ACCESS
 ) {
   const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
   const changedFields = normalizeMockRetestInputs(payload.changedFields)
@@ -681,6 +713,7 @@ export async function mockSaveSampleRetest(
     changedFields
   }
   const sheet = findWritableMockSheet(sheetId)
+  const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
   const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
   const fingerprint = retestFingerprint('SAVE', sheetId, fingerprintPayload, retestId)
   const duplicate = resolveMockRetestWrite<SampleRetest>(idempotencyKey, 'SAVE', fingerprint)
@@ -712,7 +745,7 @@ export async function mockDeleteSampleRetest(
   sheetId: string,
   retestId: string,
   payload: DeleteSampleRetestPayload,
-  canViewCompletedSensitiveData = false
+  access = UNPROTECTED_SAMPLE_RETEST_ACCESS
 ) {
   const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
   const baseUpdatedAt = requireMockBaseUpdatedAt(payload.baseUpdatedAt)
@@ -723,6 +756,7 @@ export async function mockDeleteSampleRetest(
   )
   if (duplicate) return delay(duplicate)
 
+  const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
   const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
   assertMockRetestActive(context.retest)
   assertMockExactRetestVersion(context.retest, baseUpdatedAt)
@@ -739,7 +773,7 @@ export async function mockVoidSampleRetest(
   sheetId: string,
   retestId: string,
   payload: VoidSampleRetestPayload,
-  canViewCompletedSensitiveData = false
+  access = UNPROTECTED_SAMPLE_RETEST_ACCESS
 ) {
   const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
   const baseUpdatedAt = requireMockBaseUpdatedAt(payload.baseUpdatedAt)
@@ -749,6 +783,8 @@ export async function mockVoidSampleRetest(
   const reason = typeof payload.reason === 'string' ? payload.reason.trim() || null : null
   const fingerprint = retestFingerprint('VOID', sheetId, { idempotencyKey, baseUpdatedAt, reason }, retestId)
   const sheet = findWritableMockSheet(sheetId)
+  assertNoMismatchedMockRetestWrite(idempotencyKey, 'VOID', fingerprint)
+  const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
   const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
   const duplicate = resolveMockRetestWrite<SampleRetest>(idempotencyKey, 'VOID', fingerprint)
   if (duplicate) return delay(duplicate)

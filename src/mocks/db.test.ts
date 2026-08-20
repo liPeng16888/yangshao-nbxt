@@ -3,6 +3,9 @@ import { defaultLabParameters } from '@/constants/labSheetTemplate'
 
 let db: typeof import('./db')
 
+const protectedDenied = { protected: true, allowed: false } as const
+const protectedGranted = { protected: true, allowed: true } as const
+
 describe('segmented parameter mock database validation', () => {
   beforeEach(async () => {
     vi.resetModules()
@@ -297,11 +300,145 @@ describe('sample retest mock lifecycle', () => {
       changedFields: { completed: true }
     })
 
-    const protectedSheet = await db.mockCurrentLabSheet(false)
+    const protectedSheet = await db.mockCurrentLabSheet(protectedDenied)
     expect(protectedSheet.sampleBlocks[0].retests[0]).toMatchObject({
       sensitiveFieldsHidden: true,
       inputs: { ironRaw: null },
       results: { iron: null }
     })
+  })
+
+  it('accepts only detection fields and normalizes every nonfinite detection value to null', async () => {
+    const sheet = await db.mockCurrentLabSheet()
+    const retest = (await db.mockCreateSampleRetests(sheet.id, {
+      sampleBlockIds: [sheet.sampleBlocks[0].id], idempotencyKey: 'create-1'
+    }))[0]
+    const changedFields = {
+      ironRaw: Number.POSITIVE_INFINITY,
+      titaniumRaw: Number.NaN,
+      moisture: 0,
+      sampleNumber: '不允许混入'
+    }
+
+    const saved = await db.mockSaveSampleRetest(sheet.id, retest.id, {
+      idempotencyKey: 'save-nonfinite',
+      changedFields
+    })
+
+    expect(saved.inputs).toMatchObject({ ironRaw: null, titaniumRaw: null, moisture: 0 })
+    expect(saved.inputs).not.toHaveProperty('sampleNumber')
+    expect(saved.everFilled).toBe(true)
+  })
+
+  it('merges a stale different-field save and rejects a stale same-field save', async () => {
+    const sheet = await db.mockCurrentLabSheet()
+    const original = (await db.mockCreateSampleRetests(sheet.id, {
+      sampleBlockIds: [sheet.sampleBlocks[0].id], idempotencyKey: 'create-1'
+    }))[0]
+    const first = await db.mockSaveSampleRetest(sheet.id, original.id, {
+      idempotencyKey: 'save-iron', baseUpdatedAt: original.updatedAt,
+      baseInputs: { ironRaw: null }, changedFields: { ironRaw: 1 }
+    })
+
+    const merged = await db.mockSaveSampleRetest(sheet.id, original.id, {
+      idempotencyKey: 'save-silicon-stale', baseUpdatedAt: original.updatedAt,
+      baseInputs: { siliconRaw: null }, changedFields: { siliconRaw: 2 }
+    })
+    expect(merged.inputs).toMatchObject({ ironRaw: 1, siliconRaw: 2 })
+
+    await expect(db.mockSaveSampleRetest(sheet.id, original.id, {
+      idempotencyKey: 'save-iron-stale', baseUpdatedAt: original.updatedAt,
+      baseInputs: { ironRaw: null }, changedFields: { ironRaw: 3 }
+    })).rejects.toThrow('该复样已被另一台设备修改，请确认后再保存')
+    expect(first.inputs.ironRaw).toBe(1)
+  })
+
+  it('isolates retest writes by the current data owner', async () => {
+    const sheet = await db.mockCurrentLabSheet()
+    await db.mockRegister({
+      username: '其他租户', account: 'tenant-2', password: 'secret123',
+      confirmPassword: 'secret123', inviteCode: 'YANGSHAO-2026'
+    })
+
+    await expect(db.mockCreateSampleRetests(sheet.id, {
+      sampleBlockIds: [sheet.sampleBlocks[0].id], idempotencyKey: 'cross-tenant'
+    })).rejects.toThrow('未找到表格')
+  })
+
+  it('allows completed writes when unprotected, denies protected writes without a grant, and allows a valid grant', async () => {
+    const sheet = await db.mockCurrentLabSheet()
+    const block = sheet.sampleBlocks[0]
+    await db.mockSaveSampleBlock(sheet.id, { id: block.id, changedFields: { completed: true } })
+
+    const unprotected = await db.mockCreateSampleRetests(sheet.id, {
+      sampleBlockIds: [block.id], idempotencyKey: 'unprotected-create'
+    })
+    expect(unprotected[0].sensitiveFieldsHidden).toBe(false)
+
+    await expect(db.mockCreateSampleRetests(sheet.id, {
+      sampleBlockIds: [block.id], idempotencyKey: 'protected-denied-create'
+    }, protectedDenied)).rejects.toThrow('已完成样品需要验证后才能创建复样')
+
+    await expect(db.mockCreateSampleRetests(sheet.id, {
+      sampleBlockIds: [block.id], idempotencyKey: 'protected-granted-create'
+    }, protectedGranted)).resolves.toEqual([
+      expect.objectContaining({ sensitiveFieldsHidden: false })
+    ])
+  })
+
+  it('replays SAVE and VOID snapshots without duplicate mutation', async () => {
+    const sheet = await db.mockCurrentLabSheet()
+    const created = (await db.mockCreateSampleRetests(sheet.id, {
+      sampleBlockIds: [sheet.sampleBlocks[0].id], idempotencyKey: 'create-1'
+    }))[0]
+    const savePayload = { idempotencyKey: 'save-1', changedFields: { ironRaw: 1 } }
+    const saved = await db.mockSaveSampleRetest(sheet.id, created.id, savePayload)
+    const saveReplay = await db.mockSaveSampleRetest(sheet.id, created.id, savePayload)
+    expect(saveReplay).toEqual(saved)
+    expect((await db.mockCurrentLabSheet()).sampleBlocks[0].retests).toHaveLength(1)
+
+    const voidPayload = {
+      idempotencyKey: 'void-1', baseUpdatedAt: saved.updatedAt, reason: '复核失败'
+    }
+    const voided = await db.mockVoidSampleRetest(sheet.id, created.id, voidPayload)
+    const voidReplay = await db.mockVoidSampleRetest(sheet.id, created.id, voidPayload)
+    expect(voidReplay).toEqual(voided)
+    expect((await db.mockCurrentLabSheet()).sampleBlocks[0].retests).toEqual([
+      expect.objectContaining({ id: created.id, status: 'VOID', updatedAt: voided.updatedAt })
+    ])
+  })
+
+  it('reports a VOID cross-operation idempotency conflict before missing-row lookup', async () => {
+    const sheet = await db.mockCurrentLabSheet()
+    const created = (await db.mockCreateSampleRetests(sheet.id, {
+      sampleBlockIds: [sheet.sampleBlocks[0].id], idempotencyKey: 'create-1'
+    }))[0]
+    await db.mockDeleteSampleRetest(sheet.id, created.id, {
+      idempotencyKey: 'shared-key', baseUpdatedAt: created.updatedAt
+    })
+
+    await expect(db.mockVoidSampleRetest(sheet.id, created.id, {
+      idempotencyKey: 'shared-key', baseUpdatedAt: created.updatedAt
+    })).rejects.toThrow('幂等请求编号已用于不同的复样操作')
+  })
+
+  it('rejects VOID for a persistently blank retest and marks historical reads readonly', async () => {
+    const sheet = await db.mockCurrentLabSheet()
+    const blank = (await db.mockCreateSampleRetests(sheet.id, {
+      sampleBlockIds: [sheet.sampleBlocks[0].id], idempotencyKey: 'create-1'
+    }))[0]
+    await expect(db.mockVoidSampleRetest(sheet.id, blank.id, {
+      idempotencyKey: 'void-blank', baseUpdatedAt: blank.updatedAt
+    })).rejects.toThrow('未录入数据的复样可以直接删除')
+
+    vi.setSystemTime(new Date(Date.parse(`${sheet.date}T04:00:00.000Z`) + 86_400_000))
+    try {
+      const historical = await db.mockLabSheetByDate(sheet.date)
+      expect(historical.readonly).toBe(true)
+      expect(historical.sampleBlocks.every((block) => block.readonly)).toBe(true)
+      expect(historical.sampleBlocks[0].retests[0]).toMatchObject({ id: blank.id, readonly: true })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

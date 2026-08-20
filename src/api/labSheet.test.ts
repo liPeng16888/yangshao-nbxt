@@ -13,6 +13,7 @@ import {
   applyCurrentParametersFromIndex,
   createSampleRetests,
   deleteSampleRetest,
+  getMockCompletedSampleAccess,
   saveSampleRetest,
   voidSampleRetest
 } from './labSheet'
@@ -125,5 +126,25 @@ describe('lab sheet segmented parameter API', () => {
       data: deletePayload
     })
     expect(requestMock.patch).toHaveBeenCalledWith('/lab-sheets/sheet-1/sample-retests/retest-1/void', voidPayload, headers)
+  })
+
+  it('allows unprotected mock data and requires a valid current-version session only when configured', () => {
+    expect(getMockCompletedSampleAccess()).toEqual({ protected: false, allowed: true })
+
+    window.localStorage.setItem('ys_mock_access_guard_groups', JSON.stringify([{
+      id: 'completed-data-group', name: '完成数据', enabled: true, ttlMinutes: 5,
+      grantVersion: 2, password: '1234', recoveryPrompt: '', recoveryAnswer: '',
+      features: ['COMPLETED_SAMPLE_DATA']
+    }]))
+    expect(getMockCompletedSampleAccess()).toEqual({ protected: true, allowed: false })
+
+    window.localStorage.setItem('ys_access_guard_group_sessions', JSON.stringify({
+      'completed-data-group': {
+        groupId: 'completed-data-group', grantVersion: 2,
+        expiresAt: Date.now() + 60_000,
+        token: 'current-completed-data-grant', features: ['COMPLETED_SAMPLE_DATA']
+      }
+    }))
+    expect(getMockCompletedSampleAccess()).toEqual({ protected: true, allowed: true })
   })
 })

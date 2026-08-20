@@ -25,6 +25,7 @@ import {
   mockUpdateParameters,
   mockVoidSampleRetest
 } from '@/mocks/db'
+import type { MockSampleRetestAccess } from '@/mocks/db'
 
 const CLIENT_ID_KEY = 'ys_lab_sheet_client_id'
 
@@ -104,17 +105,42 @@ function retestWriteOptions() {
   return { headers: { ...clientHeaders().headers, ...(accessGrantHeaders()?.headers || {}) } }
 }
 
-function canViewCompletedSampleData() {
-  return Boolean(accessGrantHeaders()?.headers['X-YS-Access-Grant'])
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+export function getMockCompletedSampleAccess(): MockSampleRetestAccess {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem('ys_mock_access_guard_groups') || '[]')
+    const groups = Array.isArray(parsed) ? parsed : []
+    const group = groups.find((value): value is Record<string, unknown> => {
+      if (!isRecord(value) || !Array.isArray(value.features)) return false
+      return value.enabled === true && value.features.includes('COMPLETED_SAMPLE_DATA')
+    })
+    if (!group || typeof group.id !== 'string' || typeof group.grantVersion !== 'number') {
+      return { protected: false, allowed: true }
+    }
+    const session = readAccessGuardSessions()[group.id]
+    const allowed = Boolean(
+      session?.groupId === group.id &&
+      session.grantVersion === group.grantVersion &&
+      session.token &&
+      (session.expiresAt || 0) > Date.now() &&
+      session.features?.includes('COMPLETED_SAMPLE_DATA')
+    )
+    return { protected: true, allowed }
+  } catch {
+    return { protected: false, allowed: true }
+  }
 }
 
 export async function getCurrentLabSheet(): Promise<LabSheet> {
-  if (useMocks) return mockCurrentLabSheet(canViewCompletedSampleData())
+  if (useMocks) return mockCurrentLabSheet(getMockCompletedSampleAccess())
   return request.get('/lab-sheets/current', accessGrantHeaders())
 }
 
 export async function getLabSheetByDate(date: string): Promise<LabSheet> {
-  if (useMocks) return mockLabSheetByDate(date, canViewCompletedSampleData())
+  if (useMocks) return mockLabSheetByDate(date, getMockCompletedSampleAccess())
   return request.get('/lab-sheets', { params: { date }, ...accessGrantHeaders() })
 }
 
@@ -158,7 +184,7 @@ export async function createSampleRetests(
   sheetId: string,
   payload: CreateSampleRetestsPayload
 ): Promise<SampleRetest[]> {
-  if (useMocks) return mockCreateSampleRetests(sheetId, payload, canViewCompletedSampleData())
+  if (useMocks) return mockCreateSampleRetests(sheetId, payload, getMockCompletedSampleAccess())
   return request.post(`/lab-sheets/${sheetId}/sample-retests`, payload, retestWriteOptions())
 }
 
@@ -167,7 +193,7 @@ export async function saveSampleRetest(
   retestId: string,
   payload: SaveSampleRetestPayload
 ): Promise<SampleRetest> {
-  if (useMocks) return mockSaveSampleRetest(sheetId, retestId, payload, canViewCompletedSampleData())
+  if (useMocks) return mockSaveSampleRetest(sheetId, retestId, payload, getMockCompletedSampleAccess())
   return request.put(`/lab-sheets/${sheetId}/sample-retests/${retestId}`, payload, retestWriteOptions())
 }
 
@@ -176,7 +202,7 @@ export async function deleteSampleRetest(
   retestId: string,
   payload: DeleteSampleRetestPayload
 ): Promise<{ id: string; sampleBlockId: string; deleted: true }> {
-  if (useMocks) return mockDeleteSampleRetest(sheetId, retestId, payload, canViewCompletedSampleData())
+  if (useMocks) return mockDeleteSampleRetest(sheetId, retestId, payload, getMockCompletedSampleAccess())
   return request.delete(`/lab-sheets/${sheetId}/sample-retests/${retestId}`, {
     ...retestWriteOptions(),
     data: payload
@@ -188,7 +214,7 @@ export async function voidSampleRetest(
   retestId: string,
   payload: VoidSampleRetestPayload
 ): Promise<SampleRetest> {
-  if (useMocks) return mockVoidSampleRetest(sheetId, retestId, payload, canViewCompletedSampleData())
+  if (useMocks) return mockVoidSampleRetest(sheetId, retestId, payload, getMockCompletedSampleAccess())
   return request.patch(`/lab-sheets/${sheetId}/sample-retests/${retestId}/void`, payload, retestWriteOptions())
 }
 

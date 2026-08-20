@@ -100,6 +100,7 @@ export const sampleRetestInputFields = [
 
 export type SampleRetestInputField = typeof sampleRetestInputFields[number]
 export type SampleRetestInput = Partial<Pick<LabSampleInput, SampleRetestInputField>>
+export type SampleRetestResult = { [Field in keyof LabFormulaResult]: number | null }
 export type SampleRetestStatus = 'ACTIVE' | 'VOID'
 
 export interface SampleRetest {
@@ -109,17 +110,17 @@ export interface SampleRetest {
   status: SampleRetestStatus
   everFilled: boolean
   readonly: boolean
-  sensitiveFieldsHidden?: boolean
+  sensitiveFieldsHidden: boolean
   inputs: SampleRetestInput
-  results: LabFormulaResult
+  results: SampleRetestResult
   parameterSnapshot: LabParameterSnapshot
-  voidReason?: string | null
+  voidReason: string | null
   createdById: string
   updatedById: string
-  voidedById?: string | null
+  voidedById: string | null
   createdAt: string
   updatedAt: string
-  voidedAt?: string | null
+  voidedAt: string | null
 }
 
 export interface CreateSampleRetestsPayload {
