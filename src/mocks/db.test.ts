@@ -9,18 +9,17 @@ const protectedGranted = { protected: true, allowed: true } as const
 async function expectMockRetestHttpError(
   operation: () => Promise<unknown>,
   status: number,
-  code: string,
-  message: string
+  data: Record<string, unknown>,
+  errorMessage: string
 ) {
   const error = await operation().then(
     () => new Error('expected operation to reject'),
     (reason: unknown) => reason
   )
   expect(error).toBeInstanceOf(Error)
-  expect(error).toMatchObject({
-    message,
-    response: { status, data: { code, message } }
-  })
+  expect(error).toMatchObject({ message: errorMessage })
+  expect((error as { response?: unknown }).response).toEqual({ status, data })
+  return error as Error & { response: { status: number; data: Record<string, unknown> } }
 }
 
 describe('segmented parameter mock database validation', () => {
@@ -444,7 +443,10 @@ describe('sample retest mock lifecycle', () => {
       idempotencyKey: `save-bad-snapshot-${_case}`,
       baseUpdatedAt: created.updatedAt,
       changedFields: { ironRaw: 1 }
-    }), 422, 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID', '复样参数快照无效')
+    }), 422, {
+      code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID',
+      message: '复样参数快照无效，无法保存'
+    }, '复样参数快照无效')
     db.setMockSampleRetestParameterSnapshotForTest(created.id, defaultLabParameters)
     expect((await db.mockCurrentLabSheet()).sampleBlocks[0].retests[0].inputs.ironRaw).toBeNull()
   })
@@ -472,14 +474,12 @@ describe('sample retest mock lifecycle', () => {
       thrown = error
     }
     expect(thrown).toBeInstanceOf(Error)
-    expect(thrown).toMatchObject({
-      message: '复样参数快照无效，无法读取',
-      response: {
-        status: 422,
-        data: {
-          code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID',
-          message: '复样参数快照无效，无法读取'
-        }
+    expect(thrown).toMatchObject({ message: '复样参数快照无效' })
+    expect((thrown as { response?: unknown }).response).toEqual({
+      status: 422,
+      data: {
+        code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID',
+        message: '复样参数快照无效，无法读取'
       }
     })
     const serialized = JSON.stringify(thrown)
@@ -505,8 +505,8 @@ describe('sample retest mock lifecycle', () => {
       })
     ]
     for (const operation of operations) {
-      await expectMockRetestHttpError(operation, 404, 'SAMPLE_RETEST_NOT_FOUND',
-        operation === operations[0] ? '未找到样品' : '未找到复样')
+      const message = operation === operations[0] ? '未找到样品' : '未找到复样'
+      await expectMockRetestHttpError(operation, 404, { code: 'SAMPLE_RETEST_NOT_FOUND', message }, message)
     }
   })
 
@@ -543,7 +543,12 @@ describe('sample retest mock lifecycle', () => {
       })
     ]
     for (const write of crossTenantWrites) {
-      await expectMockRetestHttpError(write, 404, 'SAMPLE_RETEST_NOT_FOUND', '未找到表格')
+      await expectMockRetestHttpError(
+        write,
+        404,
+        { code: 'SAMPLE_RETEST_NOT_FOUND', message: '未找到表格' },
+        '未找到表格'
+      )
     }
   })
 
@@ -667,12 +672,17 @@ describe('sample retest mock lifecycle', () => {
       })
     ]
     for (const denied of deniedWrites) {
-      await expectMockRetestHttpError(
+      const error = await expectMockRetestHttpError(
         denied,
         403,
-        'SAMPLE_RETEST_PERMISSION_DENIED',
+        {
+          message: '子账号没有该菜单的访问权限',
+          error: 'Forbidden',
+          statusCode: 403
+        },
         '当前子账号没有数据计算权限'
       )
+      expect(error.response.data).not.toHaveProperty('code')
     }
 
     await db.mockLogin({ account: 'with-data-main', password: 'secret123' })

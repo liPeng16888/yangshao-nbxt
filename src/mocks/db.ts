@@ -468,7 +468,7 @@ function canViewCompletedSampleData(access: MockSampleRetestAccess) {
 function findWritableMockSheet(sheetId: string) {
   const sheet = Array.from(labSheets.values()).find((item) => item.id === sheetId)
   if (!sheet || mockLabSheetOwnerById.get(sheet.id) !== currentDataOwnerId()) {
-    throw mockRetestHttpError(404, 'SAMPLE_RETEST_NOT_FOUND', '未找到表格')
+    throw mockRetestHttpError(404, { code: 'SAMPLE_RETEST_NOT_FOUND', message: '未找到表格' })
   }
   if (sheet.date !== businessDateInBeijing()) {
     throw new Error('历史日期表格仅支持查看，不能修改')
@@ -479,7 +479,11 @@ function findWritableMockSheet(sheetId: string) {
 function assertMockRetestWritePermission() {
   if (currentUser.role !== 'FRONTEND_SUB_USER') return
   if (currentUser.permissions?.includes('DATA_MAIN')) return
-  throw mockRetestHttpError(403, 'SAMPLE_RETEST_PERMISSION_DENIED', '当前子账号没有数据计算权限')
+  throw mockRetestHttpError(403, {
+    message: '子账号没有该菜单的访问权限',
+    error: 'Forbidden',
+    statusCode: 403
+  }, '当前子账号没有数据计算权限')
 }
 
 function normalizeMockRetestInputs(value: unknown): SampleRetestInput {
@@ -600,7 +604,7 @@ function findMockRetest(sheet: LabSheet, retestId: string, canViewCompletedSensi
     }
     return { block, retest }
   }
-  throw mockRetestHttpError(404, 'SAMPLE_RETEST_NOT_FOUND', '未找到复样')
+  throw mockRetestHttpError(404, { code: 'SAMPLE_RETEST_NOT_FOUND', message: '未找到复样' })
 }
 
 function assertMockRetestActive(retest: SampleRetest) {
@@ -627,13 +631,20 @@ function mockRetestConflict(
 
 function mockRetestHttpError(
   status: 403 | 404 | 422,
-  code: 'SAMPLE_RETEST_PERMISSION_DENIED' | 'SAMPLE_RETEST_NOT_FOUND' | 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID',
-  message: string
+  data: {
+    code: 'SAMPLE_RETEST_NOT_FOUND' | 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID'
+    message: string
+  } | {
+    message: string
+    error: 'Forbidden'
+    statusCode: 403
+  },
+  errorMessage = data.message
 ) {
-  const error = new Error(message) as Error & {
-    response: { status: number; data: { code: string; message: string } }
+  const error = new Error(errorMessage) as Error & {
+    response: { status: number; data: typeof data }
   }
-  error.response = { status, data: { code, message } }
+  error.response = { status, data }
   return error
 }
 
@@ -700,7 +711,7 @@ export async function mockCreateSampleRetests(
   assertMockRetestWritePermission()
   const blocks = sampleBlockIds.map((id) => sheet.sampleBlocks.find((block) => block.id === id))
   if (blocks.some((block) => !block)) {
-    throw mockRetestHttpError(404, 'SAMPLE_RETEST_NOT_FOUND', '未找到样品')
+    throw mockRetestHttpError(404, { code: 'SAMPLE_RETEST_NOT_FOUND', message: '未找到样品' })
   }
   const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
   if (!canViewCompletedSensitiveData && blocks.some((block) => block!.inputs.completed)) {
@@ -894,8 +905,11 @@ function requireStoredMockRetestParameters(parameters: unknown, read = false): L
   try {
     return requireCompleteLabParameters(parameters)
   } catch {
-    const message = read ? '复样参数快照无效，无法读取' : '复样参数快照无效'
-    throw mockRetestHttpError(422, 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID', message)
+    const responseMessage = read ? '复样参数快照无效，无法读取' : '复样参数快照无效，无法保存'
+    throw mockRetestHttpError(422, {
+      code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID',
+      message: responseMessage
+    }, '复样参数快照无效')
   }
 }
 
