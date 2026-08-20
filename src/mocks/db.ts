@@ -17,7 +17,15 @@ import type {
 import type { DateRange, FinanceReport, SampleDetectionReport } from '@/types/report'
 import type { PrepaidRechargeRow } from '@/types/financeBills'
 import type { LabParameter, LabParameterKey, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
+import type {
+  CreateLabSampleChangeRequestPayload,
+  LabSampleChangePatch,
+  LabSampleChangeRequestDetail,
+  LabSampleChangeRequestFilters,
+  LabSampleChangeRequestSummary
+} from '@/types/labSampleChangeRequest'
 import { defaultLabParameters, DEFAULT_SAMPLE_BLOCK_COUNT } from '@/constants/labSheetTemplate'
+import { LAB_SAMPLE_CHANGE_RAW_FIELDS, labSampleChangeFieldLabels } from '@/constants/labSampleChangeRequest'
 import { financeCategoryRules } from '@/constants/reportCategories'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
@@ -111,6 +119,7 @@ let medicineInventoryMovements: MedicineInventoryMovement[] = []
 let medicineCommonNames: MedicineCommonName[] = []
 
 const labSheets = new Map<string, LabSheet>()
+let labSampleChangeRequests: LabSampleChangeRequestDetail[] = []
 
 function clone<T>(value: T): T {
   if (value === undefined) return value
@@ -311,6 +320,128 @@ function requireCompleteLabParameters(parameters: unknown): LabParameter {
 
 export async function mockLabHistory() {
   return delay(Array.from(labSheets.values()).map((sheet) => ({ id: sheet.id, date: sheet.date, readonly: sheet.readonly })))
+}
+
+export async function mockListLabSampleChangeRequests(filters: LabSampleChangeRequestFilters = {}): Promise<LabSampleChangeRequestSummary[]> {
+  const rows = labSampleChangeRequests
+    .filter((row) => (!filters.date || row.date === filters.date) && (!filters.status || row.status === filters.status))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .map(mockLabSampleChangeSummary)
+  return delay(rows)
+}
+
+export async function mockGetLabSampleChangeRequest(id: string): Promise<LabSampleChangeRequestDetail> {
+  const request = labSampleChangeRequests.find((row) => row.id === id)
+  if (!request) throw new Error('未找到修改申请')
+  return delay(request)
+}
+
+export async function mockCreateLabSampleChangeRequest(payload: CreateLabSampleChangeRequestPayload): Promise<LabSampleChangeRequestSummary> {
+  const located = findMockSampleBlock(payload.blockId)
+  if (!located) throw new Error('未找到样品')
+  const { sheet, block } = located
+  if (sheet.date >= businessDateInBeijing()) throw new Error('仅支持申请修改历史日期样品')
+  if (block.sensitiveFieldsHidden) throw new Error('当前样品数据不可见')
+  if (!hasVisibleMockSampleInput(block.inputs)) throw new Error('样品无可修改数据')
+  if (!payload.reason?.trim()) throw new Error('请填写申请原因')
+  if (!block.updatedAt || payload.baseUpdatedAt !== block.updatedAt) throw new Error('样品已更新，请刷新后重新申请')
+  if (labSampleChangeRequests.some((row) => row.blockId === block.id && row.status === 'PENDING')) {
+    throw new Error('样品已有待处理修改申请')
+  }
+
+  const changes = validateMockChanges(payload.changes)
+  const nextInputs = applyMockChanges(block.inputs, changes)
+  if (!Object.keys(changes).length || !mockInputsDiffer(block.inputs, nextInputs, changes)) {
+    throw new Error('请至少修改一项内容')
+  }
+
+  const now = new Date().toISOString()
+  const detail: LabSampleChangeRequestDetail = {
+    id: mockId('lab-sample-change-request'),
+    date: sheet.date,
+    blockId: block.id,
+    blockIndex: block.index,
+    sampleName: String(block.inputs.sampleNumber || ''),
+    changedFieldLabels: Object.keys(changes).map((field) => labSampleChangeFieldLabels[field] || field),
+    reason: payload.reason.trim(),
+    status: 'PENDING',
+    review: null,
+    withdrawnAt: null,
+    createdAt: now,
+    updatedAt: now,
+    sourceSnapshot: clone({
+      inputs: block.inputs,
+      results: block.results,
+      parameterSnapshot: block.parameterSnapshot,
+      updatedAt: block.updatedAt
+    }),
+    requestedChanges: clone(changes),
+    previewResults: calculateSampleResults(nextInputs, block.parameterSnapshot),
+    settlementEffects: []
+  }
+  labSampleChangeRequests = [detail, ...labSampleChangeRequests]
+  return delay(mockLabSampleChangeSummary(detail))
+}
+
+export async function mockWithdrawLabSampleChangeRequest(id: string): Promise<LabSampleChangeRequestSummary> {
+  const index = labSampleChangeRequests.findIndex((row) => row.id === id)
+  if (index < 0 || labSampleChangeRequests[index].status !== 'PENDING') throw new Error('未找到待撤回的修改申请')
+  const updatedAt = new Date().toISOString()
+  const withdrawn = { ...labSampleChangeRequests[index], status: 'WITHDRAWN' as const, withdrawnAt: updatedAt, updatedAt }
+  labSampleChangeRequests[index] = withdrawn
+  return delay(mockLabSampleChangeSummary(withdrawn))
+}
+
+function findMockSampleBlock(blockId: string) {
+  for (const sheet of labSheets.values()) {
+    const block = sheet.sampleBlocks.find((item) => item.id === blockId)
+    if (block) return { sheet, block }
+  }
+  return undefined
+}
+
+function mockLabSampleChangeSummary(row: LabSampleChangeRequestDetail): LabSampleChangeRequestSummary {
+  const {
+    sourceSnapshot: _sourceSnapshot,
+    requestedChanges: _requestedChanges,
+    previewResults: _previewResults,
+    settlementEffects: _settlementEffects,
+    actualResults: _actualResults,
+    ...summary
+  } = row
+  return clone(summary)
+}
+
+function validateMockChanges(changes: LabSampleChangePatch): LabSampleChangePatch {
+  const allowed = new Set(['sampleNumber', 'payerCustomer', 'price', 'paymentStatus', 'elementNote', ...LAB_SAMPLE_CHANGE_RAW_FIELDS])
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes) || Object.keys(changes).some((field) => !allowed.has(field))) {
+    throw new Error('修改内容无效')
+  }
+  return clone(changes)
+}
+
+function applyMockChanges(inputs: LabSampleInput, changes: LabSampleChangePatch): LabSampleInput {
+  const { payerCustomer, ...scalarChanges } = changes
+  const next = { ...clone(inputs), ...scalarChanges }
+  if (payerCustomer) {
+    next.customerId = payerCustomer.customerIds[0] || undefined
+    next.customerIds = [...payerCustomer.customerIds]
+    next.customerText = payerCustomer.customerText
+  }
+  return next
+}
+
+function mockInputsDiffer(inputs: LabSampleInput, nextInputs: LabSampleInput, changes: LabSampleChangePatch) {
+  if (changes.payerCustomer && JSON.stringify({ customerIds: inputs.customerIds || [], customerText: inputs.customerText || '' }) !== JSON.stringify(changes.payerCustomer)) return true
+  return Object.keys(changes)
+    .filter((field) => field !== 'payerCustomer')
+    .some((field) => JSON.stringify(inputs[field as keyof LabSampleInput] ?? null) !== JSON.stringify(nextInputs[field as keyof LabSampleInput] ?? null))
+}
+
+function hasVisibleMockSampleInput(inputs: LabSampleInput) {
+  return Object.entries(inputs)
+    .filter(([field]) => field !== 'sequence' && field !== 'completed')
+    .some(([, value]) => typeof value === 'number' ? Number.isFinite(value) : typeof value === 'string' ? value.trim() !== '' : Array.isArray(value) ? value.length > 0 : Boolean(value))
 }
 
 export async function mockSearchCustomers(keyword: string) {

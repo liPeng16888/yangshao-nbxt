@@ -360,7 +360,7 @@ export class LabSampleChangeRequestsService {
     const sourceInputs = this.record(this.record(row.sourceSnapshot).inputs)
     const requestedChanges = this.record(row.requestedChanges)
     return {
-      id: row.id, date: row.date, blockIndex: row.blockIndex, sampleName: String(sourceInputs.sampleNumber || ''),
+      id: row.id, blockId: row.blockId, date: row.date, blockIndex: row.blockIndex, sampleName: String(sourceInputs.sampleNumber || ''),
       changedFieldLabels: Object.keys(requestedChanges).map((field) => FIELD_LABELS[field] || field),
       reason: row.reason, status: row.status,
       review: row.reviewRemark || row.reviewedAt ? { remark: row.reviewRemark, reviewedAt: row.reviewedAt } : null,

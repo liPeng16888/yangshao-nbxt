@@ -287,6 +287,7 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
     }, grants)
 
     expect(row.status).toBe(LabSampleChangeRequestStatus.PENDING)
+    expect(row).toMatchObject({ id: 'request-1', blockId: 'block-1' })
     expect(prisma.labSampleChangeRequest.create).toHaveBeenCalledWith({ data: expect.objectContaining({
       requestedById: 'front-1', frontendUserId: 'front-1', blockId: 'block-1', reason: '客户要求更正',
       requestedChanges: expect.objectContaining({ sampleNumber: '新样品', ironRaw: 2 }),
@@ -342,7 +343,7 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
       frontendUserId: 'front-1', date: historicalDate, status: LabSampleChangeRequestStatus.PENDING
     } }))
     expect(rows[0]).not.toHaveProperty('sourceSnapshot')
-    expect(rows[0]).toMatchObject({ id: 'request-1', sampleName: '旧样品', changedFieldLabels: ['样品编号'] })
+    expect(rows[0]).toMatchObject({ id: 'request-1', blockId: 'block-1', sampleName: '旧样品', changedFieldLabels: ['样品编号'] })
   })
 
   it('rejects a blank reason after trimming it', async () => {
@@ -720,6 +721,7 @@ describe('LabSampleChangeRequestsService admin review', () => {
       orderBy: { createdAt: 'desc' }
     })
     expect(rows[0]).not.toHaveProperty('sourceSnapshot')
+    expect(rows[0]).toMatchObject({ id: 'request-1', blockId: 'block-1' })
   })
 
   it('returns authorized admin detail with snapshots and settlement effects', async () => {
