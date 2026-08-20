@@ -365,13 +365,8 @@ export class SampleRetestsService {
 
     try {
       outcome = await this.prisma.$transaction<SaveRetestOutcome>(async (tx) => {
-        const context = await this.loadWritableRetest(
-          tx,
-          user,
-          sheetId,
-          retestId,
-          canViewCompletedSensitiveData
-        )
+        const sheet = await this.loadWritableSheet(tx, user, sheetId)
+        const context = await this.loadRetestReplayContext(tx, sheet, retestId, canViewCompletedSensitiveData)
         const duplicate = await this.resolveWriteRequest(
           tx.sampleRetestWriteRequest,
           idempotencyKey,
@@ -381,6 +376,7 @@ export class SampleRetestsService {
         )
         if (duplicate) return { response: duplicate, changed: false }
 
+        this.assertRetestActive(context)
         this.assertNoRetestInputConflict(
           context,
           baseUpdatedAt,
@@ -484,9 +480,10 @@ export class SampleRetestsService {
         )
         if (duplicate) return { response: duplicate, changed: false }
 
-        const context = await this.loadWritableRetestForSheet(
+        const context = await this.loadRetestReplayContext(
           tx, sheet, retestId, canViewCompletedSensitiveData
         )
+        this.assertRetestActive(context)
         this.assertExactRetestVersion(context.retest, baseUpdatedAt)
         const inputs = normalizeLabDetectionInputs(context.retest.inputs)
         if (context.retest.everFilled || hasLabDetectionInput(inputs)) {
@@ -552,6 +549,15 @@ export class SampleRetestsService {
     try {
       outcome = await this.prisma.$transaction<VoidRetestOutcome>(async (tx) => {
         const sheet = await this.loadWritableSheet(tx, user, sheetId)
+        await this.assertNoMismatchedWriteRequest(
+          tx.sampleRetestWriteRequest,
+          idempotencyKey,
+          'VOID',
+          requestFingerprint
+        )
+        const context = await this.loadRetestReplayContext(
+          tx, sheet, retestId, canViewCompletedSensitiveData
+        )
         const duplicate = await this.resolveWriteRequest(
           tx.sampleRetestWriteRequest,
           idempotencyKey,
@@ -561,9 +567,7 @@ export class SampleRetestsService {
         )
         if (duplicate) return { response: duplicate, changed: false }
 
-        const context = await this.loadWritableRetestForSheet(
-          tx, sheet, retestId, canViewCompletedSensitiveData
-        )
+        this.assertRetestActive(context)
         this.assertExactRetestVersion(context.retest, baseUpdatedAt)
         if (!context.retest.everFilled) {
           throw new ConflictException('未录入数据的复样可以直接删除')
@@ -621,17 +625,6 @@ export class SampleRetestsService {
     return outcome.response
   }
 
-  private async loadWritableRetest(
-    tx: SampleRetestTransaction,
-    user: CurrentUser,
-    sheetId: string,
-    retestId: string,
-    canViewCompletedSensitiveData: boolean
-  ): Promise<WritableRetestContext> {
-    const sheet = await this.loadWritableSheet(tx, user, sheetId)
-    return this.loadWritableRetestForSheet(tx, sheet, retestId, canViewCompletedSensitiveData)
-  }
-
   private async loadWritableSheet(
     tx: SampleRetestTransaction,
     user: CurrentUser,
@@ -648,7 +641,7 @@ export class SampleRetestsService {
     return sheet
   }
 
-  private async loadWritableRetestForSheet(
+  private async loadRetestReplayContext(
     tx: SampleRetestTransaction,
     sheet: WritableSheet,
     retestId: string,
@@ -670,18 +663,20 @@ export class SampleRetestsService {
     if (parentCompleted && !canViewCompletedSensitiveData) {
       throw new ForbiddenException('已完成样品需要验证后才能修改复样')
     }
-    if (retest.status !== 'ACTIVE') {
-      throw new ConflictException({
-        code: 'SAMPLE_RETEST_NOT_ACTIVE',
-        message: '已作废的复样不能再修改',
-        retest: toSampleRetestDto(retest, {
-          parentCompleted,
-          sheetReadonly: false,
-          canViewCompletedSensitiveData
-        })
-      })
-    }
     return { sheet, block, retest, parentCompleted }
+  }
+
+  private assertRetestActive(context: WritableRetestContext) {
+    if (context.retest.status === 'ACTIVE') return
+    throw new ConflictException({
+      code: 'SAMPLE_RETEST_NOT_ACTIVE',
+      message: '已作废的复样不能再修改',
+      retest: toSampleRetestDto(context.retest, {
+        parentCompleted: context.parentCompleted,
+        sheetReadonly: false,
+        canViewCompletedSensitiveData: true
+      })
+    })
   }
 
   private assertExactRetestVersion(retest: Pick<SampleRetestRow, 'updatedAt'>, baseUpdatedAt: string) {
@@ -813,6 +808,18 @@ export class SampleRetestsService {
       })
     }
     return response
+  }
+
+  private async assertNoMismatchedWriteRequest(
+    reader: SampleRetestWriteRequestReader,
+    idempotencyKey: string,
+    operation: RetestOperation,
+    requestFingerprint: string
+  ) {
+    const request = await reader.findUnique({ where: { idempotencyKey } })
+    if (request && (request.operation !== operation || request.requestFingerprint !== requestFingerprint)) {
+      this.idempotencyConflict()
+    }
   }
 
   private idempotencyConflict(): never {

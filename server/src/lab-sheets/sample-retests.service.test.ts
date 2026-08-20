@@ -789,6 +789,33 @@ describe('SampleRetestsService.saveRetest', () => {
     expect(realtime.events).toHaveLength(1)
   })
 
+  it('replays a SAVE snapshot after the row is VOID, while changed payloads and actors still conflict', async () => {
+    const { prisma, realtime, service } = setup()
+    addRetest(prisma)
+    const savePayload = { idempotencyKey: 'save-before-void', changedFields: { ironRaw: 1 } }
+    const saved = await service.saveRetest(frontendUser, 'sheet-1', 'retest-1', savePayload, 'save-client', true)
+    await service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-after-save', baseUpdatedAt: saved.updatedAt
+    }, 'void-client', true)
+
+    const replay = await service.saveRetest(frontendUser, 'sheet-1', 'retest-1', savePayload, 'replay-client', true)
+    expect(replay).toEqual(saved)
+    expect(prisma.log.filter((entry) => entry === 'update-retest:retest-1')).toHaveLength(2)
+    expect(realtime.events).toHaveLength(2)
+
+    await expect(service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'save-before-void', changedFields: { ironRaw: 2 }
+    }, undefined, true)).rejects.toMatchObject({
+      status: 409, response: expect.objectContaining({ code: 'SAMPLE_RETEST_IDEMPOTENCY_CONFLICT' })
+    })
+    await expect(service.saveRetest({ ...frontendUser, id: 'sub-1' }, 'sheet-1', 'retest-1', savePayload, undefined, true))
+      .rejects.toMatchObject({
+        status: 409, response: expect.objectContaining({ code: 'SAMPLE_RETEST_IDEMPOTENCY_CONFLICT' })
+      })
+    expect(prisma.log.filter((entry) => entry === 'update-retest:retest-1')).toHaveLength(2)
+    expect(realtime.events).toHaveLength(2)
+  })
+
   it('rejects reused save keys with changed fingerprints or operation types', async () => {
     const changedRequest = setup()
     addRetest(changedRequest.prisma)
@@ -983,6 +1010,24 @@ describe('SampleRetestsService.voidRetest', () => {
     expect(voided.voidedAt).toEqual(expect.any(String))
     expect(prisma.retests[0]).toMatchObject({ status: 'VOID', voidReason: '复核失败', voidedById: 'sub-1' })
     expect(realtime.events).toEqual([expect.objectContaining({ type: 'retests-changed', changedById: 'sub-1' })])
+  })
+
+  it('requires the completed-parent grant before replaying a sensitive VOID snapshot', async () => {
+    const { prisma, realtime, service } = setup()
+    addRetest(prisma, { everFilled: true, inputs: { ...createEmptyRetestInputs(), ironRaw: 1 } })
+    getBlock(prisma, 'block-1').inputs.completed = true
+    const payload = { idempotencyKey: 'void-completed-replay', baseUpdatedAt: '2026-08-20T09:00:00.000Z' }
+    const first = await service.voidRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'first', true)
+
+    await expect(service.voidRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'denied', false))
+      .rejects.toBeInstanceOf(ForbiddenException)
+    expect(prisma.log.filter((entry) => entry === 'update-retest:retest-1')).toHaveLength(1)
+    expect(realtime.events).toHaveLength(1)
+
+    const replay = await service.voidRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'granted', true)
+    expect(replay).toEqual(first)
+    expect(prisma.log.filter((entry) => entry === 'update-retest:retest-1')).toHaveLength(1)
+    expect(realtime.events).toHaveLength(1)
   })
 
   it('requires the exact version and prior data, normalizes blank reasons, and has no restore path', async () => {
