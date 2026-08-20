@@ -5,13 +5,14 @@ import type { CurrentUser } from '../auth/current-user'
 import { businessDateInBeijing } from '../common/date'
 import { calculateResults, createEmptyInputs, defaultLabParameters, defaultSampleBlockCount, editableInputFields, hasLabDetectionInput } from '../common/lab'
 import { LabSheetRealtimeService } from './lab-sheet-realtime.service'
-import { collapseConsecutiveFieldChanges } from '../common/change-log'
+import { LabCellChangeService } from './lab-cell-change.service'
 
 @Injectable()
 export class LabSheetsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly realtime: LabSheetRealtimeService
+    private readonly realtime: LabSheetRealtimeService,
+    private readonly cellChanges: LabCellChangeService
   ) {}
 
   async getSheetForFrontendUser(frontendUserId: string, date = businessDateInBeijing(), canViewCompletedSensitiveData = true) {
@@ -193,7 +194,15 @@ export class LabSheetsService {
           parameterSnapshot: parameters as Prisma.InputJsonValue
         }
       })
-      await this.recordInputChanges(tx, sheet.id, block.id, sheet.frontendUserId, user.id, oldInputs, nextInputs, blockPayload.changeLogFields)
+      await this.cellChanges.record(tx, {
+        sheetId: sheet.id,
+        blockId: block.id,
+        frontendUserId: sheet.frontendUserId,
+        changedById: user.id,
+        oldInputs,
+        nextInputs,
+        committedFields: blockPayload.changeLogFields
+      })
       return { block: saved, sheet, changed: true }
     })
     const savedDto = this.toBlockDto(outcome.block, false, canViewCompletedSensitiveData)
@@ -334,98 +343,6 @@ export class LabSheetsService {
     })
   }
 
-  private async recordInputChanges(
-    db: Prisma.TransactionClient,
-    sheetId: string,
-    blockId: string,
-    frontendUserId: string,
-    changedById: string,
-    oldInputs: Record<string, unknown>,
-    nextInputs: Record<string, unknown>,
-    committedFields: unknown
-  ) {
-    const hasCommittedFields = Array.isArray(committedFields)
-    const fields = this.normalizeCommittedFields(committedFields, oldInputs, nextInputs)
-    for (const { field, oldValue, newValue } of fields) {
-      if (JSON.stringify(oldValue) === JSON.stringify(newValue)) continue
-      const lastLog = await db.cellChangeLog.findFirst({ where: { blockId }, orderBy: { changedAt: 'desc' } })
-      if (!hasCommittedFields && lastLog && lastLog.field === field) {
-        await db.cellChangeLog.update({
-          where: { id: lastLog.id },
-          data: {
-            newValue: this.toJsonValue(newValue),
-            changedAt: new Date()
-          }
-        })
-      } else {
-        await db.cellChangeLog.create({
-          data: {
-            sheetId,
-            blockId,
-            frontendUserId,
-            changedById,
-            field,
-            oldValue: this.toJsonValue(oldValue),
-            newValue: this.toJsonValue(newValue)
-          }
-        })
-      }
-      const changeCount = await this.countEffectiveFieldChanges(db, blockId, field)
-      if (changeCount < 3) {
-        await db.abnormalRecord.deleteMany({ where: { blockId, field } })
-        continue
-      }
-      const sheet = await db.labSheet.findUnique({ where: { id: sheetId } })
-      await db.abnormalRecord.upsert({
-        where: { blockId_field: { blockId, field } },
-        create: {
-          sheetId,
-          blockId,
-          frontendUserId,
-          date: sheet?.date || businessDateInBeijing(),
-          field,
-          changeCount
-        },
-        update: { changeCount }
-      })
-    }
-  }
-
-  private normalizeCommittedFields(
-    committedFields: unknown,
-    oldInputs: Record<string, unknown>,
-    nextInputs: Record<string, unknown>
-  ): Array<{ field: string; oldValue: unknown; newValue: unknown }> {
-    if (Array.isArray(committedFields)) {
-      const fields: Array<{ field: string; oldValue: unknown; newValue: unknown }> = []
-      committedFields.forEach((item) => {
-        const row = item as { field?: unknown; oldValue?: unknown; newValue?: unknown }
-        const field = String(row.field || '')
-        if (!editableInputFields.includes(field)) return
-        fields.push({
-          field,
-          oldValue: row.oldValue ?? null,
-          newValue: row.newValue ?? null
-        })
-      })
-      return fields
-    }
-    return editableInputFields.map((field) => ({
-      field,
-      oldValue: oldInputs[field] ?? null,
-      newValue: nextInputs[field] ?? null
-    }))
-  }
-
-  private async countEffectiveFieldChanges(db: Prisma.TransactionClient, blockId: string, field: string) {
-    const rows = await db.cellChangeLog.findMany({
-      where: { blockId },
-      orderBy: { changedAt: 'asc' },
-      select: { field: true, oldValue: true, newValue: true, changedAt: true }
-    })
-    return collapseConsecutiveFieldChanges(rows, { windowMs: 2000 }).filter((row) => row.field === field).length
-  }
-
   private toSheetDto(sheet: Awaited<ReturnType<LabSheetsService['ensureSheet']>>, canViewCompletedSensitiveData = false) {
     const readonly = this.isReadonlySheet(sheet)
     return {
@@ -485,10 +402,6 @@ export class LabSheetsService {
       if (typeof value === 'string') return value.trim() !== ''
       return Array.isArray(value) ? value.length > 0 : Boolean(value)
     })
-  }
-
-  private toJsonValue(value: unknown) {
-    return value === null || value === undefined ? Prisma.JsonNull : (value as Prisma.InputJsonValue)
   }
 
   private isPlainObject(value: unknown): value is Record<string, unknown> {

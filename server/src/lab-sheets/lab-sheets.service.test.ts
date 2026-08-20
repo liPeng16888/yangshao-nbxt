@@ -76,6 +76,7 @@ describe('LabSheetsService default sheet selection', () => {
     $transaction: vi.fn(async (operation: (tx: typeof transaction) => unknown) => operation(transaction))
   }
   const realtime = { publish: vi.fn() }
+  const cellChanges = { record: vi.fn() }
   let service: LabSheetsService
 
   beforeEach(() => {
@@ -114,7 +115,8 @@ describe('LabSheetsService default sheet selection', () => {
       if (block) Object.assign(block, data)
       return { ...makeBlock(Number(String(where.id).replace('block-', ''))), ...block, ...data }
     })
-    service = new LabSheetsService(prisma as never, realtime as never)
+    cellChanges.record.mockResolvedValue(undefined)
+    service = new LabSheetsService(prisma as never, realtime as never, cellChanges as never)
     prisma.labSheet.findFirst.mockResolvedValue(null)
     prisma.cellChangeLog.findMany.mockResolvedValue([])
     prisma.cellChangeLog.findFirst.mockResolvedValue(null)
