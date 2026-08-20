@@ -109,6 +109,10 @@
       :can-view-completed-sensitive-data="canViewCompletedSensitiveData"
       @update="labStore.patchBlock"
       @field-commit="labStore.commitBlockFieldChange"
+      @retest-update="labStore.patchRetest"
+      @retest-field-commit="handleRetestFieldCommit"
+      @retest-delete="handleRetestDelete"
+      @retest-void="handleRetestVoid"
       @blacklist-hit="showBlacklistHit"
       @selection-change="toggleReportBlockSelection"
     />
@@ -196,7 +200,7 @@ import { ChatLineSquare, CircleCheck, DocumentChecked, EditPen, Plus } from '@el
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import type { BlacklistRecord } from '@/types/blacklist'
-import type { LabSampleInput } from '@/types/labSheet'
+import type { LabSampleInput, SampleRetestInputField } from '@/types/labSheet'
 import type { LabReportSmsTemplate, LabReportTemplate } from '@/types/labReport'
 import BlacklistHitDialog from '@/components/lab-sheet/BlacklistHitDialog.vue'
 import BulkSampleFillDialog from '@/components/lab-sheet/BulkSampleFillDialog.vue'
@@ -263,6 +267,7 @@ const smsTemplate = ref<LabReportSmsTemplate>({ ...defaultLabReportSmsTemplate }
 let businessDayBoundaryTimer: number | undefined
 let businessDayPreflushTimer: number | undefined
 let retestCreationGeneration = 0
+let retestActionGeneration = 0
 
 const isPageReadonly = computed(() => Boolean(
   labStore.sheet?.readonly || switchingBusinessDay.value || labStore.applyingParameters
@@ -655,9 +660,76 @@ function isCurrentRetestCreationOperation(generation: number, context: RetestCre
 
 function invalidateRetestCreationContext() {
   retestCreationGeneration += 1
+  retestActionGeneration += 1
   creatingRetests.value = false
   retestDialogVisible.value = false
   highlightRetestId.value = ''
+}
+
+function handleRetestFieldCommit(
+  sampleBlockId: string,
+  retestId: string,
+  _field: SampleRetestInputField,
+  oldValue: unknown,
+  newValue: unknown
+) {
+  if (JSON.stringify(oldValue ?? null) === JSON.stringify(newValue ?? null)) return
+  void labStore.persistRetest(sampleBlockId, retestId)
+}
+
+async function handleRetestDelete(sampleBlockId: string, retestId: string) {
+  const operationGeneration = ++retestActionGeneration
+  const operationContext = captureRetestCreationContext()
+  try {
+    await ElMessageBox.confirm('确认删除这条空白复样吗？', '删除复样', {
+      type: 'warning',
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消'
+    })
+  } catch {
+    return
+  }
+  if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+  try {
+    const deleted = await labStore.deleteRetestRecord(sampleBlockId, retestId)
+    if (!deleted || !isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+    if (highlightRetestId.value === retestId) highlightRetestId.value = ''
+    ElMessage.success('空白复样已删除')
+  } catch (error) {
+    if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+    ElMessage.error(error instanceof Error ? error.message : '复样删除失败')
+  }
+}
+
+async function handleRetestVoid(sampleBlockId: string, retestId: string) {
+  const operationGeneration = ++retestActionGeneration
+  const operationContext = captureRetestCreationContext()
+  let reason = ''
+  try {
+    const response = await ElMessageBox.prompt('作废后不可恢复，可选填写作废原因。', '作废复样', {
+      type: 'warning',
+      confirmButtonText: '确认作废',
+      cancelButtonText: '取消',
+      inputPlaceholder: '可选：填写作废原因'
+    })
+    reason = response.value || ''
+  } catch {
+    return
+  }
+  if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+  try {
+    const voided = await labStore.voidRetestRecord(sampleBlockId, retestId, reason)
+    if (!voided || !isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+    ElMessage.success('复样已作废')
+  } catch (error) {
+    if (!isCurrentRetestActionOperation(operationGeneration, operationContext)) return
+    ElMessage.error(error instanceof Error ? error.message : '复样作废失败')
+  }
+}
+
+function isCurrentRetestActionOperation(generation: number, context: RetestCreationContext) {
+  return generation === retestActionGeneration &&
+    JSON.stringify(context) === JSON.stringify(captureRetestCreationContext())
 }
 
 async function applySampleCompletion(payload: { blockIds: string[]; completed: boolean }) {

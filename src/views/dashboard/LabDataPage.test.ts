@@ -50,6 +50,10 @@ const mocks = vi.hoisted(() => ({
     confirmConflictOverwrite: vi.fn(),
     appendSampleBlocks: vi.fn(),
     createRetests: vi.fn(),
+    patchRetest: vi.fn(),
+    persistRetest: vi.fn(),
+    deleteRetestRecord: vi.fn(),
+    voidRetestRecord: vi.fn(),
     disconnectRealtime: vi.fn()
   }
 }))
@@ -92,7 +96,7 @@ function mountPage() {
       selectedBlockIds: { type: Array, default: () => [] },
       highlightRetestId: { type: String, default: '' }
     },
-    emits: ['selectionChange'],
+    emits: ['selectionChange', 'retestUpdate', 'retestFieldCommit', 'retestDelete', 'retestVoid'],
     setup(props, { emit }) {
       return () =>
         h('div', {
@@ -110,7 +114,27 @@ function mountPage() {
                 },
                 '选择001'
               )
-            : null
+            : null,
+          h('button', {
+            class: 'retest-update-stub',
+            type: 'button',
+            onClick: () => emit('retestUpdate', 'block-1', 'retest-1', { ironRaw: 1 })
+          }, '修改复样'),
+          h('button', {
+            class: 'retest-commit-stub',
+            type: 'button',
+            onClick: () => emit('retestFieldCommit', 'block-1', 'retest-1', 'ironRaw', null, 1)
+          }, '提交复样'),
+          h('button', {
+            class: 'retest-delete-stub',
+            type: 'button',
+            onClick: () => emit('retestDelete', 'block-1', 'retest-1')
+          }, '删除复样'),
+          h('button', {
+            class: 'retest-void-stub',
+            type: 'button',
+            onClick: () => emit('retestVoid', 'block-1', 'retest-1')
+          }, '作废复样')
         ])
     }
   })
@@ -318,6 +342,13 @@ describe('LabDataPage table layout', () => {
     mocks.labStore.createRetests.mockResolvedValue([
       { id: 'retest-1', sampleBlockId: 'block-1', sequence: 1 }
     ])
+    mocks.labStore.patchRetest.mockReset()
+    mocks.labStore.persistRetest.mockReset()
+    mocks.labStore.persistRetest.mockResolvedValue({ retestId: 'retest-1', success: true, conflict: false })
+    mocks.labStore.deleteRetestRecord.mockReset()
+    mocks.labStore.deleteRetestRecord.mockResolvedValue(true)
+    mocks.labStore.voidRetestRecord.mockReset()
+    mocks.labStore.voidRetestRecord.mockResolvedValue({ id: 'retest-1', status: 'VOID' })
     mocks.labStore.disconnectRealtime.mockReset()
     mocks.accessGuard.loadGroups.mockReset()
     mocks.accessGuard.requestFeatureAccess.mockReset()
@@ -833,6 +864,97 @@ describe('LabDataPage table layout', () => {
     expect(successSpy).toHaveBeenCalledWith('已创建 1 组复样')
     successSpy.mockRestore()
     wrapper.unmount()
+  })
+
+  it('routes desktop retest edits and field commits into the store', async () => {
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-update-stub').trigger('click')
+    await wrapper.get('.retest-commit-stub').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.patchRetest).toHaveBeenCalledWith('block-1', 'retest-1', { ironRaw: 1 })
+    expect(mocks.labStore.persistRetest).toHaveBeenCalledWith('block-1', 'retest-1')
+    wrapper.unmount()
+  })
+
+  it('confirms an empty retest deletion before calling the store', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(confirmSpy).toHaveBeenCalledWith('确认删除这条空白复样吗？', '删除复样', expect.any(Object))
+    expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledWith('block-1', 'retest-1')
+    expect(successSpy).toHaveBeenCalledWith('空白复样已删除')
+    confirmSpy.mockRestore()
+    successSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('does not delete when the confirmation is cancelled', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancel'))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.deleteRetestRecord).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('prompts for an optional reason before voiding a filled retest', async () => {
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '检测污染', action: 'confirm' } as any)
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-void-stub').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(promptSpy).toHaveBeenCalledWith(expect.stringContaining('作废后不可恢复'), '作废复样', expect.any(Object))
+    expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledWith('block-1', 'retest-1', '检测污染')
+    expect(successSpy).toHaveBeenCalledWith('复样已作废')
+    promptSpy.mockRestore()
+    successSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('does not void when the optional reason prompt is cancelled', async () => {
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockRejectedValue(new Error('cancel'))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-void-stub').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.voidRetestRecord).not.toHaveBeenCalled()
+    promptSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('does not start deletion when the confirmation settles after unmount', async () => {
+    let resolveConfirm: (value: string) => void = () => undefined
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(new Promise((resolve) => { resolveConfirm = resolve }) as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    wrapper.unmount()
+    resolveConfirm('confirm')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(mocks.labStore.deleteRetestRecord).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
   })
 
   it('locks the creation dialog until the request settles', async () => {

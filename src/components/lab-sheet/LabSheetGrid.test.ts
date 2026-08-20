@@ -7,7 +7,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import LabSheetGrid from './LabSheetGrid.vue'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import { calculateSampleResults } from '@/utils/formulaEngine'
-import type { SampleBlock } from '@/types/labSheet'
+import type { SampleBlock, SampleRetest } from '@/types/labSheet'
 
 const customerEditorStub = {
   name: 'CustomerCellEditor',
@@ -71,6 +71,38 @@ function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock 
     parameterSnapshot: defaultLabParameters,
     retests: []
   }
+}
+
+function makeRetest(sequence: number): SampleRetest {
+  return {
+    id: `retest-${sequence}`,
+    sampleBlockId: 'block-1',
+    sequence,
+    status: 'ACTIVE',
+    everFilled: false,
+    readonly: false,
+    sensitiveFieldsHidden: false,
+    inputs: {},
+    results: {
+      iron: 0, silicon: 0, aluminum: 0, aluminumSiliconRatio: 0, total: 0,
+      density: 0, calcium: 0, magnesium: 0, titanium: 0, bottleDensity: 0,
+      moisture: 0, burnLoss: 0
+    },
+    parameterSnapshot: defaultLabParameters,
+    voidReason: null,
+    createdById: 'main-1',
+    updatedById: 'main-1',
+    voidedById: null,
+    createdAt: '2026-08-20T09:15:00.000Z',
+    updatedAt: '2026-08-20T09:15:00.000Z',
+    voidedAt: null
+  }
+}
+
+function makeBlockWithRetests(count: number) {
+  const block = makeBlock({ elementNote: '铁' })
+  block.retests = Array.from({ length: count }, (_, index) => makeRetest(index + 1))
+  return block
 }
 
 describe('LabSheetGrid', () => {
@@ -835,5 +867,60 @@ describe('LabSheetGrid', () => {
     const componentSource = readFileSync('src/components/lab-sheet/LabSheetGrid.vue', 'utf8')
 
     expect(componentSource).toMatch(/\.cell--green\.cell--completed\s*\{\s*background:\s*#fff3eb;/)
+  })
+
+  it('renders every retest after original calculation cells and before the amount row', () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [makeBlockWithRetests(2)] },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    const sequenceCell = wrapper.get('[data-block-id="block-1"]')
+    const order = Array.from(sequenceCell.element.parentElement!.children).map((node) => {
+      const element = node as HTMLElement
+      return element.dataset.retestId || element.dataset.field || ''
+    })
+
+    expect(wrapper.findAll('[data-retest-id]')).toHaveLength(2)
+    expect(order.indexOf('retest-1')).toBeLessThan(order.indexOf('retest-2'))
+    expect(order.indexOf('retest-2')).toBeLessThan(order.indexOf('price'))
+  })
+
+  it('passes the highlight and forwards exact retest event signatures', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [makeBlockWithRetests(1)], highlightRetestId: 'retest-1' },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+    const band = wrapper.findComponent({ name: 'SampleRetestBand' })
+
+    expect(band.props('highlighted')).toBe(true)
+    band.vm.$emit('update', 'retest-1', { ironRaw: 1 })
+    band.vm.$emit('fieldCommit', 'retest-1', 'ironRaw', null, 1)
+    band.vm.$emit('delete', 'retest-1')
+    band.vm.$emit('void', 'retest-1')
+    await nextTick()
+
+    expect(wrapper.emitted('retestUpdate')).toContainEqual(['block-1', 'retest-1', { ironRaw: 1 }])
+    expect(wrapper.emitted('retestFieldCommit')).toContainEqual(['block-1', 'retest-1', 'ironRaw', null, 1])
+    expect(wrapper.emitted('retestDelete')).toContainEqual(['block-1', 'retest-1'])
+    expect(wrapper.emitted('retestVoid')).toContainEqual(['block-1', 'retest-1'])
+  })
+
+  it('locks retests with the completed parent when completed data access is unavailable', () => {
+    const block = makeBlockWithRetests(1)
+    block.inputs.completed = true
+    block.retests[0].inputs.ironRaw = 1
+    block.retests[0].results.iron = 27.94
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [block], canViewCompletedSensitiveData: false },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    const retestBand = wrapper.get('[data-retest-id="retest-1"]')
+    expect(retestBand.get('input').attributes('disabled')).toBeDefined()
+    expect((retestBand.get('input').element as HTMLInputElement).value).toBe('')
+    expect(retestBand.text()).not.toContain('27.94')
+    expect(retestBand.text()).toContain('数据已加密')
+    expect(wrapper.find('[data-testid="delete-retest-retest-1"]').exists()).toBe(false)
   })
 })

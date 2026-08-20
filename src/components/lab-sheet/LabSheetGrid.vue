@@ -158,6 +158,20 @@
               <FormulaCell class="cell--span-3" :value="block.results.burnLoss" />
             </template>
 
+            <SampleRetestBand
+              v-for="retest in block.retests"
+              :key="retest.id"
+              :parent="block"
+              :retest="retest"
+              :readonly="readonly"
+              :sensitive-hidden="isCompletedSensitiveHidden(block.id)"
+              :highlighted="retest.id === highlightRetestId"
+              @update="(retestId, patch) => emit('retestUpdate', block.id, retestId, patch)"
+              @field-commit="(retestId, field, oldValue, newValue) => emit('retestFieldCommit', block.id, retestId, field, oldValue, newValue)"
+              @delete="(retestId) => emit('retestDelete', block.id, retestId)"
+              @void="(retestId) => emit('retestVoid', block.id, retestId)"
+            />
+
             <div class="cell cell--label cell--remark cell--required-label">{{ getAmountLabel(block) }}</div>
             <div v-if="isCompletedSensitiveHidden(block.id)" class="cell cell--input cell--remark completed-data-compact-mask" :data-block-id="block.id" data-field="price" aria-label="样品金额已加密">
               <span aria-hidden="true">🔒</span>
@@ -259,9 +273,17 @@ import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 import { ScaleToOriginal, ZoomIn, ZoomOut } from '@element-plus/icons-vue'
 import CustomerCellEditor from './CustomerCellEditor.vue'
 import LabElementSelector from './LabElementSelector.vue'
+import SampleRetestBand from './SampleRetestBand.vue'
 import PrepaidMemberPickerDialog from '@/components/prepaid/PrepaidMemberPickerDialog.vue'
 import type { BlacklistRecord } from '@/types/blacklist'
-import type { LabSampleInput, PrepaidMemberPickerResult, SampleBlock, SamplePaymentStatus } from '@/types/labSheet'
+import type {
+  LabSampleInput,
+  PrepaidMemberPickerResult,
+  SampleBlock,
+  SamplePaymentStatus,
+  SampleRetestInput,
+  SampleRetestInputField
+} from '@/types/labSheet'
 import { labSheetColumns } from '@/constants/labSheetTemplate'
 import { formatFormulaValue, parseNumericInput } from '@/utils/formulaEngine'
 import {
@@ -282,6 +304,7 @@ const props = defineProps<{
   selectionMode?: boolean
   selectedBlockIds?: string[]
   highlightBlockId?: string
+  highlightRetestId?: string
   canViewCompletedSensitiveData?: boolean
 }>()
 
@@ -291,6 +314,10 @@ const emit = defineEmits<{
   blacklistHit: [records: BlacklistRecord[]]
   scrollStateChange: [state: LabGridScrollState]
   selectionChange: [blockId: string, checked: boolean]
+  retestUpdate: [sampleBlockId: string, retestId: string, patch: Partial<SampleRetestInput>]
+  retestFieldCommit: [sampleBlockId: string, retestId: string, field: SampleRetestInputField, oldValue: unknown, newValue: unknown]
+  retestDelete: [sampleBlockId: string, retestId: string]
+  retestVoid: [sampleBlockId: string, retestId: string]
 }>()
 
 export type LabGridScrollState = {
@@ -304,6 +331,7 @@ const gridColumns = computed(() => labSheetColumns.map((column) => `${column.wid
 const selectionMode = computed(() => Boolean(props.selectionMode))
 const selectedBlockIds = computed(() => props.selectedBlockIds || [])
 const highlightBlockId = computed(() => props.highlightBlockId || '')
+const highlightRetestId = computed(() => props.highlightRetestId || '')
 function isCompletedSensitiveHidden(blockId: string) {
   const block = props.blocks.find((item) => item.id === blockId)
   return block ? isCompletedSampleSensitiveHidden(block, Boolean(props.canViewCompletedSensitiveData)) : false
@@ -434,6 +462,13 @@ onBeforeUnmount(() => {
 
 watch(
   () => props.blocks.length,
+  () => {
+    void refreshScrollState()
+  }
+)
+
+watch(
+  () => props.blocks.map((block) => block.retests.length).join(','),
   () => {
     void refreshScrollState()
   }
