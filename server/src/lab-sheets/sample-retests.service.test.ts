@@ -3,7 +3,7 @@ import { Prisma, UserRole } from '@prisma/client'
 import { describe, expect, it } from 'vitest'
 import type { CurrentUser } from '../auth/current-user'
 import { businessDateInBeijing } from '../common/date'
-import { defaultLabParameters } from '../common/lab'
+import { createEmptyRetestInputs, defaultLabParameters } from '../common/lab'
 import type { LabSheetRealtimeEvent } from './lab-sheet-realtime.service'
 import { SampleRetestsService } from './sample-retests.service'
 
@@ -39,6 +39,8 @@ type Retest = {
   updatedAt: Date
   voidedAt: null
 }
+
+type RetestUpdateData = Pick<Retest, 'inputs' | 'results' | 'everFilled' | 'updatedById'>
 
 type WriteRequest = {
   idempotencyKey: string
@@ -133,7 +135,13 @@ class FakePrisma {
     return {
       $queryRaw: async (query: unknown): Promise<unknown> => {
         const text = queryText(query)
-        this.log.push(text.includes('SampleBlock') ? 'lock-parents' : 'lock-sheet')
+        this.log.push(
+          text.includes('SampleRetest')
+            ? 'lock-retest'
+            : text.includes('SampleBlock')
+              ? 'lock-parents'
+              : 'lock-sheet'
+        )
         return []
       },
       labSheet: {
@@ -143,6 +151,10 @@ class FakePrisma {
         }
       },
       sampleBlock: {
+        findUnique: async ({ where }: { where: { id: string } }) => {
+          this.log.push('read-parent')
+          return structuredClone(this.blocks.get(where.id) ?? null)
+        },
         findMany: async ({ where }: { where: { id: { in: string[] }; sheetId: string } }) => {
           this.log.push('read-parents')
           return where.id.in
@@ -159,6 +171,10 @@ class FakePrisma {
         }
       },
       sampleRetest: {
+        findUnique: async ({ where }: { where: { id: string } }) => {
+          this.log.push('read-retest')
+          return structuredClone(this.retests.find((row) => row.id === where.id) ?? null)
+        },
         create: async ({ data }: { data: Omit<Retest, 'id' | 'voidReason' | 'voidedById' | 'createdAt' | 'updatedAt' | 'voidedAt'> }) => {
           this.log.push(`create:${data.sampleBlockId}`)
           if (data.sampleBlockId === this.failCreateForBlockId) throw new Error('forced create failure')
@@ -173,6 +189,14 @@ class FakePrisma {
             voidedAt: null
           }
           this.retests.push(row)
+          return structuredClone(row)
+        },
+        update: async ({ where, data }: { where: { id: string }; data: RetestUpdateData }) => {
+          this.log.push(`update-retest:${where.id}`)
+          const row = this.retests.find((item) => item.id === where.id)
+          if (!row) throw new Error('missing fake retest')
+          Object.assign(row, structuredClone(data))
+          row.updatedAt = new Date(row.updatedAt.getTime() + 1000)
           return structuredClone(row)
         }
       },
@@ -241,6 +265,45 @@ function getLastAttemptedWriteRequest(prisma: FakePrisma) {
   const request = prisma.attemptedWriteRequests.at(-1)
   if (!request) throw new Error('missing attempted fake write request')
   return request
+}
+
+function addRetest(prisma: FakePrisma, overrides: Partial<Retest> = {}) {
+  const timestamp = new Date('2026-08-20T09:00:00.000Z')
+  const row: Retest = {
+    id: 'retest-1',
+    sampleBlockId: 'block-1',
+    sequence: 3,
+    inputs: createEmptyRetestInputs(),
+    results: {},
+    parameterSnapshot: { ...defaultLabParameters, ironBlank: 0.04, ironFactor: 10 },
+    everFilled: false,
+    status: 'ACTIVE',
+    voidReason: null,
+    createdById: 'front-1',
+    updatedById: 'front-1',
+    voidedById: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    voidedAt: null,
+    ...structuredClone(overrides)
+  }
+  prisma.retests.push(row)
+  return row
+}
+
+function makeSaveRaceWinner(
+  loser: WriteRequest,
+  overrides: Partial<Pick<WriteRequest, 'operation' | 'requestFingerprint'>> = {}
+): WriteRequest {
+  const response = structuredClone(loser.responseSnapshot)
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('unexpected fake save response snapshot')
+  }
+  return {
+    ...structuredClone(loser),
+    ...overrides,
+    responseSnapshot: { ...response, updatedAt: '2026-08-20T09:42:00.000Z' }
+  }
 }
 
 function makeRaceWinner(
@@ -530,6 +593,240 @@ describe('SampleRetestsService.createRetests', () => {
     expect(getBlock(prisma, 'block-1').nextRetestSequence).toBe(3)
     expect(getBlock(prisma, 'block-2').nextRetestSequence).toBe(1)
     expect(prisma.requests.size).toBe(0)
+    expect(realtime.events).toEqual([])
+  })
+})
+
+describe('SampleRetestsService.saveRetest', () => {
+  it('locks authoritative rows, persists only detection changes, uses the frozen snapshot, and publishes one metadata event', async () => {
+    const { prisma, realtime, service } = setup()
+    addRetest(prisma, {
+      inputs: { ...createEmptyRetestInputs(), siliconRaw: 2, calciumRaw: 4 }
+    })
+    const actor = { ...frontendUser, id: 'sub-1', isFrontendMainAccount: false, isFrontendSubAccount: true }
+
+    const saved = await service.saveRetest(actor, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'save-1',
+      baseUpdatedAt: '2026-08-20T09:00:00.000Z',
+      baseInputs: { ironRaw: null, calciumRaw: 4 },
+      changedFields: { ironRaw: 1, calciumRaw: null, sampleNumber: '不得写入' } as never
+    }, 'client-1', true)
+
+    expect(saved.inputs).toMatchObject({ ironRaw: 1, siliconRaw: 2, calciumRaw: null })
+    expect(saved.inputs).not.toHaveProperty('sampleNumber')
+    expect(saved.results.iron).toBe(9.6)
+    expect(saved.everFilled).toBe(true)
+    expect(saved.updatedById).toBe('sub-1')
+    expect(prisma.retests[0].inputs).not.toHaveProperty('sampleNumber')
+    expect(prisma.retests[0].parameterSnapshot.ironFactor).toBe(10)
+    expect(prisma.log).toEqual([
+      'transaction-begin', 'lock-sheet', 'read-sheet', 'lock-retest', 'read-retest',
+      'lock-parents', 'read-parent', 'read-request', 'update-retest:retest-1', 'create-request',
+      'transaction-commit', 'publish'
+    ])
+    expect(realtime.events).toEqual([
+      expect.objectContaining({
+        type: 'retests-changed', frontendUserId: 'front-1', date: businessDateInBeijing(),
+        sheetId: 'sheet-1', sampleBlockId: 'block-1', sampleRetestId: 'retest-1',
+        sourceClientId: 'client-1', changedById: 'sub-1', updatedAt: saved.updatedAt
+      })
+    ])
+    expect(realtime.events[0]).not.toHaveProperty('inputs')
+    expect(realtime.events[0]).not.toHaveProperty('results')
+    expect(realtime.events[0]).not.toHaveProperty('parameterSnapshot')
+  })
+
+  it('treats zero as entered data and permanently latches everFilled', async () => {
+    const { prisma, service } = setup()
+    addRetest(prisma)
+
+    const saved = await service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'save-zero', changedFields: { ironRaw: 0 }
+    }, undefined, true)
+
+    expect(saved.inputs.ironRaw).toBe(0)
+    expect(saved.everFilled).toBe(true)
+
+    const cleared = await service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'clear-zero', changedFields: { ironRaw: null }
+    }, undefined, true)
+    expect(cleared.inputs.ironRaw).toBeNull()
+    expect(cleared.everFilled).toBe(true)
+    expect(prisma.retests[0].everFilled).toBe(true)
+  })
+
+  it('merges a stale different-field save into the latest inputs', async () => {
+    const { prisma, service } = setup()
+    addRetest(prisma, {
+      inputs: { ...createEmptyRetestInputs(), ironRaw: 2 },
+      everFilled: true,
+      updatedAt: new Date('2026-08-20T09:00:05.000Z')
+    })
+
+    const saved = await service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'merge-different-field',
+      baseUpdatedAt: '2026-08-20T09:00:00.000Z',
+      baseInputs: { siliconRaw: null },
+      changedFields: { siliconRaw: 1 }
+    }, undefined, true)
+
+    expect(saved.inputs).toMatchObject({ ironRaw: 2, siliconRaw: 1 })
+    expect(saved.results).toMatchObject({ iron: 19.6, silicon: 12.649 })
+  })
+
+  it('returns 409 with the latest safe retest for a stale same-field save', async () => {
+    const { prisma, realtime, service } = setup()
+    addRetest(prisma, {
+      inputs: { ...createEmptyRetestInputs(), ironRaw: 2, sampleNumber: '不应返回' } as never,
+      everFilled: true,
+      updatedAt: new Date('2026-08-20T09:00:05.000Z')
+    })
+
+    await expect(service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'same-field-conflict',
+      baseUpdatedAt: '2026-08-20T09:00:00.000Z',
+      baseInputs: { ironRaw: null },
+      changedFields: { ironRaw: 1 }
+    }, 'client-1', true)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        code: 'SAMPLE_RETEST_INPUT_CONFLICT',
+        fields: ['ironRaw'],
+        retest: expect.objectContaining({
+          id: 'retest-1', inputs: expect.objectContaining({ ironRaw: 2 }),
+          results: expect.objectContaining({ iron: 19.6 })
+        })
+      })
+    })
+    expect(prisma.log).not.toContain('update-retest:retest-1')
+    expect(prisma.requests.size).toBe(0)
+    expect(realtime.events).toEqual([])
+  })
+
+  it('rejects historical, cross-tenant, and VOID targets before writing', async () => {
+    const history = setup()
+    addRetest(history.prisma)
+    getSheet(history.prisma).date = '2000-01-01'
+    await expect(history.service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'history-save', changedFields: { ironRaw: 1 }
+    }, undefined, true)).rejects.toBeInstanceOf(ForbiddenException)
+    expect(history.prisma.log).not.toContain('update-retest:retest-1')
+
+    const otherTenant = setup()
+    addRetest(otherTenant.prisma)
+    getSheet(otherTenant.prisma).frontendUserId = 'front-2'
+    await expect(otherTenant.service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'tenant-save', changedFields: { ironRaw: 1 }
+    }, undefined, true)).rejects.toBeInstanceOf(NotFoundException)
+    expect(otherTenant.prisma.log).not.toContain('lock-retest')
+
+    const voided = setup()
+    addRetest(voided.prisma, { status: 'VOID', everFilled: true })
+    await expect(voided.service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-save', changedFields: { ironRaw: 1 }
+    }, undefined, true)).rejects.toMatchObject({ status: 409 })
+    expect(voided.prisma.log).not.toContain('update-retest:retest-1')
+  })
+
+  it('requires completed-data authorization and allows the same parent with a grant', async () => {
+    const denied = setup()
+    addRetest(denied.prisma)
+    getBlock(denied.prisma, 'block-1').inputs.completed = true
+
+    await expect(denied.service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'completed-denied-save', changedFields: { ironRaw: 1 }
+    }, undefined, false)).rejects.toBeInstanceOf(ForbiddenException)
+    expect(denied.prisma.log).not.toContain('update-retest:retest-1')
+
+    const granted = setup()
+    addRetest(granted.prisma)
+    getBlock(granted.prisma, 'block-1').inputs.completed = true
+    await expect(granted.service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'completed-granted-save', changedFields: { ironRaw: 1 }
+    }, undefined, true)).resolves.toMatchObject({
+      sensitiveFieldsHidden: false,
+      inputs: expect.objectContaining({ ironRaw: 1 })
+    })
+  })
+
+  it('returns an immutable retry response without another write or event', async () => {
+    const { prisma, realtime, service } = setup()
+    addRetest(prisma)
+    const payload = { idempotencyKey: 'same-save', changedFields: { ironRaw: 1 } }
+
+    const first = await service.saveRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'client-1', true)
+    first.inputs.ironRaw = 99
+    first.results.iron = 99
+    const retry = await service.saveRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'client-2', true)
+
+    expect(retry.inputs.ironRaw).toBe(1)
+    expect(retry.results.iron).toBe(9.6)
+    expect(prisma.log.filter((entry) => entry === 'update-retest:retest-1')).toHaveLength(1)
+    expect(realtime.events).toHaveLength(1)
+  })
+
+  it('rejects reused save keys with changed fingerprints or operation types', async () => {
+    const changedRequest = setup()
+    addRetest(changedRequest.prisma)
+    await changedRequest.service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'save-key', changedFields: { ironRaw: 1 }
+    }, undefined, true)
+    await expect(changedRequest.service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'save-key', changedFields: { ironRaw: 2 }
+    }, undefined, true)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'SAMPLE_RETEST_IDEMPOTENCY_CONFLICT' })
+    })
+
+    const changedOperation = setup()
+    addRetest(changedOperation.prisma)
+    await changedOperation.service.createRetests(frontendUser, 'sheet-1', {
+      sampleBlockIds: ['block-2'], idempotencyKey: 'operation-key'
+    }, undefined, true)
+    await expect(changedOperation.service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'operation-key', changedFields: { ironRaw: 1 }
+    }, undefined, true)).rejects.toMatchObject({ status: 409 })
+    expect(changedOperation.prisma.log).not.toContain('update-retest:retest-1')
+  })
+
+  it('recovers the immutable committed SAVE winner after a P2002 race and emits no loser event', async () => {
+    const { prisma, realtime, service } = setup()
+    addRetest(prisma)
+    prisma.uniqueRaceWinnerFactory = (loser) => makeSaveRaceWinner(loser)
+    const payload = { idempotencyKey: 'save-race', changedFields: { ironRaw: 1 } }
+
+    const recovered = await service.saveRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'loser', true)
+
+    expect(recovered).toMatchObject({
+      id: 'retest-1', updatedAt: '2026-08-20T09:42:00.000Z',
+      inputs: expect.objectContaining({ ironRaw: 1 })
+    })
+    expect(prisma.log).toContain('transaction-rollback')
+    expect(prisma.log.at(-1)).toBe('read-request-outside')
+    expect(prisma.retests[0].inputs.ironRaw).toBeNull()
+    expect(realtime.events).toEqual([])
+
+    recovered.inputs.ironRaw = 99
+    const retry = await service.saveRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'retry', true)
+    expect(retry.inputs.ironRaw).toBe(1)
+    expect(retry.updatedAt).toBe('2026-08-20T09:42:00.000Z')
+    expect(realtime.events).toEqual([])
+  })
+
+  it('rejects a P2002 SAVE winner with a mismatched fingerprint', async () => {
+    const { prisma, realtime, service } = setup()
+    addRetest(prisma)
+    prisma.uniqueRaceWinnerFactory = (loser) => makeSaveRaceWinner(loser, {
+      requestFingerprint: 'different-save-fingerprint'
+    })
+
+    await expect(service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'mismatched-save-race', changedFields: { ironRaw: 1 }
+    }, undefined, true)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'SAMPLE_RETEST_IDEMPOTENCY_CONFLICT' })
+    })
+    expect(prisma.retests[0].inputs.ironRaw).toBeNull()
     expect(realtime.events).toEqual([])
   })
 })

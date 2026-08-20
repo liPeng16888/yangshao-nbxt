@@ -10,7 +10,13 @@ import { Prisma } from '@prisma/client'
 import { createHash } from 'node:crypto'
 import type { CurrentUser } from '../auth/current-user'
 import { businessDateInBeijing } from '../common/date'
-import { calculateResults, createEmptyRetestInputs, normalizeLabParameters } from '../common/lab'
+import {
+  calculateResults,
+  createEmptyRetestInputs,
+  hasLabDetectionInput,
+  normalizeLabDetectionInputs,
+  normalizeLabParameters
+} from '../common/lab'
 import { PrismaService } from '../prisma/prisma.service'
 import { LabSheetRealtimeService } from './lab-sheet-realtime.service'
 import { toSampleRetestDto, type SampleRetestRow } from './sample-retest.dto'
@@ -20,9 +26,16 @@ export type CreateSampleRetestsPayload = {
   idempotencyKey: string
 }
 
+export type SaveSampleRetestPayload = {
+  idempotencyKey: string
+  baseUpdatedAt?: string
+  baseInputs?: Record<string, unknown>
+  changedFields: Record<string, unknown>
+}
+
 export type SampleRetestDto = ReturnType<typeof toSampleRetestDto>
 
-type RetestOperation = 'CREATE'
+type RetestOperation = 'CREATE' | 'SAVE' | 'DELETE' | 'VOID'
 
 type WritableSheet = {
   id: string
@@ -50,7 +63,7 @@ type SampleRetestWriteRequestRow = {
 }
 
 type SampleRetestWriteRequestData = Omit<SampleRetestWriteRequestRow, 'responseSnapshot'> & {
-  responseSnapshot: Prisma.InputJsonArray
+  responseSnapshot: Prisma.InputJsonArray | Prisma.InputJsonObject
 }
 
 type CreateSampleRetestData = {
@@ -71,6 +84,7 @@ type SampleRetestTransaction = {
     findUnique(args: { where: { id: string } }): Promise<WritableSheet | null>
   }
   sampleBlock: {
+    findUnique(args: { where: { id: string } }): Promise<WritableSampleBlock | null>
     findMany(args: {
       where: { id: { in: string[] }; sheetId: string }
       orderBy: { id: 'asc' }
@@ -82,6 +96,16 @@ type SampleRetestTransaction = {
   }
   sampleRetest: {
     create(args: { data: CreateSampleRetestData }): Promise<SampleRetestRow>
+    findUnique(args: { where: { id: string } }): Promise<SampleRetestRow | null>
+    update(args: {
+      where: { id: string }
+      data: {
+        inputs: Prisma.InputJsonObject
+        results: Prisma.InputJsonObject
+        everFilled: boolean
+        updatedById: string
+      }
+    }): Promise<SampleRetestRow>
   }
   sampleRetestWriteRequest: {
     findUnique(args: { where: { idempotencyKey: string } }): Promise<SampleRetestWriteRequestRow | null>
@@ -107,6 +131,22 @@ type CreateRetestsOutcome =
       changed: true
       sheet: Pick<WritableSheet, 'frontendUserId' | 'date'>
     }
+
+type SaveRetestOutcome =
+  | { response: SampleRetestDto; changed: false }
+  | {
+      response: SampleRetestDto
+      changed: true
+      sheet: Pick<WritableSheet, 'frontendUserId' | 'date'>
+      sampleBlockId: string
+    }
+
+type WritableRetestContext = {
+  sheet: WritableSheet
+  block: WritableSampleBlock
+  retest: SampleRetestRow
+  parentCompleted: boolean
+}
 
 @Injectable()
 export class SampleRetestsService {
@@ -162,7 +202,10 @@ export class SampleRetestsService {
           tx.sampleRetestWriteRequest,
           idempotencyKey,
           'CREATE',
-          requestFingerprint
+          requestFingerprint,
+          (value): value is SampleRetestDto[] => (
+            Array.isArray(value) && value.every((item) => this.isSampleRetestDto(item))
+          )
         )
         if (duplicate) return { response: duplicate, changed: false }
 
@@ -218,7 +261,10 @@ export class SampleRetestsService {
         this.prisma.sampleRetestWriteRequest,
         idempotencyKey,
         'CREATE',
-        requestFingerprint
+        requestFingerprint,
+        (value): value is SampleRetestDto[] => (
+          Array.isArray(value) && value.every((item) => this.isSampleRetestDto(item))
+        )
       )
       if (!duplicate) throw error
       outcome = { response: duplicate, changed: false }
@@ -241,6 +287,201 @@ export class SampleRetestsService {
       }
     }
     return outcome.response
+  }
+
+  async saveRetest(
+    user: CurrentUser,
+    sheetId: string,
+    retestId: string,
+    payload: SaveSampleRetestPayload,
+    sourceClientId?: string,
+    canViewCompletedSensitiveData = false
+  ): Promise<SampleRetestDto> {
+    const idempotencyKey = this.requireIdempotencyKey(payload.idempotencyKey)
+    const changedFields = normalizeLabDetectionInputs(payload.changedFields)
+    const baseInputs = normalizeLabDetectionInputs(payload.baseInputs)
+    const baseUpdatedAt = typeof payload.baseUpdatedAt === 'string'
+      ? payload.baseUpdatedAt.trim()
+      : undefined
+    const fingerprintPayload = {
+      idempotencyKey,
+      ...(baseUpdatedAt ? { baseUpdatedAt } : {}),
+      ...(payload.baseInputs === undefined ? {} : { baseInputs }),
+      changedFields
+    }
+    const requestFingerprint = this.writeFingerprint(
+      'SAVE',
+      user,
+      sheetId,
+      fingerprintPayload,
+      retestId
+    )
+    let outcome: SaveRetestOutcome
+
+    try {
+      outcome = await this.prisma.$transaction<SaveRetestOutcome>(async (tx) => {
+        const context = await this.loadWritableRetest(
+          tx,
+          user,
+          sheetId,
+          retestId,
+          canViewCompletedSensitiveData
+        )
+        const duplicate = await this.resolveWriteRequest(
+          tx.sampleRetestWriteRequest,
+          idempotencyKey,
+          'SAVE',
+          requestFingerprint,
+          (value): value is SampleRetestDto => this.isSampleRetestDto(value)
+        )
+        if (duplicate) return { response: duplicate, changed: false }
+
+        this.assertNoRetestInputConflict(
+          context,
+          baseUpdatedAt,
+          baseInputs,
+          changedFields,
+          canViewCompletedSensitiveData
+        )
+        const nextInputs = {
+          ...normalizeLabDetectionInputs(context.retest.inputs),
+          ...changedFields
+        }
+        const saved = await tx.sampleRetest.update({
+          where: { id: context.retest.id },
+          data: {
+            inputs: this.toJsonObject(nextInputs),
+            results: this.toJsonObject(calculateResults(
+              nextInputs,
+              normalizeLabParameters(context.retest.parameterSnapshot)
+            )),
+            everFilled: context.retest.everFilled || hasLabDetectionInput(nextInputs),
+            updatedById: user.id
+          }
+        })
+        const response = toSampleRetestDto(saved, {
+          parentCompleted: context.parentCompleted,
+          sheetReadonly: false,
+          canViewCompletedSensitiveData
+        })
+        await tx.sampleRetestWriteRequest.create({
+          data: {
+            idempotencyKey,
+            requestFingerprint,
+            operation: 'SAVE',
+            sheetId: context.sheet.id,
+            sampleBlockId: context.block.id,
+            sampleRetestId: context.retest.id,
+            responseSnapshot: this.toJsonObject(response)
+          }
+        })
+        return {
+          response,
+          changed: true,
+          sheet: context.sheet,
+          sampleBlockId: context.block.id
+        }
+      })
+    } catch (error) {
+      if (!this.isPrismaUniqueConflict(error)) throw error
+      const duplicate = await this.resolveWriteRequest(
+        this.prisma.sampleRetestWriteRequest,
+        idempotencyKey,
+        'SAVE',
+        requestFingerprint,
+        (value): value is SampleRetestDto => this.isSampleRetestDto(value)
+      )
+      if (!duplicate) throw error
+      outcome = { response: duplicate, changed: false }
+    }
+
+    if (outcome.changed) {
+      this.realtime.publish({
+        type: 'retests-changed',
+        frontendUserId: outcome.sheet.frontendUserId,
+        date: outcome.sheet.date,
+        sheetId,
+        sampleBlockId: outcome.sampleBlockId,
+        sampleRetestId: outcome.response.id,
+        sourceClientId,
+        changedById: user.id,
+        updatedAt: outcome.response.updatedAt
+      })
+    }
+    return outcome.response
+  }
+
+  private async loadWritableRetest(
+    tx: SampleRetestTransaction,
+    user: CurrentUser,
+    sheetId: string,
+    retestId: string,
+    canViewCompletedSensitiveData: boolean
+  ): Promise<WritableRetestContext> {
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "LabSheet" WHERE "id" = ${sheetId} FOR UPDATE
+    `)
+    const sheet = await tx.labSheet.findUnique({ where: { id: sheetId } })
+    if (!sheet || sheet.frontendUserId !== user.dataOwnerId) {
+      throw new NotFoundException('未找到表格')
+    }
+    this.assertSheetEditable(sheet)
+
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "SampleRetest" WHERE "id" = ${retestId} FOR UPDATE
+    `)
+    const retest = await tx.sampleRetest.findUnique({ where: { id: retestId } })
+    if (!retest) throw new NotFoundException('未找到复样')
+
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "SampleBlock" WHERE "id" = ${retest.sampleBlockId} FOR UPDATE
+    `)
+    const block = await tx.sampleBlock.findUnique({ where: { id: retest.sampleBlockId } })
+    if (!block || block.sheetId !== sheet.id) throw new NotFoundException('未找到复样')
+
+    const parentCompleted = this.isCompleted(block.inputs)
+    if (parentCompleted && !canViewCompletedSensitiveData) {
+      throw new ForbiddenException('已完成样品需要验证后才能修改复样')
+    }
+    if (retest.status !== 'ACTIVE') {
+      throw new ConflictException({
+        code: 'SAMPLE_RETEST_NOT_ACTIVE',
+        message: '已作废的复样不能再修改',
+        retest: toSampleRetestDto(retest, {
+          parentCompleted,
+          sheetReadonly: false,
+          canViewCompletedSensitiveData
+        })
+      })
+    }
+    return { sheet, block, retest, parentCompleted }
+  }
+
+  private assertNoRetestInputConflict(
+    context: WritableRetestContext,
+    baseUpdatedAt: string | undefined,
+    baseInputs: Record<string, number | null>,
+    changedFields: Record<string, number | null>,
+    canViewCompletedSensitiveData: boolean
+  ) {
+    const baseTime = typeof baseUpdatedAt === 'string' ? Date.parse(baseUpdatedAt) : NaN
+    if (!Number.isFinite(baseTime) || context.retest.updatedAt.getTime() <= baseTime) return
+    const currentInputs = normalizeLabDetectionInputs(context.retest.inputs)
+    const conflicts = Object.keys(changedFields).filter((field) => (
+      !Object.prototype.hasOwnProperty.call(baseInputs, field) ||
+      (currentInputs[field] ?? null) !== (baseInputs[field] ?? null)
+    ))
+    if (!conflicts.length) return
+    throw new ConflictException({
+      code: 'SAMPLE_RETEST_INPUT_CONFLICT',
+      message: '该复样已被另一台设备修改，请确认后再保存',
+      fields: conflicts,
+      retest: toSampleRetestDto(context.retest, {
+        parentCompleted: context.parentCompleted,
+        sheetReadonly: false,
+        canViewCompletedSensitiveData
+      })
+    })
   }
 
   private requireIdempotencyKey(value: unknown) {
@@ -268,30 +509,34 @@ export class SampleRetestsService {
     operation: RetestOperation,
     user: CurrentUser,
     sheetId: string,
-    payload: CreateSampleRetestsPayload
+    payload: unknown,
+    sampleRetestId?: string
   ) {
-    return createHash('sha256').update(this.stableJson({
+    const request = {
       operation,
       actorUserId: user.id,
       dataOwnerId: user.dataOwnerId,
       sheetId,
+      ...(sampleRetestId === undefined ? {} : { sampleRetestId }),
       payload
-    })).digest('hex')
+    }
+    return createHash('sha256').update(this.stableJson(request)).digest('hex')
   }
 
-  private async resolveWriteRequest(
+  private async resolveWriteRequest<T>(
     reader: SampleRetestWriteRequestReader,
     idempotencyKey: string,
     operation: RetestOperation,
-    requestFingerprint: string
-  ): Promise<SampleRetestDto[] | null> {
+    requestFingerprint: string,
+    isResponse: (value: unknown) => value is T
+  ): Promise<T | null> {
     const request = await reader.findUnique({ where: { idempotencyKey } })
     if (!request) return null
     if (request.operation !== operation || request.requestFingerprint !== requestFingerprint) {
       this.idempotencyConflict()
     }
     const response = structuredClone(request.responseSnapshot)
-    if (!Array.isArray(response) || !response.every((item) => this.isSampleRetestDto(item))) {
+    if (!isResponse(response)) {
       throw new ConflictException({
         code: 'SAMPLE_RETEST_IDEMPOTENCY_STATE_INVALID',
         message: '幂等复样记录不完整，请使用新的请求编号'
@@ -349,6 +594,12 @@ export class SampleRetestsService {
 
   private toJsonArray(values: unknown[]): Prisma.InputJsonArray {
     return values.map((value) => this.toJsonValue(value))
+  }
+
+  private toJsonObject(value: unknown): Prisma.InputJsonObject {
+    const json = this.toJsonValue(value)
+    if (!this.isPlainObject(json)) throw new BadRequestException('复样数据格式错误')
+    return json as Prisma.InputJsonObject
   }
 
   private toJsonValue(value: unknown): Prisma.InputJsonValue | null {
