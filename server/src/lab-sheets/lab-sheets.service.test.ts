@@ -408,6 +408,19 @@ describe('LabSheetsService default sheet selection', () => {
     })
   })
 
+  it('redacts nested retests for a completed parent without a completed-data grant', async () => {
+    const today = businessDateInBeijing()
+    const block = makeBlock(1, { completed: true })
+    block.retests = [makeRetest(1, { inputs: { ironRaw: 1 }, results: { iron: 999 } })]
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+
+    const result = await service.getSheetForFrontendUser('front-1', today, false)
+
+    expect(result.sampleBlocks[0].retests[0]).toMatchObject({ sensitiveFieldsHidden: true })
+    expect(result.sampleBlocks[0].retests[0].inputs.ironRaw).toBeNull()
+    expect(result.sampleBlocks[0].retests[0].results.iron).toBeNull()
+  })
+
   it('keeps today sheet editable even when it was stored readonly before today', async () => {
     const today = businessDateInBeijing()
     const storedReadonlySheet = {
@@ -543,6 +556,38 @@ describe('LabSheetsService default sheet selection', () => {
     expect((result.inputs as Record<string, unknown>).sampleNumber).toBe('NEW')
     expect((result.inputs as Record<string, unknown>).moisture).toBe(4.268)
     expect((result.inputs as Record<string, unknown>).completed).toBe(true)
+  })
+
+  it('returns ordered retests when saving a parent sample', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, { note: 'old' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-20T00:00:00.000Z'),
+      retests: [makeRetest(1), makeRetest(2)]
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockImplementation(async ({ include }) => (
+      include ? block : { ...block, retests: undefined }
+    ))
+    prisma.sampleBlock.update.mockImplementation(async ({ data, include }) => {
+      Object.assign(block, data)
+      return include ? block : { ...block, retests: undefined }
+    })
+
+    const result = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'save-retests-1', changedFields: { note: 'new' } }
+    )
+
+    expect((result.retests as Array<{ sequence: number }>).map((retest) => retest.sequence)).toEqual([1, 2])
+    expect(prisma.sampleBlock.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      include: { retests: { orderBy: { sequence: 'asc' } } }
+    }))
+    expect(prisma.sampleBlock.update).toHaveBeenCalledWith(expect.objectContaining({
+      include: { retests: { orderBy: { sequence: 'asc' } } }
+    }))
   })
 
   it('atomically synchronizes a new prepaid consumption before saving the sample', async () => {

@@ -219,7 +219,10 @@ export class LabSheetsService {
         const duplicate = await this.resolveLabSaveRequest(tx as unknown as LabSaveRequestReader, idempotencyKey, requestFingerprint)
         if (duplicate) return { response: duplicate, changed: false }
         this.assertSheetEditable(sheet)
-        const block = await tx.sampleBlock.findUnique({ where: { id: blockId } })
+        const block = await tx.sampleBlock.findUnique({
+          where: { id: blockId },
+          include: { retests: { orderBy: { sequence: 'asc' } } }
+        })
         if (!block || block.sheetId !== sheet.id) throw new NotFoundException('未找到样品')
         const oldInputs = (block.inputs || {}) as Record<string, unknown>
         const changedFields = this.normalizeChangedFields(blockPayload)
@@ -273,7 +276,8 @@ export class LabSheetsService {
             inputs: nextInputs as Prisma.InputJsonValue,
             results: results as Prisma.InputJsonValue,
             parameterSnapshot: parameters as Prisma.InputJsonValue
-          }
+          },
+          include: { retests: { orderBy: { sequence: 'asc' } } }
         })
         await this.recordInputChanges(tx, sheet.id, block.id, sheet.frontendUserId, user.id, oldInputs, nextInputs, blockPayload.changeLogFields)
         const response = this.toStableBlockDto(saved, canViewCompletedSensitiveData)
