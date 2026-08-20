@@ -49,7 +49,7 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
   const prisma = {
     sampleBlock: { findUnique: vi.fn() },
     customer: { findMany: vi.fn() },
-    labSampleChangeRequest: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() }
+    labSampleChangeRequest: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn() }
   }
   const auth = { assertAccessGrant: vi.fn() }
   let service: LabSampleChangeRequestsService
@@ -65,7 +65,7 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
       id: 'request-1', ...data, status: LabSampleChangeRequestStatus.PENDING,
       reviewRemark: null, reviewedAt: null, withdrawnAt: null, createdAt: new Date(), updatedAt: new Date()
     }))
-    prisma.labSampleChangeRequest.update.mockImplementation(async ({ data }: any) => makeRequest(data))
+    prisma.labSampleChangeRequest.updateMany.mockResolvedValue({ count: 1 })
     service = new LabSampleChangeRequestsService(prisma as never, auth as never)
   })
 
@@ -156,12 +156,21 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
   it('allows only the owner to withdraw a pending request and preserves its record', async () => {
     prisma.labSampleChangeRequest.findFirst.mockResolvedValue(makeRequest({ status: LabSampleChangeRequestStatus.PENDING }))
     await service.withdrawForFrontend(frontendUser, 'request-1', grants)
-    expect(prisma.labSampleChangeRequest.update).toHaveBeenCalledWith({
-      where: { id: 'request-1' }, data: { status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt: expect.any(Date) }, include: expect.any(Object)
+    expect(prisma.labSampleChangeRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: 'request-1', frontendUserId: 'front-1', status: LabSampleChangeRequestStatus.PENDING },
+      data: { status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt: expect.any(Date) }
     })
 
     expect(prisma.labSampleChangeRequest.findFirst).toHaveBeenLastCalledWith(expect.objectContaining({ where: {
       id: 'request-1', frontendUserId: 'front-1', status: LabSampleChangeRequestStatus.PENDING
     } }))
+  })
+
+  it('rejects a withdrawal race when its pending compare-and-set updates no row', async () => {
+    prisma.labSampleChangeRequest.findFirst.mockResolvedValue(makeRequest({ status: LabSampleChangeRequestStatus.PENDING }))
+    prisma.labSampleChangeRequest.updateMany.mockResolvedValue({ count: 0 })
+
+    await expect(service.withdrawForFrontend(frontendUser, 'request-1', grants)).rejects.toBeInstanceOf(ConflictException)
+    expect(prisma.labSampleChangeRequest.updateMany).toHaveBeenCalledTimes(1)
   })
 })

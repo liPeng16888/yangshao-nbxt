@@ -132,12 +132,13 @@ export class LabSampleChangeRequestsService {
       where: { id, frontendUserId: user.id, status: LabSampleChangeRequestStatus.PENDING }
     })
     if (!request) throw new NotFoundException('未找到待撤回的修改申请')
-    const updated = await this.prisma.labSampleChangeRequest.update({
-      where: { id: request.id },
-      data: { status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt: new Date() },
-      include: {}
+    const withdrawnAt = new Date()
+    const result = await this.prisma.labSampleChangeRequest.updateMany({
+      where: { id: request.id, frontendUserId: user.id, status: LabSampleChangeRequestStatus.PENDING },
+      data: { status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt }
     })
-    return this.toSummary(updated as RequestRow)
+    if (!result.count) throw new ConflictException('修改申请状态已变更，请刷新后重试')
+    return this.toSummary({ ...request, status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt } as RequestRow)
   }
 
   private async canonicalizePayerCustomers(frontendUserId: string, changes: RequestedLabSampleChanges): Promise<CanonicalRequestedChanges> {
