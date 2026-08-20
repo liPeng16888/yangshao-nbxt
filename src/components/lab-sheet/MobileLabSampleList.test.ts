@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
-import { defineComponent, h, nextTick, ref } from 'vue'
+import { defineComponent, h, nextTick, reactive, ref } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import type { LabSampleInput, SampleBlock, SampleRetest } from '@/types/labSheet'
@@ -365,6 +365,43 @@ describe('MobileLabSampleList', () => {
     expect(expandedBlockIds(wrapper)).toContain('block-2')
     expect(wrapper.get('[data-testid="mobile-retests-toggle"]').attributes('aria-expanded')).toBe('true')
     expect((document.activeElement as HTMLElement | null)?.closest('[data-retest-id]')?.getAttribute('data-retest-id')).toBe('retest-2')
+    expect(scrollSpy).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('consumes a list-level retest highlight after the target first appears', async () => {
+    const scrollSpy = installScrollIntoViewMock()
+    const focusSpy = vi.spyOn(HTMLInputElement.prototype, 'focus')
+    const parent = reactive(makeBlock('block-1', 1, { elementNote: '铁' }))
+    const wrapper = mountList({
+      blocks: [parent],
+      highlightRetestId: 'retest-3'
+    }, document.body)
+
+    await wrapper.get('.mobile-sample-card__toggle').trigger('click')
+    expect(expandedBlockIds(wrapper)).toEqual([])
+    parent.retests.push(makeRetest(parent.id, 3))
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(expandedBlockIds(wrapper)).toEqual(['block-1'])
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+
+    await wrapper.get('.mobile-sample-card__toggle').trigger('click')
+    parent.retests.push(makeRetest(parent.id, 2))
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(expandedBlockIds(wrapper)).toEqual([])
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+
+    await wrapper.setProps({ highlightRetestId: '' })
+    await wrapper.setProps({ highlightRetestId: 'retest-3' })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(expandedBlockIds(wrapper)).toEqual(['block-1'])
+    expect(focusSpy).toHaveBeenCalledTimes(2)
     expect(scrollSpy).toHaveBeenCalled()
     wrapper.unmount()
   })

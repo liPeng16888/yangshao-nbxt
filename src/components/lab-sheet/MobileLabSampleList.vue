@@ -384,6 +384,7 @@ const expandedBlockIds = ref(new Set(initiallyExpandedBlockId ? [initiallyExpand
 const expandedGroupKeysByBlock = ref(new Map<string, Set<string>>())
 const focusedFieldValues = new Map<string, unknown>()
 const numericInputDrafts = ref(new Map<string, string>())
+let consumedRetestHighlightId = ''
 
 watch(
   () => props.highlightBlockId,
@@ -394,15 +395,20 @@ watch(
 )
 
 watch(
-  () => [
-    props.highlightRetestId || '',
-    props.blocks.flatMap((block) => block.retests.map((retest) => `${block.id}:${retest.id}`)).join('|')
-  ] as const,
-  ([retestId]) => {
+  [
+    () => props.highlightRetestId || '',
+    () => props.blocks.flatMap((block) => block.retests.map((retest) => `${block.id}:${retest.id}`)).join('|')
+  ],
+  ([retestId], [previousRetestId]) => {
+    if (retestId !== previousRetestId) consumedRetestHighlightId = ''
     if (!retestId) return
+    if (consumedRetestHighlightId === retestId) return
     const blockId = findRetestParentId(retestId)
-    if (blockId) expandBlock(blockId, false)
-  }
+    if (!blockId) return
+    expandBlock(blockId, false)
+    consumedRetestHighlightId = retestId
+  },
+  { immediate: true }
 )
 
 watch(

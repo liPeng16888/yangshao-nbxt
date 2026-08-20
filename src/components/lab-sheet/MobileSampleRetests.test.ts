@@ -213,19 +213,43 @@ describe('MobileSampleRetests', () => {
     expect(wrapper.get('[data-testid="void-retest-retest-1"]').text()).toBe('作废')
   })
 
-  it('disables a pending lifecycle action with a mobile busy state', async () => {
-    const wrapper = mountRetests(makeParent([makeRetest(2)]), {
-      pendingRetestActionIds: ['retest-2']
+  it('locks only the pending retest card until its deferred lifecycle action settles', async () => {
+    const wrapper = mountRetests(makeParent([makeRetest(1), makeRetest(2)]), {
+      pendingRetestActionIds: ['retest-1']
     })
     await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
-    const card = wrapper.get('[data-retest-id="retest-2"]')
-    const button = card.get('[data-testid="void-retest-retest-2"]')
+    const pendingCard = wrapper.get('[data-retest-id="retest-1"]')
+    const pendingButton = pendingCard.get('[data-testid="delete-retest-retest-1"]')
+    const pendingInput = pendingCard.get<HTMLInputElement>('input[data-retest-field="ironRaw"]')
 
-    expect(card.attributes('aria-busy')).toBe('true')
-    expect(button.attributes('disabled')).toBeDefined()
-    expect(button.text()).toBe('处理中…')
-    await button.trigger('click')
-    expect(wrapper.emitted('void')).toBeUndefined()
+    expect(pendingCard.attributes('aria-busy')).toBe('true')
+    expect(pendingCard.classes()).toContain('is-locked')
+    expect(pendingInput.attributes('disabled')).toBeDefined()
+    expect(pendingButton.attributes('disabled')).toBeDefined()
+    expect(pendingButton.text()).toBe('处理中…')
+    pendingInput.element.value = '9'
+    await pendingInput.trigger('input')
+    await pendingInput.trigger('blur')
+    await pendingButton.trigger('click')
+    expect(wrapper.emitted('update')).toBeUndefined()
+    expect(wrapper.emitted('fieldCommit')).toBeUndefined()
+    expect(wrapper.emitted('delete')).toBeUndefined()
+
+    const independentInput = wrapper.get('[data-retest-id="retest-2"] input[data-retest-field="ironRaw"]')
+    expect(independentInput.attributes('disabled')).toBeUndefined()
+    await independentInput.trigger('focus')
+    await independentInput.setValue('2')
+    await independentInput.trigger('blur')
+    expect(wrapper.emitted('update')).toContainEqual(['retest-2', { ironRaw: 2 }])
+    expect(wrapper.emitted('fieldCommit')).toContainEqual(['retest-2', 'ironRaw', 0.5, 2])
+
+    await wrapper.setProps({ pendingRetestActionIds: [] })
+    expect(pendingInput.attributes('disabled')).toBeUndefined()
+    await pendingInput.trigger('focus')
+    await pendingInput.setValue('1')
+    await pendingInput.trigger('blur')
+    expect(wrapper.emitted('update')).toContainEqual(['retest-1', { ironRaw: 1 }])
+    expect(wrapper.emitted('fieldCommit')).toContainEqual(['retest-1', 'ironRaw', null, 1])
   })
 
   it('expands, scrolls, and focuses only the latest highlighted retest after rapid changes', async () => {
@@ -271,6 +295,47 @@ describe('MobileSampleRetests', () => {
 
     expect(focusSpy).not.toHaveBeenCalled()
     expect(scrollSpy).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('waits for an absent highlight once, consumes it, and ignores later sibling collection changes', async () => {
+    const focusSpy = vi.spyOn(HTMLInputElement.prototype, 'focus')
+    const scrollSpy = installScrollIntoViewMock()
+    const parent = reactive(makeParent([makeRetest(1)]))
+    const wrapper = mount(MobileSampleRetests, {
+      attachTo: document.body,
+      props: { parent, highlightRetestId: 'retest-3' }
+    })
+    await nextTick()
+    await nextTick()
+    expect(focusSpy).not.toHaveBeenCalled()
+
+    parent.retests.push(makeRetest(3))
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.get('[data-testid="mobile-retests-toggle"]').attributes('aria-expanded')).toBe('true')
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+    expect(scrollSpy).toHaveBeenCalledTimes(1)
+
+    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    expect(wrapper.get('[data-testid="mobile-retests-toggle"]').attributes('aria-expanded')).toBe('false')
+    parent.retests.push(makeRetest(2))
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.get('[data-testid="mobile-retests-toggle"]').attributes('aria-expanded')).toBe('false')
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+    expect(scrollSpy).toHaveBeenCalledTimes(1)
+
+    await wrapper.setProps({ highlightRetestId: '' })
+    await wrapper.setProps({ highlightRetestId: 'retest-3' })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.get('[data-testid="mobile-retests-toggle"]').attributes('aria-expanded')).toBe('true')
+    expect(focusSpy).toHaveBeenCalledTimes(2)
+    expect(scrollSpy).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 

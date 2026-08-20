@@ -171,7 +171,7 @@ function isSensitiveHidden(retest: SampleRetest) {
   return Boolean(props.sensitiveHidden || props.parent.sensitiveFieldsHidden || retest.sensitiveFieldsHidden)
 }
 
-function isLocked(retest: SampleRetest) {
+function isBaseLocked(retest: SampleRetest) {
   return Boolean(
     props.readonly ||
     props.parent.readonly ||
@@ -181,8 +181,12 @@ function isLocked(retest: SampleRetest) {
   )
 }
 
+function isLocked(retest: SampleRetest) {
+  return isBaseLocked(retest) || isActionPending(retest.id)
+}
+
 function canManage(retest: SampleRetest) {
-  return retest.status === 'ACTIVE' && !isLocked(retest)
+  return retest.status === 'ACTIVE' && !isBaseLocked(retest)
 }
 
 function isBlank(retest: SampleRetest) {
@@ -210,12 +214,14 @@ function formatResult(retest: SampleRetest, field: NonNullable<RetestGridColumn[
 }
 
 function handleFocus(retest: SampleRetest, field: SampleRetestInputField, event: Event) {
+  if (isLocked(retest)) return
   const key = inputKey(retest.id, field)
   focusedValues.set(key, retest.inputs[field] ?? null)
   numericInputDrafts.value.set(key, (event.target as HTMLInputElement).value)
 }
 
 function handleInput(retest: SampleRetest, field: SampleRetestInputField, event: Event) {
+  if (isLocked(retest)) return
   const rawValue = (event.target as HTMLInputElement).value
   numericInputDrafts.value.set(inputKey(retest.id, field), rawValue)
   emit('update', retest.id, { [field]: parseNumericInput(rawValue) })
@@ -223,6 +229,11 @@ function handleInput(retest: SampleRetest, field: SampleRetestInputField, event:
 
 function handleBlur(retest: SampleRetest, field: SampleRetestInputField, event: Event) {
   const key = inputKey(retest.id, field)
+  if (isLocked(retest)) {
+    focusedValues.delete(key)
+    numericInputDrafts.value.delete(key)
+    return
+  }
   const oldValue = focusedValues.has(key) ? focusedValues.get(key) : retest.inputs[field] ?? null
   const newValue = parseNumericInput((event.target as HTMLInputElement).value)
   focusedValues.delete(key)
@@ -247,12 +258,19 @@ function formatTimestamp(value?: string) {
 }
 
 let highlightGeneration = 0
+let consumedHighlightRetestId = ''
 
 watch(
-  () => [props.highlightRetestId || '', props.parent.retests.map((retest) => retest.id).join('|')] as const,
-  async ([highlightRetestId]) => {
+  [
+    () => props.highlightRetestId || '',
+    () => props.parent.retests.map((retest) => retest.id).join('|')
+  ],
+  async ([highlightRetestId], [previousHighlightRetestId]) => {
     const generation = ++highlightGeneration
-    if (!highlightRetestId || !props.parent.retests.some((retest) => retest.id === highlightRetestId)) return
+    if (highlightRetestId !== previousHighlightRetestId) consumedHighlightRetestId = ''
+    if (!highlightRetestId) return
+    if (consumedHighlightRetestId === highlightRetestId) return
+    if (!props.parent.retests.some((retest) => retest.id === highlightRetestId)) return
     expanded.value = true
     await nextTick()
     await nextTick()
@@ -264,6 +282,7 @@ watch(
     if (!card) return
     card.scrollIntoView?.({ behavior: 'smooth', block: 'center', inline: 'nearest' })
     card.querySelector<HTMLInputElement>('input[data-retest-field]:not(:disabled)')?.focus()
+    consumedHighlightRetestId = highlightRetestId
   },
   { immediate: true }
 )
