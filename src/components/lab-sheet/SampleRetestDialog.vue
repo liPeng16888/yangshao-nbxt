@@ -21,7 +21,7 @@
         v-for="block in blocks"
         :key="block.id"
         :value="block.id"
-        :disabled="saving || requiresCompletedDataAccess(block)"
+        :disabled="saving || Boolean(getBlockDisabledReason(block))"
         border
       >
         <span class="retest-option__number">{{ getBlockNumber(block) }}</span>
@@ -30,7 +30,9 @@
           {{ block.inputs.completed ? '已完成' : '未完成' }}
         </el-tag>
         <span class="retest-option__count">复样 {{ block.retests.length }} 组</span>
-        <span v-if="requiresCompletedDataAccess(block)" class="retest-option__reason">验证后可复样</span>
+        <span v-if="getBlockDisabledReason(block)" class="retest-option__reason">
+          {{ getBlockDisabledReason(block) }}
+        </span>
       </el-checkbox>
     </el-checkbox-group>
 
@@ -86,8 +88,10 @@ function getSampleName(block: SampleBlock) {
   return block.inputs.sampleNumber?.trim() || '未填写样品名称'
 }
 
-function requiresCompletedDataAccess(block: SampleBlock) {
-  return Boolean(block.inputs.completed && block.sensitiveFieldsHidden)
+function getBlockDisabledReason(block: SampleBlock) {
+  if (block.inputs.completed && block.sensitiveFieldsHidden) return '验证后可复样'
+  if (block.readonly) return '只读样品不可复样'
+  return ''
 }
 
 function requestClose() {

@@ -115,7 +115,8 @@ function makeBlock(overrides: {
 const blocks = [
   makeBlock({ id: 'block-1', index: 1, sequence: '001', sampleNumber: '甲样', retestCount: 2 }),
   makeBlock({ id: 'block-2', index: 2, completed: true }),
-  makeBlock({ id: 'block-3', index: 3, sampleNumber: '密样', completed: true, sensitiveFieldsHidden: true, retestCount: 1 })
+  makeBlock({ id: 'block-3', index: 3, sampleNumber: '密样', completed: true, sensitiveFieldsHidden: true, retestCount: 1 }),
+  { ...makeBlock({ id: 'block-4', index: 4, sampleNumber: '历史样' }), readonly: true }
 ]
 
 function mountDialog(options: { visible?: boolean; saving?: boolean } = {}) {
@@ -158,6 +159,14 @@ describe('SampleRetestDialog', () => {
     expect(inputs[1].attributes('disabled')).toBeUndefined()
     expect(inputs[2].attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('验证后可复样')
+  })
+
+  it('disables readonly parents with an explicit readonly reason', () => {
+    const wrapper = mountDialog()
+    const inputs = wrapper.findAll('input[type="checkbox"]')
+
+    expect(inputs[3].attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('只读样品不可复样')
   })
 
   it('creates one retest for each selected parent', async () => {

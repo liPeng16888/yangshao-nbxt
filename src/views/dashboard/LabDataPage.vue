@@ -219,6 +219,16 @@ import { businessDateInBeijing, millisecondsUntilNextBusinessDayInBeijing } from
 import { defaultLabReportSmsTemplate, defaultLabReportTemplate } from '@/utils/labReport'
 
 type GenerationMode = 'report' | 'sms' | 'bulkFill' | null
+type RetestCreationContext = {
+  sheetId: string
+  sheetDate: string
+  selectedDate: string
+  businessDate: string
+  routeDate: string
+  routeBlock: string
+  actorId: string
+  ownerId: string
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -252,6 +262,7 @@ const reportTemplate = ref<LabReportTemplate>({
 const smsTemplate = ref<LabReportSmsTemplate>({ ...defaultLabReportSmsTemplate })
 let businessDayBoundaryTimer: number | undefined
 let businessDayPreflushTimer: number | undefined
+let retestCreationGeneration = 0
 
 const isPageReadonly = computed(() => Boolean(
   labStore.sheet?.readonly || switchingBusinessDay.value || labStore.applyingParameters
@@ -260,6 +271,14 @@ const canViewCompletedSensitiveData = computed(() => {
   accessGuard.accessSessionRevision
   return accessGuard.hasFeatureAccess('COMPLETED_SAMPLE_DATA')
 })
+const retestActorContextKey = computed(() => {
+  const user = authStore.user
+  return JSON.stringify([user?.id || '', user?.dataOwnerId || user?.id || ''])
+})
+const loadedSheetContextKey = computed(() => JSON.stringify([
+  labStore.sheet?.id || '',
+  labStore.sheet?.date || ''
+]))
 
 const autoSaveText = computed(() => {
   if (labStore.autoSaveStatus === 'pending') return '等待自动保存'
@@ -354,6 +373,14 @@ watch(selectionMode, (selecting) => {
   }
 })
 
+watch(retestActorContextKey, (current, previous) => {
+  if (current !== previous) invalidateRetestCreationContext()
+})
+
+watch(loadedSheetContextKey, (current, previous) => {
+  if (current !== previous) invalidateRetestCreationContext()
+})
+
 watch(
   () => [route.query.date, route.query.block],
   () => {
@@ -417,6 +444,7 @@ async function checkBusinessDayBoundary() {
   }
   if (switchingBusinessDay.value) return
   switchingBusinessDay.value = true
+  invalidateRetestCreationContext()
   try {
     const loaded = await labStore.loadCurrentSheet()
     if (loaded === false) {
@@ -426,7 +454,6 @@ async function checkBusinessDayBoundary() {
     }
     selectedDate.value = labStore.sheet?.date || businessDate
     highlightBlockId.value = ''
-    highlightRetestId.value = ''
     scheduleBusinessDayBoundary()
   } catch {
     ElMessage.error('新业务日表格加载失败，已保留当前表格')
@@ -447,7 +474,7 @@ function handleBusinessDayVisibilityChange() {
 async function loadSheetFromRoute() {
   const queryDate = typeof route.query.date === 'string' ? route.query.date : ''
   const queryBlock = typeof route.query.block === 'string' ? route.query.block : ''
-  highlightRetestId.value = ''
+  invalidateRetestCreationContext()
   if (queryDate) {
     const allowed = await requestHistoricalDateAccess(queryDate, () => loadRouteSheetFromQuery(queryDate, queryBlock))
     if (!allowed) {
@@ -492,7 +519,7 @@ async function loadRouteSheetFromQuery(queryDate: string, queryBlock: string) {
 async function loadSelectedDate(value: string) {
   selectedDate.value = value
   highlightBlockId.value = ''
-  highlightRetestId.value = ''
+  invalidateRetestCreationContext()
   const loaded = await labStore.loadSheetByDate(value)
   if (!loaded) {
     selectedDate.value = labStore.sheet?.date || businessDateInBeijing()
@@ -589,17 +616,47 @@ function openSampleRetestDialog() {
 
 async function applySampleRetestCreation(payload: { sampleBlockIds: string[] }) {
   if (creatingRetests.value) return
+  const operationGeneration = ++retestCreationGeneration
+  const operationContext = captureRetestCreationContext()
   creatingRetests.value = true
   try {
     const created = await labStore.createRetests(payload.sampleBlockIds)
+    if (!isCurrentRetestCreationOperation(operationGeneration, operationContext)) return
     retestDialogVisible.value = false
     highlightRetestId.value = created[0]?.id || ''
     ElMessage.success(`已创建 ${created.length} 组复样`)
   } catch (error) {
+    if (!isCurrentRetestCreationOperation(operationGeneration, operationContext)) return
     ElMessage.error(error instanceof Error ? error.message : '复样创建失败')
   } finally {
-    creatingRetests.value = false
+    if (operationGeneration === retestCreationGeneration) creatingRetests.value = false
   }
+}
+
+function captureRetestCreationContext(): RetestCreationContext {
+  const user = authStore.user
+  return {
+    sheetId: labStore.sheet?.id || '',
+    sheetDate: labStore.sheet?.date || '',
+    selectedDate: selectedDate.value,
+    businessDate: businessDateInBeijing(),
+    routeDate: typeof route.query.date === 'string' ? route.query.date : '',
+    routeBlock: typeof route.query.block === 'string' ? route.query.block : '',
+    actorId: user?.id || '',
+    ownerId: user?.dataOwnerId || user?.id || ''
+  }
+}
+
+function isCurrentRetestCreationOperation(generation: number, context: RetestCreationContext) {
+  return generation === retestCreationGeneration &&
+    JSON.stringify(context) === JSON.stringify(captureRetestCreationContext())
+}
+
+function invalidateRetestCreationContext() {
+  retestCreationGeneration += 1
+  creatingRetests.value = false
+  retestDialogVisible.value = false
+  highlightRetestId.value = ''
 }
 
 async function applySampleCompletion(payload: { blockIds: string[]; completed: boolean }) {

@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
-import { defineComponent, h, nextTick } from 'vue'
+import { defineComponent, h, nextTick, reactive } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import LabDataPage from './LabDataPage.vue'
@@ -37,7 +37,7 @@ const mocks = vi.hoisted(() => ({
     autoSaveError: '',
     pendingAutoSaveCount: 0,
     conflictBlockIds: [] as string[],
-    sheet: { date: '2026-06-24', readonly: false },
+    sheet: { id: 'sheet-1', date: '2026-06-24', readonly: false } as { id?: string; date: string; readonly: boolean } | null,
     currentParameters: null,
     sampleBlocks: [] as any[],
     loadCurrentSheet: vi.fn(),
@@ -54,8 +54,11 @@ const mocks = vi.hoisted(() => ({
   }
 }))
 
+const routeState = reactive(mocks.route)
+const authUserState = reactive(mocks.authUser)
+
 vi.mock('vue-router', () => ({
-  useRoute: () => mocks.route,
+  useRoute: () => routeState,
   useRouter: () => ({ push: mocks.routerPush })
 }))
 
@@ -73,7 +76,7 @@ vi.mock('@/stores/frontendPreferences', () => ({
 }))
 
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({ get user() { return mocks.authUser } })
+  useAuthStore: () => ({ get user() { return authUserState } })
 }))
 
 vi.mock('@/composables/useMobileLayout', () => ({
@@ -329,7 +332,7 @@ describe('LabDataPage table layout', () => {
     mocks.labStore.applyingParameters = false
     mocks.labStore.autoSaveError = ''
     mocks.labStore.conflictBlockIds = []
-    mocks.labStore.sheet = { date: '2026-06-24', readonly: false }
+    mocks.labStore.sheet = { id: 'sheet-1', date: '2026-06-24', readonly: false }
     mocks.labStore.sampleBlocks = [
       {
         id: 'block-1',
@@ -351,7 +354,12 @@ describe('LabDataPage table layout', () => {
       }
     ]
     mocks.mobileLayout.isMobileLayout.value = false
-    mocks.route.query = {}
+    routeState.query = {}
+    Object.assign(authUserState, {
+      id: 'main-1', account: 'main-1', username: '主账号', role: 'FRONTEND_USER',
+      dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false,
+      permissions: []
+    })
   })
 
   afterEach(() => {
@@ -625,7 +633,7 @@ describe('LabDataPage table layout', () => {
   it('scrolls a routed mobile sample header into view after expanding its card', async () => {
     vi.useFakeTimers()
     mocks.mobileLayout.isMobileLayout.value = true
-    mocks.route.query = { block: 'block-2' }
+    routeState.query = { block: 'block-2' }
     const card = document.createElement('article')
     card.dataset.blockId = 'block-2'
     const header = document.createElement('header')
@@ -894,6 +902,113 @@ describe('LabDataPage table layout', () => {
     await nextTick()
 
     expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('')
+    wrapper.unmount()
+  })
+
+  it('ignores a stale creation success after the date and sheet change without closing the new-context dialog', async () => {
+    let resolveCreation: (value: any[]) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((resolve) => { resolveCreation = resolve }))
+    mocks.labStore.loadSheetByDate.mockImplementation(async (date: string) => {
+      mocks.labStore.sheet = { id: 'sheet-2', date, readonly: false }
+      return true
+    })
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await wrapper.get('.date-picker-stub').setValue('2026-06-23')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+
+    resolveCreation([{ id: 'stale-retest', sampleBlockId: 'block-1', sequence: 1 }])
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('')
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    successSpy.mockRestore()
+    errorSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('ignores a stale creation error and resets dialog locking after the actor and owner change', async () => {
+    let rejectCreation: (reason: Error) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((_resolve, reject) => { rejectCreation = reject }))
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    authUserState.id = 'sub-2'
+    authUserState.dataOwnerId = 'main-2'
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    expect(wrapper.get('.sample-retest-dialog-stub').attributes('data-saving')).toBe('false')
+
+    rejectCreation(new Error('旧账号请求失败'))
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    successSpy.mockRestore()
+    errorSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('closes the retest dialog and clears its highlight when the route sheet context changes', async () => {
+    mocks.labStore.loadSheetByDate.mockResolvedValue(true)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('retest-1')
+
+    routeState.query = { date: '2026-06-23' }
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('')
+    wrapper.unmount()
+  })
+
+  it('closes the retest dialog when the automatic business day switch begins', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T19:59:59.000Z'))
+    mocks.labStore.sheet = { id: 'sheet-old', date: '2026-07-30', readonly: false }
+    mocks.labStore.loadCurrentSheet.mockImplementation(async () => {
+      mocks.labStore.sheet = { id: 'sheet-new', date: '2026-07-31', readonly: false }
+      return true
+    })
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
     wrapper.unmount()
   })
 
