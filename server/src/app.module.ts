@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config'
 import { PrismaModule } from './prisma/prisma.module'
 import { AuthModule } from './auth/auth.module'
 import { LabSheetsModule } from './lab-sheets/lab-sheets.module'
+import { LabSampleChangeRequestsModule } from './lab-sample-change-requests/lab-sample-change-requests.module'
 import { FinanceModule } from './finance/finance.module'
 import { BlacklistModule } from './blacklist/blacklist.module'
 import { UploadsModule } from './uploads/uploads.module'
@@ -20,6 +21,7 @@ import { EmployeeAttendanceModule } from './employee-attendance/employee-attenda
     PrismaModule,
     AuthModule,
     LabSheetsModule,
+    LabSampleChangeRequestsModule,
     FinanceModule,
     BlacklistModule,
     CustomersModule,
