@@ -103,8 +103,38 @@ describe('FinanceService sample retest isolation', () => {
             },
             results: { iron: 29.1 },
             retests: [
-              { id: 'retest-1', status: 'ACTIVE', inputs: { ironRaw: 99 }, results: { iron: 9999 } },
-              { id: 'retest-2', status: 'VOID', inputs: { ironRaw: 88 }, results: { iron: 8888 } }
+              {
+                id: 'retest-1',
+                status: 'ACTIVE',
+                inputs: {
+                  sampleNumber: 'A-001-复样1',
+                  customerId: 'customer-retest-active',
+                  customerIds: ['customer-retest-active'],
+                  customers: [{ id: 'customer-retest-active', name: '复样客户甲' }],
+                  customerText: '复样客户甲',
+                  price: 9999,
+                  paymentStatus: '未结款',
+                  completed: true,
+                  ironRaw: 99
+                },
+                results: { iron: 9999 }
+              },
+              {
+                id: 'retest-2',
+                status: 'VOID',
+                inputs: {
+                  sampleNumber: 'A-001-复样2',
+                  customerId: 'customer-retest-void',
+                  customerIds: ['customer-retest-void'],
+                  customers: [{ id: 'customer-retest-void', name: '复样客户乙' }],
+                  customerText: '复样客户乙',
+                  price: 8888,
+                  paymentStatus: '未结款',
+                  completed: true,
+                  ironRaw: 88
+                },
+                results: { iron: 8888 }
+              }
             ]
           }]
         }])
@@ -119,6 +149,17 @@ describe('FinanceService sample retest isolation', () => {
     expect(report).toMatchObject({ totalSamples: 1, totalAmount: 80 })
     expect(report.rows).toHaveLength(1)
     expect(report.rows[0]).toMatchObject({ sampleCount: 1, totalAmount: 80 })
+    expect(prisma.labSheet.findMany).toHaveBeenCalledWith({
+      where: {
+        frontendUserId: { in: ['front-1'] },
+        date: { gte: '2026-08-01', lte: '2026-08-31' }
+      },
+      orderBy: { date: 'desc' },
+      include: {
+        frontendUser: { select: { id: true, username: true, account: true, displayRemark: true } },
+        sampleBlocks: { orderBy: { index: 'asc' } }
+      }
+    })
   })
 })
 

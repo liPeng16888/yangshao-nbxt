@@ -108,8 +108,38 @@ describe('CustomerOverviewService', () => {
           'block-1',
           { customerText: '客户甲', price: 80, ironRaw: 1 },
           [
-            { id: 'retest-1', status: 'ACTIVE', inputs: { ironRaw: 99 }, results: { iron: 9999 } },
-            { id: 'retest-2', status: 'VOID', inputs: { ironRaw: 88 }, results: { iron: 8888 } }
+            {
+              id: 'retest-1',
+              status: 'ACTIVE',
+              inputs: {
+                sampleNumber: 'A-001-复样1',
+                customerId: 'customer-retest-active',
+                customerIds: ['customer-retest-active'],
+                customers: [{ id: 'customer-retest-active', name: '复样客户甲' }],
+                customerText: '复样客户甲',
+                price: 9999,
+                paymentStatus: '未结款',
+                completed: true,
+                ironRaw: 99
+              },
+              results: { iron: 9999 }
+            },
+            {
+              id: 'retest-2',
+              status: 'VOID',
+              inputs: {
+                sampleNumber: 'A-001-复样2',
+                customerId: 'customer-retest-void',
+                customerIds: ['customer-retest-void'],
+                customers: [{ id: 'customer-retest-void', name: '复样客户乙' }],
+                customerText: '复样客户乙',
+                price: 8888,
+                paymentStatus: '未结款',
+                completed: true,
+                ironRaw: 88
+              },
+              results: { iron: 8888 }
+            }
           ]
         )
       ], '前台一')
@@ -119,6 +149,14 @@ describe('CustomerOverviewService', () => {
 
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ customer: '客户甲', sampleCount: 1, totalAmount: 80 })
+    expect(prisma.labSheet.findMany).toHaveBeenCalledWith({
+      where: { frontendUserId: { in: ['front-1'] } },
+      include: {
+        frontendUser: { select: { account: true, username: true, displayRemark: true } },
+        sampleBlocks: { orderBy: { index: 'asc' } }
+      },
+      orderBy: { date: 'asc' }
+    })
   })
 
   it('excludes blank customers and samples without detection input', async () => {
