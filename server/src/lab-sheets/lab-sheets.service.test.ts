@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createEmptyInputs, defaultLabParameters } from '../common/lab'
 import { businessDateInBeijing } from '../common/date'
+import { LabCellChangeService } from './lab-cell-change.service'
 import { LabSheetsService } from './lab-sheets.service'
 
 function makeBlock(index: number, inputs: Record<string, unknown> = {}, parameters = defaultLabParameters) {
@@ -440,6 +441,52 @@ describe('LabSheetsService default sheet selection', () => {
     expect((result.inputs as Record<string, unknown>).sampleNumber).toBe('NEW')
     expect((result.inputs as Record<string, unknown>).moisture).toBe(4.268)
     expect((result.inputs as Record<string, unknown>).completed).toBe(true)
+  })
+
+  it('writes changed field audits through the shared cell-change service when saving', async () => {
+    const today = businessDateInBeijing()
+    const updatedAt = new Date('2026-08-20T00:00:00.000Z')
+    const oldInputs = { ...createEmptyInputs(1), price: 80 }
+    const block = {
+      ...makeBlock(1, { price: 80 }),
+      sheetId: `sheet-${today}`,
+      updatedAt,
+      inputs: oldInputs
+    }
+    const committedFields = [{ field: 'price', oldValue: 80, newValue: 100 }]
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...block, ...data, updatedAt }))
+    const sharedCellChanges = new LabCellChangeService()
+    cellChanges.record.mockImplementation((db, input) => sharedCellChanges.record(db, input))
+
+    await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      block.sheetId,
+      {
+        id: block.id,
+        baseUpdatedAt: updatedAt.toISOString(),
+        baseInputs: { price: 80 },
+        changedFields: { price: 100 },
+        changeLogFields: committedFields
+      }
+    )
+
+    expect(cellChanges.record).toHaveBeenCalledWith(transaction, expect.objectContaining({
+      sheetId: block.sheetId,
+      blockId: block.id,
+      frontendUserId: 'front-1',
+      changedById: 'front-1',
+      oldInputs,
+      nextInputs: expect.objectContaining({ price: 100 }),
+      committedFields
+    }))
+    expect(transaction.cellChangeLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      blockId: block.id,
+      field: 'price',
+      oldValue: 80,
+      newValue: 100
+    }) })
   })
 
   it('returns granted saved data to the caller but publishes only a metadata refresh signal', async () => {
