@@ -1,9 +1,10 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { defineComponent, h, nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import LabDataPage from './LabDataPage.vue'
+import type { CreateLabSampleChangeRequestPayload, LabSampleChangeRequestDetail, LabSampleChangeRequestSummary } from '@/types/labSampleChangeRequest'
 
 const mocks = vi.hoisted(() => ({
   routerPush: vi.fn(),
@@ -37,6 +38,20 @@ const mocks = vi.hoisted(() => ({
     confirmConflictOverwrite: vi.fn(),
     appendSampleBlocks: vi.fn(),
     disconnectRealtime: vi.fn()
+  },
+  changeRequestStore: {
+    requests: [] as LabSampleChangeRequestSummary[],
+    pendingByBlock: {} as Record<string, LabSampleChangeRequestSummary>,
+    detail: null as LabSampleChangeRequestDetail | null,
+    loading: false,
+    submitting: false,
+    loadingDetail: false,
+    withdrawing: false,
+    load: vi.fn(),
+    submit: vi.fn(),
+    loadDetail: vi.fn(),
+    withdraw: vi.fn(),
+    reset: vi.fn()
   }
 }))
 
@@ -53,15 +68,23 @@ vi.mock('@/stores/accessGuard', () => ({
   useAccessGuardStore: () => mocks.accessGuard
 }))
 
+vi.mock('@/stores/labSampleChangeRequest', () => ({
+  useLabSampleChangeRequestStore: () => mocks.changeRequestStore
+}))
+
 function mountPage() {
   const LabSheetGridStub = defineComponent({
+    name: 'LabSheetGrid',
     props: {
       blocks: { type: Array, default: () => [] },
       readonly: { type: Boolean, default: false },
       selectionMode: { type: Boolean, default: false },
-      selectedBlockIds: { type: Array, default: () => [] }
+      selectedBlockIds: { type: Array, default: () => [] },
+      sheetDate: { type: String, default: '' },
+      sampleChangeRequests: { type: Object, default: () => ({}) },
+      sampleChangeLoading: { type: Boolean, default: false }
     },
-    emits: ['selectionChange'],
+    emits: ['selectionChange', 'requestSampleChange', 'viewSampleChangeRequest', 'withdrawSampleChangeRequest'],
     setup(props, { emit }) {
       return () =>
         h('div', { class: 'lab-grid-stub', 'data-readonly': String(props.readonly) }, [
@@ -78,6 +101,30 @@ function mountPage() {
             : null
         ])
     }
+  })
+
+  const HistoricalSampleChangeDialogStub = defineComponent({
+    name: 'HistoricalSampleChangeDialog',
+    props: {
+      modelValue: { type: Boolean, default: false },
+      block: { type: Object, default: null },
+      submitting: { type: Boolean, default: false }
+    },
+    emits: ['update:modelValue', 'submit'],
+    template: '<div class="sample-change-dialog-stub" :data-visible="String(modelValue)" :data-submitting="String(submitting)" />'
+  })
+
+  const LabSampleChangeRequestDrawerStub = defineComponent({
+    name: 'LabSampleChangeRequestDrawer',
+    props: {
+      modelValue: { type: Boolean, default: false },
+      rows: { type: Array, default: () => [] },
+      detail: { type: Object, default: null },
+      loading: { type: Boolean, default: false },
+      withdrawingId: { type: String, default: '' }
+    },
+    emits: ['update:modelValue', 'select', 'withdraw'],
+    template: '<div class="sample-change-drawer-stub" :data-visible="String(modelValue)" />'
   })
 
   const BulkSampleFillDialogStub = defineComponent({
@@ -154,6 +201,8 @@ function mountPage() {
         LabParameterPanel: true,
         LabReportDialog: true,
         LabSmsDialog: true,
+        HistoricalSampleChangeDialog: HistoricalSampleChangeDialogStub,
+        LabSampleChangeRequestDrawer: LabSampleChangeRequestDrawerStub,
         BulkSampleFillDialog: BulkSampleFillDialogStub,
         SampleCompletionDialog: SampleCompletionDialogStub,
         BlacklistHitDialog: true,
@@ -175,7 +224,7 @@ function mountPage() {
 
 async function settleMountedPage() {
   await nextTick()
-  await Promise.resolve()
+  await flushPromises()
   await nextTick()
 }
 
@@ -196,6 +245,22 @@ describe('LabDataPage table layout', () => {
     mocks.labStore.confirmConflictOverwrite.mockResolvedValue({ success: true, failedBlockIds: [], conflictBlockIds: [] })
     mocks.labStore.appendSampleBlocks.mockResolvedValue(undefined)
     mocks.labStore.disconnectRealtime.mockReset()
+    mocks.changeRequestStore.requests = []
+    mocks.changeRequestStore.pendingByBlock = {}
+    mocks.changeRequestStore.detail = null
+    mocks.changeRequestStore.loading = false
+    mocks.changeRequestStore.submitting = false
+    mocks.changeRequestStore.loadingDetail = false
+    mocks.changeRequestStore.withdrawing = false
+    mocks.changeRequestStore.load.mockReset()
+    mocks.changeRequestStore.load.mockResolvedValue([])
+    mocks.changeRequestStore.submit.mockReset()
+    mocks.changeRequestStore.submit.mockResolvedValue(undefined)
+    mocks.changeRequestStore.loadDetail.mockReset()
+    mocks.changeRequestStore.loadDetail.mockResolvedValue(undefined)
+    mocks.changeRequestStore.withdraw.mockReset()
+    mocks.changeRequestStore.withdraw.mockResolvedValue(undefined)
+    mocks.changeRequestStore.reset.mockReset()
     mocks.accessGuard.loadGroups.mockReset()
     mocks.accessGuard.requestFeatureAccess.mockReset()
     mocks.accessGuard.requestFeatureAccess.mockReturnValue(true)
@@ -243,6 +308,130 @@ describe('LabDataPage table layout', () => {
     await settleMountedPage()
 
     expect((wrapper.find('.date-picker-stub').element as HTMLInputElement).value).toBe('2026-07-30')
+    wrapper.unmount()
+  })
+
+  it('loads request summaries for readonly history and submits without patching the sheet store', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-06-24', readonly: true }
+    mocks.labStore.sampleBlocks[0].readonly = true
+    mocks.labStore.sampleBlocks[0].updatedAt = '2026-06-24T01:00:00.000Z'
+    const payload: CreateLabSampleChangeRequestPayload = {
+      blockId: 'block-1',
+      baseUpdatedAt: '2026-06-24T01:00:00.000Z',
+      changes: { sampleNumber: '复核后样品' },
+      reason: '复核原始记录'
+    }
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(mocks.changeRequestStore.load).toHaveBeenCalledWith({ date: '2026-06-24' })
+    wrapper.getComponent({ name: 'LabSheetGrid' }).vm.$emit('requestSampleChange', 'block-1')
+    await nextTick()
+    const dialog = wrapper.getComponent({ name: 'HistoricalSampleChangeDialog' })
+    expect(dialog.props('block')).toMatchObject({ id: 'block-1' })
+    dialog.vm.$emit('submit', payload)
+    await flushPromises()
+
+    expect(mocks.changeRequestStore.submit).toHaveBeenCalledWith(payload)
+    expect(mocks.labStore.patchBlock).not.toHaveBeenCalled()
+    expect(dialog.props('modelValue')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('resets request state for current and future sheets instead of loading summaries', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-08-20', readonly: false }
+    const current = mountPage()
+    await settleMountedPage()
+
+    expect(mocks.changeRequestStore.reset).toHaveBeenCalled()
+    expect(mocks.changeRequestStore.load).not.toHaveBeenCalled()
+    current.unmount()
+
+    mocks.changeRequestStore.reset.mockClear()
+    mocks.labStore.sheet = { date: '2099-01-01', readonly: true }
+    const future = mountPage()
+    await settleMountedPage()
+
+    expect(mocks.changeRequestStore.reset).toHaveBeenCalled()
+    expect(mocks.changeRequestStore.load).not.toHaveBeenCalled()
+    future.unmount()
+  })
+
+  it('resets request state when historical access is denied', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-08-20', readonly: false }
+    const wrapper = mountPage()
+    await settleMountedPage()
+    mocks.changeRequestStore.reset.mockClear()
+    mocks.accessGuard.requestFeatureAccess.mockReturnValue(false)
+
+    await wrapper.find('.date-picker-stub').setValue('2026-06-24')
+    await flushPromises()
+
+    expect(mocks.changeRequestStore.reset).toHaveBeenCalled()
+    expect(mocks.changeRequestStore.load).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps a failed submission open and exposes submitting true then false for dialog retry', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-06-24', readonly: true }
+    mocks.labStore.sampleBlocks[0].readonly = true
+    mocks.labStore.sampleBlocks[0].updatedAt = '2026-06-24T01:00:00.000Z'
+    let rejectSubmit!: (reason: Error) => void
+    mocks.changeRequestStore.submit.mockImplementation(() => new Promise((_, reject) => {
+      rejectSubmit = reject
+    }))
+    const wrapper = mountPage()
+    await settleMountedPage()
+    const grid = wrapper.getComponent({ name: 'LabSheetGrid' })
+    grid.vm.$emit('requestSampleChange', 'block-1')
+    await nextTick()
+    const dialog = wrapper.getComponent({ name: 'HistoricalSampleChangeDialog' })
+    dialog.vm.$emit('submit', {
+      blockId: 'block-1',
+      baseUpdatedAt: '2026-06-24T01:00:00.000Z',
+      changes: { sampleNumber: '保留草稿' },
+      reason: '网络失败后重试'
+    })
+    await nextTick()
+
+    expect(dialog.props('submitting')).toBe(true)
+    rejectSubmit(new Error('网络错误'))
+    await flushPromises()
+
+    expect(dialog.props('submitting')).toBe(false)
+    expect(dialog.props('modelValue')).toBe(true)
+    expect(mocks.labStore.patchBlock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('coordinates the history drawer, detail loading, and confirmed grid withdrawal', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-06-24', readonly: true }
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '修改申请记录').trigger('click')
+    const drawer = wrapper.getComponent({ name: 'LabSampleChangeRequestDrawer' })
+    expect(drawer.props('modelValue')).toBe(true)
+    drawer.vm.$emit('select', 'request-1')
+    await flushPromises()
+    expect(mocks.changeRequestStore.loadDetail).toHaveBeenCalledWith('request-1')
+
+    wrapper.getComponent({ name: 'LabSheetGrid' }).vm.$emit('withdrawSampleChangeRequest', 'request-1')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalled()
+    expect(mocks.changeRequestStore.withdraw).toHaveBeenCalledWith('request-1')
+    expect(mocks.labStore.patchBlock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

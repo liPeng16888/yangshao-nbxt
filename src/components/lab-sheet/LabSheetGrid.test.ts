@@ -6,6 +6,7 @@ import LabSheetGrid from './LabSheetGrid.vue'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import type { SampleBlock } from '@/types/labSheet'
+import type { LabSampleChangeRequestSummary } from '@/types/labSampleChangeRequest'
 
 const customerEditorStub = {
   name: 'CustomerCellEditor',
@@ -35,7 +36,99 @@ function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock 
   }
 }
 
+function makeSummary(overrides: Partial<LabSampleChangeRequestSummary> = {}): LabSampleChangeRequestSummary {
+  return {
+    id: 'request-1',
+    date: '2026-06-24',
+    blockId: 'block-1',
+    blockIndex: 1,
+    sampleName: '历史样品',
+    changedFieldLabels: ['样品编号'],
+    reason: '复核原始记录',
+    status: 'PENDING',
+    review: null,
+    withdrawnAt: null,
+    createdAt: '2026-06-25T01:00:00.000Z',
+    updatedAt: '2026-06-25T01:00:00.000Z',
+    ...overrides
+  }
+}
+
 describe('LabSheetGrid', () => {
+  it('shows request actions only for eligible readonly history samples', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        readonly: true,
+        sheetDate: '2026-06-24',
+        blocks: [makeBlock({ sampleNumber: '历史样品' })]
+      },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    const request = wrapper.get('[data-testid="request-sample-change-block-1"]')
+    expect(request.text()).toContain('申请修改')
+    await request.trigger('click')
+    expect(wrapper.emitted('requestSampleChange')).toEqual([['block-1']])
+  })
+
+  it('shows pending view and withdraw actions without enabling cell editing', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        readonly: true,
+        sheetDate: '2026-06-24',
+        blocks: [makeBlock({ sampleNumber: '历史样品' })],
+        sampleChangeRequests: { 'block-1': makeSummary() }
+      },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    expect(wrapper.text()).toContain('待审批')
+    expect(wrapper.find('[data-testid="request-sample-change-block-1"]').exists()).toBe(false)
+    const view = wrapper.get('[data-testid="view-sample-change-request-1"]')
+    const withdraw = wrapper.get('[data-testid="withdraw-sample-change-request-1"]')
+    expect(wrapper.find('input:not([disabled])').exists()).toBe(false)
+    await view.trigger('click')
+    await withdraw.trigger('click')
+    expect(wrapper.emitted('viewSampleChangeRequest')).toEqual([['request-1']])
+    expect(wrapper.emitted('withdrawSampleChangeRequest')).toEqual([['request-1']])
+  })
+
+  it('does not add request actions to current editable or future readonly sheets', () => {
+    const current = mount(LabSheetGrid, {
+      props: {
+        readonly: false,
+        sheetDate: '2026-08-20',
+        blocks: [makeBlock({ sampleNumber: '当天样品' })]
+      },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+    const future = mount(LabSheetGrid, {
+      props: {
+        readonly: true,
+        sheetDate: '2099-01-01',
+        blocks: [makeBlock({ sampleNumber: '未来样品' })]
+      },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    expect(current.find('[data-testid^="request-sample-change-"]').exists()).toBe(false)
+    expect(future.find('[data-testid^="request-sample-change-"]').exists()).toBe(false)
+  })
+
+  it('disables historical request actions while request state is loading', () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        readonly: true,
+        sheetDate: '2026-06-24',
+        blocks: [makeBlock({ sampleNumber: '历史样品' })],
+        sampleChangeLoading: true
+      },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    expect(wrapper.get('[data-testid="request-sample-change-block-1"]').attributes('disabled')).toBeDefined()
+  })
+
   it('hides only completed sample detection, amount, and payment values without the completed-data grant', () => {
     const wrapper = mount(LabSheetGrid, {
       props: {

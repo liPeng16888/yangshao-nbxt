@@ -18,6 +18,7 @@
         </el-button>
       </div>
       <div class="toolbar-right">
+        <el-button @click="openChangeRequestDrawer">修改申请记录</el-button>
         <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
           标记样品完成
         </el-button>
@@ -44,10 +45,33 @@
       :selected-block-ids="selectedReportBlockIds"
       :highlight-block-id="highlightBlockId"
       :can-view-completed-sensitive-data="canViewCompletedSensitiveData"
+      :sheet-date="labStore.sheet?.date || selectedDate"
+      :sample-change-requests="changeRequestStore.pendingByBlock"
+      :sample-change-loading="changeRequestStore.loading || changeRequestStore.withdrawing"
       @update="labStore.patchBlock"
       @field-commit="labStore.commitBlockFieldChange"
       @blacklist-hit="showBlacklistHit"
       @selection-change="toggleReportBlockSelection"
+      @request-sample-change="openSampleChangeDialog"
+      @view-sample-change-request="openSampleChangeRequestDetail"
+      @withdraw-sample-change-request="confirmAndWithdrawSampleChangeRequest"
+    />
+
+    <HistoricalSampleChangeDialog
+      v-model="sampleChangeDialogVisible"
+      :block="selectedSampleChangeBlock"
+      :submitting="changeRequestStore.submitting || submittingSampleChange"
+      @submit="submitSampleChangeRequest"
+    />
+
+    <LabSampleChangeRequestDrawer
+      v-model="sampleChangeDrawerVisible"
+      :rows="changeRequestStore.requests"
+      :detail="changeRequestStore.detail"
+      :loading="changeRequestStore.loading || changeRequestStore.loadingDetail"
+      :withdrawing-id="withdrawingSampleChangeRequestId"
+      @select="openSampleChangeRequestDetail"
+      @withdraw="withdrawSampleChangeRequest"
     />
 
     <section class="panel append-panel" v-if="!isPageReadonly">
@@ -107,17 +131,21 @@ import { ChatLineSquare, CircleCheck, DocumentChecked, EditPen, Plus } from '@el
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import type { BlacklistRecord } from '@/types/blacklist'
-import type { LabSampleInput } from '@/types/labSheet'
+import type { LabSampleInput, SampleBlock } from '@/types/labSheet'
+import type { CreateLabSampleChangeRequestPayload } from '@/types/labSampleChangeRequest'
 import type { LabReportSmsTemplate, LabReportTemplate } from '@/types/labReport'
 import BlacklistHitDialog from '@/components/lab-sheet/BlacklistHitDialog.vue'
 import BulkSampleFillDialog from '@/components/lab-sheet/BulkSampleFillDialog.vue'
 import LabParameterPanel from '@/components/lab-sheet/LabParameterPanel.vue'
 import LabSheetGrid from '@/components/lab-sheet/LabSheetGrid.vue'
+import HistoricalSampleChangeDialog from '@/components/lab-sheet/HistoricalSampleChangeDialog.vue'
+import LabSampleChangeRequestDrawer from '@/components/lab-sheet/LabSampleChangeRequestDrawer.vue'
 import SampleCompletionDialog from '@/components/lab-sheet/SampleCompletionDialog.vue'
 import LabReportDialog from '@/components/lab-report/LabReportDialog.vue'
 import LabSmsDialog from '@/components/lab-report/LabSmsDialog.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useLabSheetStore } from '@/stores/labSheet'
+import { useLabSampleChangeRequestStore } from '@/stores/labSampleChangeRequest'
 import { businessDateInBeijing, millisecondsUntilNextBusinessDayInBeijing } from '@/utils/date'
 import { loadLabReportSmsTemplate, loadLabReportTemplate } from '@/utils/labReport'
 
@@ -126,6 +154,7 @@ type GenerationMode = 'report' | 'sms' | 'bulkFill' | null
 const route = useRoute()
 const router = useRouter()
 const labStore = useLabSheetStore()
+const changeRequestStore = useLabSampleChangeRequestStore()
 const accessGuard = useAccessGuardStore()
 const BUSINESS_DAY_PREFLUSH_LEAD_MS = 5_000
 const BUSINESS_DAY_RETRY_MS = 60_000
@@ -142,6 +171,11 @@ const bulkFillDialogVisible = ref(false)
 const completionDialogVisible = ref(false)
 const switchingBusinessDay = ref(false)
 const highlightBlockId = ref('')
+const sampleChangeDialogVisible = ref(false)
+const selectedSampleChangeBlock = ref<SampleBlock | null>(null)
+const sampleChangeDrawerVisible = ref(false)
+const submittingSampleChange = ref(false)
+const withdrawingSampleChangeRequestId = ref('')
 const reportTemplate = ref<LabReportTemplate>(loadLabReportTemplate())
 const smsTemplate = ref<LabReportSmsTemplate>(loadLabReportSmsTemplate())
 let businessDayBoundaryTimer: number | undefined
@@ -279,6 +313,7 @@ async function checkBusinessDayBoundary() {
     }
     selectedDate.value = labStore.sheet?.date || businessDate
     highlightBlockId.value = ''
+    await syncSampleChangeRequestsForSheet()
     scheduleBusinessDayBoundary()
   } catch {
     ElMessage.error('新业务日表格加载失败，已保留当前表格')
@@ -302,6 +337,7 @@ async function loadSheetFromRoute() {
   if (queryDate) {
     const allowed = await requestHistoricalDateAccess(queryDate, () => loadRouteSheetFromQuery(queryDate, queryBlock))
     if (!allowed) {
+      changeRequestStore.reset()
       selectedDate.value = labStore.sheet?.date || businessDateInBeijing()
       highlightBlockId.value = ''
       return
@@ -312,6 +348,7 @@ async function loadSheetFromRoute() {
     const loadedSheet = labStore.sheet as { date?: string } | null
     selectedDate.value = loadedSheet?.date || businessDateInBeijing()
   }
+  await syncSampleChangeRequestsForSheet()
   highlightBlockId.value = queryBlock
   if (queryBlock) await scrollToHighlightedBlock(queryBlock)
 }
@@ -320,6 +357,7 @@ async function handleDateChange(value: string) {
   if (!value) return
   const allowed = await requestHistoricalDateAccess(value, () => loadSelectedDate(value))
   if (!allowed) {
+    changeRequestStore.reset()
     selectedDate.value = labStore.sheet?.date || businessDateInBeijing()
     return
   }
@@ -345,9 +383,12 @@ async function loadSelectedDate(value: string) {
   highlightBlockId.value = ''
   const loaded = await labStore.loadSheetByDate(value)
   if (!loaded) {
+    changeRequestStore.reset()
     selectedDate.value = labStore.sheet?.date || businessDateInBeijing()
     ElMessage.error('仍有数据未保存，已停止切换日期')
+    return
   }
+  await syncSampleChangeRequestsForSheet()
 }
 
 async function requestHistoricalDateAccess(date: string, onSuccess: () => void | Promise<void>) {
@@ -367,6 +408,84 @@ async function requestCompletedSampleDataAccess() {
     message: '已完成样品的检测数据、样品金额和结款状态已隐藏。请输入对应组合密码后查看。',
     onSuccess: async () => { await labStore.loadSheetByDate(selectedDate.value) }
   })
+}
+
+async function syncSampleChangeRequestsForSheet() {
+  const sheet = labStore.sheet
+  if (!sheet?.readonly || sheet.date >= businessDateInBeijing()) {
+    changeRequestStore.reset()
+    return
+  }
+  try {
+    await changeRequestStore.load({ date: sheet.date })
+  } catch {
+    changeRequestStore.reset()
+    ElMessage.error('修改申请记录加载失败，请稍后重试')
+  }
+}
+
+function openSampleChangeDialog(blockId: string) {
+  const sheet = labStore.sheet
+  if (!sheet?.readonly || sheet.date >= businessDateInBeijing()) return
+  const block = labStore.sampleBlocks.find((item) => item.id === blockId)
+  if (!block) return
+  selectedSampleChangeBlock.value = block
+  sampleChangeDialogVisible.value = true
+}
+
+async function submitSampleChangeRequest(payload: CreateLabSampleChangeRequestPayload) {
+  if (submittingSampleChange.value || changeRequestStore.submitting) return
+  submittingSampleChange.value = true
+  try {
+    await changeRequestStore.submit(payload)
+    sampleChangeDialogVisible.value = false
+    selectedSampleChangeBlock.value = null
+    ElMessage.success('修改申请已提交，历史样品数据保持不变')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '修改申请提交失败，请重试')
+  } finally {
+    submittingSampleChange.value = false
+  }
+}
+
+function openChangeRequestDrawer() {
+  sampleChangeDrawerVisible.value = true
+}
+
+async function openSampleChangeRequestDetail(id: string) {
+  sampleChangeDrawerVisible.value = true
+  try {
+    await changeRequestStore.loadDetail(id)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '申请详情加载失败')
+  }
+}
+
+async function confirmAndWithdrawSampleChangeRequest(id: string) {
+  if (withdrawingSampleChangeRequestId.value) return
+  try {
+    await ElMessageBox.confirm(
+      '撤回后该申请会保留在历史记录中，且可重新提交修改申请。',
+      '确认撤回修改申请',
+      { type: 'warning', confirmButtonText: '确认撤回', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  await withdrawSampleChangeRequest(id)
+}
+
+async function withdrawSampleChangeRequest(id: string) {
+  if (withdrawingSampleChangeRequestId.value) return
+  withdrawingSampleChangeRequestId.value = id
+  try {
+    await changeRequestStore.withdraw(id)
+    ElMessage.success('修改申请已撤回，历史样品数据未发生变化')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '撤回申请失败')
+  } finally {
+    withdrawingSampleChangeRequestId.value = ''
+  }
 }
 
 function showBlacklistHit(records: BlacklistRecord[]) {

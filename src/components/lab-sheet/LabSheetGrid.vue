@@ -74,6 +74,41 @@
                   :model-value="block.inputs.sequence"
                   @update:model-value="(value) => updateText(block.id, 'sequence', value)"
                 />
+                <div v-if="canShowHistoricalActions(block)" class="sample-change-actions">
+                  <template v-if="pendingSampleChangeRequest(block.id)">
+                    <el-tag size="small" type="warning" effect="plain">待审批</el-tag>
+                    <el-button
+                      :data-testid="`view-sample-change-${pendingSampleChangeRequest(block.id)!.id}`"
+                      link
+                      size="small"
+                      :disabled="sampleChangeLoading"
+                      @click.stop="emit('viewSampleChangeRequest', pendingSampleChangeRequest(block.id)!.id)"
+                    >
+                      查看
+                    </el-button>
+                    <el-button
+                      :data-testid="`withdraw-sample-change-${pendingSampleChangeRequest(block.id)!.id}`"
+                      link
+                      size="small"
+                      type="danger"
+                      :disabled="sampleChangeLoading"
+                      @click.stop="emit('withdrawSampleChangeRequest', pendingSampleChangeRequest(block.id)!.id)"
+                    >
+                      撤回
+                    </el-button>
+                  </template>
+                  <el-button
+                    v-else
+                    :data-testid="`request-sample-change-${block.id}`"
+                    link
+                    size="small"
+                    type="primary"
+                    :disabled="sampleChangeLoading"
+                    @click.stop="emit('requestSampleChange', block.id)"
+                  >
+                    申请修改
+                  </el-button>
+                </div>
               </div>
             </div>
             <div class="cell cell--input cell--rowspan-3 cell--customer cell--split">
@@ -235,8 +270,10 @@ import CustomerCellEditor from './CustomerCellEditor.vue'
 import LabElementSelector from './LabElementSelector.vue'
 import type { BlacklistRecord } from '@/types/blacklist'
 import type { LabSampleInput, SampleBlock, SamplePaymentStatus } from '@/types/labSheet'
+import type { LabSampleChangeRequestSummary } from '@/types/labSampleChangeRequest'
 import { labSheetColumns } from '@/constants/labSheetTemplate'
 import { formatFormulaValue, parseNumericInput } from '@/utils/formulaEngine'
+import { isHistoricalSampleChangeEligible } from '@/utils/labSampleChangeRequest'
 
 const props = defineProps<{
   blocks: SampleBlock[]
@@ -245,6 +282,9 @@ const props = defineProps<{
   selectedBlockIds?: string[]
   highlightBlockId?: string
   canViewCompletedSensitiveData?: boolean
+  sheetDate?: string
+  sampleChangeRequests?: Record<string, LabSampleChangeRequestSummary>
+  sampleChangeLoading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -253,6 +293,9 @@ const emit = defineEmits<{
   blacklistHit: [records: BlacklistRecord[]]
   scrollStateChange: [state: LabGridScrollState]
   selectionChange: [blockId: string, checked: boolean]
+  requestSampleChange: [blockId: string]
+  viewSampleChangeRequest: [requestId: string]
+  withdrawSampleChangeRequest: [requestId: string]
 }>()
 
 export type LabGridScrollState = {
@@ -266,6 +309,14 @@ const gridColumns = computed(() => labSheetColumns.map((column) => `${column.wid
 const selectionMode = computed(() => Boolean(props.selectionMode))
 const selectedBlockIds = computed(() => props.selectedBlockIds || [])
 const highlightBlockId = computed(() => props.highlightBlockId || '')
+const sampleChangeLoading = computed(() => Boolean(props.sampleChangeLoading))
+function pendingSampleChangeRequest(blockId: string) {
+  const request = props.sampleChangeRequests?.[blockId]
+  return request?.status === 'PENDING' ? request : undefined
+}
+function canShowHistoricalActions(block: SampleBlock) {
+  return Boolean(props.sheetDate && isDisabled(block) && isHistoricalSampleChangeEligible(block, props.sheetDate))
+}
 function isCompletedSensitiveHidden(blockId: string) {
   return Boolean(props.blocks.find((block) => block.id === blockId)?.inputs.completed && !props.canViewCompletedSensitiveData)
 }
@@ -898,6 +949,28 @@ const FormulaCell = defineComponent({
 
 .sequence-editor :deep(.el-checkbox) {
   height: 16px;
+}
+
+.sample-change-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  max-width: 100%;
+}
+
+.sample-change-actions :deep(.el-button) {
+  height: auto;
+  margin: 0;
+  padding: 1px 2px;
+  font-size: 11px;
+}
+
+.sample-change-actions :deep(.el-tag) {
+  height: 18px;
+  padding: 0 4px;
+  font-size: 10px;
 }
 
 .cell--remark {
