@@ -3,6 +3,9 @@ import { Transform } from 'class-transformer'
 import { IsEnum, IsISO8601, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator'
 
 const trim = ({ value }: { value: unknown }) => typeof value === 'string' ? value.trim() : value
+const trimMulti = ({ value }: { value: unknown }) => Array.isArray(value)
+  ? value.map((item) => typeof item === 'string' ? item.trim() : item)
+  : typeof value === 'string' ? value.trim() : value
 
 export class CreateLabSampleChangeRequestDto {
   @IsString() @IsNotEmpty() blockId!: string
@@ -17,13 +20,13 @@ export class FrontendLabSampleChangeRequestQueryDto {
 }
 
 export class AdminLabSampleChangeRequestQueryDto extends FrontendLabSampleChangeRequestQueryDto {
-  @Transform(trim) @IsOptional() @IsString() frontendUserId?: string
+  @Transform(trimMulti) @IsOptional() @IsString({ each: true }) @IsNotEmpty({ each: true }) frontendUserIds?: string | string[]
 }
 
 export class ApproveLabSampleChangeRequestDto {
-  @Transform(trim) @IsOptional() @IsString() @MaxLength(500) remark?: string
+  @Transform(trim) @IsOptional() @IsString() @MaxLength(500) reviewRemark?: string
 }
 
 export class RejectLabSampleChangeRequestDto {
-  @Transform(trim) @IsString() @MinLength(1) @MaxLength(500) remark!: string
+  @Transform(trim) @IsString() @MinLength(1) @MaxLength(500) reviewRemark!: string
 }

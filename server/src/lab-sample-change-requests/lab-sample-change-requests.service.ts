@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { LabSampleChangeRequestStatus, MonthlySettlementStatus, Prisma, ReminderType } from '@prisma/client'
+import { LabSampleChangeRequestStatus, MonthlySettlementStatus, Prisma, ReminderType, UserRole } from '@prisma/client'
 import { AdminAccessService } from '../admin/admin-access.service'
 import type { CurrentUser } from '../auth/current-user'
 import { AuthService } from '../auth/auth.service'
@@ -45,7 +45,7 @@ type RequestRow = {
   updatedAt: Date
 }
 
-type ReviewDto<T> = Partial<T> & { reviewRemark?: string }
+type ReviewDto<T> = Partial<T> & { reviewRemark?: string; remark?: string }
 
 type MonthlySettlementRow = {
   id: string
@@ -55,6 +55,7 @@ type MonthlySettlementRow = {
   status: MonthlySettlementStatus
   paidAmount: unknown
   remark: string | null
+  updatedAt: Date
 }
 
 type SettlementEffect = {
@@ -180,7 +181,7 @@ export class LabSampleChangeRequestsService {
   }
 
   async listForAdmin(admin: CurrentUser, query: AdminLabSampleChangeRequestQueryDto) {
-    const requestedIds = query.frontendUserId ? [query.frontendUserId] : undefined
+    const requestedIds = this.adminAccess.parseFrontendUserIds(query.frontendUserIds)
     const frontendUserIds = await this.adminAccess.getAllowedFrontendUserIds(admin, requestedIds)
     if (!frontendUserIds.length) return []
     const rows = await this.prisma.labSampleChangeRequest.findMany({
@@ -210,7 +211,7 @@ export class LabSampleChangeRequestsService {
     const reviewRemark = this.optionalReviewRemark(dto)
     return this.prisma.$transaction(async (tx) => {
       const request = await this.lockAndLoadRequest(tx, id)
-      await this.assertAdminRequestAccess(admin, request.frontendUserId)
+      await this.lockAndAssertReviewAccess(tx, admin, request.frontendUserId)
       this.assertPending(request)
 
       const block = await this.lockAndLoadSample(tx, request)
@@ -283,7 +284,7 @@ export class LabSampleChangeRequestsService {
           createdById: admin.id,
           type: ReminderType.LAB_SAMPLE_CHANGE_APPROVED,
           title: '历史样品修改申请已通过',
-          content: `${request.date} 第 ${request.blockIndex} 个样品的修改申请已通过。`,
+          content: this.approvalReminderContent(request, settlementEffects),
           sourceType: 'lab_sample_change_request',
           sourceId: request.id
         }
@@ -305,7 +306,7 @@ export class LabSampleChangeRequestsService {
     const reviewRemark = this.requiredReviewRemark(dto)
     return this.prisma.$transaction(async (tx) => {
       const request = await this.lockAndLoadRequest(tx, id)
-      await this.assertAdminRequestAccess(admin, request.frontendUserId)
+      await this.lockAndAssertReviewAccess(tx, admin, request.frontendUserId)
       this.assertPending(request)
 
       const rejected = await this.updatePendingRequest(tx, request.id, {
@@ -392,6 +393,21 @@ export class LabSampleChangeRequestsService {
     return row as RequestRow
   }
 
+  private async lockAndAssertReviewAccess(
+    tx: Prisma.TransactionClient,
+    admin: CurrentUser,
+    frontendUserId: string
+  ) {
+    if (admin.role === UserRole.ROOT_ADMIN) return
+    if (admin.role !== UserRole.SUB_ADMIN) throw new ForbiddenException('没有后台审批权限')
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "id" FROM "SubAdminFrontendPermission"
+      WHERE "subAdminId" = ${admin.id} AND "frontendUserId" = ${frontendUserId}
+      FOR SHARE
+    `)
+    if (!rows.length) throw new ForbiddenException('没有访问该前端账号的权限')
+  }
+
   private async lockAndLoadSample(tx: Prisma.TransactionClient, request: RequestRow) {
     await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT "id" FROM "LabSheet" WHERE "id" = ${request.sheetId} FOR UPDATE
@@ -459,12 +475,34 @@ export class LabSampleChangeRequestsService {
     ]))
     if (!customers.length) return []
     const month = request.date.slice(0, 7)
+    await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "id" FROM "MonthlySettlementRecord"
+      WHERE "month" = ${month}
+        AND "frontendUserId" = ${request.frontendUserId}
+        AND "customer" IN (${Prisma.join(customers)})
+      ORDER BY "id"
+      FOR UPDATE
+    `)
     const rows = await tx.monthlySettlementRecord.findMany({
-      where: { month, frontendUserId: request.frontendUserId, customer: { in: customers } }
+      where: { month, frontendUserId: request.frontendUserId, customer: { in: customers } },
+      orderBy: { id: 'asc' }
     })
     const effects: SettlementEffect[] = []
     for (const row of rows as MonthlySettlementRow[]) {
       if (row.status !== MonthlySettlementStatus.PAID && row.status !== MonthlySettlementStatus.PARTIAL) continue
+      const updated = await tx.monthlySettlementRecord.updateMany({
+        where: {
+          id: row.id,
+          status: { in: [MonthlySettlementStatus.PAID, MonthlySettlementStatus.PARTIAL] },
+          updatedAt: row.updatedAt
+        },
+        data: {
+          status: MonthlySettlementStatus.UNPAID,
+          paidAmount: null,
+          remark: '因历史样品修改审批，需按新汇总重新核对'
+        }
+      })
+      if (!updated.count) throw new ConflictException('月结记录已变化，请刷新后重试')
       effects.push({
         recordId: row.id,
         month: row.month,
@@ -474,16 +512,15 @@ export class LabSampleChangeRequestsService {
         oldRemark: row.remark,
         newStatus: MonthlySettlementStatus.UNPAID
       })
-      await tx.monthlySettlementRecord.update({
-        where: { id: row.id },
-        data: {
-          status: MonthlySettlementStatus.UNPAID,
-          paidAmount: null,
-          remark: '因历史样品修改审批，需按新汇总重新核对'
-        }
-      })
     }
     return effects
+  }
+
+  private approvalReminderContent(request: RequestRow, effects: SettlementEffect[]) {
+    const base = `${request.date} 第 ${request.blockIndex} 个样品的修改申请已通过。`
+    if (!effects.length) return base
+    const affected = Array.from(new Set(effects.map((effect) => `${effect.customer}（${effect.month}）`)))
+    return `${base} 已重置月结记录：${affected.join('、')}。`
   }
 
   private optionalReviewRemark(dto: { remark?: unknown; reviewRemark?: unknown }) {
