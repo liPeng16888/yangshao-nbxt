@@ -1012,6 +1012,64 @@ describe('LabDataPage table layout', () => {
     wrapper.unmount()
   })
 
+  it('silently ignores a delayed retest creation success after the page unmounts', async () => {
+    let resolveCreation: (value: any[]) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((resolve) => { resolveCreation = resolve }))
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    const setupState = (wrapper.vm as any).$?.setupState as {
+      highlightRetestId: string
+      retestDialogVisible: boolean
+    }
+    wrapper.unmount()
+
+    resolveCreation([{ id: 'late-retest', sampleBlockId: 'block-1', sequence: 1 }])
+    await Promise.resolve()
+    await nextTick()
+
+    expect(setupState.retestDialogVisible).toBe(false)
+    expect(setupState.highlightRetestId).toBe('')
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    expect(mocks.labStore.disconnectRealtime).toHaveBeenCalledTimes(1)
+    successSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+
+  it('silently handles a delayed retest creation rejection after the page unmounts', async () => {
+    let rejectCreation: (reason: Error) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((_resolve, reject) => { rejectCreation = reject }))
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    const setupState = (wrapper.vm as any).$?.setupState as {
+      highlightRetestId: string
+      retestDialogVisible: boolean
+    }
+    wrapper.unmount()
+
+    rejectCreation(new Error('页面退出后的旧请求失败'))
+    await Promise.resolve()
+    await nextTick()
+
+    expect(setupState.retestDialogVisible).toBe(false)
+    expect(setupState.highlightRetestId).toBe('')
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    expect(mocks.labStore.disconnectRealtime).toHaveBeenCalledTimes(1)
+    successSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+
   it('reads the latest shared report template immediately before opening the report dialog', async () => {
     mocks.preferenceValue.mockImplementation((section: string, fallback: unknown) => (
       section === 'LAB_REPORT_TEMPLATE'

@@ -357,6 +357,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  invalidateRetestCreationContext()
   clearBusinessDayTimers()
   unbindBusinessDayListeners()
   labStore.disconnectRealtime()
