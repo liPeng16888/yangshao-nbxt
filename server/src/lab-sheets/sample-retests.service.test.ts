@@ -31,16 +31,18 @@ type Retest = {
   parameterSnapshot: Prisma.InputJsonObject
   everFilled: boolean
   status: string
-  voidReason: null
+  voidReason: string | null
   createdById: string
   updatedById: string
-  voidedById: null
+  voidedById: string | null
   createdAt: Date
   updatedAt: Date
-  voidedAt: null
+  voidedAt: Date | null
 }
 
-type RetestUpdateData = Pick<Retest, 'inputs' | 'results' | 'everFilled' | 'updatedById'>
+type RetestUpdateData = Partial<Pick<Retest,
+  'inputs' | 'results' | 'everFilled' | 'status' | 'voidReason' | 'voidedAt' | 'voidedById' | 'updatedById'
+>>
 
 type WriteRequest = {
   idempotencyKey: string
@@ -198,6 +200,13 @@ class FakePrisma {
           Object.assign(row, structuredClone(data))
           row.updatedAt = new Date(row.updatedAt.getTime() + 1000)
           return structuredClone(row)
+        },
+        delete: async ({ where }: { where: { id: string } }) => {
+          this.log.push(`delete-retest:${where.id}`)
+          const index = this.retests.findIndex((item) => item.id === where.id)
+          if (index < 0) throw new Error('missing fake retest')
+          const [deleted] = this.retests.splice(index, 1)
+          return structuredClone(deleted)
         }
       },
       sampleRetestWriteRequest: {
@@ -298,6 +307,21 @@ function makeSaveRaceWinner(
   const response = structuredClone(loser.responseSnapshot)
   if (!response || typeof response !== 'object' || Array.isArray(response)) {
     throw new Error('unexpected fake save response snapshot')
+  }
+  return {
+    ...structuredClone(loser),
+    ...overrides,
+    responseSnapshot: { ...response, updatedAt: '2026-08-20T09:42:00.000Z' }
+  }
+}
+
+function makeRetestRaceWinner(
+  loser: WriteRequest,
+  overrides: Partial<Pick<WriteRequest, 'operation' | 'requestFingerprint'>> = {}
+): WriteRequest {
+  const response = structuredClone(loser.responseSnapshot)
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('unexpected fake retest response snapshot')
   }
   return {
     ...structuredClone(loser),
@@ -828,5 +852,227 @@ describe('SampleRetestsService.saveRetest', () => {
     })
     expect(prisma.retests[0].inputs.ironRaw).toBeNull()
     expect(realtime.events).toEqual([])
+  })
+})
+
+describe('SampleRetestsService.deleteRetest', () => {
+  it('deletes a persistently blank ACTIVE retest at its exact version without reusing the parent sequence', async () => {
+    const { prisma, realtime, service } = setup()
+    addRetest(prisma)
+
+    await expect(service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-blank', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, 'client-1', true)).resolves.toEqual({ id: 'retest-1', sampleBlockId: 'block-1', deleted: true })
+
+    expect(prisma.retests).toEqual([])
+    expect(getBlock(prisma, 'block-1').nextRetestSequence).toBe(3)
+    expect(prisma.log).toContain('delete-retest:retest-1')
+    expect(realtime.events).toEqual([expect.objectContaining({
+      type: 'retests-changed', sheetId: 'sheet-1', sampleBlockId: 'block-1', sampleRetestId: 'retest-1',
+      sourceClientId: 'client-1', changedById: 'front-1'
+    })])
+    expect(realtime.events[0]).not.toHaveProperty('inputs')
+    expect(realtime.events[0]).not.toHaveProperty('results')
+  })
+
+  it('rejects stale, currently nonblank, and ever-filled retests without deleting them', async () => {
+    const stale = setup()
+    addRetest(stale.prisma, { updatedAt: new Date('2026-08-20T09:00:01.000Z') })
+    await expect(stale.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-stale', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).rejects.toMatchObject({ status: 409 })
+    expect(stale.prisma.retests).toHaveLength(1)
+
+    const zero = setup()
+    addRetest(zero.prisma, { inputs: { ...createEmptyRetestInputs(), ironRaw: 0 } })
+    await expect(zero.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-zero', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).rejects.toThrow('已录入数据的复样只能作废')
+    expect(zero.prisma.retests).toHaveLength(1)
+
+    const cleared = setup()
+    addRetest(cleared.prisma, { everFilled: true })
+    await expect(cleared.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-cleared', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).rejects.toThrow('已录入数据的复样只能作废')
+    expect(cleared.prisma.retests).toHaveLength(1)
+  })
+
+  it('enforces tenant, today, completed-parent grant, and ACTIVE state before deleting', async () => {
+    const history = setup()
+    addRetest(history.prisma)
+    getSheet(history.prisma).date = '2000-01-01'
+    await expect(history.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-history', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).rejects.toBeInstanceOf(ForbiddenException)
+
+    const tenant = setup()
+    addRetest(tenant.prisma)
+    getSheet(tenant.prisma).frontendUserId = 'other-tenant'
+    await expect(tenant.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-tenant', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).rejects.toBeInstanceOf(NotFoundException)
+
+    const completed = setup()
+    addRetest(completed.prisma)
+    getBlock(completed.prisma, 'block-1').inputs.completed = true
+    await expect(completed.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-completed', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, false)).rejects.toBeInstanceOf(ForbiddenException)
+    await expect(completed.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-completed-granted', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).resolves.toMatchObject({ deleted: true })
+
+    const voided = setup()
+    addRetest(voided.prisma, { status: 'VOID', everFilled: true })
+    await expect(voided.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-void', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('replays only the immutable DELETE response and recovers a matching P2002 winner without another event', async () => {
+    const retry = setup()
+    addRetest(retry.prisma)
+    const payload = { idempotencyKey: 'same-delete', baseUpdatedAt: '2026-08-20T09:00:00.000Z' }
+    const first = await retry.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'first', true)
+    ;(first as { deleted: boolean }).deleted = false
+    await expect(retry.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'retry', true))
+      .resolves.toEqual({ id: 'retest-1', sampleBlockId: 'block-1', deleted: true })
+    expect(retry.realtime.events).toHaveLength(1)
+
+    const raced = setup()
+    addRetest(raced.prisma)
+    raced.prisma.uniqueRaceWinnerFactory = (loser) => structuredClone(loser)
+    await expect(raced.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-race', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).resolves.toEqual({ id: 'retest-1', sampleBlockId: 'block-1', deleted: true })
+    expect(raced.prisma.retests).toHaveLength(1)
+    expect(raced.realtime.events).toEqual([])
+  })
+
+  it('binds DELETE idempotency to the operation and actual actor', async () => {
+    const { prisma, service } = setup()
+    addRetest(prisma)
+    const payload = { idempotencyKey: 'delete-key', baseUpdatedAt: '2026-08-20T09:00:00.000Z' }
+    await service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', payload, undefined, true)
+
+    await expect(service.deleteRetest({ ...frontendUser, id: 'sub-1' }, 'sheet-1', 'retest-1', payload, undefined, true))
+      .rejects.toMatchObject({ status: 409, response: expect.objectContaining({ code: 'SAMPLE_RETEST_IDEMPOTENCY_CONFLICT' }) })
+    await expect(service.voidRetest(frontendUser, 'sheet-1', 'retest-1', payload, undefined, true))
+      .rejects.toMatchObject({ status: 409, response: expect.objectContaining({ code: 'SAMPLE_RETEST_IDEMPOTENCY_CONFLICT' }) })
+  })
+})
+
+describe('SampleRetestsService.voidRetest', () => {
+  it('voids an ever-filled ACTIVE retest while preserving its detection snapshot and auditing the actual actor', async () => {
+    const { prisma, realtime, service } = setup()
+    addRetest(prisma, {
+      inputs: { ...createEmptyRetestInputs(), ironRaw: 1 },
+      results: { iron: 9.6 }, everFilled: true
+    })
+    const actor = { ...frontendUser, id: 'sub-1', isFrontendMainAccount: false, isFrontendSubAccount: true }
+
+    const voided = await service.voidRetest(actor, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-filled', baseUpdatedAt: '2026-08-20T09:00:00.000Z', reason: '  复核失败  '
+    }, 'client-1', true)
+
+    expect(voided).toMatchObject({
+      id: 'retest-1', status: 'VOID', inputs: { ironRaw: 1 }, results: { iron: 9.6 },
+      everFilled: true, voidReason: '复核失败', voidedById: 'sub-1', updatedById: 'sub-1'
+    })
+    expect(voided.voidedAt).toEqual(expect.any(String))
+    expect(prisma.retests[0]).toMatchObject({ status: 'VOID', voidReason: '复核失败', voidedById: 'sub-1' })
+    expect(realtime.events).toEqual([expect.objectContaining({ type: 'retests-changed', changedById: 'sub-1' })])
+  })
+
+  it('requires the exact version and prior data, normalizes blank reasons, and has no restore path', async () => {
+    const stale = setup()
+    addRetest(stale.prisma, { everFilled: true, updatedAt: new Date('2026-08-20T09:00:01.000Z') })
+    await expect(stale.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-stale', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).rejects.toMatchObject({ status: 409 })
+
+    const blank = setup()
+    addRetest(blank.prisma)
+    await expect(blank.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-blank', baseUpdatedAt: '2026-08-20T09:00:00.000Z', reason: '   '
+    }, undefined, true)).rejects.toThrow('未录入数据的复样可以直接删除')
+
+    const voided = setup()
+    addRetest(voided.prisma, { everFilled: true })
+    const result = await voided.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-null-reason', baseUpdatedAt: '2026-08-20T09:00:00.000Z', reason: '  '
+    }, undefined, true)
+    expect(result.voidReason).toBeNull()
+    await expect(voided.service.saveRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'save-voided', changedFields: { ironRaw: 1 }
+    }, undefined, true)).rejects.toMatchObject({ status: 409 })
+    await expect(voided.service.deleteRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'delete-voided', baseUpdatedAt: result.updatedAt
+    }, undefined, true)).rejects.toMatchObject({ status: 409 })
+    await expect(voided.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-again', baseUpdatedAt: result.updatedAt
+    }, undefined, true)).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('enforces tenant, today, and completed-parent grant before voiding', async () => {
+    const history = setup()
+    addRetest(history.prisma, { everFilled: true })
+    getSheet(history.prisma).date = '2000-01-01'
+    await expect(history.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-history', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).rejects.toBeInstanceOf(ForbiddenException)
+
+    const tenant = setup()
+    addRetest(tenant.prisma, { everFilled: true })
+    getSheet(tenant.prisma).frontendUserId = 'other-tenant'
+    await expect(tenant.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-tenant', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).rejects.toBeInstanceOf(NotFoundException)
+
+    const completed = setup()
+    addRetest(completed.prisma, { everFilled: true })
+    getBlock(completed.prisma, 'block-1').inputs.completed = true
+    await expect(completed.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-completed', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, false)).rejects.toBeInstanceOf(ForbiddenException)
+    await expect(completed.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-completed-granted', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)).resolves.toMatchObject({ status: 'VOID' })
+  })
+
+  it('replays immutable VOID results and recovers matching P2002 winners without duplicate mutations or events', async () => {
+    const retry = setup()
+    addRetest(retry.prisma, { everFilled: true })
+    const payload = { idempotencyKey: 'same-void', baseUpdatedAt: '2026-08-20T09:00:00.000Z', reason: '原因' }
+    const first = await retry.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'first', true)
+    first.status = 'ACTIVE'
+    const replay = await retry.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', payload, 'retry', true)
+    expect(replay.status).toBe('VOID')
+    expect(retry.prisma.log.filter((entry) => entry === 'update-retest:retest-1')).toHaveLength(1)
+    expect(retry.realtime.events).toHaveLength(1)
+
+    const raced = setup()
+    addRetest(raced.prisma, { everFilled: true })
+    raced.prisma.uniqueRaceWinnerFactory = (loser) => makeRetestRaceWinner(loser)
+    const recovered = await raced.service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-race', baseUpdatedAt: '2026-08-20T09:00:00.000Z'
+    }, undefined, true)
+    expect(recovered).toMatchObject({ id: 'retest-1', status: 'VOID', updatedAt: '2026-08-20T09:42:00.000Z' })
+    expect(raced.prisma.retests[0].status).toBe('ACTIVE')
+    expect(raced.realtime.events).toEqual([])
+  })
+
+  it('binds VOID idempotency to operation, payload, and actor', async () => {
+    const { prisma, service } = setup()
+    addRetest(prisma, { everFilled: true })
+    await service.voidRetest(frontendUser, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-key', baseUpdatedAt: '2026-08-20T09:00:00.000Z', reason: '原因 A'
+    }, undefined, true)
+    await expect(service.voidRetest({ ...frontendUser, id: 'sub-1' }, 'sheet-1', 'retest-1', {
+      idempotencyKey: 'void-key', baseUpdatedAt: '2026-08-20T09:00:01.000Z', reason: '原因 B'
+    }, undefined, true)).rejects.toMatchObject({
+      status: 409, response: expect.objectContaining({ code: 'SAMPLE_RETEST_IDEMPOTENCY_CONFLICT' })
+    })
   })
 })
