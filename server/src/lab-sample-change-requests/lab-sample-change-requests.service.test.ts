@@ -13,6 +13,12 @@ const rootAdmin = { id: 'admin-1', account: 'root', username: '超级管理员',
 const subAdmin = { id: 'sub-1', account: 'sub', username: '子管理员', role: 'SUB_ADMIN' as const }
 const grants = { historical: 'history-grant', completedData: 'completed-grant' }
 const historicalDate = '2026-08-19'
+const requestedByIdentity = { id: 'front-1', account: 'front', username: '前台' }
+const reviewedByIdentity = { id: 'admin-1', account: 'root', username: '超级管理员' }
+const adminIdentityInclude = {
+  requestedBy: { select: { id: true, account: true, username: true } },
+  reviewedBy: { select: { id: true, account: true, username: true } }
+}
 
 function makeHistoricalBlock(overrides: Record<string, unknown> = {}) {
   const inputs = {
@@ -52,6 +58,15 @@ function makeRequest(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function makeAdminRequest(overrides: Record<string, unknown> = {}) {
+  const request = makeRequest(overrides)
+  return {
+    ...request,
+    requestedBy: requestedByIdentity,
+    reviewedBy: request.reviewedById ? reviewedByIdentity : null
+  }
+}
+
 function sqlText(value: unknown) {
   const sql = value as { strings?: string[] }
   return Array.isArray(sql?.strings) ? sql.strings.join('?') : String(value || '')
@@ -72,7 +87,7 @@ function makeStatefulApprovalHarness(options: {
     } : {})
   }
   let state = {
-    request: makeRequest({
+    request: makeAdminRequest({
       sourceSnapshot: { inputs: oldInputs, results: { iron: 1 }, parameterSnapshot: defaultLabParameters },
       requestedChanges: options.monthly ? { price: 100 } : { sampleNumber: '新样品' }
     }) as any,
@@ -147,7 +162,12 @@ function makeStatefulApprovalHarness(options: {
           findUnique: async () => structuredClone(state.request),
           update: async ({ where, data }: any) => {
             if (where.status && state.request.status !== where.status) throw { code: 'P2025' }
-            state.request = { ...state.request, ...structuredClone(data), updatedAt: new Date('2026-08-20T02:00:00.000Z') }
+            state.request = {
+              ...state.request,
+              ...structuredClone(data),
+              reviewedBy: data.reviewedById ? reviewedByIdentity : state.request.reviewedBy,
+              updatedAt: new Date('2026-08-20T02:00:00.000Z')
+            }
             return structuredClone(state.request)
           }
         },
@@ -251,7 +271,8 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
     prisma.labSampleChangeRequest.findMany.mockResolvedValue([])
     prisma.labSampleChangeRequest.create.mockImplementation(async ({ data }: any) => ({
       id: 'request-1', ...data, status: LabSampleChangeRequestStatus.PENDING,
-      reviewRemark: null, reviewedAt: null, withdrawnAt: null, createdAt: new Date(), updatedAt: new Date()
+      reviewRemark: null, reviewedAt: null, withdrawnAt: null, createdAt: new Date(), updatedAt: new Date(),
+      requestedBy: requestedByIdentity, reviewedBy: null
     }))
     prisma.labSampleChangeRequest.updateMany.mockResolvedValue({ count: 1 })
     prisma.$transaction.mockImplementation(async (operation: any) => operation(transaction))
@@ -297,6 +318,8 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
     const data = prisma.labSampleChangeRequest.create.mock.calls[0][0].data
     expect((data.sourceSnapshot as any).inputs.customers).toEqual([])
     expect((data.requestedChanges as any).payerCustomer).toEqual({ customerIds: ['c-1'], customerText: '王总' })
+    expect(row).not.toHaveProperty('requestedBy')
+    expect(row).not.toHaveProperty('reviewedBy')
   })
 
   it('rejects today, empty diffs, foreign customers, forbidden keys, and an existing pending request', async () => {
@@ -336,17 +359,19 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
   })
 
   it('returns settlement effects in frontend detail but not summaries', async () => {
-    prisma.labSampleChangeRequest.findFirst.mockResolvedValue(makeRequest({
+    prisma.labSampleChangeRequest.findFirst.mockResolvedValue(makeAdminRequest({
       settlementEffects: [{ recordId: 'settle-1', oldStatus: MonthlySettlementStatus.PAID }]
     }))
 
     const detail = await service.getForFrontend(frontendUser, 'request-1', grants)
 
     expect(detail.settlementEffects).toEqual([expect.objectContaining({ recordId: 'settle-1' })])
+    expect(detail).not.toHaveProperty('requestedBy')
+    expect(detail).not.toHaveProperty('reviewedBy')
   })
 
   it('scopes frontend lists and hides source snapshots from summaries', async () => {
-    prisma.labSampleChangeRequest.findMany.mockResolvedValue([makeRequest()])
+    prisma.labSampleChangeRequest.findMany.mockResolvedValue([makeAdminRequest()])
     const rows = await service.listForFrontend(frontendUser, { date: historicalDate, status: LabSampleChangeRequestStatus.PENDING }, grants)
 
     expect(prisma.labSampleChangeRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {
@@ -355,6 +380,9 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
     expect(rows[0]).not.toHaveProperty('sourceSnapshot')
     expect(rows[0]).not.toHaveProperty('settlementEffects')
     expect(rows[0]).not.toHaveProperty('frontendUserId')
+    expect(rows[0]).not.toHaveProperty('requestedBy')
+    expect(rows[0]).not.toHaveProperty('reviewedBy')
+    expect(prisma.labSampleChangeRequest.findMany.mock.calls[0][0]).not.toHaveProperty('include')
     expect(rows[0]).toMatchObject({ id: 'request-1', blockId: 'block-1', sampleName: '旧样品', changedFieldLabels: ['样品编号'] })
   })
 
@@ -372,16 +400,26 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
   })
 
   it('allows only the owner to withdraw a pending request and preserves its record', async () => {
-    prisma.labSampleChangeRequest.findFirst.mockResolvedValue(makeRequest({ status: LabSampleChangeRequestStatus.PENDING }))
-    await service.withdrawForFrontend(frontendUser, 'request-1', grants)
-    expect(prisma.labSampleChangeRequest.updateMany).toHaveBeenCalledWith({
-      where: { id: 'request-1', frontendUserId: 'front-1', status: LabSampleChangeRequestStatus.PENDING },
-      data: { status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt: expect.any(Date) }
-    })
+    vi.useFakeTimers()
+    const now = new Date('2026-08-20T03:04:05.000Z')
+    vi.setSystemTime(now)
+    try {
+      prisma.labSampleChangeRequest.findFirst.mockResolvedValue(makeAdminRequest({ status: LabSampleChangeRequestStatus.PENDING }))
+      const withdrawn = await service.withdrawForFrontend(frontendUser, 'request-1', grants)
+      expect(prisma.labSampleChangeRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: 'request-1', frontendUserId: 'front-1', status: LabSampleChangeRequestStatus.PENDING },
+        data: { status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt: now, updatedAt: now }
+      })
 
-    expect(prisma.labSampleChangeRequest.findFirst).toHaveBeenLastCalledWith(expect.objectContaining({ where: {
-      id: 'request-1', frontendUserId: 'front-1', status: LabSampleChangeRequestStatus.PENDING
-    } }))
+      expect(withdrawn).toMatchObject({ withdrawnAt: now, updatedAt: now })
+      expect(withdrawn).not.toHaveProperty('requestedBy')
+      expect(withdrawn).not.toHaveProperty('reviewedBy')
+      expect(prisma.labSampleChangeRequest.findFirst).toHaveBeenLastCalledWith(expect.objectContaining({ where: {
+        id: 'request-1', frontendUserId: 'front-1', status: LabSampleChangeRequestStatus.PENDING
+      } }))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects a withdrawal race when its pending compare-and-set updates no row', async () => {
@@ -451,12 +489,14 @@ describe('LabSampleChangeRequestsService admin review', () => {
     vi.clearAllMocks()
     prisma.$transaction.mockImplementation(async (operation: any) => operation(transaction))
     prisma.labSampleChangeRequest.findMany.mockResolvedValue([])
-    prisma.labSampleChangeRequest.findUnique.mockResolvedValue(makeRequest())
+    prisma.labSampleChangeRequest.findUnique.mockResolvedValue(makeAdminRequest())
     transaction.$queryRaw.mockImplementation(async (query: unknown) =>
       sqlText(query).includes('"SubAdminFrontendPermission"') ? [{ id: 'permission-1' }] : [])
-    transaction.labSampleChangeRequest.findUnique.mockResolvedValue(makeRequest())
+    transaction.labSampleChangeRequest.findUnique.mockResolvedValue(makeAdminRequest())
     transaction.labSampleChangeRequest.update.mockImplementation(async ({ data }: any) => ({
-      ...makeRequest(), ...data, updatedAt: new Date('2026-08-20T02:00:00.000Z')
+      ...makeAdminRequest(), ...data,
+      reviewedBy: data.reviewedById ? reviewedByIdentity : null,
+      updatedAt: new Date('2026-08-20T02:00:00.000Z')
     }))
     transaction.labSheet.findUnique.mockResolvedValue({ id: 'sheet-1', frontendUserId: 'front-1', date: historicalDate })
     transaction.sampleBlock.findUnique.mockResolvedValue(makeHistoricalBlock())
@@ -474,7 +514,7 @@ describe('LabSampleChangeRequestsService admin review', () => {
   it('approves one request atomically, recalculates from the sample snapshot, links logs, and reminds the owner', async () => {
     const snapshotParameters = { ...defaultLabParameters, ironBlank: 0, ironFactor: 25 }
     const currentInputs = { ...makeHistoricalBlock().inputs, ironRaw: 1, price: 80 }
-    transaction.labSampleChangeRequest.findUnique.mockResolvedValue(makeRequest({
+    transaction.labSampleChangeRequest.findUnique.mockResolvedValue(makeAdminRequest({
       requestedChanges: { ironRaw: 2, price: 100 },
       sourceSnapshot: { inputs: currentInputs, results: {}, parameterSnapshot: snapshotParameters }
     }))
@@ -504,10 +544,13 @@ describe('LabSampleChangeRequestsService admin review', () => {
       .toBe('2026-08-19 第 1 个样品的修改申请已通过。')
     expect(approved).toMatchObject({
       frontendUserId: 'front-1',
+      requestedBy: requestedByIdentity,
+      reviewedBy: reviewedByIdentity,
       status: LabSampleChangeRequestStatus.APPROVED,
       previewResults: expect.objectContaining({ iron: 50 }),
       actualResults: expect.objectContaining({ iron: 50 })
     })
+    expect(transaction.labSampleChangeRequest.update.mock.calls[0][0].include).toEqual(adminIdentityInclude)
   })
 
   it('resets affected paid and partial monthly records and snapshots their old state', async () => {
@@ -716,11 +759,15 @@ describe('LabSampleChangeRequestsService admin review', () => {
     expect(transaction.reminder.create).toHaveBeenCalledWith({ data: expect.objectContaining({
       type: ReminderType.LAB_SAMPLE_CHANGE_REJECTED, sourceType: 'lab_sample_change_request', sourceId: 'request-1'
     }) })
-    expect(rejected).toMatchObject({ frontendUserId: 'front-1', status: LabSampleChangeRequestStatus.REJECTED })
+    expect(rejected).toMatchObject({
+      frontendUserId: 'front-1', requestedBy: requestedByIdentity, reviewedBy: reviewedByIdentity,
+      status: LabSampleChangeRequestStatus.REJECTED
+    })
+    expect(transaction.labSampleChangeRequest.update.mock.calls[0][0].include).toEqual(adminIdentityInclude)
   })
 
   it('filters the admin list to AdminAccessService-authorized frontend accounts', async () => {
-    prisma.labSampleChangeRequest.findMany.mockResolvedValue([makeRequest()])
+    prisma.labSampleChangeRequest.findMany.mockResolvedValue([makeAdminRequest()])
 
     adminAccess.parseFrontendUserIds.mockReturnValue(['front-1'])
     const rows = await service.listForAdmin(subAdmin, {
@@ -731,23 +778,31 @@ describe('LabSampleChangeRequestsService admin review', () => {
     expect(adminAccess.getAllowedFrontendUserIds).toHaveBeenCalledWith(subAdmin, ['front-1'])
     expect(prisma.labSampleChangeRequest.findMany).toHaveBeenCalledWith({
       where: { frontendUserId: { in: ['front-1'] }, date: historicalDate, status: LabSampleChangeRequestStatus.PENDING },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      include: adminIdentityInclude
     })
     expect(rows[0]).not.toHaveProperty('sourceSnapshot')
-    expect(rows[0]).toMatchObject({ id: 'request-1', blockId: 'block-1', frontendUserId: 'front-1' })
+    expect(rows[0]).toMatchObject({
+      id: 'request-1', blockId: 'block-1', frontendUserId: 'front-1',
+      requestedBy: requestedByIdentity, reviewedBy: null
+    })
   })
 
   it('returns authorized admin detail with snapshots and settlement effects', async () => {
-    prisma.labSampleChangeRequest.findUnique.mockResolvedValue(makeRequest({
+    prisma.labSampleChangeRequest.findUnique.mockResolvedValue(makeAdminRequest({
       settlementEffects: [{ recordId: 'settle-1', oldStatus: MonthlySettlementStatus.PAID }]
     }))
 
     const detail = await service.getForAdmin(subAdmin, 'request-1')
 
     expect(adminAccess.getAllowedFrontendUserIds).toHaveBeenCalledWith(subAdmin, ['front-1'])
+    expect(prisma.labSampleChangeRequest.findUnique).toHaveBeenCalledWith({
+      where: { id: 'request-1' }, include: adminIdentityInclude
+    })
     expect(detail).toMatchObject({
       id: 'request-1', frontendUserId: 'front-1', sourceSnapshot: expect.any(Object), requestedChanges: expect.any(Object), previewResults: expect.any(Object),
-      settlementEffects: [expect.objectContaining({ recordId: 'settle-1' })]
+      settlementEffects: [expect.objectContaining({ recordId: 'settle-1' })],
+      requestedBy: requestedByIdentity, reviewedBy: null
     })
   })
 

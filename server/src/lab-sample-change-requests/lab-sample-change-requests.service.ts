@@ -44,6 +44,11 @@ type RequestRow = {
   createdAt: Date
   updatedAt: Date
 }
+type RequestIdentity = Pick<CurrentUser, 'id' | 'account' | 'username'>
+type AdminRequestRow = RequestRow & {
+  requestedBy: RequestIdentity
+  reviewedBy: RequestIdentity | null
+}
 
 type ReviewDto<T> = Partial<T> & { reviewRemark?: string; remark?: string }
 
@@ -75,6 +80,10 @@ const FIELD_LABELS: Record<string, string> = {
   titaniumRaw: '钛', waterSample: '水样', bottleWater: '瓶水', bottleWaterSample: '瓶水样', moisture: '水分',
   crucible: '坩埚', sampleWeight: '样品重量', burnedCrucibleSample: '灼烧后坩埚样品'
 }
+const ADMIN_IDENTITY_INCLUDE = {
+  requestedBy: { select: { id: true, account: true, username: true } },
+  reviewedBy: { select: { id: true, account: true, username: true } }
+} as const
 
 @Injectable()
 export class LabSampleChangeRequestsService {
@@ -177,10 +186,15 @@ export class LabSampleChangeRequestsService {
     const withdrawnAt = new Date()
     const result = await this.prisma.labSampleChangeRequest.updateMany({
       where: { id: request.id, frontendUserId: user.id, status: LabSampleChangeRequestStatus.PENDING },
-      data: { status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt }
+      data: { status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt, updatedAt: withdrawnAt }
     })
     if (!result.count) throw new ConflictException('修改申请状态已变更，请刷新后重试')
-    return this.toSummary({ ...request, status: LabSampleChangeRequestStatus.WITHDRAWN, withdrawnAt } as RequestRow)
+    return this.toSummary({
+      ...request,
+      status: LabSampleChangeRequestStatus.WITHDRAWN,
+      withdrawnAt,
+      updatedAt: withdrawnAt
+    } as RequestRow)
   }
 
   async listForAdmin(admin: CurrentUser, query: AdminLabSampleChangeRequestQueryDto) {
@@ -193,15 +207,19 @@ export class LabSampleChangeRequestsService {
         ...(query.date ? { date: query.date } : {}),
         ...(query.status ? { status: query.status } : {})
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      include: ADMIN_IDENTITY_INCLUDE
     })
-    return rows.map((row) => this.toAdminSummary(row as RequestRow))
+    return rows.map((row) => this.toAdminSummary(row as AdminRequestRow))
   }
 
   async getForAdmin(admin: CurrentUser, id: string) {
-    const row = await this.prisma.labSampleChangeRequest.findUnique({ where: { id } })
+    const row = await this.prisma.labSampleChangeRequest.findUnique({
+      where: { id },
+      include: ADMIN_IDENTITY_INCLUDE
+    })
     if (!row) throw new NotFoundException('未找到修改申请')
-    const request = row as RequestRow
+    const request = row as AdminRequestRow
     await this.assertAdminRequestAccess(admin, request.frontendUserId)
     return this.toDetail(request)
   }
@@ -293,7 +311,7 @@ export class LabSampleChangeRequestsService {
         }
       })
       return {
-        ...this.toDetail(approved as RequestRow),
+        ...this.toDetail(approved),
         previewResults: results,
         actualResults: results,
         settlementEffects
@@ -329,7 +347,7 @@ export class LabSampleChangeRequestsService {
           sourceId: request.id
         }
       })
-      return this.toDetail(rejected as RequestRow)
+      return this.toDetail(rejected)
     })
   }
 
@@ -371,11 +389,16 @@ export class LabSampleChangeRequestsService {
     }
   }
 
-  private toAdminSummary(row: RequestRow) {
-    return { ...this.toSummary(row), frontendUserId: row.frontendUserId }
+  private toAdminSummary(row: AdminRequestRow) {
+    return {
+      ...this.toSummary(row),
+      frontendUserId: row.frontendUserId,
+      requestedBy: row.requestedBy,
+      reviewedBy: row.reviewedBy
+    }
   }
 
-  private toDetail(row: RequestRow) {
+  private toDetail(row: AdminRequestRow) {
     return {
       ...this.toAdminSummary(row),
       sourceSnapshot: row.sourceSnapshot,
@@ -395,9 +418,12 @@ export class LabSampleChangeRequestsService {
     await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT "id" FROM "LabSampleChangeRequest" WHERE "id" = ${id} FOR UPDATE
     `)
-    const row = await tx.labSampleChangeRequest.findUnique({ where: { id } })
+    const row = await tx.labSampleChangeRequest.findUnique({
+      where: { id },
+      include: ADMIN_IDENTITY_INCLUDE
+    })
     if (!row) throw new NotFoundException('未找到修改申请')
-    return row as RequestRow
+    return row as AdminRequestRow
   }
 
   private async lockAndAssertReviewAccess(
@@ -450,7 +476,8 @@ export class LabSampleChangeRequestsService {
     try {
       return await tx.labSampleChangeRequest.update({
         where: { id, status: LabSampleChangeRequestStatus.PENDING },
-        data
+        data,
+        include: ADMIN_IDENTITY_INCLUDE
       })
     } catch (error) {
       if (!this.isPrismaCode(error, 'P2025')) throw error

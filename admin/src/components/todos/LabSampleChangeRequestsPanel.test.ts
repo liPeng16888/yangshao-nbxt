@@ -26,6 +26,7 @@ const frontendOptions = [
 const pendingSummary = {
   id: 'request-1', frontendUserId: 'front-1', blockId: 'block-1', date: '2026-08-19', blockIndex: 1,
   sampleName: '旧样品', changedFieldLabels: ['样品编号', '价格', '铁'], reason: '客户要求更正', status: 'PENDING',
+  requestedBy: { id: 'front-1', account: 'kaili001', username: '凯里前台' }, reviewedBy: null,
   review: null, withdrawnAt: null, createdAt: '2026-08-20T01:00:00.000Z', updatedAt: '2026-08-20T01:00:00.000Z'
 }
 
@@ -149,6 +150,8 @@ describe('LabSampleChangeRequestsPanel', () => {
     expect(wrapper.text()).toContain('审批通过后，受影响的已结款或部分结款月结记录将重置为未结款')
     expect(wrapper.get('.dialog-stub').text()).toContain('申请时间')
     expect(wrapper.get('.dialog-stub').text()).toContain('2026-08-20T01:00:00.000Z')
+    expect(wrapper.get('.dialog-stub').text()).toContain('申请人凯里前台（kaili001）')
+    expect(wrapper.get('.dialog-stub').text()).toContain('审批人无信息')
     expect(wrapper.find('input').exists()).toBe(false)
 
     element.messageBox.prompt.mockResolvedValueOnce({ value: '   ' })
@@ -161,6 +164,26 @@ describe('LabSampleChangeRequestsPanel', () => {
     )
     expect(api.approveAdminLabSampleChangeRequest).toHaveBeenCalledWith('request-1', '')
     expect(api.getAdminLabSampleChangeRequests).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['APPROVED', '主账号', 'admin'],
+    ['REJECTED', '子管理员', 'sub001']
+  ])('shows the applicant and reviewer identity for a %s detail', async (status, username, account) => {
+    api.getAdminLabSampleChangeRequest.mockResolvedValueOnce({
+      ...pendingDetail,
+      status,
+      reviewedBy: { id: `${status.toLowerCase()}-reviewer`, account, username },
+      review: { remark: status === 'APPROVED' ? '已核对' : '凭证不足', reviewedAt: '2026-08-20T02:00:00.000Z' }
+    })
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="view-sample-change-request-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.dialog-stub').text()).toContain('申请人凯里前台（kaili001）')
+    expect(wrapper.get('.dialog-stub').text()).toContain(`审批人${username}（${account}）`)
   })
 
   it('shows the withdrawal timestamp from a withdrawn server detail', async () => {

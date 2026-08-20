@@ -21,17 +21,17 @@ export interface AdminLabSampleChangeRequestReview {
   reviewedAt: string | null
 }
 
-export interface AdminLabSampleChangeRequestFrontendAccount {
+export interface AdminLabSampleChangeRequestIdentity {
   id: string
   account: string
   username: string
-  displayRemark?: string | null
 }
 
 export interface AdminLabSampleChangeRequestSummary {
   id: string
   frontendUserId: string
-  frontendUser?: AdminLabSampleChangeRequestFrontendAccount
+  requestedBy: AdminLabSampleChangeRequestIdentity
+  reviewedBy: AdminLabSampleChangeRequestIdentity | null
   blockId: string
   date: string
   blockIndex: number

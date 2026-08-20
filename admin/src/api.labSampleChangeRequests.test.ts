@@ -117,6 +117,17 @@ describe('admin lab sample change request Mock lifecycle', () => {
     expect(second[0].sampleBlocks[0]).not.toBe(first[0].sampleBlocks[0])
   })
 
+  it('filters authorized lab sheets by their real date instead of rewriting sheet dates', async () => {
+    const api = await importMockApi()
+
+    const dated = await api.request.get('/admin/data-statistics/lab-sheets', { params: { date: '2026-06-25' } }) as any[]
+    const missing = await api.request.get('/admin/data-statistics/lab-sheets', { params: { date: '2099-01-01' } }) as any[]
+
+    expect(dated).toHaveLength(1)
+    expect(dated[0]).toMatchObject({ id: 'sheet-1', date: '2026-06-25' })
+    expect(missing).toEqual([])
+  })
+
   it('seeds a pending server-shaped request and applies account, status, and date filters', async () => {
     const api = await importMockApi()
 
@@ -126,9 +137,15 @@ describe('admin lab sample change request Mock lifecycle', () => {
     const detail = await api.getAdminLabSampleChangeRequest(rows[0]!.id)
 
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ frontendUserId: 'front-1', status: 'PENDING' })
+    expect(rows[0]).toMatchObject({
+      frontendUserId: 'front-1', status: 'PENDING',
+      requestedBy: { id: 'front-1', account: 'kaili001', username: '凯里化验室' },
+      reviewedBy: null
+    })
     expect(detail).toMatchObject({
       frontendUserId: 'front-1',
+      requestedBy: { id: 'front-1', account: 'kaili001', username: '凯里化验室' },
+      reviewedBy: null,
       sourceSnapshot: { inputs: expect.any(Object), results: expect.any(Object), parameterSnapshot: expect.any(Object) },
       requestedChanges: expect.any(Object),
       previewResults: expect.any(Object),
@@ -166,6 +183,8 @@ describe('admin lab sample change request Mock lifecycle', () => {
     expect(blockAfter.inputs).toMatchObject({ siliconRaw: 1.05, aluminumRaw: 2.7, sulfur: 0.08 })
     expect(approved).toMatchObject({
       status: 'APPROVED', review: { remark: '已核对' },
+      requestedBy: { id: 'front-1', account: 'kaili001', username: '凯里化验室' },
+      reviewedBy: { id: 'root-admin', account: 'admin', username: '主账号' },
       previewResults: { iron: 50 }, actualResults: { iron: 50 },
       settlementEffects: expect.arrayContaining([
         expect.objectContaining({ customer: '李四', oldStatus: 'PAID', newStatus: 'UNPAID' }),
@@ -244,7 +263,11 @@ describe('admin lab sample change request Mock lifecycle', () => {
     const rejected = await api.rejectAdminLabSampleChangeRequest(summary!.id, '  记录有误  ')
     const [sheetAfter] = await api.request.get('/admin/data-statistics/lab-sheets') as any[]
 
-    expect(rejected).toMatchObject({ status: 'REJECTED', review: { remark: '记录有误' } })
+    expect(rejected).toMatchObject({
+      status: 'REJECTED', review: { remark: '记录有误' },
+      requestedBy: { id: 'front-1', account: 'kaili001', username: '凯里化验室' },
+      reviewedBy: { id: 'root-admin', account: 'admin', username: '主账号' }
+    })
     expect(sheetAfter.sampleBlocks).toEqual(sheetBefore.sampleBlocks)
     await expect(api.rejectAdminLabSampleChangeRequest(summary!.id, '再次拒绝')).rejects.toThrow('状态已变更')
   })

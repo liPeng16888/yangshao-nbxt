@@ -145,6 +145,8 @@ const mockSampleChangeRequestedChanges: AdminLabSampleRequestedChanges = {
 }
 const mockMonthlyToNonMonthlyInputs = { ...mockSampleChangeSourceInputs, sequence: '003' }
 const mockNonMonthlyToMonthlyInputs = { ...mockSampleChangeSourceInputs, sequence: '004', paymentStatus: '未结款' }
+const mockFrontOneIdentity = { id: 'front-1', account: 'kaili001', username: '凯里化验室' }
+const mockFrontTwoIdentity = { id: 'front-2', account: 'yangshao002', username: '仰韶客户二' }
 
 const mockRows = {
   customerOverview: [
@@ -267,6 +269,8 @@ const mockRows = {
     {
       id: 'sample-change-request-1',
       frontendUserId: 'front-1',
+      requestedBy: mockFrontOneIdentity,
+      reviewedBy: null,
       blockId: 'block-2',
       date: '2026-06-25',
       blockIndex: 2,
@@ -291,6 +295,8 @@ const mockRows = {
     {
       id: 'sample-change-request-monthly-to-non-monthly',
       frontendUserId: 'front-2',
+      requestedBy: mockFrontTwoIdentity,
+      reviewedBy: null,
       blockId: 'block-3',
       date: '2026-06-26',
       blockIndex: 3,
@@ -318,6 +324,8 @@ const mockRows = {
     {
       id: 'sample-change-request-non-monthly-to-monthly',
       frontendUserId: 'front-2',
+      requestedBy: mockFrontTwoIdentity,
+      reviewedBy: null,
       blockId: 'block-4',
       date: '2026-06-27',
       blockIndex: 4,
@@ -838,6 +846,8 @@ function approveMockLabRequest(id: string, reviewRemark = '') {
   block.inputs = nextInputs as typeof block.inputs
   block.results = results
   row.status = 'APPROVED'
+  const reviewer = mockAdminUser()
+  row.reviewedBy = { id: reviewer.id, account: reviewer.account, username: reviewer.username }
   row.review = { remark: reviewRemark || null, reviewedAt: new Date().toISOString() }
   row.previewResults = results
   row.actualResults = results
@@ -851,6 +861,8 @@ function rejectMockLabRequest(id: string, reviewRemark: string) {
   const reason = reviewRemark.trim()
   if (!reason) throw new Error('请填写拒绝原因')
   row.status = 'REJECTED'
+  const reviewer = mockAdminUser()
+  row.reviewedBy = { id: reviewer.id, account: reviewer.account, username: reviewer.username }
   row.review = { remark: reason, reviewedAt: new Date().toISOString() }
   row.updatedAt = new Date().toISOString()
   return cloneMock(row)
@@ -928,11 +940,11 @@ const mockRequest = {
     }
     if (url === '/admin/data-statistics/lab-sheets') {
       const frontendUserIds = mockAttendanceIds(config)
+      const date = String(config?.params?.date || '')
       const sheets = mockLabSheets
-        .filter((sheet) => frontendUserIds.includes(sheet.frontendUserId))
+        .filter((sheet) => frontendUserIds.includes(sheet.frontendUserId) && (!date || sheet.date === date))
         .map((sheet) => ({
           ...sheet,
-          date: config?.params?.date || sheet.date,
           sampleBlocks: sheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
         }))
         .filter((sheet) => sheet.sampleBlocks.length)

@@ -78,6 +78,8 @@
           <el-descriptions-item label="申请原因">{{ detail.reason }}</el-descriptions-item>
           <el-descriptions-item label="申请状态">{{ statusLabel(detail.status) }}</el-descriptions-item>
           <el-descriptions-item label="申请时间">{{ detail.createdAt }}</el-descriptions-item>
+          <el-descriptions-item label="申请人">{{ identityLabel(detail.requestedBy) }}</el-descriptions-item>
+          <el-descriptions-item label="审批人">{{ identityLabel(detail.reviewedBy) }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.withdrawnAt" label="撤回时间">{{ detail.withdrawnAt }}</el-descriptions-item>
           <el-descriptions-item label="审批备注">{{ detail.review?.remark || '无信息' }}</el-descriptions-item>
           <el-descriptions-item label="审批时间">{{ detail.review?.reviewedAt || '无信息' }}</el-descriptions-item>
@@ -246,6 +248,10 @@ async function retryLoad() {
 function accountLabel(frontendUserId: string) {
   const option = frontendOptions.value.find((item) => item.id === frontendUserId)
   return option ? `${option.name}（${option.account}）` : frontendUserId
+}
+
+function identityLabel(identity: AdminLabSampleChangeRequestSummary['reviewedBy']) {
+  return identity ? `${identity.username}（${identity.account}）` : '无信息'
 }
 
 function statusLabel(value: AdminLabSampleChangeRequestStatus) {
