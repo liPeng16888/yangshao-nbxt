@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { readAccessGuardSessions } from '@/api/accessGuard'
+import { readAccessGuardSessions, type AccessGuardGroup } from '@/api/accessGuard'
 import {
   addSampleBlocks,
   applyCurrentParametersFromIndex as applyCurrentParametersFromIndexApi,
@@ -33,6 +33,7 @@ import {
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import { hasLabDetectionInput } from '@/utils/sampleReport'
 import { isPositiveInteger } from '@/utils/validators'
+import { useAccessGuardStore } from './accessGuard'
 
 type AutoSaveStatus = 'idle' | 'pending' | 'saving' | 'retrying' | 'saved' | 'error' | 'conflict'
 type DirtyField = {
@@ -152,33 +153,59 @@ const DRAFT_STORAGE_PREFIX = 'ys_lab_draft:v1:'
 const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const COMPLETED_SAMPLE_DATA_FEATURE = 'COMPLETED_SAMPLE_DATA'
 
-function digestAccessGrantToken(token: string) {
-  let left = 0x811c9dc5
-  let right = 0x9e3779b9
-  for (let index = 0; index < token.length; index += 1) {
-    const code = token.charCodeAt(index)
-    left = Math.imul(left ^ code, 0x01000193)
-    right = Math.imul(right ^ code, 0x85ebca6b)
-  }
-  return `${(left >>> 0).toString(36)}.${(right >>> 0).toString(36)}`
-}
+type CompletedSampleAccessContext =
+  | {
+      mode: 'granted'
+      sessionId: string
+      groupId: string
+      grantVersion: number
+      expiresAt: number
+      features: string[]
+      token: string
+    }
+  | { mode: 'protected'; groupSignatures: string[] }
+  | { mode: 'unprotected' }
 
-function getCompletedSampleGrantFingerprint(now = Date.now()) {
+function getCompletedSampleAccessContext(groups: AccessGuardGroup[], now = Date.now()): CompletedSampleAccessContext {
   const selected = Object.entries(readAccessGuardSessions()).find(([groupId, session]) =>
     session.groupId === groupId && Number.isInteger(session.grantVersion) && Number(session.grantVersion) > 0 &&
     (session.expiresAt || 0) > now && Boolean(session.token) && session.features?.includes(COMPLETED_SAMPLE_DATA_FEATURE)
   )
   const token = selected?.[1].token
-  if (!selected || !token) return null
-  const [sessionId, session] = selected
-  return JSON.stringify([
-    sessionId,
-    session.groupId,
-    session.grantVersion,
-    session.expiresAt,
-    [...(session.features || [])].sort(),
-    digestAccessGrantToken(token)
-  ])
+  if (selected && token) {
+    const [sessionId, session] = selected
+    return {
+      mode: 'granted',
+      sessionId,
+      groupId: sessionId,
+      grantVersion: Number(session.grantVersion),
+      expiresAt: Number(session.expiresAt),
+      features: [...(session.features || [])].sort(),
+      token
+    }
+  }
+  const groupSignatures = groups
+    .filter((group) => group.enabled && group.features.includes(COMPLETED_SAMPLE_DATA_FEATURE))
+    .map((group) => JSON.stringify([group.id, group.grantVersion, [...group.features].sort()]))
+    .sort()
+  return groupSignatures.length ? { mode: 'protected', groupSignatures } : { mode: 'unprotected' }
+}
+
+function isSameCompletedSampleAccessContext(
+  left: CompletedSampleAccessContext,
+  right: CompletedSampleAccessContext
+) {
+  if (left.mode !== right.mode) return false
+  if (left.mode === 'unprotected' && right.mode === 'unprotected') return true
+  if (left.mode === 'protected' && right.mode === 'protected') {
+    return JSON.stringify(left.groupSignatures) === JSON.stringify(right.groupSignatures)
+  }
+  if (left.mode !== 'granted' || right.mode !== 'granted') return false
+  return (
+    left.sessionId === right.sessionId && left.groupId === right.groupId &&
+    left.grantVersion === right.grantVersion && left.expiresAt === right.expiresAt &&
+    left.token === right.token && JSON.stringify(left.features) === JSON.stringify(right.features)
+  )
 }
 
 export const useLabSheetStore = defineStore('labSheet', () => {
@@ -234,6 +261,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   let recoveryListenersBound = false
   let draftStorageErrorShown = false
   const clientId = getLabSheetClientId()
+  const accessGuard = useAccessGuardStore()
 
   const currentParameters = computed(() => sheet.value?.parameters || null)
   const sampleBlocks = computed(() => sheet.value?.sampleBlocks || [])
@@ -586,23 +614,47 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       throw new Error('历史日期表格仅支持查看，不能修改')
     }
     const targetSheetId = sheet.value.id
+    const targetDate = sheet.value.date
     const targetOwner = getDraftOwner()
+    const targetSheetGeneration = sheetStateGeneration
     if (activeCreateRetestRequests.size) {
       await Promise.allSettled(Array.from(activeCreateRetestRequests.values()))
     }
-    if (sheet.value?.id !== targetSheetId || sheet.value.readonly || getDraftOwner() !== targetOwner) {
+    if (
+      sheetStateGeneration !== targetSheetGeneration || sheet.value?.id !== targetSheetId ||
+      sheet.value.date !== targetDate || sheet.value.readonly || getDraftOwner() !== targetOwner
+    ) {
       throw new Error('表格已切换，请在当前表格重新新增样品格')
     }
     const flushed = await persistAllBlocks({ silent: true })
     if (!flushed.success) throw new Error('仍有样品数据未保存，请先重试保存')
-    if (!sheet.value) return
+    if (
+      sheetStateGeneration !== targetSheetGeneration || sheet.value?.id !== targetSheetId ||
+      sheet.value.date !== targetDate || sheet.value.readonly || getDraftOwner() !== targetOwner
+    ) {
+      throw new Error('表格已切换，请在当前表格重新新增样品格')
+    }
+    const blockVersionsAtRequest = new Map(blockVersions)
     const retestGenerationAtRequest = retestCollectionGeneration
     adding.value = true
     try {
       const appendedSheet = await addSampleBlocks(targetSheetId, Number(countValue))
-      if (retestGenerationAtRequest === retestCollectionGeneration) sheet.value = appendedSheet
-      else applyRemoteSheet(appendedSheet, { retainMissingRetests: true })
-      resetLocalSaveState()
+      if (
+        sheetStateGeneration !== targetSheetGeneration || sheet.value?.id !== targetSheetId ||
+        sheet.value.date !== targetDate || sheet.value.readonly || getDraftOwner() !== targetOwner
+      ) return
+      const preferLocalBlockIds = new Set(
+        sheet.value.sampleBlocks
+          .filter((block) => (blockVersions.get(block.id) || 0) !== (blockVersionsAtRequest.get(block.id) || 0))
+          .map((block) => block.id)
+      )
+      sheetStateGeneration += 1
+      remoteRefreshSequence = 0
+      latestAppliedRemoteRefreshSequence = 0
+      applyRemoteSheet(appendedSheet, {
+        preferLocalBlockIds,
+        retainMissingRetests: retestGenerationAtRequest !== retestCollectionGeneration
+      })
       ElMessage.success(`已新增 ${countValue} 个样品计算格`)
     } finally {
       adding.value = false
@@ -1692,22 +1744,25 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     const requestSequence = ++remoteRefreshSequence
     const requestRetestCollectionGeneration = retestCollectionGeneration
     const requestOwner = getDraftOwner()
-    const requestGrantFingerprint = getCompletedSampleGrantFingerprint()
     try {
+      await accessGuard.loadGroups()
+      if (
+        sheetStateGeneration !== requestSheetGeneration || getDraftOwner() !== requestOwner ||
+        sheet.value?.id !== current.id || sheet.value.date !== current.date
+      ) return
+      const requestAccessContext = getCompletedSampleAccessContext(accessGuard.groups)
       const remoteSheet = await getLabSheetByDate(current.date)
-      const currentGrantFingerprint = getCompletedSampleGrantFingerprint()
+      const currentAccessContext = getCompletedSampleAccessContext(accessGuard.groups)
       if (
         sheetStateGeneration === requestSheetGeneration &&
         requestSequence > latestAppliedRemoteRefreshSequence &&
         getDraftOwner() === requestOwner &&
-        requestGrantFingerprint === currentGrantFingerprint &&
+        isSameCompletedSampleAccessContext(requestAccessContext, currentAccessContext) &&
         sheet.value?.id === current.id && sheet.value.date === current.date
       ) {
         latestAppliedRemoteRefreshSequence = requestSequence
         applyRemoteSheet(remoteSheet, {
-          allowPresentationRestore: Boolean(
-            requestGrantFingerprint
-          ),
+          allowPresentationRestore: requestAccessContext.mode !== 'protected',
           retainMissingRetests: requestRetestCollectionGeneration !== retestCollectionGeneration
         })
         realtimeError.value = ''
@@ -1788,7 +1843,11 @@ export const useLabSheetStore = defineStore('labSheet', () => {
 
   function applyRemoteSheet(
     remoteSheet: LabSheet,
-    options: { allowPresentationRestore?: boolean; retainMissingRetests?: boolean } = {}
+    options: {
+      allowPresentationRestore?: boolean
+      preferLocalBlockIds?: ReadonlySet<string>
+      retainMissingRetests?: boolean
+    } = {}
   ) {
     if (!sheet.value) return
     const localBlocks = new Map(sheet.value.sampleBlocks.map((block) => [block.id, block]))
@@ -1796,7 +1855,11 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     nextSheet.sampleBlocks = nextSheet.sampleBlocks.map((remoteBlock) => {
       const localBlock = localBlocks.get(remoteBlock.id)
       if (!localBlock) return remoteBlock
-      const mergedBlock = mergeRemoteBlockState(remoteBlock, localBlock)
+      const mergedBlock = mergeRemoteBlockState(
+        remoteBlock,
+        localBlock,
+        options.preferLocalBlockIds?.has(remoteBlock.id)
+      )
       mergedBlock.retests = mergeRemoteRetestCollection(remoteBlock.retests, localBlock.retests, {
         allowPresentationRestore: options.allowPresentationRestore,
         retainMissingLocal: options.retainMissingRetests
@@ -1887,7 +1950,8 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return merged
   }
 
-  function mergeRemoteBlockState(remoteBlock: SampleBlock, localBlock: SampleBlock) {
+  function mergeRemoteBlockState(remoteBlock: SampleBlock, localBlock: SampleBlock, preferLocal = false) {
+    if (preferLocal) return cloneBlock(localBlock)
     const dirtyFields = pendingDirtyFields.get(remoteBlock.id)
     if (!dirtyFields?.size) return cloneBlock(remoteBlock)
     const merged = cloneBlock(remoteBlock)

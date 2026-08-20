@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
+import type { AccessGuardGroup } from '@/api/accessGuard'
 import type { Customer } from '@/types/customer'
 import {
   sampleRetestInputFields,
@@ -10,6 +11,7 @@ import {
   type SampleRetestInput
 } from '@/types/labSheet'
 import { calculateSampleResults } from '@/utils/formulaEngine'
+import { useAccessGuardStore } from './accessGuard'
 import { useLabSheetStore } from './labSheet'
 
 const apiMocks = vi.hoisted(() => ({
@@ -63,6 +65,7 @@ function setCompletedSampleGrant(options: {
   token?: string
   grantVersion?: number
 } = {}) {
+  window.localStorage.setItem('ys_mock_access_guard_groups', JSON.stringify([makeCompletedSampleProtectionGroup()]))
   window.localStorage.setItem('ys_access_guard_group_sessions', JSON.stringify({
     'completed-samples': {
       expiresAt: options.expiresAt ?? Date.now() + 60_000,
@@ -72,6 +75,20 @@ function setCompletedSampleGrant(options: {
       features: ['COMPLETED_SAMPLE_DATA']
     }
   }))
+}
+
+function makeCompletedSampleProtectionGroup(): AccessGuardGroup {
+  return {
+    id: 'completed-samples',
+    name: '已完成样品数据',
+    enabled: true,
+    ttlMinutes: 5,
+    grantVersion: 1,
+    password: '1234',
+    recoveryPrompt: '',
+    recoveryAnswer: '',
+    features: ['COMPLETED_SAMPLE_DATA']
+  }
 }
 
 type FakeEventSource = {
@@ -920,6 +937,106 @@ describe('labSheet store auto save', () => {
     expect(store.sampleBlocks[0].retests.map((item) => item.id)).toEqual(['retest-created-during-append'])
   })
 
+  it('does not apply an append response after its sheet and owner are replaced', async () => {
+    let resolveAppend!: (value: LabSheet) => void
+    const appendResponse = new Promise<LabSheet>((resolve) => { resolveAppend = resolve })
+    const replacement = makeSheet()
+    replacement.id = 'sheet-2'
+    replacement.date = '2026-06-24'
+    replacement.readonly = true
+    const disclosedOldSheet = makeSegmentedSheet(2)
+    disclosedOldSheet.sampleBlocks[0].retests = [makeRetest('old-owner-private-retest', { ironRaw: 99 })]
+    apiMocks.addSampleBlocks.mockReturnValue(appendResponse)
+    apiMocks.getLabSheetByDate.mockResolvedValue(replacement)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    const appendRequest = store.appendSampleBlocks(1)
+    await vi.waitFor(() => expect(apiMocks.addSampleBlocks).toHaveBeenCalledTimes(1))
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-2', dataOwnerId: 'front-2', account: 'front-2' }))
+    await expect(store.loadSheetByDate('2026-06-24')).resolves.toBe(true)
+
+    resolveAppend(disclosedOldSheet)
+    await appendRequest
+
+    expect(store.sheet).toEqual(replacement)
+    expect(store.sampleBlocks[0].retests).toEqual([])
+    expect(messageMocks.success).not.toHaveBeenCalled()
+  })
+
+  it('keeps an original block edit saved while append is in flight', async () => {
+    let resolveAppend!: (value: LabSheet) => void
+    const appendResponse = new Promise<LabSheet>((resolve) => { resolveAppend = resolve })
+    apiMocks.addSampleBlocks.mockReturnValue(appendResponse)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    const appendRequest = store.appendSampleBlocks(1)
+    await vi.waitFor(() => expect(apiMocks.addSampleBlocks).toHaveBeenCalledTimes(1))
+    store.patchBlock('block-1', { sampleNumber: 'EDITED-DURING-APPEND' })
+    await vi.advanceTimersByTimeAsync(900)
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledWith('sheet-1', expect.objectContaining({
+      changedFields: { sampleNumber: 'EDITED-DURING-APPEND' }
+    }))
+    expect(store.pendingAutoSaveCount).toBe(0)
+
+    resolveAppend(makeSegmentedSheet(2))
+    await appendRequest
+
+    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('EDITED-DURING-APPEND')
+    expect(store.pendingAutoSaveCount).toBe(0)
+  })
+
+  it('keeps post-create retest revisions and prepared save work across an older append response', async () => {
+    let resolveAppend!: (value: LabSheet) => void
+    let resolveFirstSave!: (value: SampleRetest) => void
+    const appendResponse = new Promise<LabSheet>((resolve) => { resolveAppend = resolve })
+    const firstSave = new Promise<SampleRetest>((resolve) => { resolveFirstSave = resolve })
+    const created = makeRetest('retest-created-and-edited')
+    apiMocks.addSampleBlocks.mockReturnValue(appendResponse)
+    apiMocks.createSampleRetests.mockResolvedValue([created])
+    apiMocks.saveSampleRetest
+      .mockReturnValueOnce(firstSave)
+      .mockResolvedValueOnce(makeRetest(created.id, { ironRaw: 6 }, {
+        everFilled: true,
+        updatedAt: '2026-06-25T00:00:02.000Z'
+      }))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    const appendRequest = store.appendSampleBlocks(1)
+    await vi.waitFor(() => expect(apiMocks.addSampleBlocks).toHaveBeenCalledTimes(1))
+    await store.createRetests(['block-1'])
+    store.patchRetest('block-1', created.id, { ironRaw: 5 })
+    const firstPersist = store.persistRetest('block-1', created.id)
+    await vi.waitFor(() => expect(apiMocks.saveSampleRetest).toHaveBeenCalledTimes(1))
+    const firstPayload = apiMocks.saveSampleRetest.mock.calls[0][2]
+    store.patchRetest('block-1', created.id, { ironRaw: 6 })
+
+    resolveAppend(makeSegmentedSheet(2))
+    await appendRequest
+    expect(store.sampleBlocks[0].retests[0].inputs.ironRaw).toBe(6)
+    expect(store.pendingAutoSaveCount).toBe(1)
+
+    resolveFirstSave(makeRetest(created.id, { ironRaw: 5 }, {
+      everFilled: true,
+      updatedAt: '2026-06-25T00:00:01.000Z'
+    }))
+    await firstPersist
+    expect(store.sampleBlocks[0].retests[0].inputs.ironRaw).toBe(6)
+    expect(store.pendingAutoSaveCount).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(900)
+    expect(apiMocks.saveSampleRetest).toHaveBeenCalledTimes(2)
+    expect(apiMocks.saveSampleRetest.mock.calls[1][2]).toMatchObject({
+      baseUpdatedAt: '2026-06-25T00:00:01.000Z',
+      baseInputs: { ironRaw: 5 },
+      changedFields: { ironRaw: 6 }
+    })
+    expect(apiMocks.saveSampleRetest.mock.calls[1][2].idempotencyKey).not.toBe(firstPayload.idempotencyKey)
+    expect(store.pendingAutoSaveCount).toBe(0)
+  })
+
   it('does not merge a create response after the authenticated draft owner changes', async () => {
     let resolveCreate!: (value: SampleRetest[]) => void
     const deferredCreate = new Promise<SampleRetest[]>((resolve) => { resolveCreate = resolve })
@@ -1285,6 +1402,70 @@ describe('labSheet store auto save', () => {
     }))
   })
 
+  it('restores an editable retest without a grant after completed-data protection is disabled', async () => {
+    const source = makeEventSource()
+    const sharedUpdatedAt = '2026-06-25T00:00:02.000Z'
+    const redacted = makeRetest('retest-1', {}, {
+      readonly: true,
+      sensitiveFieldsHidden: true,
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    const unprotected = makeRetest('retest-1', { ironRaw: 6 }, {
+      readonly: false,
+      sensitiveFieldsHidden: false,
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    const accessGuard = useAccessGuardStore()
+    accessGuard.groups = [makeCompletedSampleProtectionGroup()]
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(redacted))
+    apiMocks.getLabSheetByDate.mockResolvedValue(makeSheetWithRetests(unprotected))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    accessGuard.groups = []
+    window.localStorage.removeItem('ys_access_guard_group_sessions')
+    source.onmessage?.({ data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent)
+
+    await vi.waitFor(() => expect(store.sampleBlocks[0].retests[0]).toEqual(unprotected))
+  })
+
+  it('does not treat an unloaded protected feature as unprotected during refetch', async () => {
+    const source = makeEventSource()
+    const sharedUpdatedAt = '2026-06-25T00:00:02.000Z'
+    const redacted = makeRetest('retest-1', {}, {
+      readonly: true,
+      sensitiveFieldsHidden: true,
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    const unauthorizedUnredacted = makeRetest('retest-1', { ironRaw: 6 }, {
+      readonly: false,
+      sensitiveFieldsHidden: false,
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    window.localStorage.setItem('ys_mock_access_guard_groups', JSON.stringify([makeCompletedSampleProtectionGroup()]))
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(redacted))
+    apiMocks.getLabSheetByDate.mockResolvedValue(makeSheetWithRetests(unauthorizedUnredacted))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    source.onmessage?.({ data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent)
+    await vi.waitFor(() => expect(apiMocks.getLabSheetByDate).toHaveBeenCalledTimes(1))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.sampleBlocks[0].retests[0]).toEqual(redacted)
+  })
+
   it('does not restore redacted values when the access grant is revoked during refetch', async () => {
     const source = makeEventSource()
     let resolveAuthorizedPull!: (value: LabSheet) => void
@@ -1348,6 +1529,41 @@ describe('labSheet store auto save', () => {
     }) } as MessageEvent)
     await vi.waitFor(() => expect(apiMocks.getLabSheetByDate).toHaveBeenCalledTimes(1))
     await vi.advanceTimersByTimeAsync(1_001)
+    resolveAuthorizedPull(makeSheetWithRetests(authorized))
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.sampleBlocks[0].retests[0]).toEqual(redacted)
+  })
+
+  it('does not restore redacted values when the access grant token changes during refetch', async () => {
+    const source = makeEventSource()
+    let resolveAuthorizedPull!: (value: LabSheet) => void
+    const authorizedPull = new Promise<LabSheet>((resolve) => { resolveAuthorizedPull = resolve })
+    const sharedUpdatedAt = '2026-06-25T00:00:02.000Z'
+    const redacted = makeRetest('retest-1', {}, {
+      readonly: true,
+      sensitiveFieldsHidden: true,
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    const authorized = makeRetest('retest-1', { ironRaw: 6 }, {
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    setCompletedSampleGrant({ token: 'request-grant-token' })
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(redacted))
+    apiMocks.getLabSheetByDate.mockReturnValue(authorizedPull)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    source.onmessage?.({ data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent)
+    await vi.waitFor(() => expect(apiMocks.getLabSheetByDate).toHaveBeenCalledTimes(1))
+    setCompletedSampleGrant({ token: 'replacement-grant-token' })
     resolveAuthorizedPull(makeSheetWithRetests(authorized))
     await Promise.resolve()
     await Promise.resolve()
@@ -1681,11 +1897,10 @@ describe('labSheet store auto save', () => {
         updatedAt: new Date().toISOString()
       })
     } as MessageEvent)
-    await Promise.resolve()
-    await Promise.resolve()
-
-    expect(apiMocks.getLabSheetByDate).toHaveBeenCalledWith('2026-06-25')
-    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('PULLED-001')
+    await vi.waitFor(() => {
+      expect(apiMocks.getLabSheetByDate).toHaveBeenCalledWith('2026-06-25')
+      expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('PULLED-001')
+    })
   })
 
   it('treats sheet-reloaded as an untrusted signal and pulls with this client access context', async () => {
@@ -1712,11 +1927,10 @@ describe('labSheet store auto save', () => {
         }
       })
     } as MessageEvent)
-    await Promise.resolve()
-    await Promise.resolve()
-
-    expect(apiMocks.getLabSheetByDate).toHaveBeenCalledWith('2026-06-25')
-    expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('GRANT-FILTERED-PULL')
+    await vi.waitFor(() => {
+      expect(apiMocks.getLabSheetByDate).toHaveBeenCalledWith('2026-06-25')
+      expect(store.sampleBlocks[0].inputs.sampleNumber).toBe('GRANT-FILTERED-PULL')
+    })
   })
 
   it('treats block-saved as an untrusted signal and pulls with this client access context', async () => {
