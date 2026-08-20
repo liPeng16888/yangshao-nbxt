@@ -48,10 +48,12 @@ let labParameters: LabParameter = {
   savedAt: dayjs().toISOString()
 }
 
-let customers: Customer[] = [
-  { id: 'c-1', name: '洛阳矿业样品 001', phone: '13800000001', wechat: 'luoyang001', wechatNickname: '洛阳矿业' },
-  { id: 'c-2', name: '三门峡选矿厂', phone: '13800000002', wechat: 'smx-ore', wechatNickname: '三门峡客户' },
-  { id: 'c-3', name: '渑池送样客户', phone: '13800000003', wechat: 'mianchi-lab', wechatNickname: '渑池样品' }
+type StoredCustomer = Customer & { frontendUserId: string }
+
+let customers: StoredCustomer[] = [
+  { id: 'c-1', frontendUserId: 'u-admin', name: '洛阳矿业样品 001', phone: '13800000001', wechat: 'luoyang001', wechatNickname: '洛阳矿业' },
+  { id: 'c-2', frontendUserId: 'u-admin', name: '三门峡选矿厂', phone: '13800000002', wechat: 'smx-ore', wechatNickname: '三门峡客户' },
+  { id: 'c-3', frontendUserId: 'u-admin', name: '渑池送样客户', phone: '13800000003', wechat: 'mianchi-lab', wechatNickname: '渑池样品' }
 ]
 
 let blacklist: BlacklistRecord[] = [
@@ -458,10 +460,12 @@ function normalizeMockPayer(value: unknown): NonNullable<LabSampleChangePatch['p
 }
 
 function canonicalMockPayerCustomers(customerIds: string[]) {
-  const customerById = new Map(customers.map((customer) => [customer.id, customer]))
+  const customerById = new Map(customers
+    .filter((customer) => customer.frontendUserId === currentUser.id)
+    .map((customer) => [customer.id, customer]))
   const canonical = customerIds.map((id) => customerById.get(id))
   if (canonical.some((customer) => !customer)) throw new Error('付款客户无效')
-  return canonical as NonNullable<LabSampleInput['customers']>
+  return (canonical as StoredCustomer[]).map(publicCustomer) as NonNullable<LabSampleInput['customers']>
 }
 
 function applyMockChanges(inputs: LabSampleInput, changes: LabSampleChangePatch, payerCustomers: NonNullable<LabSampleInput['customers']>): LabSampleInput {
@@ -503,17 +507,19 @@ function hasVisibleMockSampleInput(inputs: LabSampleInput) {
 
 export async function mockSearchCustomers(keyword: string) {
   const query = keyword.trim().toLowerCase()
+  const scopedCustomers = customers.filter((item) => item.frontendUserId === currentUser.id)
   const data = query
-    ? customers.filter((item) => `${item.name}${item.phone || ''}${item.wechat || ''}${item.wechatNickname || ''}`.toLowerCase().includes(query))
-    : customers
-  return delay(data)
+    ? scopedCustomers.filter((item) => `${item.name}${item.phone || ''}${item.wechat || ''}${item.wechatNickname || ''}`.toLowerCase().includes(query))
+    : scopedCustomers
+  return delay(data.map(publicCustomer))
 }
 
 export async function mockCreateCustomer(payload: CustomerPayload) {
   const customerName = payload.name?.trim() || payload.phone?.trim() || payload.wechat?.trim() || payload.wechatNickname?.trim()
   if (!customerName) throw new Error('请至少填写一项客户信息')
-  const customer: Customer = {
+  const customer: StoredCustomer = {
     id: `c-${Date.now()}`,
+    frontendUserId: currentUser.id,
     name: customerName,
     phone: payload.phone?.trim() || undefined,
     wechat: payload.wechat?.trim() || undefined,
@@ -521,14 +527,18 @@ export async function mockCreateCustomer(payload: CustomerPayload) {
     note: payload.note?.trim() || undefined
   }
   customers.unshift(customer)
-  return delay(customer)
+  return delay(publicCustomer(customer))
 }
 
 export async function mockDeleteCustomer(id: string) {
-  const customer = customers.find((item) => item.id === id)
+  const customer = customers.find((item) => item.id === id && item.frontendUserId === currentUser.id)
   if (!customer) throw new Error('客户信息不存在')
-  customers = customers.filter((item) => item.id !== id)
+  customers = customers.filter((item) => item.id !== id || item.frontendUserId !== currentUser.id)
   return delay({ id })
+}
+
+function publicCustomer({ frontendUserId: _frontendUserId, ...customer }: StoredCustomer): Customer {
+  return customer
 }
 
 export async function mockSearchBlacklist(keyword = '') {

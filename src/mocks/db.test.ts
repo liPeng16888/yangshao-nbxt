@@ -164,4 +164,46 @@ describe('segmented parameter mock database validation', () => {
     await expect(db.mockWithdrawLabSampleChangeRequest(created.id)).rejects.toThrow('未找到待撤回的修改申请')
     expect((await resolve(db.mockCreateLabSampleChangeRequest(basePayload)).then((row) => row.status))).toBe('PENDING')
   })
+
+  it('scopes customer search, deletion, and payer canonicalization to the current mock account', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    const resolve = async <T>(promise: Promise<T>) => {
+      const handled = promise.then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error })
+      )
+      await vi.runAllTimersAsync()
+      const result = await handled
+      if (!result.ok) throw result.error
+      return result.value
+    }
+    const firstCustomer = await resolve(db.mockCreateCustomer({ name: '第一账号客户' }))
+    await resolve(db.mockRegister({
+      username: '第二账号', account: 'second-account', password: 'password', confirmPassword: 'password', inviteCode: 'YANGSHAO-2026'
+    }))
+
+    expect((await resolve(db.mockSearchCustomers(''))).map((customer) => customer.id)).not.toContain(firstCustomer.id)
+    await expect(resolve(db.mockDeleteCustomer(firstCustomer.id))).rejects.toThrow('客户信息不存在')
+    const ownCustomer = await resolve(db.mockCreateCustomer({ name: '第二账号客户' }))
+    expect(ownCustomer).not.toHaveProperty('frontendUserId')
+
+    const sheet = await resolve(db.mockCurrentLabSheet())
+    const block = await resolve(db.mockSaveSampleBlock(sheet.id, {
+      id: sheet.sampleBlocks[0].id, changedFields: { sampleNumber: '跨账号样品', ironRaw: 1 }
+    }))
+    vi.setSystemTime(new Date('2026-08-21T04:00:00.000Z'))
+    const basePayload = { blockId: block.id, baseUpdatedAt: block.updatedAt!, reason: '客户更正' }
+    await expect(resolve(db.mockCreateLabSampleChangeRequest({
+      ...basePayload, changes: { payerCustomer: { customerIds: [firstCustomer.id], customerText: '第一账号客户' } }
+    }))).rejects.toThrow('付款客户无效')
+
+    const created = await resolve(db.mockCreateLabSampleChangeRequest({
+      ...basePayload, changes: { payerCustomer: { customerIds: [ownCustomer.id], customerText: '伪造文本' } }
+    }))
+    const detail = await resolve(db.mockGetLabSampleChangeRequest(created.id))
+    expect(detail.requestedChanges).toMatchObject({
+      payerCustomer: { customerIds: [ownCustomer.id], customerText: '第二账号客户' }
+    })
+  })
 })
