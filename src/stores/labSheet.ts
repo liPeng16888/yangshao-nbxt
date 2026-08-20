@@ -85,6 +85,12 @@ type CreateRetestsPayload = {
   idempotencyKey: string
 }
 
+type PreparedCreateRetestRequest = {
+  owner: string
+  sheetId: string
+  payload: CreateRetestsPayload
+}
+
 export type PersistAllBlocksResult = {
   success: boolean
   failedBlockIds: string[]
@@ -184,7 +190,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   const retestLifecycleGenerations = new Map<string, number>()
   const deletedRetestIds = new Set<string>()
   const activeCreateRetestRequests = new Map<string, Promise<SampleRetest[]>>()
-  const preparedCreateRetestRequests = new Map<string, CreateRetestsPayload>()
+  const preparedCreateRetestRequests = new Map<string, PreparedCreateRetestRequest>()
   let activeAutoSaveCount = 0
   let sheetStateGeneration = 0
   let remoteRefreshSequence = 0
@@ -330,17 +336,23 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       return Promise.reject(new Error('历史日期表格仅支持查看，不能创建复样'))
     }
     const targetSheetId = sheet.value.id
-    const requestSignature = JSON.stringify([targetSheetId, ...sampleBlockIds])
+    const targetOwner = getDraftOwner()
+    cleanupPreparedCreateRetestRequests(targetSheetId, targetOwner)
+    const requestSignature = JSON.stringify([targetOwner, targetSheetId, ...sampleBlockIds])
     const activeRequest = activeCreateRetestRequests.get(requestSignature)
     if (activeRequest) return activeRequest
-    const payload = preparedCreateRetestRequests.get(requestSignature) || {
-      sampleBlockIds: [...sampleBlockIds],
-      idempotencyKey: crypto.randomUUID()
+    const preparedRequest = preparedCreateRetestRequests.get(requestSignature) || {
+      owner: targetOwner,
+      sheetId: targetSheetId,
+      payload: {
+        sampleBlockIds: [...sampleBlockIds],
+        idempotencyKey: crypto.randomUUID()
+      }
     }
-    preparedCreateRetestRequests.set(requestSignature, payload)
-    const request = createRetestsAfterFlush(targetSheetId, payload)
+    preparedCreateRetestRequests.set(requestSignature, preparedRequest)
+    const request = createRetestsAfterFlush(targetSheetId, targetOwner, preparedRequest.payload)
       .then((created) => {
-        if (preparedCreateRetestRequests.get(requestSignature) === payload) {
+        if (preparedCreateRetestRequests.get(requestSignature) === preparedRequest) {
           preparedCreateRetestRequests.delete(requestSignature)
         }
         return created
@@ -354,19 +366,19 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return request
   }
 
-  async function createRetestsAfterFlush(targetSheetId: string, payload: CreateRetestsPayload) {
+  async function createRetestsAfterFlush(targetSheetId: string, targetOwner: string, payload: CreateRetestsPayload) {
     const flushed = await persistAllBlocks({ silent: true })
     if (!flushed.success) throw new Error('仍有数据未保存，请先重试保存')
-    if (sheet.value?.id !== targetSheetId || sheet.value.readonly) {
+    if (sheet.value?.id !== targetSheetId || sheet.value.readonly || getDraftOwner() !== targetOwner) {
       throw new Error('表格已切换，请在当前表格重新创建复样')
     }
     const created = await createSampleRetestsApi(targetSheetId, payload)
-    mergeCreatedRetests(created, targetSheetId)
+    mergeCreatedRetests(created, targetSheetId, targetOwner)
     return created
   }
 
-  function mergeCreatedRetests(created: SampleRetest[], sheetId: string) {
-    if (sheet.value?.id !== sheetId) return
+  function mergeCreatedRetests(created: SampleRetest[], sheetId: string, owner: string) {
+    if (sheet.value?.id !== sheetId || getDraftOwner() !== owner) return
     created.forEach((retest) => {
       if (deletedRetestIds.has(retest.id)) return
       const block = sheet.value?.sampleBlocks.find((item) => item.id === retest.sampleBlockId)
@@ -542,12 +554,20 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (sheet.value.readonly) {
       throw new Error('历史日期表格仅支持查看，不能修改')
     }
+    const targetSheetId = sheet.value.id
+    const targetOwner = getDraftOwner()
+    if (activeCreateRetestRequests.size) {
+      await Promise.allSettled(Array.from(activeCreateRetestRequests.values()))
+    }
+    if (sheet.value?.id !== targetSheetId || sheet.value.readonly || getDraftOwner() !== targetOwner) {
+      throw new Error('表格已切换，请在当前表格重新新增样品格')
+    }
     const flushed = await persistAllBlocks({ silent: true })
     if (!flushed.success) throw new Error('仍有样品数据未保存，请先重试保存')
     if (!sheet.value) return
     adding.value = true
     try {
-      sheet.value = await addSampleBlocks(sheet.value.id, Number(countValue))
+      sheet.value = await addSampleBlocks(targetSheetId, Number(countValue))
       resetLocalSaveState()
       ElMessage.success(`已新增 ${countValue} 个样品计算格`)
     } finally {
@@ -879,6 +899,15 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return getRetestLifecycleGeneration(retestId) === generation && !deletedRetestIds.has(retestId)
   }
 
+  function cleanupPreparedCreateRetestRequests(currentSheetId?: string, currentOwner = getDraftOwner()) {
+    preparedCreateRetestRequests.forEach((prepared, signature) => {
+      if (activeCreateRetestRequests.has(signature)) return
+      if (prepared.sheetId !== currentSheetId || prepared.owner !== currentOwner) {
+        preparedCreateRetestRequests.delete(signature)
+      }
+    })
+  }
+
   function resetLocalSaveState() {
     sheetStateGeneration += 1
     remoteRefreshSequence = 0
@@ -903,7 +932,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     retestSaveChains.clear()
     retestLifecycleGenerations.clear()
     deletedRetestIds.clear()
-    preparedCreateRetestRequests.clear()
+    cleanupPreparedCreateRetestRequests(sheet.value?.id)
     retestCollectionGeneration = 0
     autoSaveError.value = ''
     syncAutoSaveStatus()
@@ -1279,15 +1308,23 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return retest.status !== 'ACTIVE' || retest.readonly || retest.sensitiveFieldsHidden
   }
 
-  function canApplyRemoteRetest(remoteRetest: SampleRetest, localRetest: SampleRetest) {
+  function canApplyRemoteRetest(
+    remoteRetest: SampleRetest,
+    localRetest: SampleRetest,
+    allowPresentationRestore = false
+  ) {
     const remoteUpdatedAt = Date.parse(remoteRetest.updatedAt)
     const localUpdatedAt = Date.parse(localRetest.updatedAt)
     if (Number.isFinite(remoteUpdatedAt) && Number.isFinite(localUpdatedAt)) {
       if (remoteUpdatedAt < localUpdatedAt) return false
-      if (
-        remoteUpdatedAt === localUpdatedAt &&
-        isAuthoritativeTerminalRetest(localRetest) && !isAuthoritativeTerminalRetest(remoteRetest)
-      ) return false
+    }
+    if (localRetest.status === 'VOID' && remoteRetest.status !== 'VOID') return false
+    if (isAuthoritativeTerminalRetest(localRetest) && !isAuthoritativeTerminalRetest(remoteRetest)) {
+      return Boolean(
+        allowPresentationRestore &&
+        localRetest.status === 'ACTIVE' && localRetest.sensitiveFieldsHidden &&
+        remoteRetest.status === 'ACTIVE' && !remoteRetest.readonly && !remoteRetest.sensitiveFieldsHidden
+      )
     }
     return true
   }
@@ -1620,15 +1657,18 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     const requestSheetGeneration = sheetStateGeneration
     const requestSequence = ++remoteRefreshSequence
     const requestRetestCollectionGeneration = retestCollectionGeneration
+    const requestOwner = getDraftOwner()
     try {
       const remoteSheet = await getLabSheetByDate(current.date)
       if (
         sheetStateGeneration === requestSheetGeneration &&
         requestSequence > latestAppliedRemoteRefreshSequence &&
+        getDraftOwner() === requestOwner &&
         sheet.value?.id === current.id && sheet.value.date === current.date
       ) {
         latestAppliedRemoteRefreshSequence = requestSequence
         applyRemoteSheet(remoteSheet, {
+          allowPresentationRestore: true,
           retainMissingRetests: requestRetestCollectionGeneration !== retestCollectionGeneration
         })
         realtimeError.value = ''
@@ -1636,7 +1676,8 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     } catch {
       if (
         sheetStateGeneration === requestSheetGeneration &&
-        requestSequence > latestAppliedRemoteRefreshSequence
+        requestSequence > latestAppliedRemoteRefreshSequence &&
+        getDraftOwner() === requestOwner
       ) realtimeError.value = '实时同步补拉失败，请检查网络'
     }
   }
@@ -1706,7 +1747,10 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     sheet.value.parameters = parameters
   }
 
-  function applyRemoteSheet(remoteSheet: LabSheet, options: { retainMissingRetests?: boolean } = {}) {
+  function applyRemoteSheet(
+    remoteSheet: LabSheet,
+    options: { allowPresentationRestore?: boolean; retainMissingRetests?: boolean } = {}
+  ) {
     if (!sheet.value) return
     const localBlocks = new Map(sheet.value.sampleBlocks.map((block) => [block.id, block]))
     const nextSheet = cloneSheet(remoteSheet)
@@ -1715,6 +1759,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       if (!localBlock) return remoteBlock
       const mergedBlock = mergeRemoteBlockState(remoteBlock, localBlock)
       mergedBlock.retests = mergeRemoteRetestCollection(remoteBlock.retests, localBlock.retests, {
+        allowPresentationRestore: options.allowPresentationRestore,
         retainMissingLocal: options.retainMissingRetests
       })
       return mergedBlock
@@ -1733,7 +1778,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   function mergeRemoteRetestCollection(
     remoteRetests: SampleRetest[],
     localRetests: SampleRetest[],
-    options: { preferLocal?: boolean; retainMissingLocal?: boolean } = {}
+    options: { allowPresentationRestore?: boolean; preferLocal?: boolean; retainMissingLocal?: boolean } = {}
   ) {
     const localById = new Map(localRetests.map((retest) => [retest.id, retest]))
     const merged = remoteRetests.flatMap((remoteRetest) => {
@@ -1744,7 +1789,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
         return [cloneRetest(remoteRetest)]
       }
       if (options.preferLocal) return [cloneRetest(localRetest)]
-      return [mergeRemoteRetestState(remoteRetest, localRetest)]
+      return [mergeRemoteRetestState(remoteRetest, localRetest, options.allowPresentationRestore)]
     })
     localRetests.forEach((localRetest) => {
       if (merged.some((retest) => retest.id === localRetest.id) || deletedRetestIds.has(localRetest.id)) return
@@ -1758,8 +1803,12 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return merged.sort((left, right) => left.sequence - right.sequence)
   }
 
-  function mergeRemoteRetestState(remoteRetest: SampleRetest, localRetest: SampleRetest) {
-    if (!canApplyRemoteRetest(remoteRetest, localRetest)) return cloneRetest(localRetest)
+  function mergeRemoteRetestState(
+    remoteRetest: SampleRetest,
+    localRetest: SampleRetest,
+    allowPresentationRestore = false
+  ) {
+    if (!canApplyRemoteRetest(remoteRetest, localRetest, allowPresentationRestore)) return cloneRetest(localRetest)
     if (isAuthoritativeTerminalRetest(remoteRetest)) {
       adoptAuthoritativeTerminalRetest(remoteRetest)
       return cloneRetest(remoteRetest)

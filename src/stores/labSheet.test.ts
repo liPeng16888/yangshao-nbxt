@@ -849,6 +849,56 @@ describe('labSheet store auto save', () => {
     expect(differentIntentKey).not.toBe(repeatedAfterSuccessKey)
   })
 
+  it('keeps one prepared create across a concurrent append reset and ambiguous rejection', async () => {
+    let rejectCreate!: (reason: Error) => void
+    const firstCreate = new Promise<SampleRetest[]>((_resolve, reject) => { rejectCreate = reject })
+    const appendedSheet = makeSegmentedSheet(2)
+    const created = makeRetest('retest-created-after-reset')
+    apiMocks.createSampleRetests
+      .mockReturnValueOnce(firstCreate)
+      .mockResolvedValueOnce([created])
+    apiMocks.addSampleBlocks.mockResolvedValue(appendedSheet)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    const createRequest = store.createRetests(['block-1'])
+    const rejectedCreate = expect(createRequest).rejects.toThrow('connection reset after request')
+    await vi.waitFor(() => expect(apiMocks.createSampleRetests).toHaveBeenCalledTimes(1))
+    const firstPayload = apiMocks.createSampleRetests.mock.calls[0][1]
+    const appendRequest = store.appendSampleBlocks(1)
+    await Promise.resolve()
+    await Promise.resolve()
+    const appendStartedBeforeCreateSettled = apiMocks.addSampleBlocks.mock.calls.length > 0
+
+    rejectCreate(new Error('connection reset after request'))
+    await rejectedCreate
+    await appendRequest
+    const retried = await store.createRetests(['block-1'])
+
+    expect(appendStartedBeforeCreateSettled).toBe(false)
+    expect(apiMocks.createSampleRetests).toHaveBeenCalledTimes(2)
+    expect(apiMocks.createSampleRetests.mock.calls[1][1]).toBe(firstPayload)
+    expect(apiMocks.createSampleRetests.mock.calls[1][1].idempotencyKey).toBe(firstPayload.idempotencyKey)
+    expect(retried).toEqual([created])
+    expect(store.sampleBlocks[0].retests.map((item) => item.id)).toEqual(['retest-created-after-reset'])
+  })
+
+  it('does not merge a create response after the authenticated draft owner changes', async () => {
+    let resolveCreate!: (value: SampleRetest[]) => void
+    const deferredCreate = new Promise<SampleRetest[]>((resolve) => { resolveCreate = resolve })
+    apiMocks.createSampleRetests.mockReturnValue(deferredCreate)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    const request = store.createRetests(['block-1'])
+    await vi.waitFor(() => expect(apiMocks.createSampleRetests).toHaveBeenCalledTimes(1))
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-2', dataOwnerId: 'front-2', account: 'front-2' }))
+    resolveCreate([makeRetest('stale-owner-retest')])
+    await request
+
+    expect(store.sampleBlocks[0].retests).toEqual([])
+  })
+
   it('ignores edits to readonly, void, and protected retests and rejects historical creation', async () => {
     const current = makeSheetWithRetests(
       makeRetest('readonly-retest', {}, { readonly: true }),
@@ -1146,6 +1196,137 @@ describe('labSheet store auto save', () => {
     expect(Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index)))
       .not.toEqual(expect.arrayContaining([expect.stringContaining('ys_lab_draft:v1:front-1:front-1:2026-06-25:sheet-1')]))
     await expect(store.persistAllBlocks({ silent: true })).resolves.toMatchObject({ success: true })
+  })
+
+  it('restores an authorized editable retest after redaction with the same updatedAt', async () => {
+    const source = makeEventSource()
+    const sharedUpdatedAt = '2026-06-25T00:00:02.000Z'
+    const redacted = makeRetest('retest-1', {}, {
+      readonly: true,
+      sensitiveFieldsHidden: true,
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    const authorized = makeRetest('retest-1', { ironRaw: 6 }, {
+      readonly: false,
+      sensitiveFieldsHidden: false,
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(makeRetest()))
+    apiMocks.getLabSheetByDate
+      .mockResolvedValueOnce(makeSheetWithRetests(redacted))
+      .mockResolvedValueOnce(makeSheetWithRetests(authorized))
+    apiMocks.saveSampleRetest.mockResolvedValue(makeRetest('retest-1', { ironRaw: 7 }, {
+      everFilled: true,
+      updatedAt: '2026-06-25T00:00:03.000Z'
+    }))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+    store.patchRetest('block-1', 'retest-1', { ironRaw: 88 })
+
+    const message = { data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent
+    source.onmessage?.(message)
+    await vi.waitFor(() => expect(store.sampleBlocks[0].retests[0]).toEqual(redacted))
+    source.onmessage?.(message)
+    await vi.waitFor(() => expect(store.sampleBlocks[0].retests[0]).toEqual(authorized))
+
+    expect(store.sampleBlocks[0].retests[0].inputs.ironRaw).toBe(6)
+    expect(store.pendingAutoSaveCount).toBe(0)
+    expect(Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index)))
+      .not.toEqual(expect.arrayContaining([expect.stringContaining('ys_lab_draft:v1:front-1:front-1:2026-06-25:sheet-1')]))
+    store.patchRetest('block-1', 'retest-1', { ironRaw: 7 })
+    await expect(store.persistRetest('block-1', 'retest-1')).resolves.toMatchObject({ success: true })
+    expect(apiMocks.saveSampleRetest).toHaveBeenCalledWith('sheet-1', 'retest-1', expect.objectContaining({
+      baseUpdatedAt: sharedUpdatedAt,
+      baseInputs: { ironRaw: 6 },
+      changedFields: { ironRaw: 7 }
+    }))
+  })
+
+  it('does not restore redacted values from a refetch whose owner changed in flight', async () => {
+    const source = makeEventSource()
+    let resolveAuthorizedPull!: (value: LabSheet) => void
+    const authorizedPull = new Promise<LabSheet>((resolve) => { resolveAuthorizedPull = resolve })
+    const sharedUpdatedAt = '2026-06-25T00:00:02.000Z'
+    const redacted = makeRetest('retest-1', {}, {
+      readonly: true,
+      sensitiveFieldsHidden: true,
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    const authorized = makeRetest('retest-1', { ironRaw: 6 }, {
+      everFilled: true,
+      updatedAt: sharedUpdatedAt
+    })
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(redacted))
+    apiMocks.getLabSheetByDate.mockReturnValue(authorizedPull)
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    source.onmessage?.({ data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent)
+    await vi.waitFor(() => expect(apiMocks.getLabSheetByDate).toHaveBeenCalledTimes(1))
+    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-2', dataOwnerId: 'front-2', account: 'front-2' }))
+    resolveAuthorizedPull(makeSheetWithRetests(authorized))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.sampleBlocks[0].retests[0]).toEqual(redacted)
+  })
+
+  it('never reactivates a voided retest from a newer active refetch', async () => {
+    const source = makeEventSource()
+    const voided = makeRetest('retest-1', {}, {
+      status: 'VOID',
+      readonly: true,
+      updatedAt: '2026-06-25T00:00:02.000Z',
+      voidedAt: '2026-06-25T00:00:02.000Z'
+    })
+    const incorrectlyActive = makeRetest('retest-1', { ironRaw: 9 }, {
+      updatedAt: '2026-06-25T00:00:03.000Z'
+    })
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(voided))
+    apiMocks.getLabSheetByDate.mockResolvedValue(makeSheetWithRetests(incorrectlyActive))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    source.onmessage?.({ data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent)
+    await vi.waitFor(() => expect(apiMocks.getLabSheetByDate).toHaveBeenCalledTimes(1))
+
+    expect(store.sampleBlocks[0].retests[0]).toEqual(voided)
+  })
+
+  it('does not make an ordinary non-redacted readonly retest editable again', async () => {
+    const source = makeEventSource()
+    const readonlyRetest = makeRetest('retest-1', { ironRaw: 2 }, {
+      readonly: true,
+      sensitiveFieldsHidden: false,
+      updatedAt: '2026-06-25T00:00:02.000Z'
+    })
+    const incorrectlyEditable = makeRetest('retest-1', { ironRaw: 9 }, {
+      updatedAt: '2026-06-25T00:00:03.000Z'
+    })
+    apiMocks.createLabSheetEventSource.mockReturnValue(source)
+    apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(readonlyRetest))
+    apiMocks.getLabSheetByDate.mockResolvedValue(makeSheetWithRetests(incorrectlyEditable))
+    const store = useLabSheetStore()
+    await store.loadCurrentSheet()
+
+    source.onmessage?.({ data: JSON.stringify({
+      type: 'retests-changed', date: '2026-06-25', sheetId: 'sheet-1', sourceClientId: 'client-2', updatedAt: new Date().toISOString()
+    }) } as MessageEvent)
+    await vi.waitFor(() => expect(apiMocks.getLabSheetByDate).toHaveBeenCalledTimes(1))
+
+    expect(store.sampleBlocks[0].retests[0]).toEqual(readonlyRetest)
   })
 
   it('retires an in-flight retest save when realtime makes the row terminal', async () => {
