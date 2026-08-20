@@ -159,6 +159,18 @@ describe('HistoricalSampleChangeDialog', () => {
     expect(payload.changes).not.toHaveProperty('customerText')
   })
 
+  it('normalizes the displayed amount to zero precision when payment changes to prepaid', async () => {
+    const wrapper = mountDialog(makeBlock({ price: 19.87 }))
+
+    await wrapper.get('[data-testid="sample-change-payment-status"]').setValue('预存款')
+    expect((wrapper.get('[data-testid="sample-change-price"]').element as HTMLInputElement).value).toBe('19')
+    await submitWithReason(wrapper)
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({
+      changes: { price: 19, paymentStatus: '预存款' }
+    })
+  })
+
   it('renders every raw detection input with its allowed label and no forbidden direct-edit controls', () => {
     const wrapper = mountDialog(makeBlock())
 
@@ -210,5 +222,20 @@ describe('HistoricalSampleChangeDialog', () => {
 
     expect((wrapper.get('[data-testid="sample-change-sample-number"]').element as HTMLInputElement).value).toBe('保留草稿')
     expect((wrapper.get('[data-testid="sample-change-reason"]').element as HTMLInputElement).value).toBe('网络失败后重试')
+  })
+
+  it('latches a same-tick submit until the parent submission settles', async () => {
+    const wrapper = mountDialog(makeBlock())
+    await wrapper.get('[data-testid="sample-change-sample-number"]').setValue('不重复提交')
+    await wrapper.get('[data-testid="sample-change-reason"]').setValue('避免重复申请')
+
+    await wrapper.get('[data-testid="submit-sample-change"]').trigger('click')
+    await wrapper.get('[data-testid="submit-sample-change"]').trigger('click')
+    expect(wrapper.emitted('submit')).toHaveLength(1)
+
+    await wrapper.setProps({ submitting: true })
+    await wrapper.setProps({ submitting: false })
+    await wrapper.get('[data-testid="submit-sample-change"]').trigger('click')
+    expect(wrapper.emitted('submit')).toHaveLength(2)
   })
 })

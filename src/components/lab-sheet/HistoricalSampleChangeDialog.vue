@@ -205,6 +205,8 @@ const draft = ref<LabSampleInput>({})
 const rawValues = ref<Record<LabSampleChangeRawField, string>>(emptyRawValues())
 const priceText = ref('')
 const reason = ref('')
+const localSubmitPending = ref(false)
+const parentSubmissionSeen = ref(false)
 
 watch(
   () => [props.modelValue, props.block?.id] as const,
@@ -213,6 +215,20 @@ watch(
     resetDraft(props.block)
   },
   { immediate: true }
+)
+
+watch(
+  () => props.submitting,
+  (submitting) => {
+    if (submitting) {
+      parentSubmissionSeen.value = true
+      return
+    }
+    if (parentSubmissionSeen.value) {
+      localSubmitPending.value = false
+      parentSubmissionSeen.value = false
+    }
+  }
 )
 
 const changes = computed<LabSampleChangePatch>(() => {
@@ -234,6 +250,7 @@ const canSubmit = computed(() => Boolean(
   && Object.keys(changes.value).length
   && reason.value.trim()
   && !props.submitting
+  && !localSubmitPending.value
 ))
 
 function resetDraft(block: SampleBlock) {
@@ -267,6 +284,11 @@ function updatePayerCustomer(patch: Partial<LabSampleInput>) {
 
 function updatePaymentStatus(value: unknown) {
   draft.value.paymentStatus = String(value || '') as SamplePaymentStatus | ''
+  if (typeof draft.value.price === 'number' && Number.isFinite(draft.value.price)) {
+    draft.value.price = pricePrecision() === 0
+      ? Math.trunc(draft.value.price)
+      : Number(draft.value.price.toFixed(2))
+  }
   formatPrice()
 }
 
@@ -319,6 +341,7 @@ function formatDiffValue(value: unknown) {
 
 function submit() {
   if (!props.block || !canSubmit.value) return
+  localSubmitPending.value = true
   emit('submit', {
     blockId: props.block.id,
     baseUpdatedAt: props.block.updatedAt || '',
