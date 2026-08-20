@@ -111,16 +111,6 @@ type RetestSaveResult = {
   conflict: boolean
 }
 
-type RetestChangedRealtimeEvent = {
-  type: 'retests-changed'
-  date: string
-  sheetId: string
-  sourceClientId?: string
-  updatedAt: string
-  sampleBlockId?: string
-  sampleRetestId?: string
-}
-
 type StoredDraftBlock = {
   updatedAt?: string
   fields: Partial<Record<keyof LabSampleInput, { baseValue: unknown; value: unknown; revision: number }>>
@@ -368,7 +358,10 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   function patchRetest(sampleBlockId: string, retestId: string, patch: Partial<SampleRetestInput>) {
     if (!sheet.value || sheet.value.readonly || applyingParameters.value) return
     const target = findRetest(sampleBlockId, retestId)
-    if (!target || target.readonly || target.status !== 'ACTIVE' || target.sensitiveFieldsHidden) return
+    if (
+      !target || target.readonly || target.status !== 'ACTIVE' ||
+      target.sensitiveFieldsHidden || !target.parameterSnapshot
+    ) return
     const nextVersion = (retestVersions.get(retestId) || 0) + 1
     const dirtyState = trackRetestDirtyFields(target, patch, nextVersion)
     if (!dirtyState.changed) return
@@ -1100,6 +1093,12 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return JSON.parse(JSON.stringify(retest)) as SampleRetest
   }
 
+  function calculateRetestDisplayResults(retest: Pick<SampleRetest, 'inputs' | 'results' | 'parameterSnapshot'>) {
+    return retest.parameterSnapshot
+      ? calculateSampleResults(retest.inputs, retest.parameterSnapshot)
+      : cloneValue(retest.results)
+  }
+
   function findRetest(sampleBlockId: string, retestId: string) {
     return sheet.value?.sampleBlocks
       .find((block) => block.id === sampleBlockId)
@@ -1349,7 +1348,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       merged.inputs[field] = localValue as number | null
       dirty.baseValue = savedValue
     })
-    merged.results = calculateSampleResults(merged.inputs, merged.parameterSnapshot)
+    merged.results = calculateRetestDisplayResults(merged)
     block.retests[index] = merged
     retestCollectionGeneration += 1
     if (!dirtyFields?.size) {
@@ -1383,7 +1382,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       dirty.baseValue = cloneValue(remoteRetest.inputs[field] ?? null)
       if (!conflictFields.length || conflictFields.includes(field)) conflicts.add(field)
     })
-    merged.results = calculateSampleResults(merged.inputs, merged.parameterSnapshot)
+    merged.results = calculateRetestDisplayResults(merged)
     pendingRetestDirtyFields.set(remoteRetest.id, dirtyFields)
     conflictFieldsByRetest.set(remoteRetest.id, conflicts)
     preparedRetestSaves.delete(remoteRetest.id)
@@ -1612,7 +1611,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
         retestVersions.set(retestId, maxRevision)
         pendingRetestDirtyFields.set(retestId, dirtyFields)
         if (conflicts.size) conflictFieldsByRetest.set(retestId, conflicts)
-        retest.results = calculateSampleResults(retest.inputs, retest.parameterSnapshot)
+        retest.results = calculateRetestDisplayResults(retest)
         const restoredPrepared = storedRetest.preparedSave
         const candidate = buildRetestSaveCandidate(retest)
         if (
@@ -1809,9 +1808,9 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   }
 
   function handleRealtimeMessage(rawData: string) {
-    let payload: LabSheetRealtimeEvent | RetestChangedRealtimeEvent
+    let payload: LabSheetRealtimeEvent
     try {
-      payload = JSON.parse(rawData) as LabSheetRealtimeEvent | RetestChangedRealtimeEvent
+      payload = JSON.parse(rawData) as LabSheetRealtimeEvent
     } catch {
       return
     }
@@ -1938,7 +1937,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
         conflicts.add(field)
       }
     })
-    merged.results = calculateSampleResults(merged.inputs, merged.parameterSnapshot)
+    merged.results = calculateRetestDisplayResults(merged)
     if (rebased) preparedRetestSaves.delete(remoteRetest.id)
     if (!dirtyFields.size) {
       cleanupRetestSaveState(remoteRetest.id)

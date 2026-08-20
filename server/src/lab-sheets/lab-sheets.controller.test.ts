@@ -143,7 +143,9 @@ describe('LabSheetsController segmented parameter access', () => {
     auth.hasAccessGrant.mockResolvedValue(false)
     const controller = new LabSheetsController(sheets as never, auth as never, retests as never)
     const createPayload = { sampleBlockIds: ['block-1'], idempotencyKey: 'create-1' }
-    const savePayload = { changedFields: { aluminum: 1 }, idempotencyKey: 'save-1' }
+    const savePayload = {
+      changedFields: { aluminum: 1 }, idempotencyKey: 'save-1', baseUpdatedAt: '2026-08-20T10:00:00.000Z'
+    }
     const deletePayload = { baseUpdatedAt: '2026-08-20T10:00:00.000Z', idempotencyKey: 'delete-1' }
     const voidPayload = { baseUpdatedAt: '2026-08-20T10:00:00.000Z', idempotencyKey: 'void-1', reason: '复核无效' }
 

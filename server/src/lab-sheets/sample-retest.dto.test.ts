@@ -43,6 +43,8 @@ describe('toSampleRetestDto', () => {
     expect(hidden.sensitiveFieldsHidden).toBe(true)
     expect(hidden.inputs.ironRaw).toBeNull()
     expect(hidden.results.iron).toBeNull()
+    expect(hidden.parameterSnapshot).toBeNull()
+    expect(visible.parameterSnapshot).toEqual(row.parameterSnapshot)
   })
 
   it('marks void and historical retests readonly', () => {

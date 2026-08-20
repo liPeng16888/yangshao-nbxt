@@ -50,7 +50,7 @@ export function toSampleRetestDto(row: SampleRetestRow, options: SampleRetestDto
     sensitiveFieldsHidden: hidden,
     inputs: hidden ? redactInputs(inputs) : inputs,
     results: hidden ? redactResults(results) : results,
-    parameterSnapshot: row.parameterSnapshot,
+    parameterSnapshot: hidden ? null : row.parameterSnapshot,
     voidReason: row.voidReason,
     createdById: row.createdById,
     updatedById: row.updatedById,

@@ -28,7 +28,7 @@
         bottom: 'auto'
       }"
     >
-      <span>参数快照 {{ formatTimestamp(retest.parameterSnapshot.savedAt || retest.createdAt) }}</span>
+      <span>参数快照 {{ formatTimestamp(retest.parameterSnapshot?.savedAt || retest.createdAt) }}</span>
       <span>{{ retest.status === 'VOID' ? voidStatusText : `已保存 ${formatTimestamp(retest.updatedAt)}` }}</span>
       <span v-if="sensitiveHidden" class="sample-retest-band__locked-message">数据已加密</span>
       <div v-if="canManage" class="sample-retest-band__actions">

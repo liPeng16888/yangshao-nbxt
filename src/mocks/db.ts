@@ -372,6 +372,18 @@ export async function mockCurrentParameters() {
   return delay(labParameters)
 }
 
+export function setMockSampleRetestParameterSnapshotForTest(retestId: string, parameterSnapshot: unknown) {
+  for (const sheet of labSheets.values()) {
+    for (const block of sheet.sampleBlocks) {
+      const retest = block.retests.find((item) => item.id === retestId)
+      if (!retest) continue
+      retest.parameterSnapshot = parameterSnapshot as never
+      return
+    }
+  }
+  throw new Error('未找到复样')
+}
+
 export async function mockUpdateParameters(parameters: LabParameter) {
   const sheet = ensureSheet()
   if (sheet.readonly) throw new Error('历史日期表格仅支持查看，不能修改')
@@ -464,6 +476,12 @@ function findWritableMockSheet(sheetId: string) {
   return sheet
 }
 
+function assertMockRetestWritePermission() {
+  if (currentUser.role !== 'FRONTEND_SUB_USER') return
+  if (currentUser.permissions?.includes('DATA_MAIN')) return
+  throw new Error('当前子账号没有数据计算权限')
+}
+
 function normalizeMockRetestInputs(value: unknown): SampleRetestInput {
   const row = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -532,10 +550,12 @@ function requireMockIdempotencyKey(value: unknown) {
 }
 
 function requireMockBaseUpdatedAt(value: unknown) {
-  if (typeof value !== 'string' || !value.trim() || !Number.isFinite(Date.parse(value))) {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  const timestamp = Date.parse(normalized)
+  if (!normalized || !Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== normalized) {
     throw new Error('缺少或无效的复样版本时间')
   }
-  return value.trim()
+  return normalized
 }
 
 function resolveMockRetestWrite<T>(
@@ -593,6 +613,18 @@ function assertMockExactRetestVersion(retest: SampleRetest, baseUpdatedAt: strin
   }
 }
 
+function mockRetestConflict(
+  code: 'SAMPLE_RETEST_INPUT_CONFLICT' | 'SAMPLE_RETEST_VERSION_CONFLICT',
+  message: string,
+  fields: string[],
+  retest: SampleRetest
+) {
+  return {
+    response: { status: 409, data: { code, message, fields, retest } },
+    message
+  }
+}
+
 function publicMockRetest(
   retest: SampleRetest,
   block: SampleBlock,
@@ -615,7 +647,8 @@ function publicMockRetest(
     readonly: sheet.readonly || retest.status === 'VOID',
     sensitiveFieldsHidden: hidden,
     inputs,
-    results
+    results,
+    parameterSnapshot: hidden ? null : clone(retest.parameterSnapshot)
   }
   return clone(response)
 }
@@ -651,6 +684,7 @@ export async function mockCreateSampleRetests(
   if (new Set(sampleBlockIds).size !== sampleBlockIds.length) throw new Error('样品选择不能重复')
 
   const sheet = findWritableMockSheet(sheetId)
+  assertMockRetestWritePermission()
   const blocks = sampleBlockIds.map((id) => sheet.sampleBlocks.find((block) => block.id === id))
   if (blocks.some((block) => !block)) throw new Error('未找到样品')
   const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
@@ -705,14 +739,15 @@ export async function mockSaveSampleRetest(
   const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
   const changedFields = normalizeMockRetestInputs(payload.changedFields)
   const baseInputs = normalizeMockRetestInputs(payload.baseInputs)
-  const baseUpdatedAt = typeof payload.baseUpdatedAt === 'string' ? payload.baseUpdatedAt.trim() : undefined
+  const baseUpdatedAt = requireMockBaseUpdatedAt(payload.baseUpdatedAt)
   const fingerprintPayload = {
     idempotencyKey,
-    ...(baseUpdatedAt ? { baseUpdatedAt } : {}),
+    baseUpdatedAt,
     ...(payload.baseInputs === undefined ? {} : { baseInputs }),
     changedFields
   }
   const sheet = findWritableMockSheet(sheetId)
+  assertMockRetestWritePermission()
   const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
   const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
   const fingerprint = retestFingerprint('SAVE', sheetId, fingerprintPayload, retestId)
@@ -720,19 +755,38 @@ export async function mockSaveSampleRetest(
   if (duplicate) return delay(duplicate)
 
   assertMockRetestActive(context.retest)
-  const baseTime = baseUpdatedAt ? Date.parse(baseUpdatedAt) : Number.NaN
-  if (Number.isFinite(baseTime) && Date.parse(context.retest.updatedAt) > baseTime) {
+  const baseTime = Date.parse(baseUpdatedAt)
+  const currentTime = Date.parse(context.retest.updatedAt)
+  if (currentTime < baseTime) {
+    const message = '复样版本时间与服务器不一致，请刷新后重试'
+    throw mockRetestConflict(
+      'SAMPLE_RETEST_VERSION_CONFLICT',
+      message,
+      Object.keys(changedFields),
+      publicMockRetest(context.retest, context.block, sheet, canViewCompletedSensitiveData)
+    )
+  }
+  if (currentTime > baseTime) {
     const conflicts = Object.keys(changedFields).filter((field) => (
       !Object.prototype.hasOwnProperty.call(baseInputs, field) ||
       (context.retest.inputs[field as keyof SampleRetestInput] ?? null) !==
         (baseInputs[field as keyof SampleRetestInput] ?? null)
     ))
-    if (conflicts.length) throw new Error('该复样已被另一台设备修改，请确认后再保存')
+    if (conflicts.length) {
+      const message = '该复样已被另一台设备修改，请确认后再保存'
+      throw mockRetestConflict(
+        'SAMPLE_RETEST_INPUT_CONFLICT',
+        message,
+        conflicts,
+        publicMockRetest(context.retest, context.block, sheet, canViewCompletedSensitiveData)
+      )
+    }
   }
 
   const nextInputs = { ...context.retest.inputs, ...changedFields }
+  const parameters = requireStoredMockRetestParameters(context.retest.parameterSnapshot)
   context.retest.inputs = nextInputs
-  context.retest.results = calculateSampleResults(nextInputs, context.retest.parameterSnapshot)
+  context.retest.results = calculateSampleResults(nextInputs, parameters)
   context.retest.everFilled = context.retest.everFilled || hasRetestInput(nextInputs)
   context.retest.updatedById = currentUser.id
   context.retest.updatedAt = nextMockRetestTimestamp(context.retest.updatedAt)
@@ -751,6 +805,7 @@ export async function mockDeleteSampleRetest(
   const baseUpdatedAt = requireMockBaseUpdatedAt(payload.baseUpdatedAt)
   const fingerprint = retestFingerprint('DELETE', sheetId, { idempotencyKey, baseUpdatedAt }, retestId)
   const sheet = findWritableMockSheet(sheetId)
+  assertMockRetestWritePermission()
   const duplicate = resolveMockRetestWrite<{ id: string; sampleBlockId: string; deleted: true }>(
     idempotencyKey, 'DELETE', fingerprint
   )
@@ -783,6 +838,7 @@ export async function mockVoidSampleRetest(
   const reason = typeof payload.reason === 'string' ? payload.reason.trim() || null : null
   const fingerprint = retestFingerprint('VOID', sheetId, { idempotencyKey, baseUpdatedAt, reason }, retestId)
   const sheet = findWritableMockSheet(sheetId)
+  assertMockRetestWritePermission()
   assertNoMismatchedMockRetestWrite(idempotencyKey, 'VOID', fingerprint)
   const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
   const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
@@ -817,6 +873,14 @@ function requireCompleteLabParameters(parameters: unknown): LabParameter {
     next[key as LabParameterKey] = value
     return next
   }, { ...defaultLabParameters })
+}
+
+function requireStoredMockRetestParameters(parameters: unknown): LabParameter {
+  try {
+    return requireCompleteLabParameters(parameters)
+  } catch {
+    throw new Error('复样参数快照无效')
+  }
 }
 
 export async function mockLabHistory() {

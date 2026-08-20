@@ -65,6 +65,17 @@ export type LabSheetRealtimeEvent =
       updatedAt: string
     }
   | {
+      type: 'retests-changed'
+      frontendUserId: string
+      date: string
+      sheetId: string
+      sourceClientId?: string
+      changedById?: string
+      updatedAt: string
+      sampleBlockId?: string
+      sampleRetestId?: string
+    }
+  | {
       type: 'heartbeat'
       updatedAt: string
     }

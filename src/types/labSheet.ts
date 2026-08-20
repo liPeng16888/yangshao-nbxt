@@ -113,7 +113,7 @@ export interface SampleRetest {
   sensitiveFieldsHidden: boolean
   inputs: SampleRetestInput
   results: SampleRetestResult
-  parameterSnapshot: LabParameterSnapshot
+  parameterSnapshot: LabParameterSnapshot | null
   voidReason: string | null
   createdById: string
   updatedById: string
@@ -130,7 +130,7 @@ export interface CreateSampleRetestsPayload {
 
 export interface SaveSampleRetestPayload {
   idempotencyKey: string
-  baseUpdatedAt?: string
+  baseUpdatedAt: string
   baseInputs?: SampleRetestInput
   changedFields: SampleRetestInput
 }

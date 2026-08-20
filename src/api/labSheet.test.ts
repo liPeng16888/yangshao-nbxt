@@ -17,6 +17,7 @@ import {
   saveSampleRetest,
   voidSampleRetest
 } from './labSheet'
+import type { LabSheetRealtimeEvent } from './labSheet'
 
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>()
@@ -57,6 +58,22 @@ describe('lab sheet segmented parameter API', () => {
         token: 'completed-data-grant', features: ['COMPLETED_SAMPLE_DATA']
       }
     }))
+  })
+
+  it('exports the retests-changed realtime event consumed by the store', () => {
+    const event: LabSheetRealtimeEvent = {
+      type: 'retests-changed',
+      frontendUserId: 'front-1',
+      date: '2026-08-20',
+      sheetId: 'sheet-1',
+      sampleBlockId: 'block-1',
+      sampleRetestId: 'retest-1',
+      sourceClientId: 'client-1',
+      changedById: 'sub-1',
+      updatedAt: '2026-08-20T10:00:00.000Z'
+    }
+
+    expect(event.type).toBe('retests-changed')
   })
 
   it('sends both the client id and completed-sample access grant when applying', async () => {

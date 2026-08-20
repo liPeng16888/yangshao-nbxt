@@ -4,7 +4,9 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
-  NotFoundException
+  Logger,
+  NotFoundException,
+  UnprocessableEntityException
 } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { createHash } from 'node:crypto'
@@ -15,7 +17,8 @@ import {
   createEmptyRetestInputs,
   hasLabDetectionInput,
   normalizeLabDetectionInputs,
-  normalizeLabParameters
+  normalizeLabParameters,
+  validateStoredLabParameters
 } from '../common/lab'
 import { PrismaService } from '../prisma/prisma.service'
 import { LabSheetRealtimeService } from './lab-sheet-realtime.service'
@@ -28,7 +31,7 @@ export type CreateSampleRetestsPayload = {
 
 export type SaveSampleRetestPayload = {
   idempotencyKey: string
-  baseUpdatedAt?: string
+  baseUpdatedAt: string
   baseInputs?: Record<string, unknown>
   changedFields: Record<string, unknown>
 }
@@ -195,6 +198,8 @@ type WritableRetestContext = {
 
 @Injectable()
 export class SampleRetestsService {
+  private readonly logger = new Logger(SampleRetestsService.name)
+
   constructor(
     @Inject(PrismaService) private readonly prisma: SampleRetestPrisma,
     @Inject(LabSheetRealtimeService) private readonly realtime: SampleRetestRealtime
@@ -345,12 +350,10 @@ export class SampleRetestsService {
     const idempotencyKey = this.requireIdempotencyKey(payload.idempotencyKey)
     const changedFields = normalizeLabDetectionInputs(payload.changedFields)
     const baseInputs = normalizeLabDetectionInputs(payload.baseInputs)
-    const baseUpdatedAt = typeof payload.baseUpdatedAt === 'string'
-      ? payload.baseUpdatedAt.trim()
-      : undefined
+    const baseUpdatedAt = this.requireBaseUpdatedAt(payload.baseUpdatedAt)
     const fingerprintPayload = {
       idempotencyKey,
-      ...(baseUpdatedAt ? { baseUpdatedAt } : {}),
+      baseUpdatedAt,
       ...(payload.baseInputs === undefined ? {} : { baseInputs }),
       changedFields
     }
@@ -384,6 +387,7 @@ export class SampleRetestsService {
           changedFields,
           canViewCompletedSensitiveData
         )
+        const parameters = this.requireStoredRetestParameters(context)
         const nextInputs = {
           ...normalizeLabDetectionInputs(context.retest.inputs),
           ...changedFields
@@ -394,7 +398,7 @@ export class SampleRetestsService {
             inputs: this.toJsonObject(nextInputs),
             results: this.toJsonObject(calculateResults(
               nextInputs,
-              normalizeLabParameters(context.retest.parameterSnapshot)
+              parameters
             )),
             everFilled: context.retest.everFilled || hasLabDetectionInput(nextInputs),
             updatedById: user.id
@@ -711,13 +715,26 @@ export class SampleRetestsService {
 
   private assertNoRetestInputConflict(
     context: WritableRetestContext,
-    baseUpdatedAt: string | undefined,
+    baseUpdatedAt: string,
     baseInputs: Record<string, number | null>,
     changedFields: Record<string, number | null>,
     canViewCompletedSensitiveData: boolean
   ) {
-    const baseTime = typeof baseUpdatedAt === 'string' ? Date.parse(baseUpdatedAt) : NaN
-    if (!Number.isFinite(baseTime) || context.retest.updatedAt.getTime() <= baseTime) return
+    const baseTime = Date.parse(baseUpdatedAt)
+    const currentTime = context.retest.updatedAt.getTime()
+    if (currentTime < baseTime) {
+      throw new ConflictException({
+        code: 'SAMPLE_RETEST_VERSION_CONFLICT',
+        message: '复样版本时间与服务器不一致，请刷新后重试',
+        fields: Object.keys(changedFields),
+        retest: toSampleRetestDto(context.retest, {
+          parentCompleted: context.parentCompleted,
+          sheetReadonly: false,
+          canViewCompletedSensitiveData
+        })
+      })
+    }
+    if (currentTime === baseTime) return
     const currentInputs = normalizeLabDetectionInputs(context.retest.inputs)
     const conflicts = Object.keys(changedFields).filter((field) => (
       !Object.prototype.hasOwnProperty.call(baseInputs, field) ||
@@ -736,6 +753,20 @@ export class SampleRetestsService {
     })
   }
 
+  private requireStoredRetestParameters(context: WritableRetestContext) {
+    const parameters = validateStoredLabParameters(context.retest.parameterSnapshot)
+    if (parameters) return parameters
+    this.logger.error('复样参数快照无效', {
+      sheetId: context.sheet.id,
+      sampleBlockId: context.block.id,
+      sampleRetestId: context.retest.id
+    })
+    throw new UnprocessableEntityException({
+      code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID',
+      message: '复样参数快照无效，无法保存'
+    })
+  }
+
   private requireIdempotencyKey(value: unknown) {
     if (typeof value !== 'string' || !value.trim()) {
       throw new BadRequestException('缺少幂等请求编号')
@@ -746,10 +777,12 @@ export class SampleRetestsService {
   }
 
   private requireBaseUpdatedAt(value: unknown) {
-    if (typeof value !== 'string' || !value.trim() || !Number.isFinite(Date.parse(value))) {
+    const normalized = typeof value === 'string' ? value.trim() : ''
+    const timestamp = Date.parse(normalized)
+    if (!normalized || !Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== normalized) {
       throw new BadRequestException('缺少或无效的复样版本时间')
     }
-    return value.trim()
+    return normalized
   }
 
   private normalizeVoidReason(value: unknown) {
@@ -850,6 +883,7 @@ export class SampleRetestsService {
       typeof value.sensitiveFieldsHidden === 'boolean' &&
       this.isNumberOrNullRecord(value.inputs) &&
       this.isNumberOrNullRecord(value.results) &&
+      (value.parameterSnapshot === null || this.isPlainObject(value.parameterSnapshot)) &&
       (value.voidReason === null || typeof value.voidReason === 'string') &&
       typeof value.createdById === 'string' &&
       typeof value.updatedById === 'string' &&

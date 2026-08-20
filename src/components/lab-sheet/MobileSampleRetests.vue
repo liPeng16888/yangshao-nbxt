@@ -62,7 +62,7 @@
 
         <div class="mobile-retest-card__meta">
           <span>创建时间 {{ formatTimestamp(retest.createdAt) }}</span>
-          <span>参数快照 {{ formatTimestamp(retest.parameterSnapshot.savedAt || retest.createdAt) }}</span>
+          <span>参数快照 {{ formatTimestamp(retest.parameterSnapshot?.savedAt || retest.createdAt) }}</span>
           <span v-if="retest.status === 'VOID'">
             作废时间 {{ formatTimestamp(retest.voidedAt || undefined) }}<template v-if="retest.voidReason">：{{ retest.voidReason }}</template>
           </span>

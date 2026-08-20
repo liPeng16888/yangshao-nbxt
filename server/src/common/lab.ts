@@ -115,6 +115,14 @@ export function normalizeLabParameters(value: unknown) {
   ])) as typeof defaultLabParameters
 }
 
+export function validateStoredLabParameters(value: unknown): typeof defaultLabParameters | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const entries = Object.keys(defaultLabParameters).map((key) => [key, row[key]] as const)
+  if (entries.some(([, item]) => typeof item !== 'number' || !Number.isFinite(item))) return null
+  return Object.fromEntries(entries) as typeof defaultLabParameters
+}
+
 export function hasLabDetectionInput(inputs: Record<string, unknown>) {
   return labDetectionInputFields.some((field) => hasDetectionInputValue(inputs[field]))
 }

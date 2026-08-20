@@ -143,8 +143,8 @@ function makeRetest(
 ): SampleRetest {
   const completeInputs = Object.fromEntries(sampleRetestInputFields.map((field) => [field, null])) as SampleRetestInput
   const mergedInputs = { ...completeInputs, ...inputs }
-  const parameterSnapshot = overrides.parameterSnapshot || { ...defaultLabParameters }
-  return {
+  const parameterSnapshot = overrides.parameterSnapshot ?? { ...defaultLabParameters }
+  const retest: SampleRetest = {
     id,
     sampleBlockId: 'block-1',
     sequence: 1,
@@ -164,6 +164,14 @@ function makeRetest(
     voidedAt: null,
     ...overrides
   }
+  if (overrides.sensitiveFieldsHidden) {
+    retest.inputs = completeInputs
+    retest.results = Object.fromEntries(
+      Object.keys(retest.results).map((field) => [field, null])
+    ) as SampleRetest['results']
+    retest.parameterSnapshot = null
+  }
+  return retest
 }
 
 function makeSheetWithRetests(...retests: SampleRetest[]): LabSheet {
@@ -711,7 +719,7 @@ describe('labSheet store auto save', () => {
     expect(store.sampleBlocks[0].retests[0].results.iron).toBe(22)
   })
 
-  it('keeps local retest values, field conflicts, and its v2 draft after a 409', async () => {
+  it('routes an Axios-compatible real-or-Mock 409 through conflict recovery and preserves its v2 draft', async () => {
     const remote = makeRetest('retest-1', { ironRaw: 3 }, { updatedAt: '2026-06-25T00:00:02.000Z' })
     apiMocks.getCurrentLabSheet.mockResolvedValue(makeSheetWithRetests(makeRetest()))
     apiMocks.saveSampleRetest.mockRejectedValue({
@@ -734,6 +742,8 @@ describe('labSheet store auto save', () => {
     expect(apiMocks.saveSampleRetest).toHaveBeenCalledTimes(1)
     expect(store.sampleBlocks[0].retests[0].inputs.ironRaw).toBe(2)
     expect(store.autoSaveStatus).toBe('conflict')
+    expect(store.autoSaveError).toBe('该复样已被另一台设备修改')
+    expect(store.autoSaveError).not.toBe('复样自动保存失败')
     expect(store.conflictBlockIds).toContain('retest-1')
     const draftKey = Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index))
       .find((key) => key?.startsWith('ys_lab_draft:v1:front-1:front-1:2026-06-25:sheet-1'))
@@ -1342,6 +1352,8 @@ describe('labSheet store auto save', () => {
 
     await vi.waitFor(() => {
       expect(store.sampleBlocks[0].retests[0]).toEqual(redacted)
+      expect(store.sampleBlocks[0].retests[0].parameterSnapshot).toBeNull()
+      expect(Object.values(store.sampleBlocks[0].retests[0].results).every((value) => value === null)).toBe(true)
       expect(store.pendingAutoSaveCount).toBe(0)
       expect(store.conflictBlockIds).not.toContain('retest-1')
     })
