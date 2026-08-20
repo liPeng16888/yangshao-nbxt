@@ -89,6 +89,32 @@ export function createEmptyInputs(index: number) {
   }
 }
 
+export function createEmptyRetestInputs() {
+  return Object.fromEntries(labDetectionInputFields.map((field) => [field, null]))
+}
+
+export function normalizeLabDetectionInputs(value: unknown) {
+  const row = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  return Object.fromEntries(labDetectionInputFields
+    .filter((field) => Object.prototype.hasOwnProperty.call(row, field))
+    .map((field) => {
+      const raw = row[field]
+      return [field, typeof raw === 'number' && Number.isFinite(raw) ? raw : null]
+    }))
+}
+
+export function normalizeLabParameters(value: unknown) {
+  const row = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  return Object.fromEntries(Object.entries(defaultLabParameters).map(([key, fallback]) => [
+    key,
+    typeof row[key] === 'number' && Number.isFinite(row[key]) ? row[key] : fallback
+  ])) as typeof defaultLabParameters
+}
+
 export function hasLabDetectionInput(inputs: Record<string, unknown>) {
   return labDetectionInputFields.some((field) => hasDetectionInputValue(inputs[field]))
 }

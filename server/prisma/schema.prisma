@@ -63,6 +63,11 @@ enum SamplePaymentStatus {
   UNSELECTED
 }
 
+enum SampleRetestStatus {
+  ACTIVE
+  VOID
+}
+
 enum MonthlySettlementStatus {
   PAID
   UNPAID
@@ -430,6 +435,7 @@ model SampleBlock {
   inputs            Json
   results           Json
   parameterSnapshot Json
+  nextRetestSequence Int            @default(1)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -437,9 +443,48 @@ model SampleBlock {
   changeLogs                CellChangeLog[]
   abnormalRecords           AbnormalRecord[]
   sharedPrepaidConsumptions SharedPrepaidConsumption[] @relation("SharedPrepaidConsumptionBlock")
+  retests                   SampleRetest[]
 
   @@unique([sheetId, index])
   @@index([sheetId])
+}
+
+model SampleRetest {
+  id                String             @id @default(uuid())
+  sampleBlockId     String
+  sequence          Int
+  inputs            Json
+  results           Json
+  parameterSnapshot Json
+  everFilled        Boolean            @default(false)
+  status            SampleRetestStatus @default(ACTIVE)
+  voidReason        String?
+  createdById       String
+  updatedById       String
+  voidedById        String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  voidedAt          DateTime?
+
+  sampleBlock SampleBlock @relation(fields: [sampleBlockId], references: [id], onDelete: Cascade)
+
+  @@unique([sampleBlockId, sequence])
+  @@index([sampleBlockId, status, sequence])
+}
+
+model SampleRetestWriteRequest {
+  idempotencyKey     String   @id
+  requestFingerprint String
+  operation          String
+  sheetId            String
+  sampleBlockId      String?
+  sampleRetestId     String?
+  responseSnapshot   Json
+  createdAt          DateTime @default(now())
+
+  @@index([sheetId, sampleBlockId])
+  @@index([sampleRetestId])
+  @@index([createdAt])
 }
 
 model LabSampleSaveRequest {
