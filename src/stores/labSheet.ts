@@ -5,14 +5,30 @@ import {
   addSampleBlocks,
   applyCurrentParametersFromIndex as applyCurrentParametersFromIndexApi,
   createLabSheetEventSource,
+  createSampleRetests as createSampleRetestsApi,
+  deleteSampleRetest as deleteSampleRetestApi,
   getCurrentLabSheet,
   getLabSheetByDate,
   getLabSheetClientId,
   saveSampleBlock,
+  saveSampleRetest,
+  voidSampleRetest as voidSampleRetestApi,
   updateCurrentParameters
 } from '@/api/labSheet'
 import type { LabSheetRealtimeEvent } from '@/api/labSheet'
-import type { LabChangeLogField, LabParameter, LabSampleInput, LabSheet, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
+import {
+  sampleRetestInputFields,
+  type LabChangeLogField,
+  type LabParameter,
+  type LabSampleInput,
+  type LabSheet,
+  type SampleBlock,
+  type SampleBlockSavePayload,
+  type SampleRetest,
+  type SampleRetestInput,
+  type SampleRetestInputField,
+  type SaveSampleRetestPayload
+} from '@/types/labSheet'
 import { calculateSampleResults } from '@/utils/formulaEngine'
 import { hasLabDetectionInput } from '@/utils/sampleReport'
 import { isPositiveInteger } from '@/utils/validators'
@@ -41,6 +57,29 @@ type PreparedBlockSaveState = {
   prepared?: PreparedBlockSave
 }
 
+type DirtyRetestField = {
+  field: SampleRetestInputField
+  baseValue: unknown
+  revision: number
+}
+
+type SavedRetestFieldSnapshot = {
+  field: SampleRetestInputField
+  revision: number
+  value: unknown
+}
+
+type PreparedRetestSave = {
+  payload: SaveSampleRetestPayload
+  fields: SavedRetestFieldSnapshot[]
+}
+
+type PreparedRetestSaveState = {
+  signature: string
+  idempotencyKey: string
+  prepared?: PreparedRetestSave
+}
+
 export type PersistAllBlocksResult = {
   success: boolean
   failedBlockIds: string[]
@@ -53,21 +92,44 @@ type BlockSaveResult = {
   conflict: boolean
 }
 
+type RetestSaveResult = {
+  retestId: string
+  success: boolean
+  conflict: boolean
+}
+
+type RetestChangedRealtimeEvent = {
+  type: 'retests-changed'
+  date: string
+  sheetId: string
+  sourceClientId?: string
+  updatedAt: string
+  sampleBlockId?: string
+  sampleRetestId?: string
+}
+
+type StoredDraftBlock = {
+  updatedAt?: string
+  fields: Partial<Record<keyof LabSampleInput, { baseValue: unknown; value: unknown; revision: number }>>
+  changeLogFields: LabChangeLogField[]
+  preparedSave?: { signature: string; idempotencyKey: string }
+}
+
+type StoredDraftRetest = {
+  sampleBlockId: string
+  updatedAt: string
+  fields: Partial<Record<SampleRetestInputField, { baseValue: unknown; value: unknown; revision: number }>>
+  preparedSave?: { signature: string; idempotencyKey: string }
+}
+
 type StoredLabDraft = {
-  version: 1
+  version: 1 | 2
   owner: string
   sheetId: string
   date: string
   expiresAt: number
-  blocks: Record<
-    string,
-    {
-      updatedAt?: string
-      fields: Partial<Record<keyof LabSampleInput, { baseValue: unknown; value: unknown; revision: number }>>
-      changeLogFields: LabChangeLogField[]
-      preparedSave?: { signature: string; idempotencyKey: string }
-    }
-  >
+  blocks: Record<string, StoredDraftBlock>
+  retests?: Record<string, StoredDraftRetest>
 }
 
 const AUTO_SAVE_DELAY_MS = 900
@@ -102,6 +164,18 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   const conflictFieldsByBlock = new Map<string, Set<keyof LabSampleInput>>()
   const blockSaveChains = new Map<string, Promise<BlockSaveResult>>()
   const preparedBlockSaves = new Map<string, PreparedBlockSaveState>()
+  const retestAutoSaveTimers = new Map<string, number>()
+  const pendingRetestIds = new Set<string>()
+  const retestVersions = new Map<string, number>()
+  const pendingRetestDirtyFields = new Map<string, Map<SampleRetestInputField, DirtyRetestField>>()
+  const activeRetestSavePromises = new Set<Promise<RetestSaveResult>>()
+  const activeSavingRetestIds = new Set<string>()
+  const retryingRetestIds = new Set<string>()
+  const failedRetestIds = new Set<string>()
+  const conflictFieldsByRetest = new Map<string, Set<SampleRetestInputField>>()
+  const retestSaveChains = new Map<string, Promise<RetestSaveResult>>()
+  const preparedRetestSaves = new Map<string, PreparedRetestSaveState>()
+  const activeCreateRetestRequests = new Map<string, Promise<SampleRetest[]>>()
   let activeAutoSaveCount = 0
   let realtimeSource: EventSource | null = null
   let realtimeDate = ''
@@ -113,7 +187,10 @@ export const useLabSheetStore = defineStore('labSheet', () => {
 
   const currentParameters = computed(() => sheet.value?.parameters || null)
   const sampleBlocks = computed(() => sheet.value?.sampleBlocks || [])
-  const conflictBlockIds = computed(() => Array.from(conflictFieldsByBlock.keys()))
+  const conflictBlockIds = computed(() => Array.from(new Set([
+    ...conflictFieldsByBlock.keys(),
+    ...conflictFieldsByRetest.keys()
+  ])))
 
   async function loadCurrentSheet() {
     const flushed = await persistBeforeSheetChange()
@@ -210,6 +287,126 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     }
   }
 
+  function patchRetest(sampleBlockId: string, retestId: string, patch: Partial<SampleRetestInput>) {
+    if (!sheet.value || sheet.value.readonly || applyingParameters.value) return
+    const target = findRetest(sampleBlockId, retestId)
+    if (!target || target.readonly || target.status !== 'ACTIVE' || target.sensitiveFieldsHidden) return
+    const nextVersion = (retestVersions.get(retestId) || 0) + 1
+    const dirtyState = trackRetestDirtyFields(target, patch, nextVersion)
+    if (!dirtyState.changed) return
+    target.inputs = { ...target.inputs, ...patch }
+    target.results = calculateSampleResults(target.inputs, target.parameterSnapshot)
+    retestVersions.set(retestId, nextVersion)
+    if (dirtyState.hasDirty) {
+      persistLocalDraft()
+      scheduleRetestAutoSave(retestId)
+      return
+    }
+    const currentTimer = retestAutoSaveTimers.get(retestId)
+    if (currentTimer) window.clearTimeout(currentTimer)
+    retestAutoSaveTimers.delete(retestId)
+    pendingRetestIds.delete(retestId)
+    failedRetestIds.delete(retestId)
+    if (!failedRetestIds.size && !pendingDirtyFields.size) autoSaveError.value = ''
+    persistLocalDraft()
+    syncAutoSaveStatus()
+  }
+
+  function createRetests(sampleBlockIds: string[]): Promise<SampleRetest[]> {
+    if (!sheet.value || sheet.value.readonly) {
+      return Promise.reject(new Error('历史日期表格仅支持查看，不能创建复样'))
+    }
+    const targetSheetId = sheet.value.id
+    const requestSignature = JSON.stringify([targetSheetId, ...sampleBlockIds])
+    const activeRequest = activeCreateRetestRequests.get(requestSignature)
+    if (activeRequest) return activeRequest
+    const request = createRetestsAfterFlush(targetSheetId, [...sampleBlockIds]).finally(() => {
+      if (activeCreateRetestRequests.get(requestSignature) === request) {
+        activeCreateRetestRequests.delete(requestSignature)
+      }
+    })
+    activeCreateRetestRequests.set(requestSignature, request)
+    return request
+  }
+
+  async function createRetestsAfterFlush(targetSheetId: string, sampleBlockIds: string[]) {
+    const flushed = await persistAllBlocks({ silent: true })
+    if (!flushed.success) throw new Error('仍有数据未保存，请先重试保存')
+    if (sheet.value?.id !== targetSheetId || sheet.value.readonly) {
+      throw new Error('表格已切换，请在当前表格重新创建复样')
+    }
+    const payload = { sampleBlockIds, idempotencyKey: crypto.randomUUID() }
+    const created = await createSampleRetestsApi(targetSheetId, payload)
+    mergeCreatedRetests(created, targetSheetId)
+    return created
+  }
+
+  function mergeCreatedRetests(created: SampleRetest[], sheetId: string) {
+    if (sheet.value?.id !== sheetId) return
+    created.forEach((retest) => {
+      const block = sheet.value?.sampleBlocks.find((item) => item.id === retest.sampleBlockId)
+      if (!block) return
+      const index = block.retests.findIndex((item) => item.id === retest.id)
+      if (index >= 0) block.retests[index] = cloneRetest(retest)
+      else block.retests.push(cloneRetest(retest))
+      block.retests.sort((left, right) => left.sequence - right.sequence)
+    })
+  }
+
+  async function persistRetest(sampleBlockId: string, retestId: string) {
+    if (!findRetest(sampleBlockId, retestId)) {
+      return { retestId, success: true, conflict: false } satisfies RetestSaveResult
+    }
+    cancelRetestAutoSaveTimer(retestId)
+    return runRetestAutoSave(retestId)
+  }
+
+  async function deleteRetestRecord(sampleBlockId: string, retestId: string) {
+    const target = findRetest(sampleBlockId, retestId)
+    if (!sheet.value || !target || sheet.value.readonly || target.readonly || target.status !== 'ACTIVE') return false
+    const sheetId = sheet.value.id
+    const flushed = await persistRetest(sampleBlockId, retestId)
+    if (!flushed.success) throw new Error('仍有复样数据未保存，请先重试保存')
+    const current = findRetest(sampleBlockId, retestId)
+    if (!current || sheet.value?.id !== sheetId) return false
+    await deleteSampleRetestApi(sheetId, retestId, {
+      baseUpdatedAt: current.updatedAt,
+      idempotencyKey: crypto.randomUUID()
+    })
+    if (sheet.value?.id !== sheetId) return false
+    const block = sheet.value.sampleBlocks.find((item) => item.id === sampleBlockId)
+    if (!block) return false
+    block.retests = block.retests.filter((item) => item.id !== retestId)
+    cleanupRetestSaveState(retestId, true)
+    persistLocalDraft()
+    syncAutoSaveStatus()
+    return true
+  }
+
+  async function voidRetestRecord(sampleBlockId: string, retestId: string, reason?: string) {
+    const target = findRetest(sampleBlockId, retestId)
+    if (!sheet.value || !target || sheet.value.readonly || target.readonly || target.status !== 'ACTIVE') return null
+    const sheetId = sheet.value.id
+    const flushed = await persistRetest(sampleBlockId, retestId)
+    if (!flushed.success) throw new Error('仍有复样数据未保存，请先重试保存')
+    const current = findRetest(sampleBlockId, retestId)
+    if (!current || sheet.value?.id !== sheetId) return null
+    const payload = {
+      baseUpdatedAt: current.updatedAt,
+      idempotencyKey: crypto.randomUUID(),
+      ...(reason?.trim() ? { reason: reason.trim() } : {})
+    }
+    const voided = await voidSampleRetestApi(sheetId, retestId, payload)
+    if (sheet.value?.id !== sheetId) return voided
+    const block = sheet.value.sampleBlocks.find((item) => item.id === sampleBlockId)
+    const index = block?.retests.findIndex((item) => item.id === retestId) ?? -1
+    if (block && index >= 0) block.retests[index] = cloneRetest(voided)
+    cleanupRetestSaveState(retestId, true)
+    persistLocalDraft()
+    syncAutoSaveStatus()
+    return voided
+  }
+
   function commitBlockFieldChange(blockId: string, field: keyof LabSampleInput, oldValue: unknown, newValue: unknown) {
     if (!sheet.value || sheet.value.readonly || applyingParameters.value) return
     const block = sheet.value.sampleBlocks.find((item) => item.id === blockId)
@@ -235,25 +432,32 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       resetLocalSaveState()
       return successfulPersistResult()
     }
-    cancelAutoSaveTimers()
-    if (activeAutoSavePromises.size) {
-      await Promise.allSettled(Array.from(activeAutoSavePromises))
-    }
-    const dirtyBlockIds = Array.from(pendingDirtyFields.keys())
-    if (!dirtyBlockIds.length) {
+    const hadPendingWork = Boolean(
+      pendingBlockIds.size || pendingDirtyFields.size || activeAutoSavePromises.size || conflictFieldsByBlock.size ||
+      pendingRetestIds.size || pendingRetestDirtyFields.size || activeRetestSavePromises.size || conflictFieldsByRetest.size
+    )
+    if (!hadPendingWork) {
+      cancelAutoSaveTimers()
+      cancelRetestAutoSaveTimers()
       syncAutoSaveStatus()
       return successfulPersistResult()
     }
     saving.value = true
     autoSaveStatus.value = 'saving'
     try {
-      const results = await Promise.all(dirtyBlockIds.map((blockId) => runAutoSave(blockId)))
-      const failedBlockIds = Array.from(new Set(results.filter((item) => !item.success).map((item) => item.blockId)))
-      const conflictBlockIds = Array.from(conflictFieldsByBlock.keys())
-      const success = failedBlockIds.length === 0 && pendingDirtyFields.size === 0 && conflictBlockIds.length === 0
+      const [blockResult, retestResult] = await Promise.all([
+        persistAllSampleBlocks(),
+        persistAllRetests()
+      ])
+      const failedBlockIds = Array.from(new Set([...blockResult.failedBlockIds, ...retestResult.failedBlockIds]))
+      const conflictBlockIds = Array.from(new Set([
+        ...blockResult.conflictBlockIds,
+        ...retestResult.conflictBlockIds
+      ]))
+      const success = blockResult.success && retestResult.success && failedBlockIds.length === 0 && conflictBlockIds.length === 0
       if (success) {
-        lastAutoSavedAt.value = new Date().toISOString()
         autoSaveError.value = ''
+        lastAutoSavedAt.value = new Date().toISOString()
         syncAutoSaveStatus(true)
         if (!options.silent) ElMessage.success('当前表格已保存')
       } else {
@@ -264,6 +468,42 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     } finally {
       saving.value = false
     }
+  }
+
+  async function persistAllSampleBlocks(): Promise<PersistAllBlocksResult> {
+    cancelAutoSaveTimers()
+    if (activeAutoSavePromises.size) {
+      await Promise.allSettled(Array.from(activeAutoSavePromises))
+    }
+    cancelAutoSaveTimers()
+    const dirtyBlockIds = Array.from(pendingDirtyFields.keys())
+    if (!dirtyBlockIds.length) {
+      syncAutoSaveStatus()
+      return successfulPersistResult()
+    }
+    const results = await Promise.all(dirtyBlockIds.map((blockId) => runAutoSave(blockId)))
+    const failedBlockIds = Array.from(new Set(results.filter((item) => !item.success).map((item) => item.blockId)))
+    const conflictBlockIds = Array.from(conflictFieldsByBlock.keys())
+    const success = failedBlockIds.length === 0 && pendingDirtyFields.size === 0 && conflictBlockIds.length === 0
+    return { success, failedBlockIds, conflictBlockIds }
+  }
+
+  async function persistAllRetests(): Promise<PersistAllBlocksResult> {
+    cancelRetestAutoSaveTimers()
+    if (activeRetestSavePromises.size) {
+      await Promise.allSettled(Array.from(activeRetestSavePromises))
+    }
+    cancelRetestAutoSaveTimers()
+    const dirtyRetestIds = Array.from(pendingRetestDirtyFields.keys())
+    if (!dirtyRetestIds.length) {
+      syncAutoSaveStatus()
+      return successfulPersistResult()
+    }
+    const results = await Promise.all(dirtyRetestIds.map((retestId) => runRetestAutoSave(retestId)))
+    const failedBlockIds = Array.from(new Set(results.filter((item) => !item.success).map((item) => item.retestId)))
+    const conflictBlockIds = Array.from(conflictFieldsByRetest.keys())
+    const success = failedBlockIds.length === 0 && pendingRetestDirtyFields.size === 0 && conflictBlockIds.length === 0
+    return { success, failedBlockIds, conflictBlockIds }
   }
 
   async function appendSampleBlocks(countValue: string | number) {
@@ -385,6 +625,126 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return { blockId, success: succeeded, conflict: false }
   }
 
+  function scheduleRetestAutoSave(retestId: string, delayMs = AUTO_SAVE_DELAY_MS) {
+    const located = findRetestById(retestId)
+    if (!sheet.value || sheet.value.readonly || !located) return
+    const { retest } = located
+    if (retest.readonly || retest.status !== 'ACTIVE' || retest.sensitiveFieldsHidden) return
+    cancelRetestAutoSaveTimer(retestId)
+    pendingRetestIds.add(retestId)
+    failedRetestIds.delete(retestId)
+    if (!failedRetestIds.size && !pendingDirtyFields.size) autoSaveError.value = ''
+    autoSaveStatus.value = 'pending'
+    syncAutoSaveStatus()
+    const timer = window.setTimeout(() => {
+      retestAutoSaveTimers.delete(retestId)
+      pendingRetestIds.delete(retestId)
+      void runRetestAutoSave(retestId)
+    }, delayMs)
+    retestAutoSaveTimers.set(retestId, timer)
+  }
+
+  function runRetestAutoSave(retestId: string): Promise<RetestSaveResult> {
+    const previous = retestSaveChains.get(retestId) || Promise.resolve({ retestId, success: true, conflict: false })
+    const promise = previous
+      .catch(() => ({ retestId, success: false, conflict: false }))
+      .then(() => persistQueuedRetest(retestId))
+    const chain = promise.finally(() => {
+      if (retestSaveChains.get(retestId) === chain) retestSaveChains.delete(retestId)
+    })
+    retestSaveChains.set(retestId, chain)
+    activeRetestSavePromises.add(promise)
+    void promise.finally(() => activeRetestSavePromises.delete(promise))
+    return promise
+  }
+
+  async function persistQueuedRetest(retestId: string): Promise<RetestSaveResult> {
+    const currentSheet = sheet.value
+    const located = findRetestById(retestId)
+    const retest = located?.retest
+    if (
+      !currentSheet || !retest || currentSheet.readonly || retest.readonly ||
+      retest.status !== 'ACTIVE' || retest.sensitiveFieldsHidden
+    ) {
+      pendingRetestIds.delete(retestId)
+      syncAutoSaveStatus()
+      return { retestId, success: true, conflict: false }
+    }
+    if (conflictFieldsByRetest.has(retestId)) {
+      syncAutoSaveStatus()
+      return { retestId, success: false, conflict: true }
+    }
+    const sheetId = currentSheet.id
+    const prepared = prepareRetestSave(retest)
+    if (!prepared) {
+      pendingRetestIds.delete(retestId)
+      syncAutoSaveStatus()
+      return { retestId, success: true, conflict: false }
+    }
+    let succeeded = false
+    pendingRetestIds.delete(retestId)
+    activeAutoSaveCount += 1
+    activeSavingRetestIds.add(retestId)
+    syncAutoSaveStatus()
+    try {
+      const saved = await saveRetestWithRetry(sheetId, retestId, prepared.payload)
+      succeeded = true
+      mergeSavedRetest(saved, prepared.fields, sheetId)
+      if (preparedRetestSaves.get(retestId)?.prepared === prepared) preparedRetestSaves.delete(retestId)
+      lastAutoSavedAt.value = new Date().toISOString()
+      failedRetestIds.delete(retestId)
+      if (!failedRetestIds.size && !pendingDirtyFields.size) autoSaveError.value = ''
+      persistLocalDraft()
+    } catch (error) {
+      const conflictRetest = getConflictRetest(error)
+      if (conflictRetest) {
+        failedRetestIds.delete(retestId)
+        mergeConflictRetest(conflictRetest, getConflictRetestFields(error))
+        autoSaveStatus.value = 'conflict'
+        autoSaveError.value = '该复样已被另一台设备修改'
+        ElMessage.error('该复样存在修改冲突，已保留本机内容')
+      } else if ((error as { response?: { status?: number } })?.response?.status === 409) {
+        failedRetestIds.delete(retestId)
+        conflictFieldsByRetest.set(retestId, new Set(pendingRetestDirtyFields.get(retestId)?.keys() || []))
+        autoSaveStatus.value = 'conflict'
+        autoSaveError.value = '该复样保存请求存在冲突'
+        ElMessage.error('该复样存在修改冲突，已保留本机内容')
+      } else {
+        failedRetestIds.add(retestId)
+        autoSaveStatus.value = 'error'
+        autoSaveError.value = error instanceof Error ? error.message : '复样自动保存失败'
+        ElMessage.error('复样自动保存失败，数据已保存在本机草稿中')
+      }
+      persistLocalDraft()
+    } finally {
+      retryingRetestIds.delete(retestId)
+      activeSavingRetestIds.delete(retestId)
+      activeAutoSaveCount = Math.max(0, activeAutoSaveCount - 1)
+      syncAutoSaveStatus(succeeded)
+    }
+    if (succeeded && pendingRetestDirtyFields.has(retestId) && !retestAutoSaveTimers.has(retestId)) {
+      scheduleRetestAutoSave(retestId, 0)
+    }
+    return { retestId, success: succeeded, conflict: conflictFieldsByRetest.has(retestId) }
+  }
+
+  async function saveRetestWithRetry(sheetId: string, retestId: string, payload: SaveSampleRetestPayload) {
+    let lastError: unknown
+    for (let attempt = 0; attempt <= AUTO_SAVE_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        return await saveSampleRetest(sheetId, retestId, payload)
+      } catch (error) {
+        lastError = error
+        if (!isTransientSaveError(error) || attempt === AUTO_SAVE_RETRY_DELAYS_MS.length) throw error
+        retryingRetestIds.add(retestId)
+        autoSaveStatus.value = 'retrying'
+        autoSaveError.value = '网络不稳定，正在重试保存'
+        await wait(AUTO_SAVE_RETRY_DELAYS_MS[attempt])
+      }
+    }
+    throw lastError
+  }
+
   async function saveBlockWithRetry(sheetId: string, payload: SampleBlockSavePayload, blockId: string) {
     let lastError: unknown
     for (let attempt = 0; attempt <= AUTO_SAVE_RETRY_DELAYS_MS.length; attempt += 1) {
@@ -417,8 +777,34 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     autoSaveTimers.clear()
   }
 
+  function cancelRetestAutoSaveTimer(retestId: string) {
+    const timer = retestAutoSaveTimers.get(retestId)
+    if (timer) window.clearTimeout(timer)
+    retestAutoSaveTimers.delete(retestId)
+    pendingRetestIds.delete(retestId)
+  }
+
+  function cancelRetestAutoSaveTimers() {
+    retestAutoSaveTimers.forEach((timer) => window.clearTimeout(timer))
+    retestAutoSaveTimers.clear()
+    pendingRetestIds.clear()
+  }
+
+  function cleanupRetestSaveState(retestId: string, retireSaveChain = false) {
+    cancelRetestAutoSaveTimer(retestId)
+    pendingRetestDirtyFields.delete(retestId)
+    preparedRetestSaves.delete(retestId)
+    retestVersions.delete(retestId)
+    retryingRetestIds.delete(retestId)
+    failedRetestIds.delete(retestId)
+    activeSavingRetestIds.delete(retestId)
+    conflictFieldsByRetest.delete(retestId)
+    if (retireSaveChain) retestSaveChains.delete(retestId)
+  }
+
   function resetLocalSaveState() {
     cancelAutoSaveTimers()
+    cancelRetestAutoSaveTimers()
     pendingBlockIds.clear()
     pendingDirtyFields.clear()
     pendingChangeLogFields.clear()
@@ -426,6 +812,12 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     blockVersions.clear()
     retryingBlockIds.clear()
     conflictFieldsByBlock.clear()
+    pendingRetestDirtyFields.clear()
+    preparedRetestSaves.clear()
+    retestVersions.clear()
+    retryingRetestIds.clear()
+    failedRetestIds.clear()
+    conflictFieldsByRetest.clear()
     autoSaveError.value = ''
     syncAutoSaveStatus()
   }
@@ -439,10 +831,17 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       resetLocalSaveState()
       return successfulPersistResult()
     }
-    if (pendingBlockIds.size || pendingDirtyFields.size || activeAutoSavePromises.size) {
+    if (activeCreateRetestRequests.size) {
+      await Promise.allSettled(Array.from(activeCreateRetestRequests.values()))
+    }
+    if (
+      pendingBlockIds.size || pendingDirtyFields.size || activeAutoSavePromises.size || conflictFieldsByBlock.size ||
+      pendingRetestIds.size || pendingRetestDirtyFields.size || activeRetestSavePromises.size || conflictFieldsByRetest.size
+    ) {
       return persistAllBlocks({ silent: true })
     } else {
       cancelAutoSaveTimers()
+      cancelRetestAutoSaveTimers()
       syncAutoSaveStatus()
       return successfulPersistResult()
     }
@@ -453,25 +852,30 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   }
 
   function syncAutoSaveStatus(saved = false) {
-    pendingAutoSaveCount.value = new Set([...pendingBlockIds, ...pendingDirtyFields.keys()]).size
+    pendingAutoSaveCount.value = new Set([
+      ...Array.from(pendingBlockIds, (id) => `block:${id}`),
+      ...Array.from(pendingDirtyFields.keys(), (id) => `block:${id}`),
+      ...Array.from(pendingRetestIds, (id) => `retest:${id}`),
+      ...Array.from(pendingRetestDirtyFields.keys(), (id) => `retest:${id}`)
+    ]).size
     autoSaving.value = activeAutoSaveCount > 0
-    if (conflictFieldsByBlock.size) {
+    if (conflictFieldsByBlock.size || conflictFieldsByRetest.size) {
       autoSaveStatus.value = 'conflict'
       return
     }
-    if (retryingBlockIds.size) {
+    if (retryingBlockIds.size || retryingRetestIds.size) {
       autoSaveStatus.value = 'retrying'
       return
     }
-    if (pendingBlockIds.size) {
+    if (pendingBlockIds.size || pendingRetestIds.size) {
       autoSaveStatus.value = 'pending'
       return
     }
-    if (autoSaveError.value && pendingDirtyFields.size) {
+    if ((autoSaveError.value || failedRetestIds.size) && (pendingDirtyFields.size || pendingRetestDirtyFields.size)) {
       autoSaveStatus.value = 'error'
       return
     }
-    if (pendingDirtyFields.size) {
+    if (pendingDirtyFields.size || pendingRetestDirtyFields.size) {
       autoSaveStatus.value = 'pending'
       return
     }
@@ -488,6 +892,24 @@ export const useLabSheetStore = defineStore('labSheet', () => {
 
   function cloneBlock(block: SampleBlock): SampleBlock {
     return JSON.parse(JSON.stringify(block)) as SampleBlock
+  }
+
+  function cloneRetest(retest: SampleRetest): SampleRetest {
+    return JSON.parse(JSON.stringify(retest)) as SampleRetest
+  }
+
+  function findRetest(sampleBlockId: string, retestId: string) {
+    return sheet.value?.sampleBlocks
+      .find((block) => block.id === sampleBlockId)
+      ?.retests.find((retest) => retest.id === retestId)
+  }
+
+  function findRetestById(retestId: string) {
+    for (const block of sheet.value?.sampleBlocks || []) {
+      const index = block.retests.findIndex((retest) => retest.id === retestId)
+      if (index >= 0) return { block, retest: block.retests[index], index }
+    }
+    return null
   }
 
   function cloneValue<T>(value: T): T {
@@ -525,6 +947,31 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return { changed, hasDirty }
   }
 
+  function trackRetestDirtyFields(retest: SampleRetest, patch: Partial<SampleRetestInput>, revision: number) {
+    let fields = pendingRetestDirtyFields.get(retest.id)
+    let changed = false
+    sampleRetestInputFields.forEach((field) => {
+      if (!Object.prototype.hasOwnProperty.call(patch, field)) return
+      const oldValue = retest.inputs[field] ?? null
+      const nextValue = patch[field] ?? null
+      if (isSameValue(oldValue, nextValue)) return
+      if (!fields) fields = new Map<SampleRetestInputField, DirtyRetestField>()
+      const existing = fields.get(field)
+      const baseValue = existing ? existing.baseValue : cloneValue(oldValue)
+      if (isSameValue(baseValue, nextValue)) fields.delete(field)
+      else fields.set(field, { field, baseValue, revision })
+      changed = true
+    })
+    const hasDirty = Boolean(fields?.size)
+    if (hasDirty) pendingRetestDirtyFields.set(retest.id, fields!)
+    else {
+      pendingRetestDirtyFields.delete(retest.id)
+      preparedRetestSaves.delete(retest.id)
+      conflictFieldsByRetest.delete(retest.id)
+    }
+    return { changed, hasDirty }
+  }
+
   function prepareBlockSave(block: SampleBlock): PreparedBlockSave | null {
     const candidate = buildBlockSaveCandidate(block)
     if (!candidate) return null
@@ -550,6 +997,31 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return prepared
   }
 
+  function prepareRetestSave(retest: SampleRetest): PreparedRetestSave | null {
+    const candidate = buildRetestSaveCandidate(retest)
+    if (!candidate) return null
+    const existing = preparedRetestSaves.get(retest.id)
+    if (existing?.signature === candidate.signature) {
+      if (existing.prepared) {
+        existing.prepared.fields = candidate.fields
+        return existing.prepared
+      }
+      const prepared = {
+        payload: { ...candidate.payload, idempotencyKey: existing.idempotencyKey },
+        fields: candidate.fields
+      }
+      existing.prepared = prepared
+      return prepared
+    }
+    const idempotencyKey = crypto.randomUUID()
+    const prepared = {
+      payload: { ...candidate.payload, idempotencyKey },
+      fields: candidate.fields
+    }
+    preparedRetestSaves.set(retest.id, { signature: candidate.signature, idempotencyKey, prepared })
+    return prepared
+  }
+
   function buildBlockSaveCandidate(block: SampleBlock) {
     const fields = pendingDirtyFields.get(block.id)
     if (!fields?.size) return null
@@ -572,7 +1044,27 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     return { payload, fields: savedFields, signature: stableSaveSignature(payload) }
   }
 
-  function stableSaveSignature(payload: SampleBlockSavePayload) {
+  function buildRetestSaveCandidate(retest: SampleRetest) {
+    const fields = pendingRetestDirtyFields.get(retest.id)
+    if (!fields?.size) return null
+    const changedFields: SampleRetestInput = {}
+    const baseInputs: SampleRetestInput = {}
+    const savedFields: SavedRetestFieldSnapshot[] = []
+    fields.forEach((dirty, field) => {
+      const value = cloneValue(retest.inputs[field])
+      changedFields[field] = value as number | null
+      baseInputs[field] = cloneValue(dirty.baseValue) as number | null
+      savedFields.push({ field, revision: dirty.revision, value })
+    })
+    const payload = {
+      baseUpdatedAt: retest.updatedAt,
+      baseInputs,
+      changedFields
+    }
+    return { payload, fields: savedFields, signature: stableSaveSignature(payload) }
+  }
+
+  function stableSaveSignature(payload: unknown) {
     return JSON.stringify(canonicalValue(payload))
   }
 
@@ -597,6 +1089,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     const dirtyFields = pendingDirtyFields.get(saved.id)
     const changeLogFields = pendingChangeLogFields.get(saved.id)
     const merged = cloneBlock(saved)
+    merged.retests = mergeRemoteRetestCollection(saved.retests, localBlock.retests)
     dirtyFields?.forEach((dirty, field) => {
       const sent = sentFields.find((item) => item.field === field)
       const localValue = cloneValue(localBlock.inputs[field])
@@ -624,6 +1117,61 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     const conflicts = conflictFieldsByBlock.get(saved.id)
     if (conflicts && !conflicts.size) conflictFieldsByBlock.delete(saved.id)
     pendingDirtyFields.set(saved.id, dirtyFields)
+  }
+
+  function mergeSavedRetest(saved: SampleRetest, sentFields: SavedRetestFieldSnapshot[], sheetId: string) {
+    if (sheet.value?.id !== sheetId) return
+    const located = findRetestById(saved.id)
+    if (!located) return
+    const { block, index, retest: localRetest } = located
+    const dirtyFields = pendingRetestDirtyFields.get(saved.id)
+    const merged = cloneRetest(saved)
+    dirtyFields?.forEach((dirty, field) => {
+      const sent = sentFields.find((item) => item.field === field)
+      const localValue = cloneValue(localRetest.inputs[field])
+      const savedValue = cloneValue(saved.inputs[field])
+      if (sent && dirty.revision === sent.revision && isSameValue(localValue, sent.value)) {
+        dirtyFields.delete(field)
+        conflictFieldsByRetest.get(saved.id)?.delete(field)
+        return
+      }
+      merged.inputs[field] = localValue as number | null
+      dirty.baseValue = savedValue
+    })
+    merged.results = calculateSampleResults(merged.inputs, merged.parameterSnapshot)
+    block.retests[index] = merged
+    if (!dirtyFields?.size) {
+      pendingRetestDirtyFields.delete(saved.id)
+      pendingRetestIds.delete(saved.id)
+      conflictFieldsByRetest.delete(saved.id)
+      return
+    }
+    const conflicts = conflictFieldsByRetest.get(saved.id)
+    if (conflicts && !conflicts.size) conflictFieldsByRetest.delete(saved.id)
+    pendingRetestDirtyFields.set(saved.id, dirtyFields)
+  }
+
+  function mergeConflictRetest(remoteRetest: SampleRetest, conflictFields: SampleRetestInputField[]) {
+    const located = findRetestById(remoteRetest.id)
+    if (!located) return
+    const { block, index, retest: localRetest } = located
+    const dirtyFields = pendingRetestDirtyFields.get(remoteRetest.id)
+    if (!dirtyFields?.size) {
+      block.retests[index] = cloneRetest(remoteRetest)
+      return
+    }
+    const merged = cloneRetest(remoteRetest)
+    const conflicts = conflictFieldsByRetest.get(remoteRetest.id) || new Set<SampleRetestInputField>()
+    dirtyFields.forEach((dirty, field) => {
+      merged.inputs[field] = cloneValue(localRetest.inputs[field]) as number | null
+      dirty.baseValue = cloneValue(remoteRetest.inputs[field] ?? null)
+      if (!conflictFields.length || conflictFields.includes(field)) conflicts.add(field)
+    })
+    merged.results = calculateSampleResults(merged.inputs, merged.parameterSnapshot)
+    pendingRetestDirtyFields.set(remoteRetest.id, dirtyFields)
+    conflictFieldsByRetest.set(remoteRetest.id, conflicts)
+    preparedRetestSaves.delete(remoteRetest.id)
+    block.retests[index] = merged
   }
 
   function cloneSheet(value: LabSheet): LabSheet {
@@ -654,6 +1202,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (!key) return
     try {
       const blocks: StoredLabDraft['blocks'] = {}
+      const retests: Record<string, StoredDraftRetest> = {}
       pendingDirtyFields.forEach((fields, blockId) => {
         const block = sheet.value?.sampleBlocks.find((item) => item.id === blockId)
         if (!block || !fields.size) return
@@ -676,17 +1225,40 @@ export const useLabSheetStore = defineStore('labSheet', () => {
             : undefined
         }
       })
-      if (!Object.keys(blocks).length) {
+      pendingRetestDirtyFields.forEach((fields, retestId) => {
+        const located = findRetestById(retestId)
+        if (!located || !fields.size) return
+        const storedFields: StoredDraftRetest['fields'] = {}
+        fields.forEach((dirty, field) => {
+          storedFields[field] = {
+            baseValue: cloneValue(dirty.baseValue),
+            value: cloneValue(located.retest.inputs[field]),
+            revision: dirty.revision
+          }
+        })
+        const preparedSave = preparedRetestSaves.get(retestId)
+        const candidate = buildRetestSaveCandidate(located.retest)
+        retests[retestId] = {
+          sampleBlockId: located.block.id,
+          updatedAt: located.retest.updatedAt,
+          fields: storedFields,
+          preparedSave: preparedSave && candidate?.signature === preparedSave.signature
+            ? { signature: preparedSave.signature, idempotencyKey: preparedSave.idempotencyKey }
+            : undefined
+        }
+      })
+      if (!Object.keys(blocks).length && !Object.keys(retests).length) {
         window.localStorage.removeItem(key)
         return
       }
       const draft: StoredLabDraft = {
-        version: 1,
+        version: 2,
         owner: getDraftOwner(),
         sheetId: sheet.value.id,
         date: sheet.value.date,
         expiresAt: Date.now() + DRAFT_TTL_MS,
-        blocks
+        blocks,
+        retests
       }
       window.localStorage.setItem(key, JSON.stringify(draft))
       draftStorageErrorShown = false
@@ -712,7 +1284,10 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     } catch {
       draft = null
     }
-    if (!draft || draft.version !== 1 || draft.sheetId !== sheet.value.id || draft.date !== sheet.value.date || draft.expiresAt <= Date.now()) {
+    if (
+      !draft || (draft.version !== 1 && draft.version !== 2) || draft.owner !== getDraftOwner() ||
+      draft.sheetId !== sheet.value.id || draft.date !== sheet.value.date || draft.expiresAt <= Date.now()
+    ) {
       try {
         window.localStorage.removeItem(key)
       } catch {
@@ -764,9 +1339,48 @@ export const useLabSheetStore = defineStore('labSheet', () => {
       }
       if (!conflicts.size) scheduleBlockAutoSave(blockId, 0)
     })
+    if (draft.version === 2) {
+      Object.entries(draft.retests || {}).forEach(([retestId, storedRetest]) => {
+        const retest = findRetest(storedRetest.sampleBlockId, retestId)
+        if (!retest || retest.readonly || retest.status !== 'ACTIVE' || retest.sensitiveFieldsHidden) return
+        const dirtyFields = new Map<SampleRetestInputField, DirtyRetestField>()
+        const conflicts = new Set<SampleRetestInputField>()
+        let maxRevision = retestVersions.get(retestId) || 0
+        sampleRetestInputFields.forEach((field) => {
+          const stored = storedRetest.fields[field]
+          if (!stored) return
+          const remoteValue = cloneValue(retest.inputs[field])
+          if (isSameValue(remoteValue, stored.value)) return
+          retest.inputs[field] = cloneValue(stored.value) as number | null
+          const revision = Math.max(Number(stored.revision) || 0, maxRevision + 1)
+          maxRevision = Math.max(maxRevision, revision)
+          dirtyFields.set(field, { field, baseValue: remoteValue, revision })
+          if (!isSameValue(remoteValue, stored.baseValue)) conflicts.add(field)
+          restoredCount += 1
+        })
+        if (!dirtyFields.size) return
+        retestVersions.set(retestId, maxRevision)
+        pendingRetestDirtyFields.set(retestId, dirtyFields)
+        if (conflicts.size) conflictFieldsByRetest.set(retestId, conflicts)
+        retest.results = calculateSampleResults(retest.inputs, retest.parameterSnapshot)
+        const restoredPrepared = storedRetest.preparedSave
+        const candidate = buildRetestSaveCandidate(retest)
+        if (
+          restoredPrepared && typeof restoredPrepared.idempotencyKey === 'string' &&
+          restoredPrepared.idempotencyKey.length > 0 && restoredPrepared.idempotencyKey.length <= 200 &&
+          candidate?.signature === restoredPrepared.signature
+        ) {
+          preparedRetestSaves.set(retestId, {
+            signature: restoredPrepared.signature,
+            idempotencyKey: restoredPrepared.idempotencyKey
+          })
+        }
+        if (!conflicts.size) scheduleRetestAutoSave(retestId, 0)
+      })
+    }
     persistLocalDraft()
     syncAutoSaveStatus()
-    if (conflictFieldsByBlock.size) {
+    if (conflictFieldsByBlock.size || conflictFieldsByRetest.size) {
       autoSaveError.value = '恢复的本机草稿与服务器数据存在冲突'
       autoSaveStatus.value = 'conflict'
       ElMessage.warning('已恢复本机未保存数据，其中部分内容需要确认后保存')
@@ -905,7 +1519,10 @@ export const useLabSheetStore = defineStore('labSheet', () => {
 
   async function recoverRealtimeAndPendingSaves() {
     await refreshLoadedSheetFromServer()
-    if (pendingDirtyFields.size && !conflictFieldsByBlock.size) await retryFailedSaves()
+    if (
+      (pendingDirtyFields.size || pendingRetestDirtyFields.size) &&
+      !conflictFieldsByBlock.size && !conflictFieldsByRetest.size
+    ) await retryFailedSaves()
   }
 
   function handleVisibilityRecovery() {
@@ -917,9 +1534,9 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   }
 
   function handleRealtimeMessage(rawData: string) {
-    let payload: LabSheetRealtimeEvent
+    let payload: LabSheetRealtimeEvent | RetestChangedRealtimeEvent
     try {
-      payload = JSON.parse(rawData) as LabSheetRealtimeEvent
+      payload = JSON.parse(rawData) as LabSheetRealtimeEvent | RetestChangedRealtimeEvent
     } catch {
       return
     }
@@ -931,7 +1548,7 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     if (payload.sourceClientId === clientId) return
     if (!sheet.value || payload.sheetId !== sheet.value.id || payload.date !== sheet.value.date) return
 
-    if (payload.type === 'block-saved') {
+    if (payload.type === 'block-saved' || payload.type === 'retests-changed') {
       void refreshLoadedSheetFromServer()
       return
     }
@@ -955,7 +1572,10 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     const nextSheet = cloneSheet(remoteSheet)
     nextSheet.sampleBlocks = nextSheet.sampleBlocks.map((remoteBlock) => {
       const localBlock = localBlocks.get(remoteBlock.id)
-      return localBlock ? mergeRemoteBlockState(remoteBlock, localBlock) : remoteBlock
+      if (!localBlock) return remoteBlock
+      const mergedBlock = mergeRemoteBlockState(remoteBlock, localBlock)
+      mergedBlock.retests = mergeRemoteRetestCollection(remoteBlock.retests, localBlock.retests)
+      return mergedBlock
     })
     pendingDirtyFields.forEach((_fields, blockId) => {
       if (nextSheet.sampleBlocks.some((block) => block.id === blockId)) return
@@ -966,6 +1586,56 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     sheet.value = nextSheet
     persistLocalDraft()
     syncAutoSaveStatus()
+  }
+
+  function mergeRemoteRetestCollection(remoteRetests: SampleRetest[], localRetests: SampleRetest[]) {
+    const localById = new Map(localRetests.map((retest) => [retest.id, retest]))
+    const merged = remoteRetests.map((remoteRetest) => {
+      const localRetest = localById.get(remoteRetest.id)
+      return localRetest ? mergeRemoteRetestState(remoteRetest, localRetest) : cloneRetest(remoteRetest)
+    })
+    pendingRetestDirtyFields.forEach((_fields, retestId) => {
+      if (merged.some((retest) => retest.id === retestId)) return
+      const localRetest = localById.get(retestId)
+      if (localRetest) merged.push(cloneRetest(localRetest))
+    })
+    return merged.sort((left, right) => left.sequence - right.sequence)
+  }
+
+  function mergeRemoteRetestState(remoteRetest: SampleRetest, localRetest: SampleRetest) {
+    const dirtyFields = pendingRetestDirtyFields.get(remoteRetest.id)
+    if (!dirtyFields?.size) return cloneRetest(remoteRetest)
+    const merged = cloneRetest(remoteRetest)
+    const conflicts = conflictFieldsByRetest.get(remoteRetest.id) || new Set<SampleRetestInputField>()
+    let rebased = false
+    dirtyFields.forEach((dirty, field) => {
+      const localValue = cloneValue(localRetest.inputs[field])
+      const remoteValue = cloneValue(remoteRetest.inputs[field])
+      if (isSameValue(localValue, remoteValue)) {
+        dirtyFields.delete(field)
+        conflicts.delete(field)
+        rebased = true
+        return
+      }
+      merged.inputs[field] = localValue as number | null
+      if (!isSameValue(remoteValue, dirty.baseValue)) {
+        dirty.baseValue = remoteValue
+        conflicts.add(field)
+        rebased = true
+      } else if (remoteRetest.readonly || remoteRetest.status !== 'ACTIVE' || remoteRetest.sensitiveFieldsHidden) {
+        conflicts.add(field)
+      }
+    })
+    merged.results = calculateSampleResults(merged.inputs, merged.parameterSnapshot)
+    if (rebased) preparedRetestSaves.delete(remoteRetest.id)
+    if (!dirtyFields.size) {
+      cleanupRetestSaveState(remoteRetest.id)
+      return merged
+    }
+    pendingRetestDirtyFields.set(remoteRetest.id, dirtyFields)
+    if (conflicts.size) conflictFieldsByRetest.set(remoteRetest.id, conflicts)
+    else conflictFieldsByRetest.delete(remoteRetest.id)
+    return merged
   }
 
   function mergeRemoteBlockState(remoteBlock: SampleBlock, localBlock: SampleBlock) {
@@ -1029,11 +1699,15 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   }
 
   async function retryFailedSaves() {
-    if (conflictFieldsByBlock.size) {
+    if (conflictFieldsByBlock.size || conflictFieldsByRetest.size) {
+      const conflicts = Array.from(new Set([
+        ...conflictFieldsByBlock.keys(),
+        ...conflictFieldsByRetest.keys()
+      ]))
       return {
         success: false,
-        failedBlockIds: Array.from(conflictFieldsByBlock.keys()),
-        conflictBlockIds: Array.from(conflictFieldsByBlock.keys())
+        failedBlockIds: conflicts,
+        conflictBlockIds: conflicts
       }
     }
     autoSaveError.value = ''
@@ -1041,8 +1715,12 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   }
 
   async function confirmConflictOverwrite() {
-    const blockIds = Array.from(conflictFieldsByBlock.keys())
+    const blockIds = Array.from(new Set([
+      ...conflictFieldsByBlock.keys(),
+      ...conflictFieldsByRetest.keys()
+    ]))
     conflictFieldsByBlock.clear()
+    conflictFieldsByRetest.clear()
     autoSaveError.value = ''
     persistLocalDraft()
     const result = await persistAllBlocks({ silent: true })
@@ -1055,6 +1733,24 @@ export const useLabSheetStore = defineStore('labSheet', () => {
   function getConflictBlock(error: unknown): SampleBlock | null {
     const data = (error as { response?: { data?: { block?: SampleBlock; message?: { block?: SampleBlock } } } })?.response?.data
     return data?.block || data?.message?.block || null
+  }
+
+  function getConflictRetest(error: unknown): SampleRetest | null {
+    const data = (error as {
+      response?: { data?: { retest?: SampleRetest; message?: { retest?: SampleRetest } } }
+    })?.response?.data
+    return data?.retest || data?.message?.retest || null
+  }
+
+  function getConflictRetestFields(error: unknown): SampleRetestInputField[] {
+    const data = (error as {
+      response?: { data?: { fields?: unknown; message?: { fields?: unknown } } }
+    })?.response?.data
+    const fields = data?.fields || data?.message?.fields
+    if (!Array.isArray(fields)) return []
+    return fields.filter((field): field is SampleRetestInputField => (
+      typeof field === 'string' && sampleRetestInputFields.includes(field as SampleRetestInputField)
+    ))
   }
 
   function getBusinessConflictMessage(error: unknown): string {
@@ -1099,9 +1795,14 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     saveParameters,
     applyParametersFromIndex,
     patchBlock,
+    createRetests,
+    patchRetest,
     commitBlockFieldChange,
     persistBlock,
+    persistRetest,
     persistAllBlocks,
+    deleteRetestRecord,
+    voidRetestRecord,
     retryFailedSaves,
     confirmConflictOverwrite,
     appendSampleBlocks,
