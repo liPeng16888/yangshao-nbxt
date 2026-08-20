@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
   rejectAdminLabSampleChangeRequest: vi.fn()
 }))
 const element = vi.hoisted(() => ({
-  message: { success: vi.fn(), warning: vi.fn() },
+  message: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
   messageBox: { prompt: vi.fn() }
 }))
 
@@ -75,8 +75,9 @@ const DatePickerStub = defineComponent({
 const ButtonStub = defineComponent({
   name: 'ElButton',
   inheritAttrs: false,
+  props: { disabled: Boolean, loading: Boolean },
   emits: ['click'],
-  template: '<button type="button" v-bind="$attrs" @click="$emit(\'click\')"><slot /></button>'
+  template: '<button type="button" v-bind="$attrs" :disabled="disabled" :data-loading="loading ? \'true\' : \'false\'" @click="$emit(\'click\')"><slot /></button>'
 })
 const DialogStub = defineComponent({
   name: 'ElDialog',
@@ -146,6 +147,8 @@ describe('LabSampleChangeRequestsPanel', () => {
     expect(wrapper.text()).toContain('25')
     expect(wrapper.text()).toContain('50')
     expect(wrapper.text()).toContain('审批通过后，受影响的已结款或部分结款月结记录将重置为未结款')
+    expect(wrapper.get('.dialog-stub').text()).toContain('申请时间')
+    expect(wrapper.get('.dialog-stub').text()).toContain('2026-08-20T01:00:00.000Z')
     expect(wrapper.find('input').exists()).toBe(false)
 
     element.messageBox.prompt.mockResolvedValueOnce({ value: '   ' })
@@ -158,6 +161,75 @@ describe('LabSampleChangeRequestsPanel', () => {
     )
     expect(api.approveAdminLabSampleChangeRequest).toHaveBeenCalledWith('request-1', '')
     expect(api.getAdminLabSampleChangeRequests).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows the withdrawal timestamp from a withdrawn server detail', async () => {
+    api.getAdminLabSampleChangeRequest.mockResolvedValueOnce({
+      ...pendingDetail,
+      status: 'WITHDRAWN',
+      withdrawnAt: '2026-08-20T03:00:00.000Z'
+    })
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="view-sample-change-request-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.dialog-stub').text()).toContain('撤回时间')
+    expect(wrapper.get('.dialog-stub').text()).toContain('2026-08-20T03:00:00.000Z')
+  })
+
+  it('locks both decisions before prompting so double-click and approve/reject crossing start only one flow', async () => {
+    let resolvePrompt!: (value: { value: string }) => void
+    element.messageBox.prompt.mockImplementationOnce(() => new Promise((resolve) => { resolvePrompt = resolve }))
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    const approve = wrapper.get('[data-testid="approve-sample-change-request-1"]')
+    const reject = wrapper.get('[data-testid="reject-sample-change-request-1"]')
+    await approve.trigger('click')
+    await nextTick()
+
+    expect(approve.attributes('disabled')).toBeDefined()
+    expect(approve.attributes('data-loading')).toBe('true')
+    expect(reject.attributes('disabled')).toBeDefined()
+    await approve.trigger('click')
+    await reject.trigger('click')
+    expect(element.messageBox.prompt).toHaveBeenCalledTimes(1)
+
+    resolvePrompt({ value: '已核对' })
+    await flushPromises()
+    expect(api.approveAdminLabSampleChangeRequest).toHaveBeenCalledTimes(1)
+    expect(api.rejectAdminLabSampleChangeRequest).not.toHaveBeenCalled()
+  })
+
+  it('silently unlocks after prompt cancellation', async () => {
+    element.messageBox.prompt.mockRejectedValueOnce('cancel')
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="approve-sample-change-request-1"]').trigger('click')
+    await flushPromises()
+
+    expect(api.approveAdminLabSampleChangeRequest).not.toHaveBeenCalled()
+    expect(api.rejectAdminLabSampleChangeRequest).not.toHaveBeenCalled()
+    expect(element.message.error).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="approve-sample-change-request-1"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('shows an action API error and releases the latch for a retry', async () => {
+    api.approveAdminLabSampleChangeRequest.mockRejectedValueOnce(new Error('审批服务不可用'))
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="approve-sample-change-request-1"]').trigger('click')
+    await flushPromises()
+    expect(element.message.error).toHaveBeenCalledWith('审批服务不可用')
+    expect(wrapper.get('[data-testid="approve-sample-change-request-1"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-testid="approve-sample-change-request-1"]').trigger('click')
+    await flushPromises()
+    expect(api.approveAdminLabSampleChangeRequest).toHaveBeenCalledTimes(2)
   })
 
   it('requires a trimmed rejection reason and reloads the active filters only after success', async () => {
@@ -197,20 +269,34 @@ describe('LabSampleChangeRequestsPanel', () => {
     expect(wrapper.text()).toContain('已处理')
   })
 
-  it('keeps an explicit loading state, exposes a failed load, and retries with the same filters', async () => {
+  it('clears stale rows and actions during a filtered load failure, then retries the same current query', async () => {
     let rejectLoad!: (reason: Error) => void
-    api.getAdminLabSampleChangeRequests.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectLoad = reject }))
     const wrapper = mountPanel()
     await flushPromises()
+    expect(wrapper.find('[data-testid="approve-sample-change-request-1"]').exists()).toBe(true)
+
+    const [accounts, status] = wrapper.findAllComponents(SelectStub)
+    accounts.vm.$emit('update:modelValue', ['front-1'])
+    status.vm.$emit('update:modelValue', 'PENDING')
+    wrapper.getComponent(DatePickerStub).vm.$emit('update:modelValue', '2026-08-19')
+    await nextTick()
+    api.getAdminLabSampleChangeRequests.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectLoad = reject }))
+    await wrapper.get('[data-testid="sample-change-search"]').trigger('click')
     expect(wrapper.get('[data-testid="sample-change-loading"]').text()).toContain('正在加载')
+    expect(wrapper.find('[data-testid="approve-sample-change-request-1"]').exists()).toBe(false)
 
     rejectLoad(new Error('请求超时'))
     await flushPromises()
     expect(wrapper.get('[data-testid="sample-change-load-error"]').text()).toContain('请求超时')
+    expect(wrapper.find('.table-stub').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="approve-sample-change-request-1"]').exists()).toBe(false)
     await wrapper.get('[data-testid="sample-change-retry"]').trigger('click')
     await flushPromises()
 
-    expect(api.getAdminLabSampleChangeRequests).toHaveBeenCalledTimes(2)
+    expect(api.getAdminLabSampleChangeRequests).toHaveBeenCalledTimes(3)
+    expect(api.getAdminLabSampleChangeRequests).toHaveBeenLastCalledWith({
+      frontendUserIds: ['front-1'], status: 'PENDING', date: '2026-08-19'
+    })
     expect(wrapper.find('[data-testid="sample-change-load-error"]').exists()).toBe(false)
   })
 })

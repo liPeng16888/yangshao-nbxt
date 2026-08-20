@@ -143,6 +143,8 @@ const mockSampleChangeRequestedChanges: AdminLabSampleRequestedChanges = {
   price: 120,
   ironRaw: 2
 }
+const mockMonthlyToNonMonthlyInputs = { ...mockSampleChangeSourceInputs, sequence: '003' }
+const mockNonMonthlyToMonthlyInputs = { ...mockSampleChangeSourceInputs, sequence: '004', paymentStatus: '未结款' }
 
 const mockRows = {
   customerOverview: [
@@ -257,7 +259,9 @@ const mockRows = {
   ],
   monthlySettlements: [
     { id: 'settle-li-si', recordId: 'settle-li-si', month: '2026-06', frontendUserId: 'front-1', name: '凯里化验室', customer: '李四', amount: 100, sampleCount: 1, status: 'PAID', settlementStatus: '已结款', paidAmount: 100 as number | null, remark: '已结清' },
-    { id: 'settle-wang-wu', recordId: 'settle-wang-wu', month: '2026-06', frontendUserId: 'front-1', name: '凯里化验室', customer: '王五', amount: 120, sampleCount: 1, status: 'PARTIAL', settlementStatus: '部分结款', paidAmount: 20 as number | null, remark: '部分结款' }
+    { id: 'settle-wang-wu', recordId: 'settle-wang-wu', month: '2026-06', frontendUserId: 'front-1', name: '凯里化验室', customer: '王五', amount: 120, sampleCount: 1, status: 'PARTIAL', settlementStatus: '部分结款', paidAmount: 20 as number | null, remark: '部分结款' },
+    { id: 'settle-front-2-li-si', recordId: 'settle-front-2-li-si', month: '2026-06', frontendUserId: 'front-2', name: '仰韶客户二', customer: '李四', amount: 100, sampleCount: 1, status: 'PAID', settlementStatus: '已结款', paidAmount: 100 as number | null, remark: '已结清' },
+    { id: 'settle-front-2-wang-wu', recordId: 'settle-front-2-wang-wu', month: '2026-06', frontendUserId: 'front-2', name: '仰韶客户二', customer: '王五', amount: 120, sampleCount: 1, status: 'PARTIAL', settlementStatus: '部分结款', paidAmount: 20 as number | null, remark: '部分结款' }
   ],
   labSampleChangeRequests: [
     {
@@ -282,6 +286,60 @@ const mockRows = {
       },
       requestedChanges: { ...mockSampleChangeRequestedChanges },
       previewResults: calculateMockLabResults({ ...mockSampleChangeSourceInputs, sampleNumber: '新样品', price: 120, ironRaw: 2 }, mockLabParameters),
+      settlementEffects: []
+    },
+    {
+      id: 'sample-change-request-monthly-to-non-monthly',
+      frontendUserId: 'front-2',
+      blockId: 'block-3',
+      date: '2026-06-26',
+      blockIndex: 3,
+      sampleName: '粉矿',
+      changedFieldLabels: ['付款状态', '付款客户'],
+      reason: '核对后改为非月结',
+      status: 'PENDING',
+      review: null,
+      withdrawnAt: null,
+      createdAt: '2026-08-19T23:00:00.000Z',
+      updatedAt: '2026-08-19T23:00:00.000Z',
+      sourceSnapshot: {
+        inputs: { ...mockMonthlyToNonMonthlyInputs },
+        results: calculateMockLabResults(mockMonthlyToNonMonthlyInputs, mockLabParameters),
+        parameterSnapshot: { ...mockLabParameters },
+        updatedAt: '2026-06-26T08:00:00.000Z'
+      },
+      requestedChanges: {
+        paymentStatus: '未结款',
+        payerCustomer: { customerIds: ['customer-wang-wu'], customerText: '王五' }
+      },
+      previewResults: calculateMockLabResults(mockMonthlyToNonMonthlyInputs, mockLabParameters),
+      settlementEffects: []
+    },
+    {
+      id: 'sample-change-request-non-monthly-to-monthly',
+      frontendUserId: 'front-2',
+      blockId: 'block-4',
+      date: '2026-06-27',
+      blockIndex: 4,
+      sampleName: '粉矿',
+      changedFieldLabels: ['付款状态', '付款客户'],
+      reason: '核对后改为月结',
+      status: 'PENDING',
+      review: null,
+      withdrawnAt: null,
+      createdAt: '2026-08-19T22:00:00.000Z',
+      updatedAt: '2026-08-19T22:00:00.000Z',
+      sourceSnapshot: {
+        inputs: { ...mockNonMonthlyToMonthlyInputs },
+        results: calculateMockLabResults(mockNonMonthlyToMonthlyInputs, mockLabParameters),
+        parameterSnapshot: { ...mockLabParameters },
+        updatedAt: '2026-06-27T08:00:00.000Z'
+      },
+      requestedChanges: {
+        paymentStatus: '月结款',
+        payerCustomer: { customerIds: ['customer-wang-wu'], customerText: '王五' }
+      },
+      previewResults: calculateMockLabResults(mockNonMonthlyToMonthlyInputs, mockLabParameters),
       settlementEffects: []
     }
   ] as AdminLabSampleChangeRequestDetail[],
@@ -590,6 +648,46 @@ const mockSheet = {
   ]
 }
 
+const mockSecondarySheet = {
+  id: 'sheet-2',
+  frontendUserId: 'front-2',
+  name: '仰韶客户二',
+  date: '2026-06-26',
+  readonly: true,
+  parameters: {},
+  sampleBlocks: [
+    {
+      id: 'block-3',
+      index: 3,
+      readonly: true,
+      inputs: { ...mockMonthlyToNonMonthlyInputs },
+      results: calculateMockLabResults(mockMonthlyToNonMonthlyInputs, mockLabParameters),
+      parameterSnapshot: { ...mockLabParameters }
+    }
+  ]
+}
+
+const mockTertiarySheet = {
+  id: 'sheet-3',
+  frontendUserId: 'front-2',
+  name: '仰韶客户二',
+  date: '2026-06-27',
+  readonly: true,
+  parameters: {},
+  sampleBlocks: [
+    {
+      id: 'block-4',
+      index: 4,
+      readonly: true,
+      inputs: { ...mockNonMonthlyToMonthlyInputs },
+      results: calculateMockLabResults(mockNonMonthlyToMonthlyInputs, mockLabParameters),
+      parameterSnapshot: { ...mockLabParameters }
+    }
+  ]
+}
+
+const mockLabSheets = [mockSheet, mockSecondarySheet, mockTertiarySheet]
+
 function hasVisibleSampleInput(inputs: Record<string, unknown>) {
   return Object.entries(inputs).some(([field, value]) => {
     if (field === 'sequence' || field === 'completed') return false
@@ -684,10 +782,22 @@ function applyMockLabRequestedChanges(inputs: Record<string, unknown>, changes: 
   return nextInputs
 }
 
+function mockSamplePayerName(inputs: Record<string, unknown>) {
+  if (typeof inputs.customerText === 'string' && inputs.customerText.trim()) return inputs.customerText.trim()
+  if (Array.isArray(inputs.customers)) {
+    const names = inputs.customers
+      .map((item) => item && typeof item === 'object' && 'name' in item ? String((item as { name?: unknown }).name || '') : '')
+      .filter(Boolean)
+    if (names.length) return names.join('、')
+  }
+  return '无信息'
+}
+
 function approveMockLabRequest(id: string, reviewRemark = '') {
   const row = mockPendingLabRequest(id)
-  const block = mockSheet.sampleBlocks.find((item) => item.id === row.blockId)
-  if (!block || mockSheet.frontendUserId !== row.frontendUserId) throw new Error('未找到样品')
+  const sheet = mockLabSheets.find((item) => item.frontendUserId === row.frontendUserId && item.sampleBlocks.some((block) => block.id === row.blockId))
+  const block = sheet?.sampleBlocks.find((item) => item.id === row.blockId)
+  if (!block) throw new Error('未找到样品')
   const sourceInputs = row.sourceSnapshot.inputs
   const sourceParameters = row.sourceSnapshot.parameterSnapshot
   const currentParameters = 'parameterSnapshot' in block ? block.parameterSnapshot : {}
@@ -701,7 +811,10 @@ function approveMockLabRequest(id: string, reviewRemark = '') {
       || Object.prototype.hasOwnProperty.call(row.requestedChanges, 'paymentStatus')
       || payerChanged)
     && (sourceInputs.paymentStatus === '月结款' || nextInputs.paymentStatus === '月结款')
-  const customers = Array.from(new Set([String(sourceInputs.customerText || ''), String(nextInputs.customerText || '')].filter(Boolean)))
+  const customers = Array.from(new Set([
+    ...(sourceInputs.paymentStatus === '月结款' ? [mockSamplePayerName(sourceInputs)] : []),
+    ...(nextInputs.paymentStatus === '月结款' ? [mockSamplePayerName(nextInputs)] : [])
+  ]))
   const settlementEffects: AdminLabSampleSettlementEffect[] = []
   if (affectsMonthly) {
     for (const settlement of mockRows.monthlySettlements) {
@@ -814,8 +927,16 @@ const mockRequest = {
       return mockEmployeeAttendance.audit.filter((row) => ids.includes(row.frontendUserId) && (!month || String(row.createdAt).slice(0, 7) === month))
     }
     if (url === '/admin/data-statistics/lab-sheets') {
-      const sampleBlocks = mockSheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
-      return sampleBlocks.length ? [{ ...mockSheet, date: config?.params?.date || mockSheet.date, sampleBlocks }] : []
+      const frontendUserIds = mockAttendanceIds(config)
+      const sheets = mockLabSheets
+        .filter((sheet) => frontendUserIds.includes(sheet.frontendUserId))
+        .map((sheet) => ({
+          ...sheet,
+          date: config?.params?.date || sheet.date,
+          sampleBlocks: sheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
+        }))
+        .filter((sheet) => sheet.sampleBlocks.length)
+      return cloneMock(sheets)
     }
     if (url === '/admin/customer-overview') {
       const selectedIds = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)

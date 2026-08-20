@@ -23,7 +23,7 @@
     </el-alert>
     <div v-if="loading" data-testid="sample-change-loading" class="loading-state">正在加载样品修改申请...</div>
 
-    <el-table v-else v-loading="loading" :data="rows" border>
+    <el-table v-else-if="!loadError" v-loading="loading" :data="rows" border>
       <el-table-column prop="createdAt" label="申请时间" width="190" />
       <el-table-column label="前端账号" min-width="190">
         <template #default="{ row }">{{ accountLabel(row.frontendUserId) }}</template>
@@ -41,8 +41,22 @@
         <template #default="{ row }">
           <el-button :data-testid="`view-sample-change-${row.id}`" size="small" @click="openDetail(row)">详情</el-button>
           <template v-if="row.status === 'PENDING'">
-            <el-button :data-testid="`approve-sample-change-${row.id}`" size="small" type="primary" @click="approve(row)">同意</el-button>
-            <el-button :data-testid="`reject-sample-change-${row.id}`" size="small" type="danger" @click="reject(row)">拒绝</el-button>
+            <el-button
+              :data-testid="`approve-sample-change-${row.id}`"
+              size="small"
+              type="primary"
+              :disabled="Boolean(actionRequestId)"
+              :loading="actionRequestId === row.id && actionKind === 'approve'"
+              @click="approve(row)"
+            >同意</el-button>
+            <el-button
+              :data-testid="`reject-sample-change-${row.id}`"
+              size="small"
+              type="danger"
+              :disabled="Boolean(actionRequestId)"
+              :loading="actionRequestId === row.id && actionKind === 'reject'"
+              @click="reject(row)"
+            >拒绝</el-button>
           </template>
           <span v-else class="muted">已处理</span>
         </template>
@@ -63,6 +77,8 @@
           <el-descriptions-item label="样品名称">{{ detail.sampleName || '无信息' }}</el-descriptions-item>
           <el-descriptions-item label="申请原因">{{ detail.reason }}</el-descriptions-item>
           <el-descriptions-item label="申请状态">{{ statusLabel(detail.status) }}</el-descriptions-item>
+          <el-descriptions-item label="申请时间">{{ detail.createdAt }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.withdrawnAt" label="撤回时间">{{ detail.withdrawnAt }}</el-descriptions-item>
           <el-descriptions-item label="审批备注">{{ detail.review?.remark || '无信息' }}</el-descriptions-item>
           <el-descriptions-item label="审批时间">{{ detail.review?.reviewedAt || '无信息' }}</el-descriptions-item>
         </el-descriptions>
@@ -132,6 +148,8 @@ const detailLoading = ref(false)
 const detailError = ref('')
 const detail = ref<AdminLabSampleChangeRequestDetail | null>(null)
 const detailRequestId = ref('')
+const actionRequestId = ref('')
+const actionKind = ref<'approve' | 'reject' | ''>('')
 let loadGeneration = 0
 let detailGeneration = 0
 
@@ -208,6 +226,7 @@ function currentQuery(): AdminLabSampleChangeRequestQuery {
 async function loadRequests() {
   const generation = ++loadGeneration
   loadError.value = ''
+  rows.value = []
   loading.value = true
   try {
     const loaded = await getAdminLabSampleChangeRequests(currentQuery())
@@ -285,32 +304,65 @@ function settlementStatusLabel(status: string) {
 }
 
 async function approve(row: AdminLabSampleChangeRequestSummary) {
-  const result = await ElMessageBox.prompt(
-    `确认同意整份申请「${row.sampleName || `第 ${row.blockIndex} 个样品`}」？申请值将直接生效，公式结果由服务端重算；受影响的已结款或部分结款月结记录可能重置为未结款。`,
-    '同意样品修改申请',
-    { confirmButtonText: '整份同意', cancelButtonText: '取消', inputType: 'textarea', inputPlaceholder: '可选：填写审批备注', type: 'warning' }
-  )
-  await approveAdminLabSampleChangeRequest(row.id, String(result.value || '').trim())
-  ElMessage.success('已同意样品修改申请')
-  detailVisible.value = false
-  await loadRequests()
+  if (!beginAction(row.id, 'approve')) return
+  try {
+    const result = await ElMessageBox.prompt(
+      `确认同意整份申请「${row.sampleName || `第 ${row.blockIndex} 个样品`}」？申请值将直接生效，公式结果由服务端重算；受影响的已结款或部分结款月结记录可能重置为未结款。`,
+      '同意样品修改申请',
+      { confirmButtonText: '整份同意', cancelButtonText: '取消', inputType: 'textarea', inputPlaceholder: '可选：填写审批备注', type: 'warning' }
+    )
+    await approveAdminLabSampleChangeRequest(row.id, String(result.value || '').trim())
+    ElMessage.success('已同意样品修改申请')
+    detailVisible.value = false
+    await loadRequests()
+  } catch (error) {
+    if (!isPromptCancel(error)) ElMessage.error(errorMessage(error))
+  } finally {
+    endAction()
+  }
 }
 
 async function reject(row: AdminLabSampleChangeRequestSummary) {
-  const result = await ElMessageBox.prompt(
-    `确认整份拒绝「${row.sampleName || `第 ${row.blockIndex} 个样品`}」的修改申请？请填写拒绝原因。`,
-    '拒绝样品修改申请',
-    { confirmButtonText: '整份拒绝', cancelButtonText: '取消', inputType: 'textarea', inputPlaceholder: '必填：拒绝原因', type: 'warning' }
-  )
-  const reason = String(result.value || '').trim()
-  if (!reason) {
-    ElMessage.warning('请填写拒绝原因')
-    return
+  if (!beginAction(row.id, 'reject')) return
+  try {
+    const result = await ElMessageBox.prompt(
+      `确认整份拒绝「${row.sampleName || `第 ${row.blockIndex} 个样品`}」的修改申请？请填写拒绝原因。`,
+      '拒绝样品修改申请',
+      { confirmButtonText: '整份拒绝', cancelButtonText: '取消', inputType: 'textarea', inputPlaceholder: '必填：拒绝原因', type: 'warning' }
+    )
+    const reason = String(result.value || '').trim()
+    if (!reason) {
+      ElMessage.warning('请填写拒绝原因')
+      return
+    }
+    await rejectAdminLabSampleChangeRequest(row.id, reason)
+    ElMessage.success('已拒绝样品修改申请')
+    detailVisible.value = false
+    await loadRequests()
+  } catch (error) {
+    if (!isPromptCancel(error)) ElMessage.error(errorMessage(error))
+  } finally {
+    endAction()
   }
-  await rejectAdminLabSampleChangeRequest(row.id, reason)
-  ElMessage.success('已拒绝样品修改申请')
-  detailVisible.value = false
-  await loadRequests()
+}
+
+function beginAction(requestId: string, kind: 'approve' | 'reject') {
+  if (actionRequestId.value) return false
+  actionRequestId.value = requestId
+  actionKind.value = kind
+  return true
+}
+
+function endAction() {
+  actionRequestId.value = ''
+  actionKind.value = ''
+}
+
+function isPromptCancel(error: unknown) {
+  if (error === 'cancel' || error === 'close') return true
+  if (!error || typeof error !== 'object' || !('action' in error)) return false
+  const action = String((error as { action?: unknown }).action || '')
+  return action === 'cancel' || action === 'close'
 }
 
 function errorMessage(error: unknown) {

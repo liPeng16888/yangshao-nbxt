@@ -29,6 +29,18 @@ async function importMockApi() {
   return import('./api')
 }
 
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function deepFreeze<T>(value: T): Readonly<T> {
+  if (value && typeof value === 'object') {
+    Object.freeze(value)
+    for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested)
+  }
+  return value
+}
+
 beforeAll(() => {
   const values = new Map<string, string>()
   Object.defineProperty(window, 'localStorage', { configurable: true, value: {
@@ -89,6 +101,22 @@ describe('admin lab sample change request real API contract', () => {
 })
 
 describe('admin lab sample change request Mock lifecycle', () => {
+  it('returns a fully isolated lab-sheet graph on every GET', async () => {
+    const api = await importMockApi()
+    const first = await api.request.get('/admin/data-statistics/lab-sheets', { params: { date: '2026-06-25' } }) as any[]
+    const pristine = clone(first)
+
+    first[0].sampleBlocks[0].id = 'mutated-block'
+    first[0].sampleBlocks[0].inputs.siliconRaw = 999
+    first[0].sampleBlocks[0].results.silicon = 999
+    first[0].sampleBlocks.push({ id: 'injected-block', inputs: {}, results: {} })
+
+    const second = await api.request.get('/admin/data-statistics/lab-sheets', { params: { date: '2026-06-25' } }) as any[]
+    expect(second).toEqual(pristine)
+    expect(second).not.toBe(first)
+    expect(second[0].sampleBlocks[0]).not.toBe(first[0].sampleBlocks[0])
+  })
+
   it('seeds a pending server-shaped request and applies account, status, and date filters', async () => {
     const api = await importMockApi()
 
@@ -106,7 +134,7 @@ describe('admin lab sample change request Mock lifecycle', () => {
       previewResults: expect.any(Object),
       settlementEffects: []
     })
-    expect(await api.getAdminLabSampleChangeRequests({ frontendUserIds: ['front-2'] })).toEqual([])
+    expect(await api.getAdminLabSampleChangeRequests({ frontendUserIds: ['front-2'], date: '2026-06-25' })).toEqual([])
     expect(await api.getAdminLabSampleChangeRequests({ status: 'REJECTED' })).toEqual([])
     expect(await api.getAdminLabSampleChangeRequests({ date: '2026-06-24' })).toEqual([])
   })
@@ -116,7 +144,7 @@ describe('admin lab sample change request Mock lifecycle', () => {
     const [summary] = await api.getAdminLabSampleChangeRequests({ status: 'PENDING' })
     const before = await api.getAdminLabSampleChangeRequest(summary!.id)
     const [sheetBefore] = await api.request.get('/admin/data-statistics/lab-sheets', { params: { date: before.date } }) as any[]
-    const blockBefore = sheetBefore.sampleBlocks.find((row: any) => row.id === before.blockId)
+    const blockBefore = deepFreeze(clone(sheetBefore.sampleBlocks.find((row: any) => row.id === before.blockId))) as any
 
     const approved = await api.approveAdminLabSampleChangeRequest(summary!.id, '已核对')
     const [sheetAfter] = await api.request.get('/admin/data-statistics/lab-sheets', { params: { date: before.date } }) as any[]
@@ -124,7 +152,18 @@ describe('admin lab sample change request Mock lifecycle', () => {
     const monthly = await api.request.get('/admin/finance/monthly-bills') as { summaryRows: any[] }
 
     expect(blockAfter.inputs).toMatchObject({ sampleNumber: '新样品', price: 120, ironRaw: 2, customerText: '王五' })
-    expect(blockAfter.inputs.siliconRaw).toBe(blockBefore.inputs.siliconRaw)
+    const {
+      sampleNumber: _oldSampleNumber, price: _oldPrice, ironRaw: _oldIronRaw,
+      customerText: _oldCustomerText, customerId: _oldCustomerId, customerIds: _oldCustomerIds, customers: _oldCustomers,
+      ...unchangedBefore
+    } = blockBefore.inputs
+    const {
+      sampleNumber: _newSampleNumber, price: _newPrice, ironRaw: _newIronRaw,
+      customerText: _newCustomerText, customerId: _newCustomerId, customerIds: _newCustomerIds, customers: _newCustomers,
+      ...unchangedAfter
+    } = blockAfter.inputs
+    expect(unchangedAfter).toEqual(unchangedBefore)
+    expect(blockAfter.inputs).toMatchObject({ siliconRaw: 1.05, aluminumRaw: 2.7, sulfur: 0.08 })
     expect(approved).toMatchObject({
       status: 'APPROVED', review: { remark: '已核对' },
       previewResults: { iron: 50 }, actualResults: { iron: 50 },
@@ -140,6 +179,60 @@ describe('admin lab sample change request Mock lifecycle', () => {
     ]))
     await expect(api.approveAdminLabSampleChangeRequest(summary!.id)).rejects.toThrow('状态已变更')
     await expect(api.rejectAdminLabSampleChangeRequest(summary!.id, '重复处理')).rejects.toThrow('状态已变更')
+  })
+
+  it('resets only the old payer when a monthly sample becomes non-monthly', async () => {
+    const api = await importMockApi()
+    const [summary] = await api.getAdminLabSampleChangeRequests({ status: 'PENDING', date: '2026-06-26' })
+    const prepaidBefore = clone({
+      recharges: await api.request.get('/admin/finance/prepaid-recharges'),
+      report: await api.request.get('/admin/finance/prepaid-report')
+    })
+
+    const approved = await api.approveAdminLabSampleChangeRequest(summary!.id)
+    const monthly = await api.request.get('/admin/finance/monthly-bills') as { summaryRows: any[] }
+    const prepaidAfter = clone({
+      recharges: await api.request.get('/admin/finance/prepaid-recharges'),
+      report: await api.request.get('/admin/finance/prepaid-report')
+    })
+
+    expect(approved.settlementEffects).toEqual([
+      expect.objectContaining({ customer: '李四', oldStatus: 'PAID', oldPaidAmount: 100, oldRemark: '已结清', newStatus: 'UNPAID' })
+    ])
+    expect(monthly.summaryRows.find((row) => row.frontendUserId === 'front-2' && row.customer === '李四')).toMatchObject({
+      settlementStatus: '未结款', paidAmount: null, remark: '因历史样品修改审批，需按新汇总重新核对'
+    })
+    expect(monthly.summaryRows.find((row) => row.frontendUserId === 'front-2' && row.customer === '王五')).toMatchObject({
+      status: 'PARTIAL', settlementStatus: '部分结款', paidAmount: 20, remark: '部分结款'
+    })
+    expect(prepaidAfter).toEqual(prepaidBefore)
+  })
+
+  it('resets only the new payer when a non-monthly sample becomes monthly and changes customer', async () => {
+    const api = await importMockApi()
+    const [summary] = await api.getAdminLabSampleChangeRequests({ status: 'PENDING', date: '2026-06-27' })
+    const prepaidBefore = clone({
+      recharges: await api.request.get('/admin/finance/prepaid-recharges'),
+      report: await api.request.get('/admin/finance/prepaid-report')
+    })
+
+    const approved = await api.approveAdminLabSampleChangeRequest(summary!.id)
+    const monthly = await api.request.get('/admin/finance/monthly-bills') as { summaryRows: any[] }
+    const prepaidAfter = clone({
+      recharges: await api.request.get('/admin/finance/prepaid-recharges'),
+      report: await api.request.get('/admin/finance/prepaid-report')
+    })
+
+    expect(approved.settlementEffects).toEqual([
+      expect.objectContaining({ customer: '王五', oldStatus: 'PARTIAL', oldPaidAmount: 20, oldRemark: '部分结款', newStatus: 'UNPAID' })
+    ])
+    expect(monthly.summaryRows.find((row) => row.frontendUserId === 'front-2' && row.customer === '李四')).toMatchObject({
+      status: 'PAID', settlementStatus: '已结款', paidAmount: 100, remark: '已结清'
+    })
+    expect(monthly.summaryRows.find((row) => row.frontendUserId === 'front-2' && row.customer === '王五')).toMatchObject({
+      settlementStatus: '未结款', paidAmount: null, remark: '因历史样品修改审批，需按新汇总重新核对'
+    })
+    expect(prepaidAfter).toEqual(prepaidBefore)
   })
 
   it('requires a trimmed rejection reason and rejects the whole pending request without changing the sample', async () => {
@@ -161,6 +254,7 @@ describe('admin lab sample change request Mock lifecycle', () => {
     await api.adminLogin({ account: 'sub001', password: 'sub123456' })
 
     await expect(api.getAdminLabSampleChangeRequests({ frontendUserIds: ['front-2'] })).rejects.toThrow('没有访问部分前端账号的权限')
+    await expect(api.request.get('/admin/data-statistics/lab-sheets', { params: { frontendUserIds: 'front-2' } })).rejects.toThrow('没有访问部分前端账号的权限')
     expect((await api.getAdminLabSampleChangeRequests({ frontendUserIds: ['front-1'] }))).toHaveLength(1)
   })
 })
