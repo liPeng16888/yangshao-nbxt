@@ -1,5 +1,7 @@
 # Frontend Subaccounts and Menu Permissions Implementation Plan
 
+> **已废弃，请勿执行：** 本计划基于旧版设计生成，已由 `docs/superpowers/specs/2026-08-20-frontend-subaccounts-menu-permissions-design.md` 取代。新版设计经用户确认后必须重新编写实施计划。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add secure frontend subaccounts that share their parent account's business data, enforce per-page menu permissions on both client and server, expose read-only details in admin, and prevent concurrent edits from silently overwriting data.
