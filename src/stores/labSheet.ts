@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { readAccessGuardSessions } from '@/api/accessGuard'
 import {
   addSampleBlocks,
   applyCurrentParametersFromIndex as applyCurrentParametersFromIndexApi,
@@ -149,6 +150,36 @@ const REALTIME_RECONNECT_DELAY_MS = 3000
 const REALTIME_HEARTBEAT_TIMEOUT_MS = 60000
 const DRAFT_STORAGE_PREFIX = 'ys_lab_draft:v1:'
 const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const COMPLETED_SAMPLE_DATA_FEATURE = 'COMPLETED_SAMPLE_DATA'
+
+function digestAccessGrantToken(token: string) {
+  let left = 0x811c9dc5
+  let right = 0x9e3779b9
+  for (let index = 0; index < token.length; index += 1) {
+    const code = token.charCodeAt(index)
+    left = Math.imul(left ^ code, 0x01000193)
+    right = Math.imul(right ^ code, 0x85ebca6b)
+  }
+  return `${(left >>> 0).toString(36)}.${(right >>> 0).toString(36)}`
+}
+
+function getCompletedSampleGrantFingerprint(now = Date.now()) {
+  const selected = Object.entries(readAccessGuardSessions()).find(([groupId, session]) =>
+    session.groupId === groupId && Number.isInteger(session.grantVersion) && Number(session.grantVersion) > 0 &&
+    (session.expiresAt || 0) > now && Boolean(session.token) && session.features?.includes(COMPLETED_SAMPLE_DATA_FEATURE)
+  )
+  const token = selected?.[1].token
+  if (!selected || !token) return null
+  const [sessionId, session] = selected
+  return JSON.stringify([
+    sessionId,
+    session.groupId,
+    session.grantVersion,
+    session.expiresAt,
+    [...(session.features || [])].sort(),
+    digestAccessGrantToken(token)
+  ])
+}
 
 export const useLabSheetStore = defineStore('labSheet', () => {
   const sheet = ref<LabSheet | null>(null)
@@ -565,9 +596,12 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     const flushed = await persistAllBlocks({ silent: true })
     if (!flushed.success) throw new Error('仍有样品数据未保存，请先重试保存')
     if (!sheet.value) return
+    const retestGenerationAtRequest = retestCollectionGeneration
     adding.value = true
     try {
-      sheet.value = await addSampleBlocks(targetSheetId, Number(countValue))
+      const appendedSheet = await addSampleBlocks(targetSheetId, Number(countValue))
+      if (retestGenerationAtRequest === retestCollectionGeneration) sheet.value = appendedSheet
+      else applyRemoteSheet(appendedSheet, { retainMissingRetests: true })
       resetLocalSaveState()
       ElMessage.success(`已新增 ${countValue} 个样品计算格`)
     } finally {
@@ -1658,17 +1692,22 @@ export const useLabSheetStore = defineStore('labSheet', () => {
     const requestSequence = ++remoteRefreshSequence
     const requestRetestCollectionGeneration = retestCollectionGeneration
     const requestOwner = getDraftOwner()
+    const requestGrantFingerprint = getCompletedSampleGrantFingerprint()
     try {
       const remoteSheet = await getLabSheetByDate(current.date)
+      const currentGrantFingerprint = getCompletedSampleGrantFingerprint()
       if (
         sheetStateGeneration === requestSheetGeneration &&
         requestSequence > latestAppliedRemoteRefreshSequence &&
         getDraftOwner() === requestOwner &&
+        requestGrantFingerprint === currentGrantFingerprint &&
         sheet.value?.id === current.id && sheet.value.date === current.date
       ) {
         latestAppliedRemoteRefreshSequence = requestSequence
         applyRemoteSheet(remoteSheet, {
-          allowPresentationRestore: true,
+          allowPresentationRestore: Boolean(
+            requestGrantFingerprint
+          ),
           retainMissingRetests: requestRetestCollectionGeneration !== retestCollectionGeneration
         })
         realtimeError.value = ''
