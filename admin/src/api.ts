@@ -540,6 +540,10 @@ function isSharedPrepaidAdminPath(url: string) {
   return url === '/admin/shared-prepaid' || url.startsWith('/admin/shared-prepaid/')
 }
 
+function isAdminRetestWritePath(url: string) {
+  return url.startsWith('/admin/data-statistics/lab-sheets') || url.includes('/sample-retests')
+}
+
 function mockSharedPrepaidIds(config?: AdminRequestConfig) {
   const permitted = mockAuthorizedFrontendIds()
   const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
@@ -802,7 +806,25 @@ const mockSheet = {
         bottleDensity: 1.9965,
         moisture: 2,
         burnLoss: 18
-      }
+      },
+      retests: [
+        {
+          id: 'retest-1', sampleBlockId: 'block-1', sequence: 1, status: 'ACTIVE', everFilled: true,
+          readonly: true, sensitiveFieldsHidden: false,
+          inputs: { ironRaw: 1.2, siliconRaw: 2.1 }, results: { iron: 33.76, silicon: 26.95 },
+          parameterSnapshot: { ironBlank: 0.04, ironFactor: 29.1, siliconBlank: 0.027, siliconFactor: 13 },
+          voidReason: null, createdById: 'front-1', updatedById: 'front-1', voidedById: null,
+          createdAt: '2026-08-20T08:00:00+08:00', updatedAt: '2026-08-20T08:30:00+08:00', voidedAt: null
+        },
+        {
+          id: 'retest-2', sampleBlockId: 'block-1', sequence: 2, status: 'VOID', everFilled: true,
+          readonly: true, sensitiveFieldsHidden: false,
+          inputs: { ironRaw: 1.3, siliconRaw: 2.2 }, results: { iron: 36.67, silicon: 28.25 },
+          parameterSnapshot: { ironBlank: 0.04, ironFactor: 29.1, siliconBlank: 0.027, siliconFactor: 13 },
+          voidReason: '复核无效', createdById: 'front-1', updatedById: 'front-1', voidedById: 'front-1',
+          createdAt: '2026-08-20T09:00:00+08:00', updatedAt: '2026-08-20T09:30:00+08:00', voidedAt: '2026-08-20T10:00:00+08:00'
+        }
+      ]
     },
     {
       id: 'block-2',
@@ -834,7 +856,8 @@ const mockSheet = {
         calcium: 0.92,
         magnesium: 0.44,
         titanium: 0.86
-      }
+      },
+      retests: []
     }
   ]
 }
@@ -1010,6 +1033,7 @@ const mockRequest = {
       if (sub) return { token: 'mock-sub-admin-token', user: { id: sub.id, account: sub.account, username: sub.username, role: 'SUB_ADMIN' } }
       throw new Error('账号或密码错误')
     }
+    if (isAdminRetestWritePath(url)) throw new Error('后台复样数据只读')
     if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
     if (url === '/admin/accounts/invite-codes') return { code: `YS-${Date.now().toString().slice(-6)}` }
     const revealEmployeeMatch = url.match(/^\/admin\/employee-attendance\/employees\/(.+)\/reveal$/)
@@ -1050,11 +1074,13 @@ const mockRequest = {
     return { ok: true }
   },
   async put(url: string) {
+    if (isAdminRetestWritePath(url)) throw new Error('后台复样数据只读')
     if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
     if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     return { ok: true }
   },
   async patch(url: string, payload?: any) {
+    if (isAdminRetestWritePath(url)) throw new Error('后台复样数据只读')
     if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
     if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     if (url === '/admin/auth/profile') {
@@ -1078,6 +1104,7 @@ const mockRequest = {
     return { ok: true }
   },
   async delete(url: string) {
+    if (isAdminRetestWritePath(url)) throw new Error('后台复样数据只读')
     if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
     if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     return { ok: true }

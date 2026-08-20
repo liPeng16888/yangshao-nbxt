@@ -14,6 +14,70 @@ export interface FrontendOption {
   disabled: boolean
 }
 
+export type AdminSampleRetestStatus = 'ACTIVE' | 'VOID'
+
+export interface AdminSampleRetest {
+  id: string
+  sampleBlockId: string
+  sequence: number
+  status: AdminSampleRetestStatus
+  everFilled: boolean
+  readonly: true
+  sensitiveFieldsHidden: boolean
+  inputs: Record<string, number | null>
+  results: Record<string, number | null>
+  parameterSnapshot: Record<string, number>
+  voidReason: string | null
+  createdById: string
+  updatedById: string
+  voidedById: string | null
+  createdAt: string
+  updatedAt: string
+  voidedAt: string | null
+}
+
+export interface AdminDataCustomer {
+  id?: string
+  name?: string
+  phone?: string | null
+  wechat?: string | null
+  wechatNickname?: string | null
+  note?: string | null
+}
+
+export interface AdminDataSampleInputs extends Record<string, unknown> {
+  sequence?: string
+  sampleNumber?: string
+  customerId?: string
+  customerIds?: string[]
+  customers?: AdminDataCustomer[]
+  customerText?: string
+  price?: number | null
+  paymentStatus?: string
+  elementNote?: string
+  completed?: boolean
+}
+
+export interface AdminDataSampleBlock {
+  id: string
+  index: number
+  readonly: true
+  inputs: AdminDataSampleInputs
+  results: Record<string, unknown>
+  parameterSnapshot: Record<string, unknown>
+  retests: AdminSampleRetest[]
+}
+
+export interface AdminDataLabSheet {
+  id: string
+  frontendUserId: string
+  name: string
+  date: string
+  readonly: true
+  parameters: Record<string, unknown>
+  sampleBlocks: AdminDataSampleBlock[]
+}
+
 export type FrontendMenuPermission =
   | 'DATA_MAIN'
   | 'DATA_STANDARD_SAMPLE'

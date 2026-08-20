@@ -7,6 +7,7 @@ import { toMoney } from '../common/money'
 import { AdminAccessService } from './admin-access.service'
 import { collapseConsecutiveFieldChanges } from '../common/change-log'
 import { CustomerOverviewService } from '../customer-overview/customer-overview.service'
+import { toSampleRetestDto } from '../lab-sheets/sample-retest.dto'
 
 @Injectable()
 export class AdminDataService {
@@ -44,7 +45,10 @@ export class AdminDataService {
       where: { frontendUserId: { in: ids }, date },
       include: {
         frontendUser: { select: { account: true, username: true, displayRemark: true } },
-        sampleBlocks: { orderBy: { index: 'asc' } }
+        sampleBlocks: {
+          orderBy: { index: 'asc' },
+          include: { retests: { orderBy: { sequence: 'asc' } } }
+        }
       },
       orderBy: { updatedAt: 'desc' }
     })
@@ -65,7 +69,15 @@ export class AdminDataService {
             readonly: true,
             inputs: this.enrichCustomerInputs(block.inputs as Record<string, unknown>, customersById),
             results: block.results,
-            parameterSnapshot: block.parameterSnapshot
+            parameterSnapshot: block.parameterSnapshot,
+            retests: block.retests.map((retest) => ({
+              ...toSampleRetestDto(retest, {
+                parentCompleted: Boolean((block.inputs as Record<string, unknown>).completed),
+                sheetReadonly: true,
+                canViewCompletedSensitiveData: true
+              }),
+              readonly: true
+            }))
           }))
       }))
       .filter((sheet) => sheet.sampleBlocks.length)

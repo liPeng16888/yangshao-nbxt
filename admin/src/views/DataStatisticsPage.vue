@@ -19,7 +19,32 @@
         <strong>{{ sheet.name }} - {{ sheet.date }}</strong>
         <span>只读数据</span>
       </div>
-      <el-table :data="sheet.sampleBlocks" border :row-class-name="getRowClassName" row-key="id">
+      <el-table
+        :data="sheet.sampleBlocks"
+        :expand-row-keys="expandedRetestRowKeys"
+        border
+        :row-class-name="getRowClassName"
+        row-key="id"
+      >
+        <el-table-column type="expand" width="1">
+          <template #default="{ row }">
+            <SampleRetestReadOnlyPanel v-if="row.retests.length" :retests="row.retests" />
+          </template>
+        </el-table-column>
+        <el-table-column label="复样记录" width="150">
+          <template #default="{ row }">
+            <el-button
+              v-if="row.retests.length"
+              :data-testid="`retest-toggle-${row.id}`"
+              link
+              type="primary"
+              @click="toggleRetests(row.id)"
+            >
+              {{ expandedRetestIds.has(row.id) ? `收起复样（${row.retests.length}）` : `查看复样（${row.retests.length}）` }}
+            </el-button>
+            <span v-else>无复样</span>
+          </template>
+        </el-table-column>
         <el-table-column label="编号" width="90">
           <template #default="{ row }">
             <div class="history-cell">
@@ -105,23 +130,34 @@
 
 <script setup lang="ts">
 import dayjs from 'dayjs'
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { buildFrontendIds, getFrontendOptions, request } from '../api'
-import type { FrontendOption } from '../types'
+import SampleRetestReadOnlyPanel from '../components/SampleRetestReadOnlyPanel.vue'
+import type { AdminDataLabSheet, AdminDataSampleBlock, AdminDataSampleInputs, FrontendOption } from '../types'
 
 const route = useRoute()
 const frontendOptions = ref<FrontendOption[]>([])
 const selectedFrontendIds = ref<string[]>([])
 const date = ref(dayjs().format('YYYY-MM-DD'))
-const sheets = ref<any[]>([])
-const historyRows = ref<any[]>([])
+const sheets = ref<AdminDataLabSheet[]>([])
+const historyRows = ref<AdminCellHistoryRow[]>([])
 const loading = ref(false)
 const historyVisible = ref(false)
 const historyLookupEnabled = ref(false)
 const historyTitle = ref('单元格修改历史')
 const highlightedBlockId = ref('')
 const routeReady = ref(false)
+const expandedRetestIds = ref(new Set<string>())
+const expandedRetestRowKeys = computed(() => [...expandedRetestIds.value])
+
+type AdminCellHistoryRow = {
+  id: string
+  field: string
+  oldValue: unknown
+  newValue: unknown
+  changedAt: string
+}
 
 type ElementColumn = {
   key: string
@@ -249,7 +285,7 @@ function applyRouteQuery() {
 async function loadData() {
   loading.value = true
   try {
-    sheets.value = await request.get('/admin/data-statistics/lab-sheets', {
+    sheets.value = await request.get<never, AdminDataLabSheet[]>('/admin/data-statistics/lab-sheets', {
       params: { date: date.value, frontendUserIds: buildFrontendIds(selectedFrontendIds.value) }
     })
   } finally {
@@ -272,17 +308,24 @@ async function scrollToHighlightedRow() {
 async function openHistory(blockId: string, fields: string | string[], label: string) {
   const normalizedFields = Array.isArray(fields) ? fields : [fields]
   historyTitle.value = `${label}修改历史`
-  historyRows.value = await request.get('/admin/data-statistics/cell-history', {
+  historyRows.value = await request.get<never, AdminCellHistoryRow[]>('/admin/data-statistics/cell-history', {
     params: { blockId, fields: normalizedFields.join(',') }
   })
   historyVisible.value = true
 }
 
-function getRowClassName({ row }: { row: any }) {
+function getRowClassName({ row }: { row: AdminDataSampleBlock }) {
   return row.id === highlightedBlockId.value ? 'admin-highlight-row' : ''
 }
 
-function customerName(inputs: any) {
+function toggleRetests(blockId: string) {
+  const next = new Set(expandedRetestIds.value)
+  if (next.has(blockId)) next.delete(blockId)
+  else next.add(blockId)
+  expandedRetestIds.value = next
+}
+
+function customerName(inputs: AdminDataSampleInputs) {
   if (Array.isArray(inputs.customers) && inputs.customers.length) {
     const customerText = inputs.customers.map(formatCustomerDisplay).filter(Boolean).join('、')
     if (customerText) return customerText
@@ -291,15 +334,16 @@ function customerName(inputs: any) {
   return '无信息'
 }
 
-function formatCustomerDisplay(customer: any) {
+function formatCustomerDisplay(customer: unknown) {
   if (!customer || typeof customer !== 'object') return ''
-  return [customer.name, customer.phone, customer.wechat, customer.wechatNickname, customer.note]
+  const details = customer as Record<string, unknown>
+  return [details.name, details.phone, details.wechat, details.wechatNickname, details.note]
     .map((item) => (typeof item === 'string' ? item.trim() : ''))
     .filter(Boolean)
     .join(' ')
 }
 
-function elementDisplay(row: any, column: ElementColumn) {
+function elementDisplay(row: AdminDataSampleBlock, column: ElementColumn) {
   if (column.requiredFields?.length && !hasRequiredInputs(row.inputs, column)) return ''
   const source = column.source === 'input' ? row.inputs : row.results
   return formatOptionalNumber(source?.[column.field])
@@ -313,7 +357,7 @@ function fieldLabel(field: string) {
   return fieldLabels[field] || field
 }
 
-function hasRequiredInputs(inputs: any, column: ElementColumn) {
+function hasRequiredInputs(inputs: AdminDataSampleInputs, column: ElementColumn) {
   const checker = (field: string) => hasValue(inputs?.[field])
   return column.requireMode === 'any' ? column.requiredFields!.some(checker) : column.requiredFields!.every(checker)
 }
