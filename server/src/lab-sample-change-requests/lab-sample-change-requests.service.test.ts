@@ -323,8 +323,14 @@ describe('LabSampleChangeRequestsService frontend lifecycle', () => {
   })
 
   it('rejects today, empty diffs, foreign customers, forbidden keys, and an existing pending request', async () => {
-    prisma.sampleBlock.findUnique.mockResolvedValue(makeCurrentBlock())
-    await expect(service.createForFrontend(frontendUser, validCreateDto(), grants)).rejects.toThrow('仅支持申请修改历史日期样品')
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-08-20T03:00:00.000Z'))
+      prisma.sampleBlock.findUnique.mockResolvedValue(makeCurrentBlock())
+      await expect(service.createForFrontend(frontendUser, validCreateDto(), grants)).rejects.toThrow('仅支持申请修改历史日期样品')
+    } finally {
+      vi.useRealTimers()
+    }
 
     prisma.sampleBlock.findUnique.mockResolvedValue(makeHistoricalBlock())
     await expect(service.createForFrontend(frontendUser, { ...validCreateDto(), changes: {} }, grants)).rejects.toThrow('请至少修改一项内容')
