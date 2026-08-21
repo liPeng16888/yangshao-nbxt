@@ -1,3 +1,4 @@
+import { Logger, UnprocessableEntityException } from '@nestjs/common'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createEmptyInputs, defaultLabParameters } from '../common/lab'
 import { businessDateInBeijing } from '../common/date'
@@ -12,7 +13,29 @@ function makeBlock(index: number, inputs: Record<string, unknown> = {}, paramete
     readonly: false,
     inputs: nextInputs,
     results: {},
-    parameterSnapshot: parameters
+    parameterSnapshot: parameters,
+    retests: [] as Array<Record<string, unknown>>
+  }
+}
+
+function makeRetest(sequence: number, overrides: Record<string, unknown> = {}) {
+  return {
+    id: `retest-${sequence}`,
+    sampleBlockId: 'block-1',
+    sequence,
+    inputs: { ironRaw: sequence },
+    results: { iron: 999 },
+    parameterSnapshot: { ...defaultLabParameters, ironFactor: 10 },
+    everFilled: true,
+    status: 'ACTIVE',
+    voidReason: null,
+    createdById: 'user-1',
+    updatedById: 'user-1',
+    voidedById: null,
+    createdAt: new Date('2026-08-20T00:00:00.000Z'),
+    updatedAt: new Date('2026-08-20T00:00:00.000Z'),
+    voidedAt: null,
+    ...overrides
   }
 }
 
@@ -28,7 +51,15 @@ function makeSheet(date: string, blocks = [makeBlock(1)], parameters = defaultLa
 }
 
 describe('LabSheetsService default sheet selection', () => {
+  const labSaveRequests = new Map<string, {
+    idempotencyKey: string
+    requestFingerprint: string
+    sheetId: string
+    sampleBlockId: string
+    responseSnapshot: unknown
+  }>()
   const transaction = {
+    $executeRaw: vi.fn(),
     $queryRaw: vi.fn(),
     labSheet: {
       findUnique: vi.fn(),
@@ -48,6 +79,10 @@ describe('LabSheetsService default sheet selection', () => {
     abnormalRecord: {
       deleteMany: vi.fn(),
       upsert: vi.fn()
+    },
+    labSampleSaveRequest: {
+      findUnique: vi.fn(),
+      create: vi.fn()
     }
   }
   const prisma = {
@@ -74,17 +109,25 @@ describe('LabSheetsService default sheet selection', () => {
       deleteMany: vi.fn(),
       upsert: vi.fn()
     },
+    labSampleSaveRequest: {
+      findUnique: vi.fn()
+    },
     $transaction: vi.fn(async (operation: (tx: typeof transaction) => unknown) => operation(transaction))
   }
   const realtime = { publish: vi.fn() }
   const cellChanges = { record: vi.fn() }
+  const prepaid = { syncSampleConsumption: vi.fn() }
+  const prepaidRealtime = { publish: vi.fn() }
   let service: LabSheetsService
 
   beforeEach(() => {
     vi.clearAllMocks()
+    labSaveRequests.clear()
     transaction.labSheet.findUnique.mockReset()
     transaction.labSheet.findUnique.mockImplementation((argument) => prisma.labSheet.findUnique(argument))
     transaction.labSheet.update.mockReset()
+    transaction.$executeRaw.mockReset()
+    transaction.$executeRaw.mockResolvedValue(0)
     transaction.$queryRaw.mockReset()
     transaction.$queryRaw.mockResolvedValue([])
     transaction.sampleBlock.findUnique.mockReset()
@@ -105,6 +148,22 @@ describe('LabSheetsService default sheet selection', () => {
     transaction.abnormalRecord.deleteMany.mockImplementation((argument) => prisma.abnormalRecord.deleteMany(argument))
     transaction.abnormalRecord.upsert.mockReset()
     transaction.abnormalRecord.upsert.mockImplementation((argument) => prisma.abnormalRecord.upsert(argument))
+    transaction.labSampleSaveRequest.findUnique.mockReset()
+    transaction.labSampleSaveRequest.findUnique.mockImplementation(async ({ where }) => (
+      labSaveRequests.get(where.idempotencyKey) || null
+    ))
+    transaction.labSampleSaveRequest.create.mockReset()
+    transaction.labSampleSaveRequest.create.mockImplementation(async ({ data }) => {
+      if (labSaveRequests.has(data.idempotencyKey)) {
+        throw Object.assign(new Error('unique constraint'), { code: 'P2002' })
+      }
+      labSaveRequests.set(data.idempotencyKey, data)
+      return data
+    })
+    prisma.labSampleSaveRequest.findUnique.mockReset()
+    prisma.labSampleSaveRequest.findUnique.mockImplementation(async ({ where }) => (
+      labSaveRequests.get(where.idempotencyKey) || null
+    ))
     transaction.labSheet.update.mockImplementation(async ({ data }) => {
       const sheet = await transaction.labSheet.findUnique.mock.results[0]?.value
       if (sheet) Object.assign(sheet, data)
@@ -117,7 +176,15 @@ describe('LabSheetsService default sheet selection', () => {
       return { ...makeBlock(Number(String(where.id).replace('block-', ''))), ...block, ...data }
     })
     cellChanges.record.mockResolvedValue(undefined)
-    service = new LabSheetsService(prisma as never, realtime as never, cellChanges as never)
+    prepaid.syncSampleConsumption.mockReset()
+    prepaid.syncSampleConsumption.mockResolvedValue(undefined)
+    service = new LabSheetsService(
+      prisma as never,
+      realtime as never,
+      cellChanges as never,
+      prepaid as never,
+      prepaidRealtime as never
+    )
     prisma.labSheet.findFirst.mockResolvedValue(null)
     prisma.cellChangeLog.findMany.mockResolvedValue([])
     prisma.cellChangeLog.findFirst.mockResolvedValue(null)
@@ -193,6 +260,54 @@ describe('LabSheetsService default sheet selection', () => {
 
     expect((result.sampleBlocks[0].results as Record<string, unknown>).moisture).toBe(4.268)
     expect((result.sampleBlocks[0].results as Record<string, unknown>).bottleDensity).toBe(1.9965)
+  })
+
+  it('includes active and void retests in sequence order when reading a customer sheet', async () => {
+    const today = businessDateInBeijing()
+    const block = makeBlock(1)
+    block.retests = [
+      makeRetest(1),
+      makeRetest(2, { status: 'VOID', voidReason: 'duplicate' })
+    ]
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+
+    const result = await service.getSheetForFrontendUser('front-1', today, true)
+
+    expect(result.sampleBlocks[0].retests.map((retest: { sequence: number }) => retest.sequence)).toEqual([1, 2])
+    expect(result.sampleBlocks[0].retests[1]).toMatchObject({ status: 'VOID', readonly: true })
+    expect(prisma.labSheet.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
+    }))
+  })
+
+  it('rejects a corrupted retest snapshot from the customer sheet read boundary', async () => {
+    const today = businessDateInBeijing()
+    const block = makeBlock(1)
+    block.retests = [makeRetest(1, { parameterSnapshot: { ironFactor: 10 } })]
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    const log = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+
+    try {
+      await expect(service.getSheetForFrontendUser('front-1', today, true)).rejects.toMatchObject({
+        status: 422,
+        response: expect.objectContaining({ code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID' })
+      })
+      await expect(service.getSheetForFrontendUser('front-1', today, true)).rejects.toBeInstanceOf(
+        UnprocessableEntityException
+      )
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('marks all retests readonly when reading a historical sheet', async () => {
+    const block = makeBlock(1)
+    block.retests = [makeRetest(1)]
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet('2026-06-30', [block]))
+
+    const result = await service.getSheetForFrontendUser('front-1', '2026-06-30', true)
+
+    expect(result.sampleBlocks[0].retests[0]).toMatchObject({ readonly: true })
   })
 
   it('returns today sheet when today is empty even if history has data', async () => {
@@ -297,6 +412,8 @@ describe('LabSheetsService default sheet selection', () => {
       ironRaw: 1.234,
       price: 88,
       paymentStatus: '已结款',
+      prepaidMemberId: 'member-sensitive',
+      prepaidMemberPhone: '13800000000',
       note: '保留备注'
     })]))
 
@@ -304,7 +421,29 @@ describe('LabSheetsService default sheet selection', () => {
     const block = result.sampleBlocks[0]
 
     expect(block.sensitiveFieldsHidden).toBe(true)
-    expect((block.inputs as Record<string, unknown>)).toMatchObject({ sampleNumber: 'KEEP-001', customerText: '保留客户', note: '保留备注', ironRaw: null, price: null, paymentStatus: null })
+    expect((block.inputs as Record<string, unknown>)).toMatchObject({
+      sampleNumber: 'KEEP-001',
+      customerText: '保留客户',
+      note: '保留备注',
+      ironRaw: null,
+      price: null,
+      paymentStatus: null,
+      prepaidMemberId: null,
+      prepaidMemberPhone: null
+    })
+  })
+
+  it('redacts nested retests for a completed parent without a completed-data grant', async () => {
+    const today = businessDateInBeijing()
+    const block = makeBlock(1, { completed: true })
+    block.retests = [makeRetest(1, { inputs: { ironRaw: 1 }, results: { iron: 999 } })]
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+
+    const result = await service.getSheetForFrontendUser('front-1', today, false)
+
+    expect(result.sampleBlocks[0].retests[0]).toMatchObject({ sensitiveFieldsHidden: true })
+    expect(result.sampleBlocks[0].retests[0].inputs.ironRaw).toBeNull()
+    expect(result.sampleBlocks[0].retests[0].results.iron).toBeNull()
   })
 
   it('keeps today sheet editable even when it was stored readonly before today', async () => {
@@ -417,10 +556,11 @@ describe('LabSheetsService default sheet selection', () => {
     }))
 
     const result = await service.saveSampleBlock(
-      { id: 'front-1' } as never,
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
       `sheet-${today}`,
       {
         id: 'block-1',
+        idempotencyKey: 'merge-fields-1',
         baseUpdatedAt: updatedAt.toISOString(),
         baseInputs: { sampleNumber: 'OLD' },
         changedFields: { sampleNumber: 'NEW', moisture: 4.268, completed: true }
@@ -465,6 +605,7 @@ describe('LabSheetsService default sheet selection', () => {
       block.sheetId,
       {
         id: block.id,
+        idempotencyKey: 'cell-change-audit-1',
         baseUpdatedAt: updatedAt.toISOString(),
         baseInputs: { price: 80 },
         changedFields: { price: 100 },
@@ -489,6 +630,499 @@ describe('LabSheetsService default sheet selection', () => {
     }) })
   })
 
+  it('returns ordered retests when saving a parent sample', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, { note: 'old' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-20T00:00:00.000Z'),
+      retests: [makeRetest(1), makeRetest(2)]
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockImplementation(async ({ include }) => (
+      include ? block : { ...block, retests: undefined }
+    ))
+    prisma.sampleBlock.update.mockImplementation(async ({ data, include }) => {
+      Object.assign(block, data)
+      return include ? block : { ...block, retests: undefined }
+    })
+
+    const result = await service.saveSampleBlock(
+      { id: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'save-retests-1', changedFields: { note: 'new' } }
+    )
+
+    expect((result.retests as Array<{ sequence: number }>).map((retest) => retest.sequence)).toEqual([1, 2])
+    expect(prisma.sampleBlock.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      include: { retests: { orderBy: { sequence: 'asc' } } }
+    }))
+    expect(prisma.sampleBlock.update).toHaveBeenCalledWith(expect.objectContaining({
+      include: { retests: { orderBy: { sequence: 'asc' } } }
+    }))
+  })
+
+  it('atomically synchronizes a new prepaid consumption before saving the sample', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, { sampleNumber: 'A-001' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...block, ...data }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'cell-save-1',
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '138-0000-0000'
+        }
+      }
+    )
+
+    expect(prepaid.syncSampleConsumption).toHaveBeenCalledWith(transaction, expect.objectContaining({
+      sheetId: `sheet-${today}`,
+      sampleBlockId: 'block-1',
+      sampleIndex: 1,
+      sheetDate: today,
+      consumingFrontendUserId: 'front-1',
+      actorUserId: 'sub-1',
+      idempotencyKey: 'cell-save-1',
+      nextInputs: expect.objectContaining({
+        paymentStatus: '预存款',
+        price: 100,
+        prepaidMemberId: 'member-1',
+        prepaidMemberPhone: '138-0000-0000'
+      })
+    }))
+    expect(prepaid.syncSampleConsumption.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.sampleBlock.update.mock.invocationCallOrder[0]
+    )
+  })
+
+  it.each([
+    ['amount', { price: 125.5 }],
+    ['member', { prepaidMemberId: 'member-2', prepaidMemberPhone: '13900000000' }],
+    ['payment status', {
+      paymentStatus: '已结款',
+      prepaidMemberId: null,
+      prepaidMemberPhone: null
+    }]
+  ])('synchronizes prepaid consumption when the %s changes', async (_label, changedFields) => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, {
+        paymentStatus: '预存款',
+        price: 100,
+        prepaidMemberId: 'member-1',
+        prepaidMemberPhone: '13800000000'
+      }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...block, ...data }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: `change-${_label}`, changedFields }
+    )
+
+    expect(prepaid.syncSampleConsumption).toHaveBeenCalledTimes(1)
+    expect(prepaid.syncSampleConsumption).toHaveBeenCalledWith(transaction, expect.objectContaining({
+      oldInputs: expect.objectContaining({
+        paymentStatus: '预存款',
+        price: 100,
+        prepaidMemberId: 'member-1'
+      }),
+      nextInputs: expect.objectContaining(changedFields)
+    }))
+  })
+
+  it('does not invoke the prepaid ledger for an unrelated field change', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, {
+        paymentStatus: '预存款',
+        price: 100,
+        prepaidMemberId: 'member-1',
+        prepaidMemberPhone: '13800000000'
+      }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...block, ...data }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'unrelated-1', changedFields: { note: '复核通过' } }
+    )
+
+    expect(prepaid.syncSampleConsumption).not.toHaveBeenCalled()
+  })
+
+  it('does not save a sample or its change log when prepaid balance is insufficient', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prepaid.syncSampleConsumption.mockRejectedValueOnce(new Error('PREPAID_BALANCE_INSUFFICIENT'))
+
+    await expect(service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'insufficient-1',
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        }
+      }
+    )).rejects.toThrow('PREPAID_BALANCE_INSUFFICIENT')
+    expect(prisma.sampleBlock.update).not.toHaveBeenCalled()
+    expect(transaction.cellChangeLog.create).not.toHaveBeenCalled()
+    expect(transaction.cellChangeLog.update).not.toHaveBeenCalled()
+  })
+
+  it('treats a response-loss retry as already saved without duplicating consumption', async () => {
+    const today = businessDateInBeijing()
+    const savedInputs = {
+      ...createEmptyInputs(1),
+      paymentStatus: '预存款',
+      price: 100,
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    }
+    const block = {
+      ...makeBlock(1, savedInputs),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+
+    const result = await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'cell-save-retry',
+        baseUpdatedAt: '2026-08-11T00:00:00.000Z',
+        baseInputs: { paymentStatus: '', price: null, prepaidMemberId: null, prepaidMemberPhone: null },
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        }
+      }
+    )
+
+    expect(result.inputs).toMatchObject(savedInputs)
+    expect(prepaid.syncSampleConsumption).not.toHaveBeenCalled()
+    expect(prisma.sampleBlock.update).not.toHaveBeenCalled()
+  })
+
+  it('reserves a no-op save and returns its immutable response snapshot after later changes', async () => {
+    const today = businessDateInBeijing()
+    const original = {
+      ...makeBlock(1, { sampleNumber: 'UNCHANGED', note: 'original' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    let current: Omit<typeof original, 'inputs'> & { inputs: Record<string, unknown> } = original
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [original]))
+    prisma.sampleBlock.findUnique.mockImplementation(async () => current)
+    const payload = {
+      id: original.id,
+      idempotencyKey: 'noop-save-1',
+      baseUpdatedAt: original.updatedAt.toISOString(),
+      baseInputs: { sampleNumber: 'UNCHANGED' },
+      changedFields: { sampleNumber: 'UNCHANGED' }
+    }
+
+    const first = await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      payload
+    )
+    current = {
+      ...original,
+      updatedAt: new Date('2026-08-11T00:05:00.000Z'),
+      inputs: { ...(original.inputs as Record<string, unknown>), note: 'later change' }
+    }
+    const retry = await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      payload
+    )
+
+    expect(retry).toEqual(first)
+    expect((retry.inputs as Record<string, unknown>).note).toBe('original')
+    expect(transaction.labSampleSaveRequest.create).toHaveBeenCalledTimes(1)
+    expect(prisma.sampleBlock.update).not.toHaveBeenCalled()
+  })
+
+  it('covers note-only saves and rejects reusing their key for a different request', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, { note: 'before' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'note-save-1', changedFields: { note: 'first request' } }
+    )
+
+    await expect(service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'note-save-1', changedFields: { note: 'different request' } }
+    )).rejects.toMatchObject({ response: expect.objectContaining({ code: 'LAB_SAVE_IDEMPOTENCY_CONFLICT' }) })
+    expect(prisma.sampleBlock.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects one idempotency key reused for a different sample before mutating it', async () => {
+    const today = businessDateInBeijing()
+    const firstBlock = {
+      ...makeBlock(1, { note: 'before' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    const secondBlock = {
+      ...makeBlock(2, { note: 'before' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [firstBlock, secondBlock]))
+    prisma.sampleBlock.findUnique.mockImplementation(async ({ where }) => (
+      where.id === firstBlock.id ? firstBlock : secondBlock
+    ))
+    prisma.sampleBlock.update.mockImplementation(async ({ where, data }) => ({
+      ...(where.id === firstBlock.id ? firstBlock : secondBlock),
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: firstBlock.id, idempotencyKey: 'cross-sample-key', changedFields: { note: 'first' } }
+    )
+    await expect(service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: secondBlock.id, idempotencyKey: 'cross-sample-key', changedFields: { note: 'second' } }
+    )).rejects.toMatchObject({ response: expect.objectContaining({ code: 'LAB_SAVE_IDEMPOTENCY_CONFLICT' }) })
+
+    expect(prisma.sampleBlock.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('settles concurrent cross-sheet key reuse with one winner and one stable 409 loser', async () => {
+    const today = businessDateInBeijing()
+    const firstSheetId = `sheet-${today}`
+    const secondSheetId = `${firstSheetId}-other`
+    const firstBlock = {
+      ...makeBlock(1),
+      sheetId: firstSheetId,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    const secondBlock = {
+      ...makeBlock(2),
+      sheetId: secondSheetId,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockImplementation(async ({ where }) => (
+      where.id === firstSheetId
+        ? { ...makeSheet(today, [firstBlock]), id: firstSheetId }
+        : { ...makeSheet(today, [secondBlock]), id: secondSheetId }
+    ))
+    prisma.sampleBlock.findUnique.mockImplementation(async ({ where }) => (
+      where.id === firstBlock.id ? firstBlock : secondBlock
+    ))
+    prisma.sampleBlock.update.mockImplementation(async ({ where, data }) => ({
+      ...(where.id === firstBlock.id ? firstBlock : secondBlock),
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+
+    const outcomes = await Promise.allSettled([
+      service.saveSampleBlock(
+        { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+        firstSheetId,
+        { id: firstBlock.id, idempotencyKey: 'concurrent-cross-sheet', changedFields: { note: 'winner-a' } }
+      ),
+      service.saveSampleBlock(
+        { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+        secondSheetId,
+        { id: secondBlock.id, idempotencyKey: 'concurrent-cross-sheet', changedFields: { note: 'winner-b' } }
+      )
+    ])
+
+    expect(outcomes.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    const loser = outcomes.find((result) => result.status === 'rejected') as PromiseRejectedResult
+    expect(loser.reason).toMatchObject({ response: expect.objectContaining({ code: 'LAB_SAVE_IDEMPOTENCY_CONFLICT' }) })
+    expect(realtime.publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns the committed winner snapshot when an identical concurrent insert reports P2002', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1, { note: 'before' }),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+    transaction.labSampleSaveRequest.create.mockImplementationOnce(async ({ data }) => {
+      labSaveRequests.set(data.idempotencyKey, {
+        ...data,
+        responseSnapshot: { ...(data.responseSnapshot as Record<string, unknown>), updatedAt: 'winner-snapshot' }
+      })
+      throw Object.assign(new Error('concurrent unique constraint'), { code: 'P2002' })
+    })
+
+    const result = await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      { id: block.id, idempotencyKey: 'same-request-race', changedFields: { note: 'saved' } }
+    )
+
+    expect(result.updatedAt).toBe('winner-snapshot')
+    expect((result.inputs as Record<string, unknown>).note).toBe('saved')
+    expect(realtime.publish).not.toHaveBeenCalled()
+  })
+
+  it('rolls back a prepaid ledger mutation when the later sample update fails', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    const committedLedgerMutations: string[] = []
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prepaid.syncSampleConsumption.mockImplementationOnce(async () => {
+      committedLedgerMutations.push('consumption-created')
+    })
+    prisma.sampleBlock.update.mockRejectedValueOnce(new Error('sample update failed'))
+    prisma.$transaction.mockImplementationOnce(async (operation: (tx: typeof transaction) => unknown) => {
+      const ledgerSnapshot = [...committedLedgerMutations]
+      try {
+        return await operation(transaction)
+      } catch (error) {
+        committedLedgerMutations.splice(0, committedLedgerMutations.length, ...ledgerSnapshot)
+        labSaveRequests.clear()
+        throw error
+      }
+    })
+
+    await expect(service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'rollback-after-ledger',
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        }
+      }
+    )).rejects.toThrow('sample update failed')
+
+    expect(committedLedgerMutations).toEqual([])
+    expect(labSaveRequests.size).toBe(0)
+    expect(block.inputs.paymentStatus).toBe('')
+    expect(transaction.cellChangeLog.create).not.toHaveBeenCalled()
+    expect(prepaidRealtime.publish).not.toHaveBeenCalled()
+  })
+
+  it('publishes prepaid invalidations only after the enclosing sample transaction commits', async () => {
+    const today = businessDateInBeijing()
+    const block = {
+      ...makeBlock(1),
+      sheetId: `sheet-${today}`,
+      updatedAt: new Date('2026-08-11T00:00:00.000Z')
+    }
+    prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [block]))
+    prisma.sampleBlock.findUnique.mockResolvedValue(block)
+    prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({
+      ...block,
+      ...data,
+      updatedAt: new Date('2026-08-11T00:00:01.000Z')
+    }))
+    prepaid.syncSampleConsumption.mockResolvedValueOnce({
+      memberId: 'member-1',
+      consumptionId: 'consumption-1',
+      operation: 'create'
+    })
+
+    await service.saveSampleBlock(
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
+      `sheet-${today}`,
+      {
+        id: block.id,
+        idempotencyKey: 'committed-prepaid-signal',
+        changedFields: {
+          paymentStatus: '预存款',
+          price: 100,
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        }
+      }
+    )
+
+    expect(prepaidRealtime.publish.mock.calls).toEqual([
+      [expect.objectContaining({
+        module: 'consumptions', entityId: 'consumption-1', operation: 'create', changedById: 'sub-1'
+      })],
+      [expect.objectContaining({
+        module: 'members', entityId: 'member-1', operation: 'update', changedById: 'sub-1'
+      })],
+      [expect.objectContaining({
+        module: 'settlements', entityId: 'consumption-1', operation: 'update', changedById: 'sub-1'
+      })]
+    ])
+  })
+
   it('returns granted saved data to the caller but publishes only a metadata refresh signal', async () => {
     const today = businessDateInBeijing()
     const updatedAt = new Date('2026-08-08T00:00:00.000Z')
@@ -506,10 +1140,11 @@ describe('LabSheetsService default sheet selection', () => {
     }))
 
     const result = await service.saveSampleBlock(
-      { id: 'front-1' } as never,
+      { id: 'sub-1', dataOwnerId: 'front-1' } as never,
       `sheet-${today}`,
       {
         id: block.id,
+        idempotencyKey: 'granted-save-1',
         baseUpdatedAt: updatedAt.toISOString(),
         baseInputs: { note: null },
         changedFields: { note: '已复核' }
@@ -525,7 +1160,9 @@ describe('LabSheetsService default sheet selection', () => {
     })
     expect(realtime.publish).toHaveBeenCalledWith(expect.objectContaining({
       type: 'block-saved',
-      sheetId: `sheet-${today}`
+      sheetId: `sheet-${today}`,
+      frontendUserId: 'front-1',
+      changedById: 'sub-1'
     }))
     expect(realtime.publish).toHaveBeenCalledWith(expect.not.objectContaining({ block: expect.anything() }))
   })
@@ -557,6 +1194,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: 'block-1',
+        idempotencyKey: 'recipient-save-1',
         baseUpdatedAt: updatedAt.toISOString(),
         baseInputs: {
           recipientCustomerId: undefined,
@@ -614,6 +1252,7 @@ describe('LabSheetsService default sheet selection', () => {
         `sheet-${today}`,
         {
           id: 'block-1',
+          idempotencyKey: 'stale-save-1',
           baseUpdatedAt: '2026-07-03T00:00:00.000Z',
           baseInputs: { sampleNumber: 'OLD' },
           changedFields: { sampleNumber: 'LOCAL' }
@@ -644,6 +1283,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: 'block-1',
+        idempotencyKey: 'repeated-save-1',
         baseUpdatedAt: '2026-07-03T00:00:00.000Z',
         baseInputs: { sampleNumber: 'OLD' },
         changedFields: { sampleNumber: 'ALREADY-SAVED' }
@@ -682,6 +1322,28 @@ describe('LabSheetsService default sheet selection', () => {
     }))
     expect(result.parameters).toMatchObject({ ironBlank: 0.1, ironFactor: 20 })
     expect(realtime.publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not rewrite an existing retest snapshot when applying parameters by segment', async () => {
+    const today = businessDateInBeijing()
+    const previousParameters = { ...defaultLabParameters, ironFactor: 10 }
+    const nextParameters = { ...defaultLabParameters, ironFactor: 25 }
+    const block = makeBlock(1, { ironRaw: 1 }, previousParameters)
+    block.retests = [makeRetest(1, { parameterSnapshot: previousParameters })]
+    const current = makeSheet(today, [block], previousParameters)
+    prisma.labSheet.findUnique.mockResolvedValue(current)
+    transaction.labSheet.findUnique.mockResolvedValue(current)
+
+    const result = await service.applyCurrentParametersFromIndex(
+      'front-1',
+      { parameters: nextParameters, startIndex: 1 }
+    )
+
+    expect((result.sampleBlocks[0].retests[0].parameterSnapshot as Record<string, unknown>).ironFactor).toBe(10)
+    expect(transaction.sampleBlock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'block-1' },
+      data: expect.not.objectContaining({ retests: expect.anything() })
+    }))
   })
 
   it('redacts completed sample data in apply responses without a grant and publishes only a safe refresh signal', async () => {
@@ -776,7 +1438,7 @@ describe('LabSheetsService default sheet selection', () => {
     const saved = await service.saveSampleBlock(
       { id: 'front-1' } as never,
       before.id,
-      { id: 'block-2', changedFields: { ironRaw: 2 } }
+      { id: 'block-2', idempotencyKey: 'blank-before-boundary-1', changedFields: { ironRaw: 2 } }
     )
 
     expect((saved.parameterSnapshot as Record<string, unknown>)).toMatchObject({
@@ -816,7 +1478,7 @@ describe('LabSheetsService default sheet selection', () => {
     const saved = await service.saveSampleBlock(
       { id: 'front-1' } as never,
       before.id,
-      { id: 'block-11', changedFields: { ironRaw: 2 } }
+      { id: 'block-11', idempotencyKey: 'added-blank-before-boundary-1', changedFields: { ironRaw: 2 } }
     )
 
     expect((saved.parameterSnapshot as Record<string, unknown>)).toMatchObject({
@@ -884,6 +1546,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: block.id,
+        idempotencyKey: 'segmented-first-input-1',
         baseUpdatedAt: block.updatedAt.toISOString(),
         baseInputs: { ironRaw: null },
         changedFields: { ironRaw: 2 }
@@ -919,6 +1582,7 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: block.id,
+        idempotencyKey: 'ordinary-first-input-1',
         baseUpdatedAt: block.updatedAt.toISOString(),
         baseInputs: { ironRaw: null },
         changedFields: { ironRaw: 2 }
@@ -966,7 +1630,12 @@ describe('LabSheetsService default sheet selection', () => {
     prisma.labSheet.findUnique.mockResolvedValue(makeSheet(today, [staleBlock], staleParameters))
     prisma.sampleBlock.findUnique.mockResolvedValue(staleBlock)
     prisma.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...staleBlock, ...data }))
-    transaction.$queryRaw.mockResolvedValue([{ id: `sheet-${today}` }])
+    transaction.$queryRaw.mockImplementation(async (query: { strings?: readonly string[] }) => {
+      if (query.strings?.join('').includes('pg_advisory_xact_lock')) {
+        throw new Error("Failed to deserialize column of type 'void'")
+      }
+      return [{ id: `sheet-${today}` }]
+    })
     transaction.labSheet.findUnique.mockResolvedValue(makeSheet(today, [latestBlock], staleParameters))
     transaction.sampleBlock.findUnique.mockResolvedValue(latestBlock)
     transaction.sampleBlock.update.mockImplementation(async ({ data }) => ({ ...latestBlock, ...data }))
@@ -976,13 +1645,18 @@ describe('LabSheetsService default sheet selection', () => {
       `sheet-${today}`,
       {
         id: latestBlock.id,
+        idempotencyKey: 'locked-save-1',
         baseUpdatedAt: latestBlock.updatedAt.toISOString(),
         baseInputs: { ironRaw: null },
         changedFields: { ironRaw: 2 }
       }
     )
 
+    expect(transaction.$executeRaw).toHaveBeenCalledTimes(1)
     expect(transaction.$queryRaw).toHaveBeenCalledTimes(1)
+    expect(transaction.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      transaction.$queryRaw.mock.invocationCallOrder[0]
+    )
     expect(transaction.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
       transaction.sampleBlock.findUnique.mock.invocationCallOrder[0]
     )

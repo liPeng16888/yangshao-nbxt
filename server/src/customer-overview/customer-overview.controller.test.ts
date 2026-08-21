@@ -8,14 +8,18 @@ const frontendUser: CurrentUser = {
   id: 'front-1',
   account: 'front-1',
   username: '前台一',
-  role: UserRole.FRONTEND_USER
+  role: UserRole.FRONTEND_USER,
+  dataOwnerId: 'front-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: true, isFrontendSubAccount: false
 }
 
 const rootAdmin: CurrentUser = {
   id: 'root-1',
   account: 'root',
   username: '主账号',
-  role: UserRole.ROOT_ADMIN
+  role: UserRole.ROOT_ADMIN,
+  dataOwnerId: 'root-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: false, isFrontendSubAccount: false
 }
 
 describe('customer overview routes', () => {

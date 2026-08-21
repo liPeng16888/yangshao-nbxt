@@ -41,8 +41,8 @@
             </template>
             <template #default="{ row }">
               <el-radio-group v-model="row.paymentMethod" size="small">
-                <el-radio-button label="cash">现金</el-radio-button>
-                <el-radio-button label="online">线上</el-radio-button>
+                <el-radio-button value="cash">现金</el-radio-button>
+                <el-radio-button value="online">线上</el-radio-button>
               </el-radio-group>
             </template>
           </el-table-column>
@@ -83,21 +83,12 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import type { UploadUserFile } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import type { FinancePayload, PaymentMethod } from '@/types/finance'
-import { uploadImages } from '@/api/upload'
+import type { FinancePayload } from '@/types/finance'
 import { todayInBeijing } from '@/utils/date'
-
-interface ExpenseDraftRow {
-  id: string
-  item: string
-  amount: number
-  paymentMethod: PaymentMethod | ''
-  files: UploadUserFile[]
-  remark: string
-}
+import { buildPayloads, createRow, validateRows } from './useFinanceEntryDraft'
+import type { ExpenseDraftRow } from './useFinanceEntryDraft'
 
 const emit = defineEmits<{
   submit: [payloads: FinancePayload[]]
@@ -107,17 +98,6 @@ const submitting = ref(false)
 const paymentDate = ref(todayInBeijing())
 const appendCount = ref(1)
 const rows = reactive<ExpenseDraftRow[]>([createRow()])
-
-function createRow(): ExpenseDraftRow {
-  return {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    item: '',
-    amount: 0,
-    paymentMethod: '',
-    files: [],
-    remark: ''
-  }
-}
 
 function appendRows() {
   for (let index = 0; index < appendCount.value; index += 1) {
@@ -134,44 +114,6 @@ function handleScreenshotExceed() {
   ElMessage.error('每条开支最多上传 10 张图片')
 }
 
-async function uploadRowScreenshots(row: ExpenseDraftRow) {
-  const localFiles: File[] = []
-  row.files.forEach((file) => {
-    if (file.raw) localFiles.push(file.raw as File)
-  })
-  const existingUrls = row.files.map((file) => (!file.raw && file.url ? file.url : '')).filter(Boolean)
-  const uploadedUrls = localFiles.length ? await uploadImages(localFiles) : []
-  return Array.from(new Set([...existingUrls, ...uploadedUrls]))
-}
-
-async function buildPayloads() {
-  const payloads: FinancePayload[] = []
-  for (const row of rows) {
-    const screenshotUrls = await uploadRowScreenshots(row)
-    payloads.push({
-      paymentDate: paymentDate.value,
-      item: row.item,
-      amount: Number(row.amount),
-      paymentMethod: row.paymentMethod as PaymentMethod,
-      screenshotUrl: screenshotUrls[0] || '',
-      screenshotUrls,
-      remark: row.remark
-    })
-  }
-  return payloads
-}
-
-function validateRows() {
-  if (!paymentDate.value) return '请选择支付日期'
-  for (const [index, row] of rows.entries()) {
-    const rowNumber = index + 1
-    if (!row.item.trim()) return `第 ${rowNumber} 行：开支项目必填`
-    if (!Number.isFinite(Number(row.amount)) || Number(row.amount) <= 0) return `第 ${rowNumber} 行：开支金额必须大于 0`
-    if (!row.paymentMethod) return `第 ${rowNumber} 行：支付方式必填`
-  }
-  return ''
-}
-
 function resetForm() {
   paymentDate.value = todayInBeijing()
   rows.splice(0, rows.length, createRow())
@@ -179,14 +121,14 @@ function resetForm() {
 }
 
 async function submit() {
-  const error = validateRows()
+  const error = validateRows(paymentDate.value, rows)
   if (error) {
     ElMessage.error(error)
     return
   }
   submitting.value = true
   try {
-    emit('submit', await buildPayloads())
+    emit('submit', await buildPayloads(paymentDate.value, rows))
     resetForm()
   } finally {
     submitting.value = false

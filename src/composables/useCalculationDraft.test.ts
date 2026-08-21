@@ -1,0 +1,1136 @@
+// @vitest-environment jsdom
+import { effectScope, nextTick, type EffectScope } from 'vue'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  CalculationDraftConflictError,
+  getCalculationDraft,
+  saveCalculationDraft
+} from '@/api/calculationDraft'
+import type { CoefficientDraftPayload } from '@/types/calculationDraft'
+import {
+  migrateLegacyCoefficientDraft,
+  normalizeCoefficientDraft,
+  useCoefficientCalculation
+} from './useCoefficientCalculation'
+import { useCalculationDraft, type CalculationDraftAdapter } from './useCalculationDraft'
+
+vi.mock('@/api/calculationDraft', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/calculationDraft')>()
+  return {
+    ...actual,
+    getCalculationDraft: vi.fn(),
+    saveCalculationDraft: vi.fn()
+  }
+})
+
+interface TestDraft {
+  value: number
+  details: { label: string }
+}
+
+const defaults: TestDraft = { value: 0, details: { label: 'default' } }
+const serverPayload: TestDraft = { value: 4, details: { label: 'server' } }
+const legacyPayload: TestDraft = { value: 1, details: { label: 'legacy' } }
+
+function response(payload: TestDraft, revision: number, updatedAt: string | null = null) {
+  return { kind: 'STANDARD_SAMPLE' as const, payload, revision, updatedAt }
+}
+
+function dirtyCache(payload: TestDraft, baseRevision: number) {
+  return { version: 1, state: 'dirty', baseRevision, payload }
+}
+
+function resolvedCache(revision: number) {
+  return { version: 1, state: 'resolved', revision }
+}
+
+function normalize(value: unknown): TestDraft {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid draft')
+  const source = value as Partial<TestDraft>
+  if (!Number.isFinite(source.value) || !source.details || typeof source.details.label !== 'string') {
+    throw new Error('invalid draft')
+  }
+  return { value: source.value as number, details: { label: source.details.label } }
+}
+
+function memoryStorage() {
+  const values = new Map<string, string>()
+  return {
+    get length() { return values.size },
+    clear: vi.fn(() => values.clear()),
+    getItem: vi.fn((key: string) => values.get(key) ?? null),
+    key: vi.fn((index: number) => Array.from(values.keys())[index] ?? null),
+    removeItem: vi.fn((key: string) => { values.delete(key) }),
+    setItem: vi.fn((key: string, value: string) => { values.set(key, value) })
+  } satisfies Storage
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function setup(initial: TestDraft = defaults, adapterOverrides: Partial<CalculationDraftAdapter<TestDraft>> = {}) {
+  let current = normalize(initial)
+  const apply = vi.fn((payload: TestDraft) => { current = normalize(payload) })
+  const adapter: CalculationDraftAdapter<TestDraft> = {
+    kind: 'standard-sample',
+    legacyStorageKey: 'legacy-draft',
+    cacheStorageKey: 'draft-cache',
+    defaults: () => normalize(defaults),
+    normalize,
+    snapshot: () => current,
+    apply,
+    ...adapterOverrides
+  }
+  const scope = effectScope()
+  let draft!: ReturnType<typeof useCalculationDraft<TestDraft>>
+  scope.run(() => { draft = useCalculationDraft(adapter) })
+  return {
+    adapter,
+    apply,
+    draft,
+    scope,
+    edit(next: TestDraft) { current = next }
+  }
+}
+
+async function flush() {
+  await Promise.resolve()
+  await Promise.resolve()
+  await nextTick()
+}
+
+describe('useCalculationDraft', () => {
+  let scopes: EffectScope[]
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.resetAllMocks()
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: memoryStorage() })
+    scopes = []
+  })
+
+  afterEach(() => {
+    scopes.forEach((scope) => scope.stop())
+    vi.useRealTimers()
+  })
+
+  function trackedSetup(initial?: TestDraft) {
+    const result = setup(initial)
+    scopes.push(result.scope)
+    return result
+  }
+
+  it('lets a positive server revision win over an older legacy payload', async () => {
+    localStorage.setItem('legacy-draft', JSON.stringify(legacyPayload))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(serverPayload, 4, '2026-08-15T08:00:00.000Z'))
+    const { draft, apply } = trackedSetup(legacyPayload)
+
+    await draft.load()
+
+    expect(apply).toHaveBeenCalledWith(serverPayload)
+    expect(draft.revision.value).toBe(4)
+    expect(draft.updatedAt.value).toBe('2026-08-15T08:00:00.000Z')
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(localStorage.getItem('legacy-draft')).not.toBeNull()
+  })
+
+  it('imports one valid legacy payload only at revision zero and removes it after the save succeeds', async () => {
+    localStorage.setItem('legacy-draft', JSON.stringify(legacyPayload))
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(defaults, 0))
+      .mockResolvedValueOnce(response(legacyPayload, 1, '2026-08-15T08:01:00.000Z'))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(legacyPayload, 1, '2026-08-15T08:01:00.000Z'))
+    const { draft, apply } = trackedSetup()
+
+    await draft.load()
+
+    expect(apply).toHaveBeenCalledWith(legacyPayload)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 0,
+      payload: legacyPayload
+    })
+    expect(localStorage.getItem('legacy-draft')).toBeNull()
+    await draft.load()
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+    expect(draft.revision.value).toBe(1)
+  })
+
+  it('uses an explicit legacy migrator without weakening strict server and live normalization', async () => {
+    const rawLegacy = { legacyValue: 7 }
+    const migrated = { value: 7, details: { label: 'migrated legacy' } }
+    const migrateLegacy = vi.fn((value: unknown) => {
+      if (JSON.stringify(value) !== JSON.stringify(rawLegacy)) throw new Error('invalid legacy')
+      return migrated
+    })
+    localStorage.setItem('legacy-draft', JSON.stringify(rawLegacy))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 0))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(migrated, 1))
+    const result = setup(defaults, { migrateLegacy })
+    scopes.push(result.scope)
+
+    await result.draft.load()
+
+    expect(migrateLegacy).toHaveBeenCalledWith(rawLegacy)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', { baseRevision: 0, payload: migrated })
+    expect(() => result.adapter.normalize(rawLegacy)).toThrow('invalid draft')
+  })
+
+  it('keeps an unconvertible legacy payload and exposes a retryable load error instead of silently showing defaults', async () => {
+    const invalidLegacy = { legacyValue: 'malformed' }
+    localStorage.setItem('legacy-draft', JSON.stringify(invalidLegacy))
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(defaults, 0))
+      .mockResolvedValueOnce(response(defaults, 0))
+    const migrateLegacy = vi.fn(() => { throw new Error('legacy cannot be converted without data loss') })
+    const result = setup(legacyPayload, { migrateLegacy })
+    scopes.push(result.scope)
+
+    await result.draft.load()
+
+    expect(result.apply).toHaveBeenCalledWith(defaults)
+    expect(result.draft.status.value).toBe('error')
+    expect(localStorage.getItem('legacy-draft')).toBe(JSON.stringify(invalidLegacy))
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+
+    await result.draft.retry()
+    expect(getCalculationDraft).toHaveBeenCalledTimes(2)
+    expect(migrateLegacy).toHaveBeenCalledTimes(2)
+    expect(result.draft.status.value).toBe('error')
+    expect(localStorage.getItem('legacy-draft')).toBe(JSON.stringify(invalidLegacy))
+  })
+
+  it('does not remove legacy data when its first server save fails', async () => {
+    localStorage.setItem('legacy-draft', JSON.stringify(legacyPayload))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 0))
+    vi.mocked(saveCalculationDraft).mockRejectedValueOnce(new Error('offline'))
+    const { draft } = trackedSetup()
+
+    await draft.load()
+
+    expect(draft.status.value).toBe('error')
+    expect(localStorage.getItem('legacy-draft')).not.toBeNull()
+  })
+
+  it('uses the revision-zero server draft when reading legacy storage throws', async () => {
+    const storage = memoryStorage()
+    storage.getItem.mockImplementation((key) => {
+      if (key === 'legacy-draft') throw new Error('blocked legacy read')
+      return null
+    })
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 0))
+    const { draft, apply } = trackedSetup(legacyPayload)
+
+    await draft.load()
+
+    expect(storage.getItem).toHaveBeenCalledWith('legacy-draft')
+    expect(apply).toHaveBeenCalledWith(defaults)
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(draft.status.value).toBe('idle')
+  })
+
+  it.each([
+    ['malformed JSON', (storage: Storage) => storage.setItem('legacy-draft', '{broken-json')],
+    ['a parsed payload rejected by the ordinary adapter', (storage: Storage) => storage.setItem('legacy-draft', JSON.stringify({ value: 'invalid' }))],
+    ['a storage read exception', (storage: Storage) => {
+      vi.mocked(storage.getItem).mockImplementation((key) => {
+        if (key === 'legacy-draft') throw new Error('blocked legacy read')
+        return null
+      })
+    }]
+  ])('treats %s as absent without a migrator and still saves a later edit', async (_case, arrangeLegacy) => {
+    const storage = memoryStorage()
+    arrangeLegacy(storage)
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    const laterEdit = { value: 8, details: { label: 'later edit' } }
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 0))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(laterEdit, 1))
+    const { draft, apply, edit } = trackedSetup(legacyPayload)
+
+    await draft.load()
+
+    expect(apply).toHaveBeenCalledWith(defaults)
+    expect(draft.status.value).toBe('idle')
+    edit(laterEdit)
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 0,
+      payload: laterEdit
+    })
+    expect(draft.status.value).toBe('saved')
+    expect(storage.removeItem).not.toHaveBeenCalledWith('legacy-draft')
+  })
+
+  it('treats malformed JSON as absent before invoking an explicit migrator', async () => {
+    localStorage.setItem('legacy-draft', '{broken-json')
+    const laterEdit = { value: 9, details: { label: 'edit after unreadable bytes' } }
+    const migrateLegacy = vi.fn(() => legacyPayload)
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 0))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(laterEdit, 1))
+    const result = setup(legacyPayload, { migrateLegacy })
+    scopes.push(result.scope)
+
+    await result.draft.load()
+
+    expect(result.apply).toHaveBeenCalledWith(defaults)
+    expect(result.draft.status.value).toBe('idle')
+    expect(migrateLegacy).not.toHaveBeenCalled()
+    result.edit(laterEdit)
+    result.draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 0,
+      payload: laterEdit
+    })
+    expect(result.draft.status.value).toBe('saved')
+    expect(localStorage.getItem('legacy-draft')).toBe('{broken-json')
+  })
+
+  it('does not turn a successful legacy import into failure when removal throws or reimport later', async () => {
+    const storage = memoryStorage()
+    storage.setItem('legacy-draft', JSON.stringify(legacyPayload))
+    storage.removeItem.mockImplementation(() => { throw new Error('blocked legacy removal') })
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(defaults, 0))
+      .mockResolvedValueOnce(response(legacyPayload, 1))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(legacyPayload, 1))
+    const { draft } = trackedSetup()
+
+    await draft.load()
+    expect(draft.status.value).toBe('saved')
+    expect(storage.removeItem).toHaveBeenCalledWith('legacy-draft')
+    expect(storage.getItem('legacy-draft')).not.toBeNull()
+
+    await draft.load()
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+    expect(draft.revision.value).toBe(1)
+  })
+
+  it('keeps authoritative load and edit saves successful when cache writes throw', async () => {
+    const storage = memoryStorage()
+    storage.setItem.mockImplementation(() => { throw new Error('blocked cache write') })
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    const local = { value: 5, details: { label: 'edit' } }
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(serverPayload, 2))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(local, 3))
+    const { draft, edit } = trackedSetup()
+
+    await draft.load()
+    edit(local)
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(storage.setItem).toHaveBeenCalledWith('draft-cache', JSON.stringify(dirtyCache(local, 2)))
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 2,
+      payload: local
+    })
+    expect(draft.status.value).toBe('saved')
+  })
+
+  it('keeps server load and save working when every storage operation throws', async () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: vi.fn(() => { throw new Error('blocked') }),
+        setItem: vi.fn(() => { throw new Error('blocked') }),
+        removeItem: vi.fn(() => { throw new Error('blocked') })
+      }
+    })
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(serverPayload, 2))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response({ value: 5, details: { label: 'edit' } }, 3))
+    const { draft, edit, apply } = trackedSetup()
+
+    await draft.load()
+    edit({ value: 5, details: { label: 'edit' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(apply).toHaveBeenCalledWith(serverPayload)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 2,
+      payload: { value: 5, details: { label: 'edit' } }
+    })
+    expect(draft.status.value).toBe('saved')
+  })
+
+  it('keeps an edit queued after a failed load visible while retrying against the fetched revision', async () => {
+    const local = { value: 9, details: { label: 'edited after load failure' } }
+    vi.mocked(getCalculationDraft)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(response(serverPayload, 4))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(local, 5))
+    const { draft, edit, apply } = trackedSetup()
+
+    await draft.load()
+    expect(draft.status.value).toBe('error')
+    edit(local)
+    draft.scheduleSave()
+
+    await draft.retry()
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(apply).not.toHaveBeenCalledWith(serverPayload)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 4,
+      payload: local
+    })
+    expect(draft.revision.value).toBe(5)
+    expect(draft.status.value).toBe('saved')
+  })
+
+  it('restores a valid recovery cache provisionally after an authoritative load failure', async () => {
+    const cached = { value: 8, details: { label: 'cached local' } }
+    localStorage.setItem('draft-cache', JSON.stringify(dirtyCache(cached, 3)))
+    vi.mocked(getCalculationDraft).mockRejectedValueOnce(new Error('offline'))
+    const { draft, apply } = trackedSetup()
+
+    await draft.load()
+
+    expect(apply).toHaveBeenCalledWith(cached)
+    expect(draft.status.value).toBe('error')
+    expect(draft.revision.value).toBe(0)
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+  })
+
+  it('does not persist a clean server snapshot as an unsynchronized recovery cache', async () => {
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(serverPayload, 4))
+      .mockRejectedValueOnce(new Error('offline'))
+    const first = trackedSetup()
+
+    await first.draft.load()
+    expect(localStorage.getItem('draft-cache')).toBeNull()
+
+    const remounted = trackedSetup()
+    await remounted.draft.load()
+    expect(remounted.apply).not.toHaveBeenCalled()
+    expect(remounted.draft.status.value).toBe('error')
+  })
+
+  it('keeps a successful save successful when clearing its recovery cache throws', async () => {
+    const storage = memoryStorage()
+    storage.removeItem.mockImplementation((key) => {
+      if (key === 'draft-cache') throw new Error('blocked cache removal')
+    })
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    const local = { value: 8, details: { label: 'saved local' } }
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(serverPayload, 4))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(local, 5))
+    const { draft, edit } = trackedSetup()
+
+    await draft.load()
+    edit(local)
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(storage.removeItem).toHaveBeenCalledWith('draft-cache')
+    expect(JSON.parse(storage.getItem('draft-cache')!)).toEqual(resolvedCache(5))
+    expect(draft.status.value).toBe('saved')
+    expect(draft.revision.value).toBe(5)
+
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(local, 5))
+    const remounted = trackedSetup()
+    await remounted.draft.load()
+    expect(remounted.apply).toHaveBeenCalledWith(local)
+    expect(remounted.draft.status.value).toBe('idle')
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses payload equality after both resolved-cache writes fail to avoid replaying an already saved edit', async () => {
+    const storage = memoryStorage()
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    const local = { value: 8, details: { label: 'saved despite blocked cleanup' } }
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(serverPayload, 2))
+      .mockResolvedValueOnce(response(local, 3))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(local, 3))
+    const first = trackedSetup()
+    await first.draft.load()
+    first.edit(local)
+    first.draft.scheduleSave()
+    storage.removeItem.mockImplementation((key) => {
+      if (key === 'draft-cache') throw new Error('blocked cache removal')
+    })
+    storage.setItem.mockImplementation((key, value) => {
+      if (key === 'draft-cache') throw new Error('blocked tombstone write')
+      void value
+    })
+    await vi.advanceTimersByTimeAsync(500)
+
+    const remounted = trackedSetup()
+    await remounted.draft.load()
+
+    expect(remounted.apply).toHaveBeenLastCalledWith(local)
+    expect(remounted.draft.conflict.value).toBeNull()
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['malformed cache data', () => localStorage.setItem('draft-cache', '{bad json')],
+    ['a legacy raw payload', () => localStorage.setItem('draft-cache', JSON.stringify(legacyPayload))],
+    ['a cache version mismatch', () => {
+      localStorage.setItem('draft-cache', JSON.stringify({ ...dirtyCache(legacyPayload, 1), version: 2 }))
+    }],
+    ['an extra cache field', () => {
+      localStorage.setItem('draft-cache', JSON.stringify({ ...dirtyCache(legacyPayload, 1), extra: true }))
+    }],
+    ['an unsafe cache base revision', () => {
+      localStorage.setItem('draft-cache', JSON.stringify(dirtyCache(legacyPayload, Number.MAX_SAFE_INTEGER + 1)))
+    }],
+    ['cache data rejected by the adapter normalizer', () => {
+      localStorage.setItem('draft-cache', JSON.stringify({
+        version: 1,
+        state: 'dirty',
+        baseRevision: 1,
+        payload: { value: '8', details: { label: 'invalid' } }
+      }))
+    }],
+    ['a throwing cache read', () => {
+      const storage = memoryStorage()
+      storage.getItem.mockImplementation((key) => {
+        if (key === 'draft-cache') throw new Error('blocked')
+        return null
+      })
+      Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    }]
+  ])('ignores %s without blocking the failed-load retry state', async (_label, arrange) => {
+    arrange()
+    vi.mocked(getCalculationDraft).mockRejectedValueOnce(new Error('offline'))
+    const { draft, apply } = trackedSetup()
+
+    await draft.load()
+
+    expect(apply).not.toHaveBeenCalled()
+    expect(draft.status.value).toBe('error')
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+  })
+
+  it('reconciles a provisional recovery cache with the server revision before saving it', async () => {
+    const cached = { value: 8, details: { label: 'newer cached local' } }
+    localStorage.setItem('draft-cache', JSON.stringify(dirtyCache(cached, 4)))
+    vi.mocked(getCalculationDraft)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(response(serverPayload, 4))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(cached, 5))
+    const { draft, apply } = trackedSetup()
+
+    await draft.load()
+    apply.mockClear()
+    await draft.retry()
+    await flush()
+
+    expect(apply).not.toHaveBeenCalledWith(serverPayload)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 4,
+      payload: cached
+    })
+    expect(draft.revision.value).toBe(5)
+    expect(draft.status.value).toBe('saved')
+  })
+
+  it('saves an online dirty cache only when the server still matches its originating revision', async () => {
+    const cached = { value: 8, details: { label: 'dirty at revision 4' } }
+    localStorage.setItem('draft-cache', JSON.stringify(dirtyCache(cached, 4)))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(
+      serverPayload,
+      4,
+      '2026-08-15T08:00:00.000Z'
+    ))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(
+      cached,
+      5,
+      '2026-08-15T08:01:00.000Z'
+    ))
+    const { draft, apply } = trackedSetup()
+
+    await draft.load()
+
+    expect(apply).not.toHaveBeenCalledWith(serverPayload)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 4,
+      payload: cached
+    })
+    expect(draft.revision.value).toBe(5)
+  })
+
+  it.each([1, 3])('enters conflict instead of rebasing a dirty cache when server revision is %s', async (serverRevision) => {
+    const cached = { value: 8, details: { label: 'dirty at revision 2' } }
+    const server = { value: serverRevision, details: { label: 'different server' } }
+    localStorage.setItem('draft-cache', JSON.stringify(dirtyCache(cached, 2)))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(
+      server,
+      serverRevision,
+      '2026-08-15T08:00:00.000Z'
+    ))
+    const { draft, apply } = trackedSetup()
+
+    await draft.load()
+
+    expect(apply).toHaveBeenCalledWith(cached)
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(draft.status.value).toBe('conflict')
+    expect(draft.conflict.value).toEqual({
+      serverDraft: response(server, serverRevision, '2026-08-15T08:00:00.000Z'),
+      localSnapshot: cached
+    })
+  })
+
+  it('recognizes a stale dirty cache whose payload is already saved on the server', async () => {
+    const cached = { value: 8, details: { label: 'already saved' } }
+    localStorage.setItem('draft-cache', JSON.stringify(dirtyCache(cached, 2)))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(
+      cached,
+      3,
+      '2026-08-15T08:00:00.000Z'
+    ))
+    const { draft, apply } = trackedSetup()
+
+    await draft.load()
+
+    expect(apply).toHaveBeenLastCalledWith(cached)
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(draft.conflict.value).toBeNull()
+    expect(draft.revision.value).toBe(3)
+    expect(localStorage.getItem('draft-cache')).toBeNull()
+  })
+
+  it('conflicts on a lower server revision even when its payload equals the dirty cache', async () => {
+    const cached = { value: 8, details: { label: 'dirty at revision 4' } }
+    localStorage.setItem('draft-cache', JSON.stringify(dirtyCache(cached, 4)))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(
+      cached,
+      3,
+      '2026-08-15T08:00:00.000Z'
+    ))
+    const { draft } = trackedSetup()
+
+    await draft.load()
+
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(draft.status.value).toBe('conflict')
+    expect(draft.conflict.value?.serverDraft.revision).toBe(3)
+    expect(draft.conflict.value?.localSnapshot).toEqual(cached)
+  })
+
+  it('keeps an offline recovered base and conflicts after retry when the server advanced', async () => {
+    const cached = { value: 8, details: { label: 'offline local at revision 2' } }
+    localStorage.setItem('draft-cache', JSON.stringify(dirtyCache(cached, 2)))
+    vi.mocked(getCalculationDraft)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(response(serverPayload, 3, '2026-08-15T08:00:00.000Z'))
+    const { draft, apply } = trackedSetup()
+
+    await draft.load()
+    expect(apply).toHaveBeenCalledWith(cached)
+    expect(draft.status.value).toBe('error')
+
+    await draft.retry()
+
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(draft.status.value).toBe('conflict')
+    expect(draft.conflict.value?.localSnapshot).toEqual(cached)
+    expect(draft.conflict.value?.serverDraft.revision).toBe(3)
+  })
+
+  it('debounces rapid edits and saves only an immutable copy of the latest snapshot', async () => {
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 2))
+    const saved = { value: 2, details: { label: 'latest' } }
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(saved, 3))
+    const { draft, edit } = trackedSetup()
+    await draft.load()
+
+    edit({ value: 1, details: { label: 'older' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(300)
+    const mutable = { value: 2, details: { label: 'latest' } }
+    edit(mutable)
+    draft.scheduleSave()
+    mutable.details.label = 'mutated after scheduling'
+    await vi.advanceTimersByTimeAsync(499)
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(JSON.parse(localStorage.getItem('draft-cache')!)).toEqual(dirtyCache(saved, 2))
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 2,
+      payload: saved
+    })
+  })
+
+  it('makes the retry action recapture state after a local snapshot validation error', async () => {
+    const corrected = { value: 6, details: { label: 'corrected' } }
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 2))
+    vi.mocked(saveCalculationDraft).mockResolvedValueOnce(response(corrected, 3))
+    const { draft, edit } = trackedSetup()
+    await draft.load()
+
+    edit({ value: Number.NaN, details: { label: 'invalid' } })
+    draft.scheduleSave()
+    expect(draft.status.value).toBe('error')
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(localStorage.getItem('draft-cache')).toBeNull()
+    edit(corrected)
+    draft.scheduleSave()
+
+    await draft.retry()
+
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 2,
+      payload: corrected
+    })
+    expect(draft.status.value).toBe('saved')
+  })
+
+  it('surfaces a corrupted 51-row real coefficient snapshot without a blank save or dirty cache', async () => {
+    const calculation = useCoefficientCalculation()
+    const serverSnapshot = calculation.snapshot()
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce({
+      kind: 'COEFFICIENT',
+      payload: serverSnapshot,
+      revision: 2,
+      updatedAt: '2026-08-15T08:00:00.000Z'
+    })
+    const adapter: CalculationDraftAdapter<CoefficientDraftPayload> = {
+      kind: 'coefficient',
+      legacyStorageKey: 'coefficient-legacy',
+      cacheStorageKey: 'coefficient-cache',
+      defaults: calculation.snapshot,
+      normalize: normalizeCoefficientDraft,
+      snapshot: calculation.snapshot,
+      apply: calculation.apply
+    }
+    const scope = effectScope()
+    let draft!: ReturnType<typeof useCalculationDraft<CoefficientDraftPayload>>
+    scope.run(() => { draft = useCalculationDraft(adapter) })
+    scopes.push(scope)
+    await draft.load()
+
+    calculation.standardAddCount.value = 50
+    calculation.addStandardRows()
+    calculation.standardRows.push({ ...calculation.standardRows[0], id: 'real-corrupted-row-51' })
+    vi.mocked(saveCalculationDraft).mockClear()
+    draft.scheduleSave()
+
+    expect(draft.status.value).toBe('error')
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(localStorage.getItem('coefficient-cache')).toBeNull()
+  })
+
+  it.each([
+    ['51 rows', Array.from({ length: 51 }, (_, index) => ({ code: `S-${index + 1}` }))],
+    ['one malformed object row', [{ code: 'VALID' }, { code: 'MALFORMED', aluminum: 'not-a-number' }]]
+  ])('keeps a real coefficient legacy payload with %s visible as a migration error', async (_case, standardRows) => {
+    const calculation = useCoefficientCalculation()
+    const legacy = {
+      parameters: { ironBlank: 0.123 },
+      standardRows,
+      calculationRows: [{ code: 'CALC-VALID', inputs: { ironRaw: 1.234 } }]
+    }
+    localStorage.setItem('coefficient-legacy', JSON.stringify(legacy))
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce({
+      kind: 'COEFFICIENT',
+      payload: calculation.snapshot(),
+      revision: 0,
+      updatedAt: null
+    })
+    const adapter: CalculationDraftAdapter<CoefficientDraftPayload> = {
+      kind: 'coefficient',
+      legacyStorageKey: 'coefficient-legacy',
+      cacheStorageKey: 'coefficient-cache',
+      defaults: calculation.snapshot,
+      normalize: normalizeCoefficientDraft,
+      migrateLegacy: migrateLegacyCoefficientDraft,
+      snapshot: calculation.snapshot,
+      apply: calculation.apply
+    }
+    const scope = effectScope()
+    let draft!: ReturnType<typeof useCalculationDraft<CoefficientDraftPayload>>
+    scope.run(() => { draft = useCalculationDraft(adapter) })
+    scopes.push(scope)
+
+    await draft.load()
+
+    expect(draft.status.value).toBe('error')
+    expect(localStorage.getItem('coefficient-legacy')).toBe(JSON.stringify(legacy))
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+  })
+
+  it('retries the exact failed snapshot before safely saving a newer queued edit', async () => {
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 2))
+    vi.mocked(saveCalculationDraft)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(response({ value: 1, details: { label: 'failed' } }, 3))
+      .mockResolvedValueOnce(response({ value: 2, details: { label: 'newer' } }, 4))
+    const { draft, edit } = trackedSetup()
+    await draft.load()
+
+    const first = { value: 1, details: { label: 'failed' } }
+    edit(first)
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    first.details.label = 'mutated later'
+    expect(draft.status.value).toBe('error')
+
+    edit({ value: 2, details: { label: 'newer' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+
+    await draft.retry()
+    expect(saveCalculationDraft).toHaveBeenNthCalledWith(2, 'standard-sample', {
+      baseRevision: 2,
+      payload: { value: 1, details: { label: 'failed' } }
+    })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(saveCalculationDraft).toHaveBeenNthCalledWith(3, 'standard-sample', {
+      baseRevision: 3,
+      payload: { value: 2, details: { label: 'newer' } }
+    })
+  })
+
+  it('does not let an older in-flight save response replace the newer queued cache', async () => {
+    const firstSave = deferred<ReturnType<typeof response>>()
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 2))
+    vi.mocked(saveCalculationDraft)
+      .mockReturnValueOnce(firstSave.promise)
+      .mockResolvedValueOnce(response({ value: 2, details: { label: 'newer' } }, 4))
+    const { draft, edit } = trackedSetup()
+    await draft.load()
+
+    edit({ value: 1, details: { label: 'in flight' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    edit({ value: 2, details: { label: 'newer' } })
+    draft.scheduleSave()
+
+    firstSave.resolve(response({ value: 1, details: { label: 'in flight' } }, 3))
+    await flush()
+    expect(JSON.parse(localStorage.getItem('draft-cache')!)).toEqual(dirtyCache({
+      value: 2,
+      details: { label: 'newer' }
+    }, 3))
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(saveCalculationDraft).toHaveBeenNthCalledWith(2, 'standard-sample', {
+      baseRevision: 3,
+      payload: { value: 2, details: { label: 'newer' } }
+    })
+  })
+
+  it('does not consume a corrected pending snapshot when retry is pressed during an older save', async () => {
+    const firstSave = deferred<ReturnType<typeof response>>()
+    const corrected = { value: 3, details: { label: 'corrected while saving' } }
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 2))
+    vi.mocked(saveCalculationDraft)
+      .mockReturnValueOnce(firstSave.promise)
+      .mockResolvedValueOnce(response(corrected, 4))
+    const { draft, edit } = trackedSetup()
+    await draft.load()
+
+    edit({ value: 1, details: { label: 'in flight' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    edit({ value: Number.NaN, details: { label: 'invalid newer edit' } })
+    draft.scheduleSave()
+    edit(corrected)
+    draft.scheduleSave()
+    expect(draft.status.value).toBe('error')
+
+    await draft.retry()
+    firstSave.resolve(response({ value: 1, details: { label: 'in flight' } }, 3))
+    await flush()
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(saveCalculationDraft).toHaveBeenNthCalledWith(2, 'standard-sample', {
+      baseRevision: 3,
+      payload: corrected
+    })
+    expect(draft.status.value).toBe('saved')
+  })
+
+  it('drains a queued successor before load and preserves its retry snapshot when the successor fails', async () => {
+    const firstSave = deferred<ReturnType<typeof response>>()
+    const secondSave = deferred<ReturnType<typeof response>>()
+    const queued = { value: 2, details: { label: 'queued B' } }
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(defaults, 2))
+      .mockResolvedValueOnce(response({ value: 1, details: { label: 'old server A' } }, 3))
+    vi.mocked(saveCalculationDraft)
+      .mockReturnValueOnce(firstSave.promise)
+      .mockReturnValueOnce(secondSave.promise)
+      .mockResolvedValueOnce(response(queued, 4))
+    const { draft, edit, apply } = trackedSetup()
+    await draft.load()
+    apply.mockClear()
+
+    edit({ value: 1, details: { label: 'in-flight A' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    edit(queued)
+    draft.scheduleSave()
+    const concurrentLoad = draft.load()
+
+    firstSave.resolve(response({ value: 1, details: { label: 'in-flight A' } }, 3))
+    await flush()
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(2)
+    expect(getCalculationDraft).toHaveBeenCalledTimes(1)
+
+    secondSave.reject(new Error('B failed'))
+    await concurrentLoad
+    expect(draft.status.value).toBe('error')
+    expect(apply).not.toHaveBeenCalled()
+    expect(JSON.parse(localStorage.getItem('draft-cache')!)).toEqual(dirtyCache(queued, 3))
+
+    await draft.retry()
+    expect(saveCalculationDraft).toHaveBeenNthCalledWith(3, 'standard-sample', {
+      baseRevision: 3,
+      payload: queued
+    })
+  })
+
+  it('does not let a concurrent load apply or clear a conflict produced by the save it awaited', async () => {
+    const firstSave = deferred<ReturnType<typeof response>>()
+    const authoritative = response(serverPayload, 4, '2026-08-15T09:00:00.000Z')
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(defaults, 2))
+      .mockResolvedValueOnce(authoritative)
+    vi.mocked(saveCalculationDraft).mockReturnValueOnce(firstSave.promise)
+    const { draft, edit, apply } = trackedSetup()
+    await draft.load()
+    apply.mockClear()
+
+    edit({ value: 1, details: { label: 'conflicting local' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    const concurrentLoad = draft.load()
+
+    firstSave.reject(new CalculationDraftConflictError(authoritative))
+    await concurrentLoad
+
+    expect(getCalculationDraft).toHaveBeenCalledTimes(1)
+    expect(draft.status.value).toBe('conflict')
+    expect(draft.conflict.value?.localSnapshot).toEqual({ value: 1, details: { label: 'conflicting local' } })
+    expect(Object.isFrozen(draft.conflict.value?.serverDraft)).toBe(true)
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('does not let a late load response overwrite an edit made while loading', async () => {
+    const loading = deferred<ReturnType<typeof response>>()
+    const saving = deferred<ReturnType<typeof response>>()
+    vi.mocked(getCalculationDraft).mockReturnValueOnce(loading.promise)
+    vi.mocked(saveCalculationDraft).mockReturnValueOnce(saving.promise)
+    const { draft, edit, apply } = trackedSetup()
+
+    const load = draft.load()
+    edit({ value: 9, details: { label: 'local' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    loading.resolve(response(serverPayload, 5))
+    await flush()
+
+    expect(apply).not.toHaveBeenCalledWith(serverPayload)
+    expect(JSON.parse(localStorage.getItem('draft-cache')!)).toEqual(dirtyCache({
+      value: 9,
+      details: { label: 'local' }
+    }, 5))
+    expect(saveCalculationDraft).toHaveBeenCalledWith('standard-sample', {
+      baseRevision: 5,
+      payload: { value: 9, details: { label: 'local' } }
+    })
+    saving.resolve(response({ value: 9, details: { label: 'local' } }, 6))
+    await load
+  })
+
+  it('conflicts instead of rebasing an edit made during refresh from a known revision', async () => {
+    const refresh = deferred<ReturnType<typeof response>>()
+    const local = { value: 9, details: { label: 'edited during refresh' } }
+    const remote = { value: 7, details: { label: 'remote advanced' } }
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(defaults, 2))
+      .mockReturnValueOnce(refresh.promise)
+    const { draft, edit, apply } = trackedSetup()
+    await draft.load()
+    apply.mockClear()
+
+    const loading = draft.load()
+    edit(local)
+    draft.scheduleSave()
+    refresh.resolve(response(remote, 3, '2026-08-15T08:00:00.000Z'))
+    await loading
+
+    expect(apply).not.toHaveBeenCalledWith(remote)
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+    expect(draft.status.value).toBe('conflict')
+    expect(draft.conflict.value).toEqual({
+      serverDraft: response(remote, 3, '2026-08-15T08:00:00.000Z'),
+      localSnapshot: local
+    })
+  })
+
+  it('freezes automatic saves during conflict, keeps the attempted snapshot, and can use the server version', async () => {
+    const authoritative = response(serverPayload, 4, '2026-08-15T09:00:00.000Z')
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 2))
+    vi.mocked(saveCalculationDraft).mockRejectedValueOnce(new CalculationDraftConflictError(authoritative))
+    const { draft, edit, apply } = trackedSetup()
+    await draft.load()
+
+    const attempted = { value: 1, details: { label: 'attempted' } }
+    edit(attempted)
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    attempted.details.label = 'changed outside'
+
+    expect(draft.status.value).toBe('conflict')
+    expect(draft.conflict.value?.localSnapshot).toEqual({ value: 1, details: { label: 'attempted' } })
+    edit({ value: 8, details: { label: 'new while conflicted' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+
+    draft.useServerVersion()
+    expect(apply).toHaveBeenLastCalledWith(serverPayload)
+    expect(draft.revision.value).toBe(4)
+    expect(draft.conflict.value).toBeNull()
+    expect(draft.status.value).toBe('saved')
+    expect(localStorage.getItem('draft-cache')).toBeNull()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('writes a discard tombstone when useServerVersion cannot remove the dirty cache', async () => {
+    const storage = memoryStorage()
+    storage.removeItem.mockImplementation((key) => {
+      if (key === 'draft-cache') throw new Error('blocked cache removal')
+    })
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    const local = { value: 1, details: { label: 'discard me' } }
+    const authoritative = response(serverPayload, 4, '2026-08-15T09:00:00.000Z')
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(defaults, 2))
+      .mockResolvedValueOnce(authoritative)
+    vi.mocked(saveCalculationDraft).mockRejectedValueOnce(new CalculationDraftConflictError(authoritative))
+    const first = trackedSetup()
+    await first.draft.load()
+    first.edit(local)
+    first.draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+
+    first.draft.useServerVersion()
+
+    expect(first.draft.status.value).toBe('saved')
+    expect(JSON.parse(storage.getItem('draft-cache')!)).toEqual(resolvedCache(4))
+
+    const remounted = trackedSetup()
+    await remounted.draft.load()
+    expect(remounted.apply).toHaveBeenCalledWith(serverPayload)
+    expect(remounted.draft.conflict.value).toBeNull()
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('still applies useServerVersion when both tombstone storage operations fail', async () => {
+    const storage = memoryStorage()
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+    const authoritative = response(serverPayload, 4, '2026-08-15T09:00:00.000Z')
+    vi.mocked(getCalculationDraft)
+      .mockResolvedValueOnce(response(defaults, 2))
+      .mockResolvedValueOnce(authoritative)
+    vi.mocked(saveCalculationDraft).mockRejectedValueOnce(new CalculationDraftConflictError(authoritative))
+    const { draft, edit, apply } = trackedSetup()
+    await draft.load()
+    edit({ value: 1, details: { label: 'discard me' } })
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+    storage.setItem.mockImplementation(() => { throw new Error('blocked tombstone write') })
+    storage.removeItem.mockImplementation(() => { throw new Error('blocked cache removal') })
+
+    draft.useServerVersion()
+
+    expect(apply).toHaveBeenLastCalledWith(serverPayload)
+    expect(draft.status.value).toBe('saved')
+    expect(draft.conflict.value).toBeNull()
+
+    const remounted = trackedSetup()
+    await remounted.draft.load()
+    expect(remounted.draft.status.value).toBe('conflict')
+    expect(remounted.draft.conflict.value?.localSnapshot).toEqual({ value: 1, details: { label: 'discard me' } })
+    expect(saveCalculationDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('overwrites from the conflict revision and retains the same local snapshot across repeat conflict and retryable failure', async () => {
+    const local = { value: 1, details: { label: 'attempted' } }
+    const conflict4 = response(serverPayload, 4)
+    const conflict5 = response({ value: 5, details: { label: 'new server' } }, 5)
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 2))
+    vi.mocked(saveCalculationDraft)
+      .mockRejectedValueOnce(new CalculationDraftConflictError(conflict4))
+      .mockRejectedValueOnce(new CalculationDraftConflictError(conflict5))
+      .mockRejectedValueOnce(new Error('temporarily unavailable'))
+      .mockResolvedValueOnce(response(local, 6))
+    const { draft, edit } = trackedSetup()
+    await draft.load()
+    edit(local)
+    draft.scheduleSave()
+    await vi.advanceTimersByTimeAsync(500)
+
+    await draft.overwriteServerVersion()
+    expect(saveCalculationDraft).toHaveBeenNthCalledWith(2, 'standard-sample', {
+      baseRevision: 4,
+      payload: local
+    })
+    expect(draft.status.value).toBe('conflict')
+    expect(draft.conflict.value?.serverDraft.revision).toBe(5)
+    expect(draft.conflict.value?.localSnapshot).toEqual(local)
+
+    await draft.overwriteServerVersion()
+    expect(saveCalculationDraft).toHaveBeenNthCalledWith(3, 'standard-sample', {
+      baseRevision: 5,
+      payload: local
+    })
+    expect(draft.status.value).toBe('error')
+
+    await draft.retry()
+    expect(saveCalculationDraft).toHaveBeenNthCalledWith(4, 'standard-sample', {
+      baseRevision: 5,
+      payload: local
+    })
+    expect(draft.revision.value).toBe(6)
+    expect(draft.conflict.value).toBeNull()
+    expect(localStorage.getItem('draft-cache')).toBeNull()
+  })
+
+  it('clears scheduled work and ignores late responses when its scope is disposed', async () => {
+    vi.mocked(getCalculationDraft).mockResolvedValueOnce(response(defaults, 2))
+    const lateSave = deferred<ReturnType<typeof response>>()
+    vi.mocked(saveCalculationDraft).mockReturnValueOnce(lateSave.promise)
+    const { draft, edit, scope } = trackedSetup()
+    await draft.load()
+
+    edit({ value: 7, details: { label: 'pending' } })
+    draft.scheduleSave()
+    scope.stop()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(saveCalculationDraft).not.toHaveBeenCalled()
+
+    localStorage.removeItem('draft-cache')
+    const second = trackedSetup()
+    const lateLoad = deferred<ReturnType<typeof response>>()
+    vi.mocked(getCalculationDraft).mockReturnValueOnce(lateLoad.promise)
+    const loading = second.draft.load()
+    second.scope.stop()
+    lateLoad.resolve(response(serverPayload, 9))
+    await loading
+    expect(second.apply).not.toHaveBeenCalled()
+    expect(second.draft.revision.value).toBe(0)
+  })
+})

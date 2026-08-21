@@ -87,4 +87,52 @@ describe('accessGuard store revocation-safe sessions', () => {
     await expect(store.saveGroup({ name: group.name, enabled: true, ttlMinutes: 5, password: '5678', recoveryPrompt: '提示', recoveryAnswer: '答案', features: ['EMPLOYEE_ATTENDANCE'] }, group.id)).rejects.toThrow('保存失败')
     expect(readSessions()).toHaveProperty('attendance-group')
   })
+
+  it('cancels only the access prompt owned by the matching consumer', async () => {
+    const store = useAccessGuardStore()
+    await store.loadGroups()
+    const attendanceOwner = Symbol('attendance-page')
+    const financeOwner = Symbol('finance-page')
+    const attendanceAction = vi.fn()
+    const financeAction = vi.fn()
+    store.requestFeatureAccess('EMPLOYEE_ATTENDANCE', {
+      title: '员工考勤', message: '员工验证', owner: attendanceOwner, onSuccess: attendanceAction
+    })
+    store.requestFeatureAccess('FINANCE', {
+      title: '财务', message: '财务验证', owner: financeOwner, onSuccess: financeAction
+    })
+
+    expect(store.cancelAccess(attendanceOwner)).toBe(false)
+    expect(store.dialogVisible).toBe(true)
+    api.verifyAccessGuardGroup.mockResolvedValueOnce({
+      groupId: 'other', grantVersion: 1, expiresAt: Date.now() + 60_000, token: 'finance-grant', features: ['FINANCE']
+    })
+    await expect(store.verifyPassword('1234')).resolves.toMatchObject({ ok: true })
+    expect(attendanceAction).not.toHaveBeenCalled()
+    expect(financeAction).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not persist a grant or run an action when its prompt is cancelled during verification', async () => {
+    const store = useAccessGuardStore()
+    await store.loadGroups()
+    const owner = Symbol('employee-directory')
+    const action = vi.fn()
+    let resolveVerification!: (value: any) => void
+    api.verifyAccessGuardGroup.mockReturnValueOnce(new Promise((resolve) => { resolveVerification = resolve }))
+    store.requestFeatureAccess('EMPLOYEE_ATTENDANCE', {
+      title: '员工敏感信息', message: '请输入密码', owner, onSuccess: action
+    })
+
+    const result = store.verifyPassword('1234')
+    expect(store.cancelAccess(owner)).toBe(true)
+    resolveVerification({
+      groupId: 'attendance-group', grantVersion: 2, expiresAt: Date.now() + 60_000,
+      token: 'stale-attendance-grant', features: ['EMPLOYEE_ATTENDANCE']
+    })
+
+    await expect(result).resolves.toMatchObject({ ok: false })
+    expect(readSessions()).not.toHaveProperty('attendance-group')
+    expect(action).not.toHaveBeenCalled()
+    expect(store.dialogVisible).toBe(false)
+  })
 })

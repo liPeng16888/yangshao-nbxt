@@ -1,18 +1,31 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
-import { defineComponent, h, nextTick } from 'vue'
+import { defineComponent, h, nextTick, reactive } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import LabDataPage from './LabDataPage.vue'
 import type { CreateLabSampleChangeRequestPayload, LabSampleChangeRequestDetail, LabSampleChangeRequestSummary } from '@/types/labSampleChangeRequest'
 
 const mocks = vi.hoisted(() => ({
+  route: {
+    query: {} as Record<string, string>
+  },
   routerPush: vi.fn(),
   accessGuard: {
     loadGroups: vi.fn(),
     requestFeatureAccess: vi.fn(() => true),
     hasFeatureAccess: vi.fn(() => true),
     accessSessionRevision: 0
+  },
+  preferenceValue: vi.fn(),
+  preferenceCanAccess: vi.fn<(_user: unknown, _section: string) => boolean>(() => true),
+  authUser: {
+    id: 'main-1', account: 'main-1', username: '主账号', role: 'FRONTEND_USER',
+    dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false,
+    permissions: []
+  },
+  mobileLayout: {
+    isMobileLayout: { __v_isRef: true, value: false }
   },
   labStore: {
     loading: false,
@@ -25,7 +38,7 @@ const mocks = vi.hoisted(() => ({
     autoSaveError: '',
     pendingAutoSaveCount: 0,
     conflictBlockIds: [] as string[],
-    sheet: { date: '2026-06-24', readonly: false },
+    sheet: { id: 'sheet-1', date: '2026-06-24', readonly: false } as { id?: string; date: string; readonly: boolean } | null,
     currentParameters: null,
     sampleBlocks: [] as any[],
     loadCurrentSheet: vi.fn(),
@@ -37,6 +50,11 @@ const mocks = vi.hoisted(() => ({
     retryFailedSaves: vi.fn(),
     confirmConflictOverwrite: vi.fn(),
     appendSampleBlocks: vi.fn(),
+    createRetests: vi.fn(),
+    patchRetest: vi.fn(),
+    persistRetest: vi.fn(),
+    deleteRetestRecord: vi.fn(),
+    voidRetestRecord: vi.fn(),
     disconnectRealtime: vi.fn()
   },
   changeRequestStore: {
@@ -55,8 +73,11 @@ const mocks = vi.hoisted(() => ({
   }
 }))
 
+const routeState = reactive(mocks.route)
+const authUserState = reactive(mocks.authUser)
+
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
+  useRoute: () => routeState,
   useRouter: () => ({ push: mocks.routerPush })
 }))
 
@@ -72,6 +93,19 @@ vi.mock('@/stores/labSampleChangeRequest', () => ({
   useLabSampleChangeRequestStore: () => mocks.changeRequestStore
 }))
 
+vi.mock('@/stores/frontendPreferences', () => ({
+  canAccessFrontendPreference: mocks.preferenceCanAccess,
+  useFrontendPreferencesStore: () => ({ value: mocks.preferenceValue })
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({ get user() { return authUserState } })
+}))
+
+vi.mock('@/composables/useMobileLayout', () => ({
+  useMobileLayout: () => mocks.mobileLayout
+}))
+
 function mountPage() {
   const LabSheetGridStub = defineComponent({
     name: 'LabSheetGrid',
@@ -82,12 +116,22 @@ function mountPage() {
       selectedBlockIds: { type: Array, default: () => [] },
       sheetDate: { type: String, default: '' },
       sampleChangeRequests: { type: Object, default: () => ({}) },
-      sampleChangeLoading: { type: Boolean, default: false }
+      sampleChangeLoading: { type: Boolean, default: false },
+      highlightRetestId: { type: String, default: '' },
+      pendingRetestActionIds: { type: Array, default: () => [] }
     },
-    emits: ['selectionChange', 'requestSampleChange', 'viewSampleChangeRequest', 'withdrawSampleChangeRequest'],
+    emits: [
+      'selectionChange', 'requestSampleChange', 'viewSampleChangeRequest', 'withdrawSampleChangeRequest',
+      'retestUpdate', 'retestFieldCommit', 'retestDelete', 'retestVoid'
+    ],
     setup(props, { emit }) {
       return () =>
-        h('div', { class: 'lab-grid-stub', 'data-readonly': String(props.readonly) }, [
+        h('div', {
+          class: 'lab-grid-stub',
+          'data-readonly': String(props.readonly),
+          'data-highlight-retest-id': props.highlightRetestId,
+          'data-pending-retest-actions': props.pendingRetestActionIds.join(',')
+        }, [
           props.selectionMode
             ? h(
                 'button',
@@ -98,7 +142,37 @@ function mountPage() {
                 },
                 '选择001'
               )
-            : null
+            : null,
+          h('button', {
+            class: 'retest-update-stub',
+            type: 'button',
+            onClick: () => emit('retestUpdate', 'block-1', 'retest-1', { ironRaw: 1 })
+          }, '修改复样'),
+          h('button', {
+            class: 'retest-commit-stub',
+            type: 'button',
+            onClick: () => emit('retestFieldCommit', 'block-1', 'retest-1', 'ironRaw', null, 1)
+          }, '提交复样'),
+          h('button', {
+            class: 'retest-zero-commit-stub',
+            type: 'button',
+            onClick: () => emit('retestFieldCommit', 'block-1', 'retest-1', 'ironRaw', null, 0)
+          }, '提交零值复样'),
+          h('button', {
+            class: 'retest-delete-stub',
+            type: 'button',
+            onClick: () => emit('retestDelete', 'block-1', 'retest-1')
+          }, '删除复样'),
+          h('button', {
+            class: 'retest-void-stub',
+            type: 'button',
+            onClick: () => emit('retestVoid', 'block-1', 'retest-1')
+          }, '作废复样'),
+          h('button', {
+            class: 'retest-void-second-stub',
+            type: 'button',
+            onClick: () => emit('retestVoid', 'block-2', 'retest-2')
+          }, '作废第二条复样')
         ])
     }
   })
@@ -167,6 +241,47 @@ function mountPage() {
     }
   })
 
+  const MobileLabSampleListStub = defineComponent({
+    props: {
+      blocks: { type: Array, default: () => [] },
+      readonly: { type: Boolean, default: false },
+      selectionMode: { type: Boolean, default: false },
+      selectedBlockIds: { type: Array, default: () => [] },
+      highlightRetestId: { type: String, default: '' },
+      pendingRetestActionIds: { type: Array, default: () => [] }
+    },
+    emits: ['selectionChange', 'saveNext', 'retestUpdate', 'retestFieldCommit', 'retestDelete', 'retestVoid'],
+    setup(props, { emit }) {
+      return () => h('div', {
+        class: 'mobile-lab-list-stub',
+        'data-readonly': String(props.readonly),
+        'data-highlight-retest-id': props.highlightRetestId,
+        'data-pending-retest-actions': props.pendingRetestActionIds.join(',')
+      }, [
+        props.selectionMode
+          ? h('button', { class: 'mobile-select-block-1', onClick: () => emit('selectionChange', 'block-1', true) }, '选择001')
+          : null,
+        h('button', { class: 'mobile-save-next-stub', onClick: () => emit('saveNext', 'block-1') }, '保存下一项'),
+        h('button', {
+          class: 'mobile-retest-update-stub',
+          onClick: () => emit('retestUpdate', 'block-1', 'retest-1', { ironRaw: 1 })
+        }, '手机修改复样'),
+        h('button', {
+          class: 'mobile-retest-commit-stub',
+          onClick: () => emit('retestFieldCommit', 'block-1', 'retest-1', 'ironRaw', null, 0)
+        }, '手机提交复样'),
+        h('button', {
+          class: 'mobile-retest-delete-stub',
+          onClick: () => emit('retestDelete', 'block-1', 'retest-1')
+        }, '手机删除复样'),
+        h('button', {
+          class: 'mobile-retest-void-stub',
+          onClick: () => emit('retestVoid', 'block-2', 'retest-2')
+        }, '手机作废复样')
+      ])
+    }
+  })
+
   const SampleCompletionDialogStub = defineComponent({
     props: {
       visible: { type: Boolean, default: false }
@@ -190,6 +305,65 @@ function mountPage() {
     }
   })
 
+  const SampleRetestDialogStub = defineComponent({
+    name: 'SampleRetestDialog',
+    props: {
+      visible: { type: Boolean, default: false },
+      saving: { type: Boolean, default: false }
+    },
+    emits: ['create', 'close'],
+    setup(props, { emit }) {
+      return () => props.visible
+        ? h('div', {
+            class: 'sample-retest-dialog-stub',
+            'data-saving': String(props.saving)
+          }, [
+            h('button', {
+              class: 'sample-retest-create',
+              type: 'button',
+              disabled: props.saving,
+              onClick: () => emit('create', { sampleBlockIds: ['block-1'] })
+            }, '创建001复样')
+          ])
+        : null
+    }
+  })
+
+  const LabReportDialogStub = defineComponent({
+    props: {
+      visible: { type: Boolean, default: false },
+      template: { type: Object, required: true },
+      mobile: { type: Boolean, default: false }
+    },
+    setup(props) {
+      return () => props.visible
+        ? h('div', {
+            class: 'lab-report-dialog-stub',
+            'data-title': (props.template as any).title,
+            'data-mobile': String(props.mobile)
+          })
+        : null
+    }
+  })
+
+  const LabSmsDialogStub = defineComponent({
+    name: 'LabSmsDialog',
+    props: {
+      visible: { type: Boolean, default: false },
+      template: { type: Object, required: true },
+      mobile: { type: Boolean, default: false }
+    },
+    setup(props) {
+      return () => props.visible
+        ? h('div', {
+            class: 'lab-sms-dialog-stub',
+            'data-prefix': (props.template as any).prefix,
+            'data-mobile': String(props.mobile)
+          })
+        : null
+    }
+  })
+
   return mount(LabDataPage, {
     global: {
       plugins: [createPinia()],
@@ -198,13 +372,15 @@ function mountPage() {
       },
       stubs: {
         LabSheetGrid: LabSheetGridStub,
+        MobileLabSampleList: MobileLabSampleListStub,
         LabParameterPanel: true,
-        LabReportDialog: true,
-        LabSmsDialog: true,
+        LabReportDialog: LabReportDialogStub,
+        LabSmsDialog: LabSmsDialogStub,
         HistoricalSampleChangeDialog: HistoricalSampleChangeDialogStub,
         LabSampleChangeRequestDrawer: LabSampleChangeRequestDrawerStub,
         BulkSampleFillDialog: BulkSampleFillDialogStub,
         SampleCompletionDialog: SampleCompletionDialogStub,
+        SampleRetestDialog: SampleRetestDialogStub,
         BlacklistHitDialog: true,
         ElDatePicker: {
           props: ['modelValue'],
@@ -254,6 +430,17 @@ describe('LabDataPage table layout', () => {
     mocks.labStore.confirmConflictOverwrite.mockReset()
     mocks.labStore.confirmConflictOverwrite.mockResolvedValue({ success: true, failedBlockIds: [], conflictBlockIds: [] })
     mocks.labStore.appendSampleBlocks.mockResolvedValue(undefined)
+    mocks.labStore.createRetests.mockReset()
+    mocks.labStore.createRetests.mockResolvedValue([
+      { id: 'retest-1', sampleBlockId: 'block-1', sequence: 1 }
+    ])
+    mocks.labStore.patchRetest.mockReset()
+    mocks.labStore.persistRetest.mockReset()
+    mocks.labStore.persistRetest.mockResolvedValue({ retestId: 'retest-1', success: true, conflict: false })
+    mocks.labStore.deleteRetestRecord.mockReset()
+    mocks.labStore.deleteRetestRecord.mockResolvedValue(true)
+    mocks.labStore.voidRetestRecord.mockReset()
+    mocks.labStore.voidRetestRecord.mockResolvedValue({ id: 'retest-1', status: 'VOID' })
     mocks.labStore.disconnectRealtime.mockReset()
     mocks.changeRequestStore.requests = []
     mocks.changeRequestStore.pendingByBlock = {}
@@ -276,11 +463,15 @@ describe('LabDataPage table layout', () => {
     mocks.accessGuard.requestFeatureAccess.mockReturnValue(true)
     mocks.accessGuard.hasFeatureAccess.mockReset()
     mocks.accessGuard.hasFeatureAccess.mockReturnValue(true)
+    mocks.preferenceValue.mockReset()
+    mocks.preferenceValue.mockImplementation((_section: string, fallback: unknown) => JSON.parse(JSON.stringify(fallback)))
+    mocks.preferenceCanAccess.mockReset()
+    mocks.preferenceCanAccess.mockReturnValue(true)
     mocks.labStore.autoSaveStatus = 'idle'
     mocks.labStore.applyingParameters = false
     mocks.labStore.autoSaveError = ''
     mocks.labStore.conflictBlockIds = []
-    mocks.labStore.sheet = { date: '2026-06-24', readonly: false }
+    mocks.labStore.sheet = { id: 'sheet-1', date: '2026-06-24', readonly: false }
     mocks.labStore.sampleBlocks = [
       {
         id: 'block-1',
@@ -288,7 +479,8 @@ describe('LabDataPage table layout', () => {
         readonly: false,
         inputs: { sequence: '001', price: null, paymentStatus: '' },
         results: {},
-        parameterSnapshot: {}
+        parameterSnapshot: {},
+        retests: []
       },
       {
         id: 'block-2',
@@ -296,9 +488,17 @@ describe('LabDataPage table layout', () => {
         readonly: false,
         inputs: { sequence: '002', price: null, paymentStatus: '' },
         results: {},
-        parameterSnapshot: {}
+        parameterSnapshot: {},
+        retests: []
       }
     ]
+    mocks.mobileLayout.isMobileLayout.value = false
+    routeState.query = {}
+    Object.assign(authUserState, {
+      id: 'main-1', account: 'main-1', username: '主账号', role: 'FRONTEND_USER',
+      dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false,
+      permissions: []
+    })
   })
 
   afterEach(() => {
@@ -655,6 +855,203 @@ describe('LabDataPage table layout', () => {
     expect(wrapper.find('.append-panel').exists()).toBe(true)
   })
 
+  it('mounts exactly one mobile card editor or desktop grid from the shared layout state', async () => {
+    const desktop = mountPage()
+    await settleMountedPage()
+    expect(desktop.find('.lab-grid-stub').exists()).toBe(true)
+    expect(desktop.find('.mobile-lab-list-stub').exists()).toBe(false)
+    expect(desktop.getComponent({ name: 'LabSmsDialog' }).props('mobile')).toBe(false)
+    expect(desktop.find('.mobile-toolbar-summary').exists()).toBe(false)
+    expect(desktop.get('.toolbar-content').text()).toContain('生成化验报告')
+    desktop.unmount()
+
+    mocks.mobileLayout.isMobileLayout.value = true
+    const mobile = mountPage()
+    await settleMountedPage()
+    expect(mobile.find('.mobile-lab-list-stub').exists()).toBe(true)
+    expect(mobile.find('.lab-grid-stub').exists()).toBe(false)
+    expect(mobile.find('.append-submit').exists()).toBe(true)
+    expect(mobile.getComponent({ name: 'LabSmsDialog' }).props('mobile')).toBe(true)
+    expect(mobile.get('.mobile-toolbar-summary').attributes('aria-expanded')).toBe('false')
+    mobile.unmount()
+  })
+
+  it('starts the mobile toolbar as a compact summary and expands and collapses the existing controls', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    const summary = wrapper.get('.mobile-toolbar-summary')
+    expect(summary.attributes('aria-expanded')).toBe('false')
+    expect(summary.text()).toContain('2026-06-24')
+    expect(summary.text()).toContain('当前表可编辑')
+    expect(summary.text()).toContain('自动保存开启')
+    expect(wrapper.find('.toolbar-content').exists()).toBe(false)
+    expect(wrapper.findAll('button').some((button) => button.text() === '生成化验报告')).toBe(false)
+
+    await summary.trigger('click')
+    await nextTick()
+    expect(wrapper.get('.mobile-toolbar-summary').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('.toolbar-content').text()).toContain('生成化验报告')
+    expect(wrapper.get('.toolbar-content').text()).toContain('生成化验短信')
+    expect(wrapper.get('.toolbar-content').text()).toContain('样品复样')
+
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.toolbar-content').exists()).toBe(false)
+  })
+
+  it('gives the mobile toolbar summary a complete accessible name and politely announces save failures and conflicts', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    const idleSummary = wrapper.get('.mobile-toolbar-summary')
+    expect(idleSummary.attributes('aria-label')).toContain('展开数据计算操作')
+    expect(idleSummary.attributes('aria-label')).toContain('2026-06-24')
+    expect(idleSummary.attributes('aria-label')).toContain('当前表可编辑')
+    expect(idleSummary.attributes('aria-label')).toContain('自动保存开启')
+    expect(wrapper.find('.mobile-toolbar-live-status').exists()).toBe(false)
+    wrapper.unmount()
+
+    mocks.labStore.autoSaveStatus = 'error'
+    const errorWrapper = mountPage()
+    await settleMountedPage()
+    expect(errorWrapper.get('.mobile-toolbar-summary').attributes('aria-label')).toContain('自动保存失败，请手动保存')
+    expect(errorWrapper.get('.mobile-toolbar-live-status').attributes('role')).toBe('status')
+    expect(errorWrapper.get('.mobile-toolbar-live-status').attributes('aria-live')).toBe('polite')
+    expect(errorWrapper.get('.mobile-toolbar-live-status').text()).toContain('自动保存失败，请手动保存')
+    errorWrapper.unmount()
+
+    mocks.labStore.autoSaveStatus = 'conflict'
+    const conflictWrapper = mountPage()
+    await settleMountedPage()
+    expect(conflictWrapper.get('.mobile-toolbar-summary').attributes('aria-label')).toContain('保存冲突，本机内容已保留')
+    expect(conflictWrapper.get('.mobile-toolbar-live-status').text()).toContain('保存冲突，本机内容已保留')
+  })
+
+  it('automatically collapses the expanded mobile toolbar when selection mode starts', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('.mobile-toolbar-summary').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('.toolbar-content').exists()).toBe(false)
+    expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 0 个样品')
+  })
+
+  it('returns focus to the collapsed mobile toolbar summary after entering selection mode', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    const summary = wrapper.get('.mobile-toolbar-summary')
+    const focusSpy = vi.spyOn(summary.element as HTMLButtonElement, 'focus')
+    await summary.trigger('click')
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await Promise.resolve()
+
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+    focusSpy.mockRestore()
+  })
+
+  it('shows that parameters are being applied in the mobile toolbar summary', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    mocks.labStore.applyingParameters = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(wrapper.get('.mobile-toolbar-summary').text()).toContain('正在应用参数')
+    expect(wrapper.get('.mobile-toolbar-summary').attributes('aria-label')).toContain('正在应用参数')
+  })
+
+  it('keeps save failures visible in the collapsed mobile summary and recovery available after expanding', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    mocks.labStore.autoSaveStatus = 'error'
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(wrapper.get('.mobile-toolbar-summary').text()).toContain('自动保存失败，请手动保存')
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    await findButtonByText(wrapper, '重试保存').trigger('click')
+    await Promise.resolve()
+    expect(mocks.labStore.retryFailedSaves).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the mobile save recovery button at the 44px touch target', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    mocks.labStore.autoSaveStatus = 'error'
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    const recoveryButton = findButtonByText(wrapper, '重试保存')
+    expect(recoveryButton.classes()).toContain('mobile-toolbar-recovery')
+    expect(recoveryButton.classes()).toContain('mobile-touch-target')
+  })
+
+  it('enlarges only the mobile append-count input to the shared touch target', async () => {
+    const desktop = mountPage()
+    await settleMountedPage()
+    expect(desktop.get('.append-input').classes()).not.toContain('mobile-touch-target')
+    desktop.unmount()
+
+    mocks.mobileLayout.isMobileLayout.value = true
+    const mobile = mountPage()
+    await settleMountedPage()
+    expect(mobile.get('.append-input').classes()).toContain('mobile-touch-target')
+    mobile.unmount()
+  })
+
+  it('scrolls a routed mobile sample header into view after expanding its card', async () => {
+    vi.useFakeTimers()
+    mocks.mobileLayout.isMobileLayout.value = true
+    routeState.query = { block: 'block-2' }
+    const card = document.createElement('article')
+    card.dataset.blockId = 'block-2'
+    const header = document.createElement('header')
+    header.className = 'mobile-sample-card__header'
+    const scrollIntoView = vi.fn()
+    header.scrollIntoView = scrollIntoView
+    card.appendChild(header)
+    document.body.appendChild(card)
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+    await vi.advanceTimersByTimeAsync(120)
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    wrapper.unmount()
+    card.remove()
+  })
+
+  it('moves mobile selection actions into a full-width bottom bar with the selected count', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await nextTick()
+    expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 0 个样品')
+
+    await wrapper.get('.mobile-select-block-1').trigger('click')
+    await nextTick()
+    expect(wrapper.get('.mobile-selection-bar').text()).toContain('已选 1 个样品')
+    expect(wrapper.get('.mobile-selection-primary').text()).toContain('填写已选1个样品')
+
+    await wrapper.get('.mobile-selection-primary').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.bulk-fill-dialog-stub').exists()).toBe(true)
+  })
+
   it('makes the data grid readonly and hides append controls while parameters are being applied', async () => {
     mocks.labStore.applyingParameters = true
     const wrapper = mountPage()
@@ -728,6 +1125,36 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
   })
 
+  it('clears prepaid member fields when bulk fill changes an existing prepaid sample to another status', async () => {
+    mocks.labStore.sampleBlocks[0].inputs = {
+      sequence: '001',
+      price: 30.25,
+      paymentStatus: '预存款',
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    }
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '批量填写样品').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '填写已选1个样品').trigger('click')
+    await wrapper.find('.bulk-fill-apply').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.patchBlock.mock.calls[0]).toStrictEqual([
+      'block-1',
+      {
+        price: 20,
+        paymentStatus: '月结款',
+        prepaidMemberId: undefined,
+        prepaidMemberPhone: undefined
+      }
+    ])
+    expect(mocks.labStore.patchBlock).not.toHaveBeenCalledWith('block-2', expect.anything())
+    expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
+  })
+
   it('records and saves recipient customers during bulk fill', async () => {
     const wrapper = mountPage()
     await settleMountedPage()
@@ -767,12 +1194,585 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
   })
 
+  it('places 样品复样 immediately before 标记样品完成 and creates the selected parents', async () => {
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+    const labels = wrapper.findAll('.toolbar-right button').map((button) => button.text())
+
+    expect(labels.indexOf('样品复样')).toBe(labels.indexOf('标记样品完成') - 1)
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(mocks.labStore.createRetests).toHaveBeenCalledWith(['block-1'])
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('retest-1')
+    expect(successSpy).toHaveBeenCalledWith('已创建 1 组复样')
+    successSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('routes desktop retest edits and field commits into the store', async () => {
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-update-stub').trigger('click')
+    await wrapper.get('.retest-commit-stub').trigger('click')
+    await wrapper.get('.retest-zero-commit-stub').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.patchRetest).toHaveBeenCalledWith('block-1', 'retest-1', { ironRaw: 1 })
+    expect(mocks.labStore.persistRetest).toHaveBeenCalledTimes(2)
+    expect(mocks.labStore.persistRetest).toHaveBeenNthCalledWith(1, 'block-1', 'retest-1')
+    expect(mocks.labStore.persistRetest).toHaveBeenNthCalledWith(2, 'block-1', 'retest-1')
+    wrapper.unmount()
+  })
+
+  it('routes mobile retest edits and lifecycle actions through the same guarded page handlers', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '手机原因', action: 'confirm' } as any)
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.mobile-retest-update-stub').trigger('click')
+    await wrapper.get('.mobile-retest-commit-stub').trigger('click')
+    await wrapper.get('.mobile-retest-delete-stub').trigger('click')
+    await wrapper.get('.mobile-retest-void-stub').trigger('click')
+    await vi.waitFor(() => {
+      expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledTimes(1)
+      expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mocks.labStore.patchRetest).toHaveBeenCalledWith('block-1', 'retest-1', { ironRaw: 1 })
+    expect(mocks.labStore.persistRetest).toHaveBeenCalledWith('block-1', 'retest-1')
+    expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledWith('block-1', 'retest-1')
+    expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledWith('block-2', 'retest-2', '手机原因')
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(promptSpy).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('.mobile-lab-list-stub').attributes('data-pending-retest-actions')).toBe('')
+    confirmSpy.mockRestore()
+    promptSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('confirms an empty retest deletion before calling the store', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(confirmSpy).toHaveBeenCalledWith('确认删除这条空白复样吗？', '删除复样', expect.any(Object))
+    expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledWith('block-1', 'retest-1')
+    expect(successSpy).toHaveBeenCalledWith('空白复样已删除')
+    confirmSpy.mockRestore()
+    successSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('does not delete when the confirmation is cancelled', async () => {
+    let rejectConfirm: (reason: Error) => void = () => undefined
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm')
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectConfirm = reject }) as any)
+      .mockResolvedValueOnce('confirm' as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('retest-1')
+    rejectConfirm(new Error('cancel'))
+    await vi.waitFor(() => {
+      expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('')
+    })
+
+    expect(mocks.labStore.deleteRetestRecord).not.toHaveBeenCalled()
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    await vi.waitFor(() => {
+      expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledTimes(1)
+    })
+    expect(confirmSpy).toHaveBeenCalledTimes(2)
+    confirmSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('shares one lifecycle guard across repeated delete and void actions until delete settles', async () => {
+    let resolveDelete: (value: boolean) => void = () => undefined
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '', action: 'confirm' } as any)
+    mocks.labStore.deleteRetestRecord.mockReturnValue(new Promise((resolve) => { resolveDelete = resolve }))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    await vi.waitFor(() => {
+      expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledTimes(1)
+    })
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('retest-1')
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    await wrapper.get('.retest-void-stub').trigger('click')
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(promptSpy).not.toHaveBeenCalled()
+    expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledTimes(1)
+    expect(mocks.labStore.voidRetestRecord).not.toHaveBeenCalled()
+    resolveDelete(true)
+    await vi.waitFor(() => {
+      expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('')
+    })
+    confirmSpy.mockRestore()
+    promptSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('guards repeated void actions and releases the guard after the request fails', async () => {
+    let rejectVoid: (reason: Error) => void = () => undefined
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '重测污染', action: 'confirm' } as any)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    mocks.labStore.voidRetestRecord
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectVoid = reject }))
+      .mockResolvedValueOnce({ id: 'retest-1', status: 'VOID' })
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-void-stub').trigger('click')
+    await vi.waitFor(() => {
+      expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(1)
+    })
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('retest-1')
+    await wrapper.get('.retest-void-stub').trigger('click')
+    expect(promptSpy).toHaveBeenCalledTimes(1)
+    expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(1)
+
+    rejectVoid(new Error('作废失败'))
+    await vi.waitFor(() => {
+      expect(errorSpy).toHaveBeenCalledWith('作废失败')
+    })
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('')
+    await wrapper.get('.retest-void-stub').trigger('click')
+    await vi.waitFor(() => {
+      expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(2)
+    })
+    expect(promptSpy).toHaveBeenCalledTimes(2)
+    promptSpy.mockRestore()
+    errorSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('keeps concurrent lifecycle actions for different retests independently current', async () => {
+    let resolveConfirm: (value: string) => void = () => undefined
+    let resolvePrompt: (value: { value: string; action: string }) => void = () => undefined
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(
+      new Promise((resolve) => { resolveConfirm = resolve }) as any
+    )
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockReturnValue(
+      new Promise((resolve) => { resolvePrompt = resolve }) as any
+    )
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    await wrapper.get('.retest-void-second-stub').trigger('click')
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('retest-1,retest-2')
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(promptSpy).toHaveBeenCalledTimes(1)
+
+    resolveConfirm('confirm')
+    resolvePrompt({ value: '独立原因', action: 'confirm' })
+    await vi.waitFor(() => {
+      expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledTimes(1)
+      expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mocks.labStore.deleteRetestRecord).toHaveBeenCalledWith('block-1', 'retest-1')
+    expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledWith('block-2', 'retest-2', '独立原因')
+    expect(successSpy).toHaveBeenCalledWith('空白复样已删除')
+    expect(successSpy).toHaveBeenCalledWith('复样已作废')
+    expect(wrapper.get('.lab-grid-stub').attributes('data-pending-retest-actions')).toBe('')
+    confirmSpy.mockRestore()
+    promptSpy.mockRestore()
+    successSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('prompts for an optional reason before voiding a filled retest', async () => {
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '检测污染', action: 'confirm' } as any)
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-void-stub').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(promptSpy).toHaveBeenCalledWith(expect.stringContaining('作废后不可恢复'), '作废复样', expect.any(Object))
+    expect(mocks.labStore.voidRetestRecord).toHaveBeenCalledWith('block-1', 'retest-1', '检测污染')
+    expect(successSpy).toHaveBeenCalledWith('复样已作废')
+    promptSpy.mockRestore()
+    successSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('does not void when the optional reason prompt is cancelled', async () => {
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockRejectedValue(new Error('cancel'))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-void-stub').trigger('click')
+    await Promise.resolve()
+
+    expect(mocks.labStore.voidRetestRecord).not.toHaveBeenCalled()
+    promptSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('does not start deletion when the confirmation settles after unmount', async () => {
+    let resolveConfirm: (value: string) => void = () => undefined
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(new Promise((resolve) => { resolveConfirm = resolve }) as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.retest-delete-stub').trigger('click')
+    wrapper.unmount()
+    resolveConfirm('confirm')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(mocks.labStore.deleteRetestRecord).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  it('locks the creation dialog until the request settles', async () => {
+    let resolveCreation: (value: any[]) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((resolve) => { resolveCreation = resolve }))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('.sample-retest-dialog-stub').attributes('data-saving')).toBe('true')
+    expect(wrapper.get('.sample-retest-create').attributes('disabled')).toBeDefined()
+    resolveCreation([{ id: 'retest-1', sampleBlockId: 'block-1', sequence: 1 }])
+    await Promise.resolve()
+    await nextTick()
+    wrapper.unmount()
+  })
+
+  it('keeps the selected dialog open and reports a creation error', async () => {
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    mocks.labStore.createRetests.mockRejectedValue(new Error('没有复样权限'))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    expect(wrapper.get('.sample-retest-dialog-stub').attributes('data-saving')).toBe('false')
+    expect(errorSpy).toHaveBeenCalledWith('没有复样权限')
+    errorSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('passes the first created retest highlight to the mobile sample list', async () => {
+    mocks.mobileLayout.isMobileLayout.value = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await wrapper.get('.mobile-toolbar-summary').trigger('click')
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.mobile-lab-list-stub').attributes('data-highlight-retest-id')).toBe('retest-1')
+    wrapper.unmount()
+  })
+
+  it('clears the created retest highlight when switching dates', async () => {
+    mocks.labStore.loadSheetByDate.mockResolvedValue(true)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('retest-1')
+
+    await wrapper.get('.date-picker-stub').setValue('2026-06-23')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('')
+    wrapper.unmount()
+  })
+
+  it('ignores a stale creation success after the date and sheet change without closing the new-context dialog', async () => {
+    let resolveCreation: (value: any[]) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((resolve) => { resolveCreation = resolve }))
+    mocks.labStore.loadSheetByDate.mockImplementation(async (date: string) => {
+      mocks.labStore.sheet = { id: 'sheet-2', date, readonly: false }
+      return true
+    })
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await wrapper.get('.date-picker-stub').setValue('2026-06-23')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+
+    resolveCreation([{ id: 'stale-retest', sampleBlockId: 'block-1', sequence: 1 }])
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('')
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    successSpy.mockRestore()
+    errorSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('ignores a stale creation error and resets dialog locking after the actor and owner change', async () => {
+    let rejectCreation: (reason: Error) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((_resolve, reject) => { rejectCreation = reject }))
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    authUserState.id = 'sub-2'
+    authUserState.dataOwnerId = 'main-2'
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    expect(wrapper.get('.sample-retest-dialog-stub').attributes('data-saving')).toBe('false')
+
+    rejectCreation(new Error('旧账号请求失败'))
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    successSpy.mockRestore()
+    errorSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('closes the retest dialog and clears its highlight when the route sheet context changes', async () => {
+    mocks.labStore.loadSheetByDate.mockResolvedValue(true)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('retest-1')
+
+    routeState.query = { date: '2026-06-23' }
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
+    expect(wrapper.get('.lab-grid-stub').attributes('data-highlight-retest-id')).toBe('')
+    wrapper.unmount()
+  })
+
+  it('closes the retest dialog when the automatic business day switch begins', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-30T19:59:59.000Z'))
+    mocks.labStore.sheet = { id: 'sheet-old', date: '2026-07-30', readonly: false }
+    mocks.labStore.loadCurrentSheet.mockImplementation(async () => {
+      mocks.labStore.sheet = { id: 'sheet-new', date: '2026-07-31', readonly: false }
+      return true
+    })
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await nextTick()
+
+    expect(wrapper.find('.sample-retest-dialog-stub').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('silently ignores a delayed retest creation success after the page unmounts', async () => {
+    let resolveCreation: (value: any[]) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((resolve) => { resolveCreation = resolve }))
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    const setupState = (wrapper.vm as any).$?.setupState as {
+      highlightRetestId: string
+      retestDialogVisible: boolean
+    }
+    wrapper.unmount()
+
+    resolveCreation([{ id: 'late-retest', sampleBlockId: 'block-1', sequence: 1 }])
+    await Promise.resolve()
+    await nextTick()
+
+    expect(setupState.retestDialogVisible).toBe(false)
+    expect(setupState.highlightRetestId).toBe('')
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    expect(mocks.labStore.disconnectRealtime).toHaveBeenCalledTimes(1)
+    successSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+
+  it('silently handles a delayed retest creation rejection after the page unmounts', async () => {
+    let rejectCreation: (reason: Error) => void = () => undefined
+    mocks.labStore.createRetests.mockReturnValue(new Promise((_resolve, reject) => { rejectCreation = reject }))
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as any)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as any)
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '样品复样').trigger('click')
+    await wrapper.get('.sample-retest-create').trigger('click')
+    const setupState = (wrapper.vm as any).$?.setupState as {
+      highlightRetestId: string
+      retestDialogVisible: boolean
+    }
+    wrapper.unmount()
+
+    rejectCreation(new Error('页面退出后的旧请求失败'))
+    await Promise.resolve()
+    await nextTick()
+
+    expect(setupState.retestDialogVisible).toBe(false)
+    expect(setupState.highlightRetestId).toBe('')
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+    expect(mocks.labStore.disconnectRealtime).toHaveBeenCalledTimes(1)
+    successSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+
+  it('reads the latest shared report template immediately before opening the report dialog', async () => {
+    mocks.preferenceValue.mockImplementation((section: string, fallback: unknown) => (
+      section === 'LAB_REPORT_TEMPLATE'
+        ? { ...(fallback as Record<string, unknown>), title: '服务器最新报告模板' }
+        : JSON.parse(JSON.stringify(fallback))
+    ))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '生成化验报告').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '选择元素生成报告').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.lab-report-dialog-stub').attributes('data-title')).toBe('服务器最新报告模板')
+    expect(mocks.preferenceValue).toHaveBeenCalledWith('LAB_REPORT_TEMPLATE', expect.any(Object))
+    wrapper.unmount()
+  })
+
+  it('reads the latest shared SMS template immediately before opening the SMS dialog', async () => {
+    mocks.preferenceValue.mockImplementation((section: string, fallback: unknown) => (
+      section === 'LAB_REPORT_SMS_TEMPLATE'
+        ? { prefix: '服务器最新短信前缀', suffix: '' }
+        : JSON.parse(JSON.stringify(fallback))
+    ))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '生成化验短信').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '选择元素生成短信').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.lab-sms-dialog-stub').attributes('data-prefix')).toBe('服务器最新短信前缀')
+    expect(mocks.preferenceValue).toHaveBeenCalledWith('LAB_REPORT_SMS_TEMPLATE', expect.any(Object))
+    wrapper.unmount()
+  })
+
+  it('does not read or use an owner-cached report template without actor permission', async () => {
+    mocks.preferenceCanAccess.mockImplementation((_user: unknown, section: string) => section !== 'LAB_REPORT_TEMPLATE')
+    mocks.preferenceValue.mockImplementation((section: string, fallback: unknown) => (
+      section === 'LAB_REPORT_TEMPLATE'
+        ? { ...(fallback as Record<string, unknown>), title: '无权不应消费的缓存模板' }
+        : JSON.parse(JSON.stringify(fallback))
+    ))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '生成化验报告').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '选择元素生成报告').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.lab-report-dialog-stub').attributes('data-title')).not.toBe('无权不应消费的缓存模板')
+    expect(mocks.preferenceValue).not.toHaveBeenCalledWith('LAB_REPORT_TEMPLATE', expect.anything())
+    wrapper.unmount()
+  })
+
+  it('does not read or use an owner-cached SMS template without actor permission', async () => {
+    mocks.preferenceCanAccess.mockImplementation((_user: unknown, section: string) => section !== 'LAB_REPORT_SMS_TEMPLATE')
+    mocks.preferenceValue.mockImplementation((section: string, fallback: unknown) => (
+      section === 'LAB_REPORT_SMS_TEMPLATE'
+        ? { prefix: '无权不应消费的缓存短信', suffix: '' }
+        : JSON.parse(JSON.stringify(fallback))
+    ))
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    await findButtonByText(wrapper, '生成化验短信').trigger('click')
+    await wrapper.find('.select-block-1').trigger('click')
+    await findButtonByText(wrapper, '选择元素生成短信').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.get('.lab-sms-dialog-stub').attributes('data-prefix')).not.toBe('无权不应消费的缓存短信')
+    expect(mocks.preferenceValue).not.toHaveBeenCalledWith('LAB_REPORT_SMS_TEMPLATE', expect.anything())
+    wrapper.unmount()
+  })
+
   it('disables the sample completion action for readonly history sheets', async () => {
     mocks.labStore.sheet = { date: '2026-06-24', readonly: true }
     const wrapper = mountPage()
     await settleMountedPage()
 
     expect(findButtonByText(wrapper, '标记样品完成').attributes('disabled')).toBeDefined()
+    expect(findButtonByText(wrapper, '样品复样').attributes('disabled')).toBeDefined()
   })
 
   it('retries unsaved fields from the toolbar after a save failure', async () => {

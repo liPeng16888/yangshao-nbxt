@@ -20,13 +20,19 @@ import type {
   AdminAttendanceSchedules,
   AdminScheduleAttendanceOverview,
   AdminAttendanceCalendarDay,
+  AdminDataLabSheet,
   AdminCustomerOverviewRow,
+  AdminFrontendAccount,
   AdminEmployeeAttendanceQuery,
   AdminLeaveRequest,
   AdminMedicineInventoryItem,
   AdminMedicineInventoryMovement,
   AdminRevealedAttendanceEmployee,
   AdminRevealedAttendanceEmployeeResponse,
+  AdminSampleRetest,
+  AdminSampleRetestInput,
+  AdminSampleRetestParameterSnapshot,
+  AdminSampleRetestResult,
   AdminUser,
   FrontendOption
 } from './types'
@@ -226,6 +232,11 @@ const mockRows = {
         { id: 'group-1', name: '经营数据', enabled: true, password: '2580', ttlMinutes: 5, recoveryPrompt: '管理员提示', recoveryAnswer: '凯里', features: ['FINANCE', 'REPORTS'] },
         { id: 'group-2', name: '样品历史', enabled: true, password: '9527', ttlMinutes: 10, recoveryPrompt: '城市', recoveryAnswer: '凯里', features: ['HISTORICAL_DATES', 'COMPLETED_SAMPLE_DATA'] }
       ],
+      frontendSubAccounts: [{
+        id: 'frontend-sub-1', account: 'operator01', username: '操作员', disabled: false,
+        requiresAccessGuardPassword: true, permissions: ['DATA_MAIN', 'REPORTS'],
+        createdAt: '2026-08-11T09:00:00.000Z', lastLoginAt: null
+      }],
       disabled: false,
       createdAt: '2026-06-25 09:00:00'
     },
@@ -237,6 +248,7 @@ const mockRows = {
       displayName: '仰韶客户二',
       password: '123456',
       accessGroups: [],
+      frontendSubAccounts: [],
       disabled: false,
       createdAt: '2026-06-25 10:00:00'
     }
@@ -380,6 +392,117 @@ const mockRows = {
   ]
 }
 
+const mockPrepaidAccountA = {
+  id: 'front-1', account: 'kaili001', username: '凯里化验室', displayRemark: ''
+}
+const mockPrepaidAccountB = {
+  id: 'front-2', account: 'yangshao002', username: '仰韶客户二', displayRemark: ''
+}
+const mockSharedPrepaid = {
+  recharges: [
+    {
+      id: 'recharge-1', memberId: 'member-1', phone: '13800000001', ownerFrontendUserId: 'front-1',
+      ownerAccount: 'kaili001', ownerUsername: '凯里化验室', actorUserId: 'front-1',
+      actorAccount: 'kaili001', actorUsername: '凯里化验室', rechargeDate: '2026-08-01',
+      paidAmount: 1000, giftAmount: 100, totalAmount: 1100, remainingAmount: 900,
+      isOpeningBalance: false, remark: '现金充值', reversedAt: null, reversedByLedgerId: null,
+      createdAt: '2026-08-01T01:00:00.000Z', updatedAt: '2026-08-01T01:00:00.000Z'
+    },
+    {
+      id: 'recharge-2', memberId: 'member-2', phone: '13800000002', ownerFrontendUserId: 'front-2',
+      ownerAccount: 'yangshao002', ownerUsername: '仰韶客户二', actorUserId: 'front-2',
+      actorAccount: 'yangshao002', actorUsername: '仰韶客户二', rechargeDate: '2026-08-02',
+      paidAmount: 500, giftAmount: 50, totalAmount: 550, remainingAmount: 0,
+      isOpeningBalance: true, remark: '期初导入', reversedAt: '2026-08-03T02:00:00.000Z',
+      reversedByLedgerId: 'ledger-reversal-2', createdAt: '2026-08-02T01:00:00.000Z',
+      updatedAt: '2026-08-03T02:00:00.000Z', reversal: {
+        id: 'ledger-reversal-2', reason: '重复导入', actorUserId: 'front-2', actorUser: mockPrepaidAccountB,
+        createdAt: '2026-08-03T02:00:00.000Z'
+      }
+    },
+    {
+      id: 'recharge-mixed-b', memberId: 'member-1', phone: '13800000001', ownerFrontendUserId: 'front-2',
+      ownerAccount: 'yangshao002', ownerUsername: '仰韶客户二', actorUserId: 'front-2',
+      actorAccount: 'yangshao002', actorUsername: '仰韶客户二', rechargeDate: '2026-08-01',
+      paidAmount: 90, giftAmount: 0, totalAmount: 90, remainingAmount: 0,
+      isOpeningBalance: false, remark: '混合来源', reversedAt: null, reversedByLedgerId: null,
+      createdAt: '2026-08-01T01:30:00.000Z', updatedAt: '2026-08-01T01:30:00.000Z'
+    }
+  ],
+  members: [
+    {
+      id: 'member-1', phone: '13800000001',
+      ledgerEntries: [{ id: 'ledger-1', kind: 'RECHARGE', balanceDelta: 1100, ownerFrontendUserId: 'front-1' }],
+    },
+    {
+      id: 'member-2', phone: '13800000002',
+      ledgerEntries: [{ id: 'ledger-reversal-2', kind: 'RECHARGE_REVERSAL', balanceDelta: -550, ownerFrontendUserId: 'front-2' }]
+    },
+    {
+      id: 'member-consumer-only', phone: '13800000003', ledgerEntries: []
+    },
+    {
+      id: 'member-settlement-only', phone: '13800000004', ledgerEntries: []
+    }
+  ],
+  consumptions: [
+    {
+      id: 'consumption-1', memberId: 'member-1', phoneSnapshot: '13800000001',
+      sampleNumberSnapshot: 'YS-001', sampleCountSnapshot: 2, elementsSnapshot: ['金', '银'], amount: 100,
+      kind: 'CONSUMPTION', active: true, reversalOfId: null, consumingFrontendUserId: 'front-2',
+      consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB,
+      allocations: [
+        { id: 'allocation-1', sourceOwnerId: 'front-1', sourceOwner: mockPrepaidAccountA, allocatedAmount: 10, recharge: { id: 'recharge-1', rechargeDate: '2026-08-01' } },
+        { id: 'allocation-2', sourceOwnerId: 'front-2', sourceOwner: mockPrepaidAccountB, allocatedAmount: 90, recharge: { id: 'recharge-mixed-b', rechargeDate: '2026-08-01' } }
+      ],
+      payables: [{ id: 'payable-1', status: 'PENDING', amount: 181.82, sourceOwner: mockPrepaidAccountA, consumerOwner: mockPrepaidAccountB }],
+      originalPayables: [], sheetDate: '2026-08-04', createdAt: '2026-08-04T01:00:00.000Z'
+    },
+    {
+      id: 'consumption-consumer-only', memberId: 'member-consumer-only', phoneSnapshot: '13800000003',
+      sampleNumberSnapshot: 'YS-002', sampleCountSnapshot: 1, elementsSnapshot: ['金'], amount: 30,
+      kind: 'CONSUMPTION', active: true, reversalOfId: null, consumingFrontendUserId: 'front-1',
+      consumingFrontendUser: mockPrepaidAccountA, actorUser: mockPrepaidAccountA, allocations: [], payables: [],
+      originalPayables: [], sheetDate: '2026-08-06', createdAt: '2026-08-06T01:00:00.000Z'
+    },
+    {
+      id: 'consumption-settlement-only', memberId: 'member-settlement-only', phoneSnapshot: '13800000004',
+      sampleNumberSnapshot: 'YS-003', sampleCountSnapshot: 1, elementsSnapshot: ['银'], amount: 20,
+      kind: 'CONSUMPTION', active: true, reversalOfId: null, consumingFrontendUserId: 'front-2',
+      consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB, allocations: [],
+      payables: [{ id: 'payable-settlement-only', status: 'HELD', amount: 20, sourceOwner: mockPrepaidAccountB, consumerOwner: mockPrepaidAccountB }],
+      originalPayables: [], sheetDate: '2026-08-07', createdAt: '2026-08-07T01:00:00.000Z'
+    },
+    {
+      id: 'consumption-reversal-1', memberId: 'member-1', phoneSnapshot: '13800000001',
+      sampleNumberSnapshot: 'YS-001', sampleCountSnapshot: 2, elementsSnapshot: ['金', '银'], amount: -100,
+      kind: 'REVERSAL', active: false, reversalOfId: 'consumption-1', consumingFrontendUserId: 'front-2',
+      consumingFrontendUser: mockPrepaidAccountB, actorUser: mockPrepaidAccountB, allocations: [], payables: [],
+      originalPayables: [], sheetDate: '2026-08-08', createdAt: '2026-08-08T01:00:00.000Z'
+    }
+  ],
+  settlements: [
+    {
+      id: 'settlement-1', accountAId: 'front-1', accountBId: 'front-2', accountA: mockPrepaidAccountA,
+      accountB: mockPrepaidAccountB, aToBAmount: 181.82, bToAAmount: 40, netAmount: 141.82,
+      grossAmount: 221.82, status: 'AWAITING_RECEIPT', payerFrontendUserId: 'front-1',
+      receiverFrontendUserId: 'front-2', proofUrls: ['/uploads/prepaid-proof-demo.jpg'],
+      rejectionReason: null, createdByUser: mockPrepaidAccountA, paidByUser: mockPrepaidAccountA,
+      confirmedByUser: null, rejectedByUser: null, createdAt: '2026-08-05T01:00:00.000Z',
+      updatedAt: '2026-08-05T02:00:00.000Z', lines: [{ id: 'line-1', payableId: 'payable-1', amount: 181.82 }],
+      actions: [{ id: 'action-1', operation: 'SUBMIT_PAYMENT', reason: null, actorUser: mockPrepaidAccountA, createdAt: '2026-08-05T02:00:00.000Z' }]
+    },
+    {
+      id: 'settlement-member-only', accountAId: 'front-1', accountBId: 'front-2', accountA: mockPrepaidAccountA,
+      accountB: mockPrepaidAccountB, aToBAmount: 20, bToAAmount: 0, netAmount: 20, grossAmount: 20,
+      status: 'AWAITING_PAYMENT', payerFrontendUserId: 'front-1', receiverFrontendUserId: 'front-2', proofUrls: [],
+      rejectionReason: null, createdByUser: mockPrepaidAccountA, paidByUser: null, confirmedByUser: null,
+      rejectedByUser: null, createdAt: '2026-08-07T02:00:00.000Z', updatedAt: '2026-08-07T02:00:00.000Z',
+      lines: [{ id: 'line-member-only', payableId: 'payable-settlement-only', amount: 20 }], actions: []
+    }
+  ]
+}
+
 const mockEmployeeAttendance = {
   employees: [
     {
@@ -470,6 +593,15 @@ function mockAuthorizedFrontendIds() {
   return (sub?.permissions || []).map((item) => item.id)
 }
 
+function mockTodayInBeijing() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date())
+}
+
 function mockAttendanceIds(config?: AdminRequestConfig) {
   const permitted = mockAuthorizedFrontendIds()
   const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
@@ -504,7 +636,7 @@ function mockAdminScheduleAttendanceOverview(config?: AdminRequestConfig): Admin
   if (employeeId && !employee) throw new Error('员工不存在或无权查看')
   const monthRows = mockEmployeeAttendance.attendance.filter((row) => ids.includes(row.frontendUserId) && row.date.startsWith(month))
   const pendingLeaves = mockEmployeeAttendance.leaves.filter((row) => ids.includes(row.frontendUserId) && row.status === 'PENDING' && row.startDate <= `${month}-31` && row.endDate >= `${month}-01`).length
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  const today = mockTodayInBeijing()
   const activeIds = new Set(mockEmployeeAttendance.employees.filter((row) => ids.includes(row.frontendUserId) && row.status === 'ACTIVE' && row.hireDate <= today && (!row.terminationDate || String(row.terminationDate) >= today)).map((row) => row.id))
   const todayClassifications = mockEmployeeAttendance.schedules.days
     .filter((row) => ids.includes(row.frontendUserId) && activeIds.has(row.employeeId) && row.date === today && row.isWorkday && row.scheduledMinutes > 0)
@@ -571,6 +703,213 @@ function isEmployeeAttendanceAdminPath(url: string) {
   return url === '/admin/employee-attendance' || url.startsWith('/admin/employee-attendance/')
 }
 
+function isSharedPrepaidAdminPath(url: string) {
+  return url === '/admin/shared-prepaid' || url.startsWith('/admin/shared-prepaid/')
+}
+
+function isAdminRetestWritePath(url: string) {
+  let pathname: string
+  try {
+    pathname = new URL(url, 'http://admin.local').pathname
+  } catch {
+    pathname = url.split(/[?#]/, 1)[0]
+  }
+  const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
+  return normalized === '/admin/data-statistics/lab-sheets'
+    || normalized.startsWith('/admin/data-statistics/lab-sheets/')
+    || normalized.split('/').includes('sample-retests')
+}
+
+function mockSharedPrepaidIds(config?: AdminRequestConfig) {
+  const permitted = mockAuthorizedFrontendIds()
+  const requested = String(config?.params?.frontendUserIds || '').split(',').filter(Boolean)
+  if (requested.some((id) => !permitted.includes(id))) throw new Error('没有访问部分前端账号的权限')
+  return requested.length ? requested : permitted
+}
+
+function mockSharedPrepaidEffectiveAllocations(row: any) {
+  const sourceRow = row.kind === 'REVERSAL' && row.reversalOfId
+    ? mockSharedPrepaid.consumptions.find((candidate) => candidate.id === row.reversalOfId) ?? row
+    : row
+  return {
+    sourceConsumptionId: sourceRow.id,
+    allocations: sourceRow.allocations
+  }
+}
+
+function mockSharedPrepaidConsumptionParticipates(row: any, allowedIds: string[]) {
+  const { allocations } = mockSharedPrepaidEffectiveAllocations(row)
+  return allowedIds.includes(row.consumingFrontendUserId)
+    || allocations.some((allocation: any) => allowedIds.includes(allocation.sourceOwnerId))
+}
+
+function mockSharedPrepaidMemberParticipates(memberId: string, allowedIds: string[]) {
+  if (mockSharedPrepaid.recharges.some((row) => row.memberId === memberId && allowedIds.includes(row.ownerFrontendUserId))) {
+    return true
+  }
+  return mockSharedPrepaid.consumptions.some((consumption) => consumption.memberId === memberId && (
+    mockSharedPrepaidConsumptionParticipates(consumption, allowedIds)
+    || consumption.payables.some((payable) => mockSharedPrepaid.settlements.some((settlement) =>
+      settlement.lines.some((line) => line.payableId === payable.id)
+      && (allowedIds.includes(settlement.accountAId) || allowedIds.includes(settlement.accountBId))
+    ))
+  ))
+}
+
+function mockSharedPrepaidConsumptionSummary(row: any) {
+  const { allocations: effectiveAllocations, sourceConsumptionId } = mockSharedPrepaidEffectiveAllocations(row)
+  const sourceOwners = [...new Map(effectiveAllocations.map((allocation: any) => [
+    allocation.sourceOwnerId,
+    allocation.sourceOwner
+  ])).values()]
+  const {
+    allocations: _allocations,
+    payables: _payables,
+    originalPayables: _originalPayables,
+    sheetId: _sheetId,
+    sampleBlockId: _sampleBlockId,
+    sampleIndex: _sampleIndex,
+    ...summary
+  } = row
+  return {
+    ...summary,
+    allocationOrigin: sourceConsumptionId === row.id ? 'DIRECT' : 'REVERSAL_TARGET',
+    allocationSourceConsumptionId: sourceConsumptionId,
+    sourceOwners: sourceOwners.slice(0, 100),
+    sourceOwnersTruncated: sourceOwners.length > 100
+  }
+}
+
+function mockScopedSharedPrepaidMember(row: any, allowedIds: string[]) {
+  const scopedRecharges = mockSharedPrepaid.recharges
+    .filter((recharge) => recharge.memberId === row.id && allowedIds.includes(recharge.ownerFrontendUserId))
+  const activeRecharges = scopedRecharges.filter((recharge) => !recharge.reversedAt)
+  const scopedConsumptions = mockSharedPrepaid.consumptions.filter((consumption) => (
+    consumption.memberId === row.id && mockSharedPrepaidConsumptionParticipates(consumption, allowedIds)
+  ))
+  const activeConsumptions = scopedConsumptions.filter((consumption) => (
+    consumption.kind === 'CONSUMPTION' && consumption.active
+  ))
+  const consumedTotal = activeConsumptions.reduce((total, consumption) => {
+    if (allowedIds.includes(consumption.consumingFrontendUserId)) return total + consumption.amount
+    return total + consumption.allocations.reduce(
+      (subtotal, allocation) => allowedIds.includes(allocation.sourceOwnerId)
+        ? subtotal + allocation.allocatedAmount
+        : subtotal,
+      0
+    )
+  }, 0)
+  const ownerComposition = [...new Set(activeRecharges.map((recharge) => recharge.ownerFrontendUserId))]
+    .map((ownerFrontendUserId) => {
+      const ownerRows = activeRecharges.filter((recharge) => recharge.ownerFrontendUserId === ownerFrontendUserId)
+      const first = ownerRows[0]
+      return {
+        ownerFrontendUserId,
+        ownerAccount: first.ownerAccount,
+        ownerUsername: first.ownerUsername,
+        ownerDisplayName: first.ownerUsername || first.ownerAccount,
+        balance: ownerRows.reduce((total, recharge) => total + recharge.remainingAmount, 0)
+      }
+    })
+    .filter((owner) => owner.balance > 0)
+    .sort((left, right) => left.ownerFrontendUserId.localeCompare(right.ownerFrontendUserId))
+  const ledgerEntries = (row.ledgerEntries ?? [])
+    .filter((entry: any) => allowedIds.includes(entry.ownerFrontendUserId))
+  const historyLimit = 50
+  return {
+    ...row,
+    paidTotal: activeRecharges.reduce((total, recharge) => total + recharge.paidAmount, 0),
+    giftTotal: activeRecharges.reduce((total, recharge) => total + recharge.giftAmount, 0),
+    consumedTotal,
+    balance: activeRecharges.reduce((total, recharge) => total + recharge.remainingAmount, 0),
+    ownerComposition,
+    latestRechargeTime: activeRecharges.reduce<string | null>((latest, recharge) => (
+      !latest || recharge.createdAt > latest ? recharge.createdAt : latest
+    ), null),
+    latestConsumptionTime: activeConsumptions.reduce<string | null>((latest, consumption) => (
+      !latest || consumption.createdAt > latest ? consumption.createdAt : latest
+    ), null),
+    historyLimit,
+    historyTruncated: {
+      recharges: scopedRecharges.length > historyLimit,
+      consumptions: scopedConsumptions.length > historyLimit,
+      ledgerEntries: ledgerEntries.length > historyLimit
+    },
+    recharges: scopedRecharges.slice(0, historyLimit),
+    consumptions: scopedConsumptions.slice(0, historyLimit).map(mockSharedPrepaidConsumptionSummary),
+    ledgerEntries: ledgerEntries.slice(0, historyLimit)
+  }
+}
+
+function mockSharedPrepaidRows(resource: keyof typeof mockSharedPrepaid, config?: AdminRequestConfig) {
+  const allowedIds = mockSharedPrepaidIds(config)
+  const phone = String(config?.params?.phone || '').replace(/\D/g, '')
+  const status = String(config?.params?.status || '')
+  const startDate = String(config?.params?.startDate || '')
+  const endDate = String(config?.params?.endDate || '')
+  const rows = mockSharedPrepaid[resource].filter((row: any) => {
+    const participates = resource === 'recharges'
+      ? allowedIds.includes(row.ownerFrontendUserId)
+      : resource === 'members'
+        ? mockSharedPrepaidMemberParticipates(row.id, allowedIds)
+        : resource === 'consumptions'
+          ? mockSharedPrepaidConsumptionParticipates(row, allowedIds)
+          : allowedIds.includes(row.accountAId) || allowedIds.includes(row.accountBId)
+    const date = resource === 'recharges' ? row.rechargeDate : resource === 'consumptions' ? row.sheetDate : String(row.createdAt || '').slice(0, 10)
+    const rowStatus = resource === 'recharges' ? (row.reversedAt ? 'REVERSED' : 'ACTIVE') : resource === 'consumptions' ? (row.active ? 'ACTIVE' : 'REVERSED') : row.status
+    const sourceOwnerId = String(config?.params?.sourceOwnerId || '')
+    const counterpartyId = String(config?.params?.counterpartyFrontendUserId || '')
+    return participates
+      && (!phone || String(row.phone || row.phoneSnapshot || '').includes(phone))
+      && (!config?.params?.ownerFrontendUserId || row.ownerFrontendUserId === config.params.ownerFrontendUserId)
+      && (!config?.params?.consumingFrontendUserId || row.consumingFrontendUserId === config.params.consumingFrontendUserId)
+      && (resource !== 'consumptions' || !sourceOwnerId || mockSharedPrepaidEffectiveAllocations(row).allocations
+        .some((allocation: any) => allocation.sourceOwnerId === sourceOwnerId))
+      && (!counterpartyId || row.accountAId === counterpartyId || row.accountBId === counterpartyId)
+      && (!status || rowStatus === status)
+      && (resource !== 'recharges' || config?.params?.isOpeningBalance === undefined || row.isOpeningBalance === config.params.isOpeningBalance)
+      && (!startDate || !date || date >= startDate)
+      && (!endDate || !date || date <= endDate)
+  })
+  if (resource !== 'consumptions' || !config?.params?.payableStatus) return rows
+  return rows.filter((row: any) => [...(row.payables || []), ...(row.originalPayables || [])]
+    .some((payable: any) => payable.status === config.params.payableStatus))
+}
+
+function mockSharedPrepaidResponse(resource: keyof typeof mockSharedPrepaid, id: string | undefined, config?: AdminRequestConfig) {
+  const rows = mockSharedPrepaidRows(resource, config)
+  const allowedIds = mockSharedPrepaidIds(config)
+  if (id) {
+    const row = rows.find((item) => item.id === id)
+    if (!row) throw new Error('记录不存在或无权查看')
+    return resource === 'members' ? mockScopedSharedPrepaidMember(row, allowedIds) : row
+  }
+  const page = Math.max(1, Number(config?.params?.page) || 1)
+  const pageSize = Math.min(100, Math.max(1, Number(config?.params?.pageSize) || 20))
+  const start = (page - 1) * pageSize
+  const items = rows.slice(start, start + pageSize).map((row: any) => {
+    if (resource === 'members') {
+      const scoped = mockScopedSharedPrepaidMember(row, allowedIds)
+      const { recharges: _recharges, consumptions: _consumptions, ledgerEntries: _ledgerEntries,
+        historyLimit: _historyLimit, historyTruncated: _historyTruncated, ...summary } = scoped
+      return summary
+    }
+    if (resource === 'consumptions') {
+      return mockSharedPrepaidConsumptionSummary(row)
+    }
+    if (resource === 'settlements') {
+      const { proofUrls: _proofUrls, lines: _lines, actions: _actions, rejectionReason: _rejectionReason, ...summary } = row
+      return summary
+    }
+    if (resource === 'recharges') {
+      const { reversal: _reversal, ...summary } = row
+      return summary
+    }
+    return row
+  })
+  return { items, total: rows.length, page, pageSize }
+}
+
 function mockAttendanceFilter<T extends Record<string, unknown>>(rows: T[], config?: AdminRequestConfig, dateFields: [string, string?] = ['date']) {
   const ids = mockAttendanceIds(config)
   const employeeId = String(config?.params?.employeeId || '')
@@ -591,13 +930,54 @@ function mockAttendanceFilter<T extends Record<string, unknown>>(rows: T[], conf
   })
 }
 
-const mockSheet = {
+const mockAdminRetestInputs: AdminSampleRetestInput = {
+  ironRaw: null, siliconRaw: null, siliconAdjust: null, aluminumRaw: null, aluminumAdjust: null,
+  sulfur: null, densityRaw: null, whiteness: null, calciumRaw: null, magnesiumRaw: null,
+  carbon: null, titaniumRaw: null, waterSample: null, bottleWater: null, bottleWaterSample: null,
+  moisture: null, crucible: null, sampleWeight: null, burnedCrucibleSample: null
+}
+
+const mockAdminRetestResults: AdminSampleRetestResult = {
+  iron: 0, silicon: 0, aluminum: 0, aluminumSiliconRatio: 0, total: 0, density: 0,
+  calcium: 0, magnesium: 0, titanium: 0, bottleDensity: 0, moisture: 0, burnLoss: 0
+}
+
+const mockAdminRetestParameters: AdminSampleRetestParameterSnapshot = {
+  ironBlank: 0.04, ironFactor: 29.1, siliconBlank: 0.027, siliconFactor: 13,
+  aluminumFactor1: 0.502, aluminumFactor2: 4.98, calciumFactor: 1.15,
+  magnesiumFactor: 0.556, titaniumFactor: 0.57
+}
+
+function mockAdminRetests(blockId: string, idPrefix = 'retest'): AdminSampleRetest[] {
+  return [
+    {
+      id: `${idPrefix}-1`, sampleBlockId: blockId, sequence: 1, status: 'ACTIVE', everFilled: true,
+      readonly: true, sensitiveFieldsHidden: false,
+      inputs: { ...mockAdminRetestInputs, ironRaw: 1.2, siliconRaw: 2.1 },
+      results: { ...mockAdminRetestResults, iron: 33.756, silicon: 26.949, total: 60.705 },
+      parameterSnapshot: { ...mockAdminRetestParameters },
+      voidReason: null, createdById: 'front-1', updatedById: 'front-1', voidedById: null,
+      createdAt: '2026-08-20T08:00:00+08:00', updatedAt: '2026-08-20T08:30:00+08:00', voidedAt: null
+    },
+    {
+      id: `${idPrefix}-2`, sampleBlockId: blockId, sequence: 2, status: 'VOID', everFilled: true,
+      readonly: true, sensitiveFieldsHidden: false,
+      inputs: { ...mockAdminRetestInputs, ironRaw: 1.3, siliconRaw: 2.2 },
+      results: { ...mockAdminRetestResults, iron: 36.666, silicon: 28.249, total: 64.915 },
+      parameterSnapshot: { ...mockAdminRetestParameters },
+      voidReason: '复核无效', createdById: 'front-1', updatedById: 'front-1', voidedById: 'front-1',
+      createdAt: '2026-08-20T09:00:00+08:00', updatedAt: '2026-08-20T09:30:00+08:00', voidedAt: '2026-08-20T10:00:00+08:00'
+    }
+  ]
+}
+
+const mockSheet: AdminDataLabSheet = {
   id: 'sheet-1',
   frontendUserId: 'front-1',
   name: '凯里化验室',
   date: '2026-06-25',
   readonly: true,
-  parameters: {},
+  parameters: { ...mockAdminRetestParameters },
   sampleBlocks: [
     {
       id: 'block-1',
@@ -643,7 +1023,9 @@ const mockSheet = {
         bottleDensity: 1.9965,
         moisture: 2,
         burnLoss: 18
-      }
+      },
+      parameterSnapshot: { ...mockAdminRetestParameters },
+      retests: mockAdminRetests('block-1')
     },
     {
       id: 'block-2',
@@ -651,7 +1033,26 @@ const mockSheet = {
       readonly: true,
       inputs: { ...mockSampleChangeSourceInputs },
       results: { ...mockSampleChangeSourceResults },
-      parameterSnapshot: { ...mockLabParameters }
+      parameterSnapshot: { ...mockLabParameters },
+      retests: []
+    },
+    {
+      id: 'block-retests-only',
+      index: 3,
+      readonly: true,
+      inputs: { sequence: '003', completed: false },
+      results: {},
+      parameterSnapshot: { ...mockAdminRetestParameters },
+      retests: mockAdminRetests('block-retests-only', 'retest-only')
+    },
+    {
+      id: 'block-blank',
+      index: 4,
+      readonly: true,
+      inputs: { sequence: '004', completed: false },
+      results: {},
+      parameterSnapshot: { ...mockAdminRetestParameters },
+      retests: []
     }
   ]
 }
@@ -703,6 +1104,13 @@ function hasVisibleSampleInput(inputs: Record<string, unknown>) {
     if (typeof value === 'string') return value.trim() !== ''
     return Array.isArray(value) ? value.length > 0 : Boolean(value)
   })
+}
+
+function mockAdminDataIds(config?: AdminRequestConfig) {
+  const permitted = mockAuthorizedFrontendIds()
+  const requested = String(config?.params?.frontendUserIds || '').split(',').map((id) => id.trim()).filter(Boolean)
+  if (requested.some((id) => !permitted.includes(id))) throw new Error('没有访问部分前端账号的权限')
+  return requested.length ? requested : permitted
 }
 
 function parseHistoryFields(value: unknown) {
@@ -871,6 +1279,14 @@ function rejectMockLabRequest(id: string, reviewRemark: string) {
 const mockRequest = {
   async get(url: string, config?: AdminRequestConfig) {
     if (isEmployeeAttendanceAdminPath(url) && url !== '/admin/employee-attendance/schedules') assertExclusiveAttendanceDateFilter(config)
+    const prepaidMatch = url.match(/^\/admin\/shared-prepaid\/(recharges|members|consumptions|settlements)(?:\/([^/]+))?$/)
+    if (prepaidMatch) {
+      return mockSharedPrepaidResponse(
+        prepaidMatch[1] as keyof typeof mockSharedPrepaid,
+        prepaidMatch[2] ? decodeURIComponent(prepaidMatch[2]) : undefined,
+        config
+      )
+    }
     if (url === '/admin/auth/me') return mockAdminUser()
     if (url === '/admin/frontend-users/options') {
       const allowed = mockAuthorizedFrontendIds()
@@ -939,13 +1355,15 @@ const mockRequest = {
       return mockEmployeeAttendance.audit.filter((row) => ids.includes(row.frontendUserId) && (!month || String(row.createdAt).slice(0, 7) === month))
     }
     if (url === '/admin/data-statistics/lab-sheets') {
-      const frontendUserIds = mockAttendanceIds(config)
-      const date = String(config?.params?.date || '')
+      const frontendUserIds = mockAdminDataIds(config)
+      const date = String(config?.params?.date || mockTodayInBeijing())
       const sheets = mockLabSheets
         .filter((sheet) => frontendUserIds.includes(sheet.frontendUserId) && (!date || sheet.date === date))
         .map((sheet) => ({
           ...sheet,
-          sampleBlocks: sheet.sampleBlocks.filter((block) => hasVisibleSampleInput(block.inputs))
+          sampleBlocks: sheet.sampleBlocks.filter((block) => (
+            ('retests' in block && (block.retests?.length || 0) > 0) || hasVisibleSampleInput(block.inputs)
+          ))
         }))
         .filter((sheet) => sheet.sampleBlocks.length)
       return cloneMock(sheets)
@@ -1001,13 +1419,13 @@ const mockRequest = {
         rows: [
           {
             date: '2026-06-25',
-            sampleCount: 12,
+            sampleCount: 3,
             totalAmount: 1180,
             statusSummaries: [
               { status: '已结款', count: 0, amount: 0 },
               { status: '未结款', count: 1, amount: 80 },
               { status: '月结款', count: 1, amount: 100 },
-              { status: '预存款', count: 10, amount: 1000 }
+              { status: '预存款', count: 1, amount: 1000 }
             ]
           }
         ]
@@ -1025,13 +1443,9 @@ const mockRequest = {
       return { summaryRows: cloneMock(mockRows.monthlySettlements) }
     }
     if (url === '/admin/finance/monthly-customers') return mockRows.monthlyCustomers
-    if (url === '/admin/finance/prepaid-recharges') return mockRows.prepaidRecharges
     if (url === '/admin/finance/delete-requests') {
       const status = String(config?.params?.status || '')
       return status ? mockRows.deletionRequests.filter((row) => row.status === status) : mockRows.deletionRequests
-    }
-    if (url === '/admin/finance/prepaid-report') {
-      return { customerRows: mockRows.prepaidCustomers, dailyRows: mockRows.prepaidDaily }
     }
     if (url === '/admin/abnormal-records') return mockRows.abnormal
     if (url === '/admin/blacklist') return mockRows.blacklist
@@ -1046,6 +1460,8 @@ const mockRequest = {
       if (sub) return { token: 'mock-sub-admin-token', user: { id: sub.id, account: sub.account, username: sub.username, role: 'SUB_ADMIN' } }
       throw new Error('账号或密码错误')
     }
+    if (isAdminRetestWritePath(url)) throw new Error('后台复样数据只读')
+    if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
     if (url === '/admin/accounts/invite-codes') return { code: `YS-${Date.now().toString().slice(-6)}` }
     const revealEmployeeMatch = url.match(/^\/admin\/employee-attendance\/employees\/(.+)\/reveal$/)
     if (revealEmployeeMatch) {
@@ -1088,7 +1504,15 @@ const mockRequest = {
     }
     return { ok: true }
   },
+  async put(url: string) {
+    if (isAdminRetestWritePath(url)) throw new Error('后台复样数据只读')
+    if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
+    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
+    return { ok: true }
+  },
   async patch(url: string, payload?: any) {
+    if (isAdminRetestWritePath(url)) throw new Error('后台复样数据只读')
+    if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
     if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     if (url === '/admin/auth/profile') {
       mockUser.account = payload?.account || mockUser.account
@@ -1110,11 +1534,9 @@ const mockRequest = {
     }
     return { ok: true }
   },
-  async put(url: string) {
-    if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
-    return { ok: true }
-  },
   async delete(url: string) {
+    if (isAdminRetestWritePath(url)) throw new Error('后台复样数据只读')
+    if (isSharedPrepaidAdminPath(url)) throw new Error('后台共享预存款只读')
     if (isEmployeeAttendanceAdminPath(url)) throw new Error('后台员工考勤只读')
     return { ok: true }
   }
@@ -1157,6 +1579,10 @@ export function logoutAdmin() {
 
 export function getFrontendOptions() {
   return request.get<any, FrontendOption[]>('/admin/frontend-users/options')
+}
+
+export function getAdminFrontendAccounts() {
+  return request.get<any, AdminFrontendAccount[]>('/admin/accounts/frontend-users')
 }
 
 export function buildFrontendIds(ids: string[]) {

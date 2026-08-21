@@ -1,12 +1,22 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
 import { toMoney } from '../common/money'
+import { requiredBaseUpdatedAt, staleWrite } from '../common/optimistic-concurrency'
+import { TenantRealtimeService } from '../realtime/tenant-realtime.service'
+
+type BlacklistMutationPayload = {
+  phone?: string; wechat?: string; wechatNickname?: string; amount?: number | null
+  images?: string[]; other?: string; note?: string; baseUpdatedAt?: string
+}
 
 @Injectable()
 export class BlacklistService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtime?: TenantRealtimeService
+  ) {}
 
-  async search(keyword = '') {
+  async search(frontendUserId: string, keyword = '') {
     const query = keyword.trim()
     const rows = await this.prisma.blacklistRecord.findMany({
       where: query
@@ -23,17 +33,18 @@ export class BlacklistService {
       include: { uploadedBy: { select: { username: true, account: true } } },
       orderBy: { uploadedAt: 'desc' }
     })
-    return rows.map((row) => this.dto(row))
+    return rows.map((row) => this.dto(row, frontendUserId))
   }
 
-  async check(keyword: string) {
-    const records = keyword.trim() ? await this.search(keyword) : []
+  async check(frontendUserId: string, keyword: string) {
+    const records = keyword.trim() ? await this.search(frontendUserId, keyword) : []
     return { hit: records.length > 0, records }
   }
 
-  async create(frontendUserId: string, payload: { phone?: string; wechat?: string; wechatNickname?: string; amount?: number | null; images?: string[]; other?: string; note?: string }) {
+  async create(frontendUserId: string, actorUserId: string, payload: BlacklistMutationPayload) {
+    this.assertAmount(payload.amount)
     const images = payload.images || []
-    const hasContent = [payload.phone, payload.wechat, payload.wechatNickname, payload.other, payload.note].some((value) => String(value || '').trim())
+    const hasContent = [payload.phone, payload.wechat, payload.wechatNickname, payload.other, payload.note].some((value) => String(value || '').trim()) || payload.amount !== null && payload.amount !== undefined
     if (!hasContent) throw new BadRequestException('请至少填写一项黑名单信息')
     if (images.length > 2) throw new BadRequestException('黑名单图片最多上传 2 张')
     const row = await this.prisma.blacklistRecord.create({
@@ -49,10 +60,13 @@ export class BlacklistService {
       },
       include: { uploadedBy: { select: { username: true, account: true } } }
     })
-    return this.dto(row)
+    const dto = this.dto(row, frontendUserId)
+    this.publish(frontendUserId, actorUserId, row.id, 'create', row.updatedAt)
+    return dto
   }
 
-  async update(frontendUserId: string, id: string, payload: { phone?: string; wechat?: string; wechatNickname?: string; amount?: number | null; images?: string[]; other?: string; note?: string }) {
+  async update(frontendUserId: string, actorUserId: string, id: string, payload: BlacklistMutationPayload) {
+    this.assertAmount(payload.amount)
     const current = await this.prisma.blacklistRecord.findUnique({ where: { id } })
     if (!current) throw new NotFoundException('黑名单记录不存在')
     if (current.uploadedById !== frontendUserId) throw new ForbiddenException('只能补充自己上传的黑名单')
@@ -69,25 +83,42 @@ export class BlacklistService {
     }
     const hasContent = [next.phone, next.wechat, next.wechatNickname, next.other, next.note].some((value) => String(value || '').trim()) || next.amount !== null
     if (!hasContent) throw new BadRequestException('请至少填写一项黑名单信息')
-    const row = await this.prisma.blacklistRecord.update({
-      where: { id },
-      data: next,
-      include: { uploadedBy: { select: { username: true, account: true } } }
+    const baseUpdatedAt = requiredBaseUpdatedAt(payload.baseUpdatedAt)
+    const result = await this.prisma.blacklistRecord.updateMany({
+      where: { id, uploadedById: frontendUserId, updatedAt: baseUpdatedAt },
+      data: next
     })
-    return this.dto(row)
+    const row = await this.prisma.blacklistRecord.findUnique({
+      where: { id }, include: { uploadedBy: { select: { username: true, account: true } } }
+    })
+    if (!result.count) staleWrite(row ? this.dto(row, frontendUserId) : null)
+    if (!row) throw new NotFoundException('黑名单记录不存在')
+    const dto = this.dto(row, frontendUserId)
+    this.publish(frontendUserId, actorUserId, id, 'update', row.updatedAt)
+    return dto
   }
 
-  async delete(frontendUserId: string, id: string) {
+  async delete(frontendUserId: string, actorUserId: string, id: string, baseUpdatedAtInput?: string) {
     const row = await this.prisma.blacklistRecord.findUnique({ where: { id }, include: { uploadedBy: { select: { username: true, account: true } } } })
     if (!row) throw new NotFoundException('黑名单记录不存在')
     if (row.uploadedById !== frontendUserId) throw new ForbiddenException('只能删除自己上传的黑名单')
-    await this.prisma.blacklistRecord.delete({ where: { id } })
-    return this.dto(row)
+    const baseUpdatedAt = requiredBaseUpdatedAt(baseUpdatedAtInput)
+    const result = await this.prisma.blacklistRecord.deleteMany({ where: { id, uploadedById: frontendUserId, updatedAt: baseUpdatedAt } })
+    if (!result.count) {
+      const latest = await this.prisma.blacklistRecord.findUnique({
+        where: { id }, include: { uploadedBy: { select: { username: true, account: true } } }
+      })
+      staleWrite(latest ? this.dto(latest, frontendUserId) : null)
+    }
+    this.publish(frontendUserId, actorUserId, id, 'delete', new Date())
+    return this.dto(row, frontendUserId)
   }
 
   private dto(row: {
     id: string
+    uploadedById: string
     uploadedAt: Date
+    updatedAt: Date
     uploadedBy?: { username: string; account: string }
     phone: string | null
     wechat: string | null
@@ -96,11 +127,13 @@ export class BlacklistService {
     images: unknown
     other: string | null
     note: string | null
-  }) {
+  }, frontendUserId: string) {
     return {
       id: row.id,
       uploadedAt: row.uploadedAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
       uploadedBy: row.uploadedBy?.username || row.uploadedBy?.account || '无信息',
+      canManage: row.uploadedById === frontendUserId,
       phone: row.phone || '',
       wechat: row.wechat || '',
       wechatNickname: row.wechatNickname || '',
@@ -109,5 +142,17 @@ export class BlacklistService {
       other: row.other || '',
       note: row.note || ''
     }
+  }
+
+  private publish(dataOwnerId: string, changedById: string, entityId: string, operation: 'create' | 'update' | 'delete', updatedAt: Date) {
+    this.realtime?.publish({ dataOwnerId, module: 'blacklist', entityId, operation, changedById, updatedAt: updatedAt.toISOString() })
+  }
+
+  private assertAmount(amount: number | null | undefined) {
+    if (amount === null || amount === undefined) return
+    if (!Number.isFinite(amount)) throw new BadRequestException('金额必须是有效数字')
+    if (amount < 0) throw new BadRequestException('金额不能小于 0')
+    const cents = amount * 100
+    if (Math.abs(cents - Math.round(cents)) > 1e-8) throw new BadRequestException('金额最多保留两位小数')
   }
 }

@@ -13,6 +13,13 @@ export type LabParameterKey =
 
 export type SamplePaymentStatus = '已结款' | '未结款' | '月结款' | '预存款'
 
+export interface PrepaidMemberPickerResult {
+  memberId: string
+  phone: string
+  amount: number
+  currentBalance: number
+}
+
 export interface LabParameter {
   ironBlank: number
   ironFactor: number
@@ -44,6 +51,8 @@ export interface LabSampleInput {
   recipientCustomerText?: string
   price?: number | null
   paymentStatus?: SamplePaymentStatus | ''
+  prepaidMemberId?: string
+  prepaidMemberPhone?: string
   ironRaw?: number | null
   siliconRaw?: number | null
   siliconAdjust?: number | null
@@ -82,6 +91,61 @@ export interface LabFormulaResult {
   burnLoss: number
 }
 
+export const sampleRetestInputFields = [
+  'ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust',
+  'sulfur', 'densityRaw', 'whiteness', 'calciumRaw', 'magnesiumRaw', 'carbon',
+  'titaniumRaw', 'waterSample', 'bottleWater', 'bottleWaterSample', 'moisture',
+  'crucible', 'sampleWeight', 'burnedCrucibleSample'
+] as const
+
+export type SampleRetestInputField = typeof sampleRetestInputFields[number]
+export type SampleRetestInput = Partial<Pick<LabSampleInput, SampleRetestInputField>>
+export type SampleRetestResult = { [Field in keyof LabFormulaResult]: number | null }
+export type SampleRetestStatus = 'ACTIVE' | 'VOID'
+
+export interface SampleRetest {
+  id: string
+  sampleBlockId: string
+  sequence: number
+  status: SampleRetestStatus
+  everFilled: boolean
+  readonly: boolean
+  sensitiveFieldsHidden: boolean
+  inputs: SampleRetestInput
+  results: SampleRetestResult
+  parameterSnapshot: LabParameterSnapshot | null
+  voidReason: string | null
+  createdById: string
+  updatedById: string
+  voidedById: string | null
+  createdAt: string
+  updatedAt: string
+  voidedAt: string | null
+}
+
+export interface CreateSampleRetestsPayload {
+  sampleBlockIds: string[]
+  idempotencyKey: string
+}
+
+export interface SaveSampleRetestPayload {
+  idempotencyKey: string
+  baseUpdatedAt: string
+  baseInputs?: SampleRetestInput
+  changedFields: SampleRetestInput
+}
+
+export interface DeleteSampleRetestPayload {
+  idempotencyKey: string
+  baseUpdatedAt: string
+}
+
+export interface VoidSampleRetestPayload {
+  idempotencyKey: string
+  baseUpdatedAt: string
+  reason?: string
+}
+
 export interface SampleBlock {
   id: string
   index: number
@@ -91,6 +155,7 @@ export interface SampleBlock {
   inputs: LabSampleInput
   results: LabFormulaResult
   parameterSnapshot: LabParameterSnapshot
+  retests: SampleRetest[]
 }
 
 export interface LabChangeLogField {
@@ -101,6 +166,7 @@ export interface LabChangeLogField {
 
 export interface SampleBlockSavePayload {
   id: string
+  idempotencyKey?: string
   baseUpdatedAt?: string
   baseInputs?: Partial<LabSampleInput>
   changedFields?: Partial<LabSampleInput>

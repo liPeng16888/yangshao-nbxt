@@ -1,14 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 
-const requestMock = vi.hoisted(() => ({ put: vi.fn(), post: vi.fn() }))
+const requestMock = vi.hoisted(() => ({ put: vi.fn(), post: vi.fn(), delete: vi.fn(), patch: vi.fn() }))
 
 vi.mock('@/utils/request', () => ({
   default: requestMock,
   useMocks: false
 }))
 
-import { addSampleBlocks, applyCurrentParametersFromIndex } from './labSheet'
+import {
+  addSampleBlocks,
+  applyCurrentParametersFromIndex,
+  createSampleRetests,
+  deleteSampleRetest,
+  getMockCompletedSampleAccess,
+  saveSampleRetest,
+  voidSampleRetest
+} from './labSheet'
+import type { LabSheetRealtimeEvent } from './labSheet'
 
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>()
@@ -28,6 +37,10 @@ describe('lab sheet segmented parameter API', () => {
     requestMock.put.mockResolvedValue({})
     requestMock.post.mockReset()
     requestMock.post.mockResolvedValue({})
+    requestMock.delete.mockReset()
+    requestMock.delete.mockResolvedValue({})
+    requestMock.patch.mockReset()
+    requestMock.patch.mockResolvedValue({})
     Object.defineProperty(window, 'localStorage', { configurable: true, value: createMemoryStorage() })
     Object.defineProperty(window, 'sessionStorage', { configurable: true, value: createMemoryStorage() })
     window.localStorage.clear()
@@ -45,6 +58,22 @@ describe('lab sheet segmented parameter API', () => {
         token: 'completed-data-grant', features: ['COMPLETED_SAMPLE_DATA']
       }
     }))
+  })
+
+  it('exports the retests-changed realtime event consumed by the store', () => {
+    const event: LabSheetRealtimeEvent = {
+      type: 'retests-changed',
+      frontendUserId: 'front-1',
+      date: '2026-08-20',
+      sheetId: 'sheet-1',
+      sampleBlockId: 'block-1',
+      sampleRetestId: 'retest-1',
+      sourceClientId: 'client-1',
+      changedById: 'sub-1',
+      updatedAt: '2026-08-20T10:00:00.000Z'
+    }
+
+    expect(event.type).toBe('retests-changed')
   })
 
   it('sends both the client id and completed-sample access grant when applying', async () => {
@@ -76,5 +105,63 @@ describe('lab sheet segmented parameter API', () => {
         }
       }
     )
+  })
+
+  it('sends both authorization headers on all four retest writes with exact payload placement', async () => {
+    const headers = {
+      headers: {
+        'X-YS-Client-Id': 'client-1',
+        'X-YS-Access-Grant': 'completed-data-grant'
+      }
+    }
+    const createPayload = { sampleBlockIds: ['block-1'], idempotencyKey: 'create-1' }
+    const savePayload = {
+      idempotencyKey: 'save-1',
+      baseUpdatedAt: '2026-08-20T00:00:00.000Z',
+      baseInputs: { ironRaw: null },
+      changedFields: { ironRaw: 0 }
+    }
+    const deletePayload = {
+      baseUpdatedAt: '2026-08-20T00:00:01.000Z',
+      idempotencyKey: 'delete-1'
+    }
+    const voidPayload = {
+      baseUpdatedAt: '2026-08-20T00:00:02.000Z',
+      idempotencyKey: 'void-1',
+      reason: '复核失败'
+    }
+
+    await createSampleRetests('sheet-1', createPayload)
+    await saveSampleRetest('sheet-1', 'retest-1', savePayload)
+    await deleteSampleRetest('sheet-1', 'retest-2', deletePayload)
+    await voidSampleRetest('sheet-1', 'retest-1', voidPayload)
+
+    expect(requestMock.post).toHaveBeenCalledWith('/lab-sheets/sheet-1/sample-retests', createPayload, headers)
+    expect(requestMock.put).toHaveBeenCalledWith('/lab-sheets/sheet-1/sample-retests/retest-1', savePayload, headers)
+    expect(requestMock.delete).toHaveBeenCalledWith('/lab-sheets/sheet-1/sample-retests/retest-2', {
+      ...headers,
+      data: deletePayload
+    })
+    expect(requestMock.patch).toHaveBeenCalledWith('/lab-sheets/sheet-1/sample-retests/retest-1/void', voidPayload, headers)
+  })
+
+  it('allows unprotected mock data and requires a valid current-version session only when configured', () => {
+    expect(getMockCompletedSampleAccess()).toEqual({ protected: false, allowed: true })
+
+    window.localStorage.setItem('ys_mock_access_guard_groups', JSON.stringify([{
+      id: 'completed-data-group', name: '完成数据', enabled: true, ttlMinutes: 5,
+      grantVersion: 2, password: '1234', recoveryPrompt: '', recoveryAnswer: '',
+      features: ['COMPLETED_SAMPLE_DATA']
+    }]))
+    expect(getMockCompletedSampleAccess()).toEqual({ protected: true, allowed: false })
+
+    window.localStorage.setItem('ys_access_guard_group_sessions', JSON.stringify({
+      'completed-data-group': {
+        groupId: 'completed-data-group', grantVersion: 2,
+        expiresAt: Date.now() + 60_000,
+        token: 'current-completed-data-grant', features: ['COMPLETED_SAMPLE_DATA']
+      }
+    }))
+    expect(getMockCompletedSampleAccess()).toEqual({ protected: true, allowed: true })
   })
 })

@@ -3,6 +3,7 @@ import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import type { SampleBlock } from '@/types/labSheet'
 import {
   createLabReportFilename,
+  createLabReportPngBlob,
   createLabReportSmsText,
   createReportCanvasLayout,
   createReportDraft,
@@ -10,9 +11,9 @@ import {
   defaultLabReportTemplate,
   detectReportElementKeys,
   downloadLabReportElementAsPng,
-  loadLabReportSampleUnits,
+  loadLabReportSmsTemplate,
+  loadLabReportTemplate,
   parseLabElementKeys,
-  saveLabReportSampleUnits
 } from './labReport'
 
 function createMemoryStorage(): Storage {
@@ -58,7 +59,8 @@ function makeBlock(): SampleBlock {
       moisture: 0,
       burnLoss: 0
     },
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
 }
 
@@ -142,6 +144,38 @@ describe('lab report generation', () => {
     expect(createLabReportFilename([firstBlock, secondBlock], '2026-08-02')).toBe('王总、李总-2026.8.2.png')
   })
 
+  it('creates one reusable PNG blob for mobile sharing and desktop downloads', async () => {
+    const block = makeBlock()
+    const draft = createReportDraft(
+      [block],
+      [{ blockId: block.id, elementKeys: ['aluminum'] }],
+      defaultLabReportTemplate,
+      '2026-08-02'
+    )
+    const context = new Proxy(
+      {
+        measureText: vi.fn(() => ({ width: 10 }))
+      } as Record<string, unknown>,
+      {
+        get(target, key) {
+          if (key in target) return target[key as string]
+          const method = vi.fn()
+          target[key as string] = method
+          return method
+        },
+        set(target, key, value) {
+          target[key as string] = value
+          return true
+        }
+      }
+    ) as unknown as CanvasRenderingContext2D
+    const expectedBlob = new Blob(['png'], { type: 'image/png' })
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => callback(expectedBlob))
+
+    await expect(createLabReportPngBlob(draft)).resolves.toBe(expectedBlob)
+  })
+
   it('expands the exported report result grid beyond five sample rows', () => {
     const blocks = Array.from({ length: 6 }, (_, index) => {
       const block = makeBlock()
@@ -166,17 +200,22 @@ describe('lab report generation', () => {
     expect(layout.height - fiveSampleLayout.height).toBe(layout.resultRowHeight)
   })
 
-  it('stores report sample unit shortcuts separately for each signed-in account', () => {
-    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', account: 'account-1' }))
-    expect(saveLabReportSampleUnits([' 王庄客户 ', '王庄客户', '', '清镇客户'])).toEqual(['王庄客户', '清镇客户'])
-    expect(loadLabReportSampleUnits()).toEqual(['王庄客户', '清镇客户'])
+  it('reads only known legacy template fields and drops migration metadata', () => {
+    window.localStorage.setItem('yangshao-lab-report-template', JSON.stringify({
+      ...defaultLabReportTemplate,
+      title: '旧报告',
+      updatedAt: '2026-08-13T00:00:00.000Z',
+      unexpected: 'drop-me'
+    }))
+    window.localStorage.setItem('yangshao-lab-report-sms-template', JSON.stringify({
+      prefix: '旧前缀',
+      suffix: '',
+      updatedAt: '2026-08-13T00:00:00.000Z',
+      unexpected: 'drop-me'
+    }))
 
-    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-2', account: 'account-2' }))
-    expect(loadLabReportSampleUnits()).toEqual([])
-    saveLabReportSampleUnits(['富宁客户'])
-
-    window.localStorage.setItem('ys_user', JSON.stringify({ id: 'front-1', account: 'account-1' }))
-    expect(loadLabReportSampleUnits()).toEqual(['王庄客户', '清镇客户'])
+    expect(loadLabReportTemplate()).toEqual({ ...defaultLabReportTemplate, title: '旧报告' })
+    expect(loadLabReportSmsTemplate()).toEqual({ prefix: '旧前缀', suffix: '' })
   })
 
   it('creates SMS content with prefix, suffix, sample line, and blank lines between samples', () => {

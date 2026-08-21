@@ -37,6 +37,10 @@ export function validateBlacklistPayload(payload: BlacklistPayload) {
   if (payload.images.length > 2) errors.push('图片最多上传 2 张')
   if (payload.amount !== null && payload.amount !== undefined && !Number.isFinite(payload.amount)) {
     errors.push('金额必须是有效数字')
+  } else if (payload.amount !== null && payload.amount !== undefined) {
+    if (payload.amount < 0) errors.push('金额不能小于 0')
+    const cents = payload.amount * 100
+    if (Math.abs(cents - Math.round(cents)) > 1e-8) errors.push('金额最多保留两位小数')
   }
 
   return errors

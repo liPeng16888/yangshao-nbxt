@@ -23,7 +23,7 @@ describe('calculatePayroll', () => {
       overtimeMinutes: 90,
       commissionAmount: '37.05',
       bonusAmount: '100.105',
-      adjustments: [{ amount: '50.005' }, { amount: '-20.004' }]
+      adjustments: [{ amount: '50.00' }, { amount: '-20.00' }]
     })
 
     expect(result).toEqual({
@@ -37,6 +37,8 @@ describe('calculatePayroll', () => {
       bonusAmount: 100.11,
       adjustmentAmount: 30,
       attendanceBonus: 0,
+      grossEarningsAmount: 10232.16,
+      deductionAmount: 133.64,
       payableAmount: 10098.52,
       issues: []
     })
@@ -117,6 +119,8 @@ describe('calculatePayroll', () => {
       bonusAmount: 20,
       adjustmentAmount: -5,
       attendanceBonus: 0,
+      grossEarningsAmount: 6060,
+      deductionAmount: 5,
       payableAmount: 6055,
       issues: ['缺少当月应出勤天数']
     })
@@ -159,6 +163,38 @@ describe('calculatePayroll', () => {
     expect(result.overtimePay).toBe(0.01)
     expect(result.commissionAmount).toBe(1.01)
     expect(result.bonusAmount).toBe(10.08)
+    expect(result.grossEarningsAmount).toBe(11.2)
+    expect(result.deductionAmount).toBe(0)
     expect(result.payableAmount).toBe(11.2)
+  })
+
+  it('separates mixed manual adjustments into authoritative gross and deductions while preserving payable', () => {
+    const result = calculatePayroll({
+      ...baseInput,
+      baseSalary: 1000,
+      attendanceBonus: 300,
+      scheduledWorkDays: 3,
+      restQuotaDays: 1,
+      countedLeaveDays: 2,
+      absenceDays: 0.5,
+      overtimeMinutes: 1,
+      overtimeHourlyRate: '0.3',
+      commissionAmount: '1.005',
+      bonusAmount: '10.075',
+      adjustments: [{ amount: '12.34' }, { amount: '-5.67' }]
+    })
+
+    expect(result).toMatchObject({
+      leaveDeduction: 333.33,
+      absenceDeduction: 166.67,
+      overtimePay: 0.01,
+      commissionAmount: 1.01,
+      bonusAmount: 10.08,
+      adjustmentAmount: 6.67,
+      grossEarningsAmount: 1023.44,
+      deductionAmount: 505.67,
+      payableAmount: 517.77
+    })
+    expect(result.grossEarningsAmount - result.deductionAmount).toBe(result.payableAmount)
   })
 })

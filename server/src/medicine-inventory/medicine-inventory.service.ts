@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common'
 import {
   MedicineMovementType,
   Prisma,
@@ -6,6 +6,7 @@ import {
   type MedicineInventoryMovement
 } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
+import { TenantRealtimeService } from '../realtime/tenant-realtime.service'
 import {
   CreateMedicineInboundPayload,
   CreateMedicineOutboundPayload,
@@ -20,7 +21,10 @@ import {
 
 @Injectable()
 export class MedicineInventoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtime?: TenantRealtimeService
+  ) {}
 
   async listItems(frontendUserIds: string[], itemIds?: string[]): Promise<MedicineInventoryItemDto[]> {
     const scopedFrontendUserIds = this.uniqueStrings(frontendUserIds)
@@ -46,21 +50,28 @@ export class MedicineInventoryService {
     })
   }
 
-  async createCommonName(frontendUserId: string, nameInput: string): Promise<MedicineCommonNameDto> {
+  async createCommonName(frontendUserId: string, actorUserIdOrName: string, nameInput?: string): Promise<MedicineCommonNameDto> {
+    const actorUserId = nameInput === undefined ? frontendUserId : actorUserIdOrName
+    const actualName = nameInput === undefined ? actorUserIdOrName : nameInput
     const accountId = this.requiredString(frontendUserId, '前台账号不能为空')
-    const name = this.requiredString(nameInput, '请填写常用药品名称')
-    return this.prisma.medicineCommonName.upsert({
+    const name = this.requiredString(actualName, '请填写常用药品名称')
+    const row = await this.prisma.medicineCommonName.upsert({
       where: { frontendUserId_name: { frontendUserId: accountId, name } },
       create: { frontendUserId: accountId, name },
       update: {}
     })
+    this.publish(accountId, actorUserId, row.id, 'update', row.updatedAt)
+    return row
   }
 
-  async deleteCommonName(frontendUserId: string, commonNameId: string): Promise<void> {
+  async deleteCommonName(frontendUserId: string, actorUserIdOrCommonNameId: string, commonNameId?: string): Promise<void> {
+    const actorUserId = commonNameId === undefined ? frontendUserId : actorUserIdOrCommonNameId
+    const actualCommonNameId = commonNameId === undefined ? actorUserIdOrCommonNameId : commonNameId
     const accountId = this.requiredString(frontendUserId, '前台账号不能为空')
-    const id = this.requiredString(commonNameId, '请选择常用药品名称')
+    const id = this.requiredString(actualCommonNameId, '请选择常用药品名称')
     const result = await this.prisma.medicineCommonName.deleteMany({ where: { id, frontendUserId: accountId } })
     if (!result.count) throw new NotFoundException('未找到当前账号的常用药品名称')
+    this.publish(accountId, actorUserId, id, 'delete', new Date())
   }
 
   async listMovements(
@@ -99,7 +110,9 @@ export class MedicineInventoryService {
     return rows.map((row) => this.movementDto(row))
   }
 
-  async createInbound(frontendUserId: string, payload: CreateMedicineInboundPayload) {
+  async createInbound(frontendUserId: string, actorUserIdOrPayload: string | CreateMedicineInboundPayload, maybePayload?: CreateMedicineInboundPayload) {
+    const actorUserId = typeof actorUserIdOrPayload === 'string' ? actorUserIdOrPayload : frontendUserId
+    const payload = typeof actorUserIdOrPayload === 'string' ? maybePayload! : actorUserIdOrPayload
     const accountId = this.requiredString(frontendUserId, '前台账号不能为空')
     const occurredOn = this.businessDate(payload.occurredOn, '入库日期')
     const name = this.requiredString(payload.name, '请填写药品名称')
@@ -107,7 +120,7 @@ export class MedicineInventoryService {
     const remark = this.optionalString(payload.remark)
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const result = await this.prisma.$transaction(async (tx) => {
         const item = await tx.medicineInventoryItem.upsert({
           where: {
             frontendUserId_name_unit: {
@@ -143,6 +156,8 @@ export class MedicineInventoryService {
           movement: this.movementDto(movement)
         }
       })
+      this.publish(accountId, actorUserId, result.movement.id, 'create', new Date(result.movement.createdAt))
+      return result
     } catch (error) {
       if (this.isQuantityRangeViolation(error)) {
         throw new ConflictException('库存数量超出允许范围，请核对当前库存和本次入库数量')
@@ -151,13 +166,15 @@ export class MedicineInventoryService {
     }
   }
 
-  async createOutbound(frontendUserId: string, payload: CreateMedicineOutboundPayload) {
+  async createOutbound(frontendUserId: string, actorUserIdOrPayload: string | CreateMedicineOutboundPayload, maybePayload?: CreateMedicineOutboundPayload) {
+    const actorUserId = typeof actorUserIdOrPayload === 'string' ? actorUserIdOrPayload : frontendUserId
+    const payload = typeof actorUserIdOrPayload === 'string' ? maybePayload! : actorUserIdOrPayload
     const accountId = this.requiredString(frontendUserId, '前台账号不能为空')
     const occurredOn = this.businessDate(payload.occurredOn, '出库日期')
     const medicineItemId = this.requiredString(payload.medicineItemId, '请选择出库药品')
     const remark = this.optionalString(payload.remark)
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const item = await tx.medicineInventoryItem.findFirst({
         where: { id: medicineItemId, frontendUserId: accountId }
       })
@@ -205,15 +222,20 @@ export class MedicineInventoryService {
         movement: this.movementDto(movement)
       }
     })
+    this.publish(accountId, actorUserId, result.movement.id, 'create', new Date(result.movement.createdAt))
+    return result
   }
 
-  async createCorrection(frontendUserId: string, movementId: string, reason: string) {
+  async createCorrection(frontendUserId: string, actorUserIdOrMovementId: string, movementIdOrReason: string, maybeReason?: string) {
+    const actorUserId = maybeReason === undefined ? frontendUserId : actorUserIdOrMovementId
+    const movementId = maybeReason === undefined ? actorUserIdOrMovementId : movementIdOrReason
+    const reason = maybeReason === undefined ? movementIdOrReason : maybeReason
     const accountId = this.requiredString(frontendUserId, '前台账号不能为空')
     const originalMovementId = this.requiredString(movementId, '请选择要更正的流水')
     const correctionReason = this.requiredString(reason, '请填写更正原因')
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const result = await this.prisma.$transaction(async (tx) => {
         const original = await tx.medicineInventoryMovement.findFirst({
           where: { id: originalMovementId, frontendUserId: accountId },
           include: { correctionMovement: { select: { id: true } } }
@@ -280,6 +302,8 @@ export class MedicineInventoryService {
           movement: this.movementDto(correction)
         }
       })
+      this.publish(accountId, actorUserId, result.movement.id, 'create', new Date(result.movement.createdAt))
+      return result
     } catch (error) {
       if (this.isUniqueConstraintViolation(error)) {
         throw new ConflictException('该流水已更正，不能重复更正')
@@ -305,6 +329,10 @@ export class MedicineInventoryService {
       unitLabel: MEDICINE_UNIT_LABELS[row.unitSnapshot],
       quantity: row.quantity.toNumber()
     }
+  }
+
+  private publish(dataOwnerId: string, changedById: string, entityId: string, operation: 'create' | 'update' | 'delete', updatedAt: Date) {
+    this.realtime?.publish({ dataOwnerId, module: 'medicine-inventory', entityId, operation, changedById, updatedAt: updatedAt.toISOString() })
   }
 
   private quantityDecimal(unit: MedicineInventoryItem['unit'], input: unknown) {

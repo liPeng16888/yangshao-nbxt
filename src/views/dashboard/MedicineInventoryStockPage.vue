@@ -1,5 +1,16 @@
 <template>
-  <div class="page-stack medicine-inventory-stock">
+  <div class="page-stack medicine-inventory-stock" :class="{ 'mobile-page': isMobileLayout }">
+    <MobileMedicineStockList
+      v-if="isMobileLayout"
+      :items="visibleItems"
+      :filter-items="items"
+      :loading="loading"
+      :error="loadError"
+      :selected-medicine-item-ids="selectedMedicineItemIds"
+      @filter="selectedMedicineItemIds = $event"
+      @retry="loadItems"
+    />
+    <template v-else>
     <section class="inventory-control-band">
       <div>
         <h2>药品库存</h2>
@@ -25,21 +36,29 @@
         <template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template>
       </el-table-column>
     </el-table>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getMedicineItems } from '@/api/medicineInventory'
+import MobileMedicineStockList from '@/components/medicine/MobileMedicineStockList.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import type { MedicineInventoryItem } from '@/types/medicineInventory'
 import { formatDateTime } from '@/utils/date'
 import { formatMedicineQuantity } from '@/utils/medicineInventory'
+import { tryUseTenantRealtimeStore } from '@/stores/tenantRealtime'
 
 const loading = ref(false)
 const loadError = ref('')
 const items = ref<MedicineInventoryItem[]>([])
 const selectedMedicineItemIds = ref<string[]>([])
+const tenantRealtime = tryUseTenantRealtimeStore()
+let unregisterRealtime: (() => void) | undefined
+const { isMobileLayout } = useMobileLayout()
+let itemsRequestId = 0
 
 const visibleItems = computed(() => {
   if (!selectedMedicineItemIds.value.length) return items.value
@@ -49,19 +68,26 @@ const visibleItems = computed(() => {
 
 onMounted(() => {
   void loadItems()
+  unregisterRealtime = tenantRealtime?.registerModule('medicine-inventory', { isDirty: () => false, refresh: loadItems })
 })
 
+onBeforeUnmount(() => unregisterRealtime?.())
+
 async function loadItems() {
+  const requestId = ++itemsRequestId
   loading.value = true
   loadError.value = ''
   try {
-    items.value = await getMedicineItems()
+    const result = await getMedicineItems()
+    if (requestId !== itemsRequestId) return
+    items.value = result
   } catch (error) {
+    if (requestId !== itemsRequestId) return
     items.value = []
     loadError.value = errorMessage(error, '药品库存加载失败，请稍后重试')
     ElMessage.error(loadError.value)
   } finally {
-    loading.value = false
+    if (requestId === itemsRequestId) loading.value = false
   }
 }
 

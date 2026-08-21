@@ -155,6 +155,18 @@ describe('employee attendance real API adapters', () => {
     expect(payload).not.toHaveProperty('emergencyContact')
   })
 
+  it('omits a blank optional termination date while preserving an explicit date', () => {
+    const blankDate = buildEmployeeMutationPayload({
+      employeeNumber: 'YG002', name: '李四', hireDate: '2026-08-17', terminationDate: ''
+    }, false)
+    const explicitDate = buildEmployeeMutationPayload({
+      employeeNumber: 'YG003', name: '王五', hireDate: '2026-08-17', terminationDate: '2026-08-31'
+    }, false)
+
+    expect(blankDate).not.toHaveProperty('terminationDate')
+    expect(explicitDate).toHaveProperty('terminationDate', '2026-08-31')
+  })
+
   it('keeps masked sensitive values out of editable plaintext keys', () => {
     const row = normalizeEmployeeResponse({ id: 'e1', employeeNumber: '001', name: '张三', hireDate: '2026-01-01', idCard: '410****1234', bankCard: '622****7890', address: '洛***区', emergencyContact: '张***001', baseSalary: '6000.00' }) as unknown as Record<string, unknown>
     expect(row).toMatchObject({ idCardMasked: '410****1234', bankCardMasked: '622****7890', baseSalary: 6000 })
@@ -166,8 +178,25 @@ describe('employee attendance real API adapters', () => {
 
   it('maps server snapshot and lock field names without losing payroll rows', () => {
     expect(normalizeCommissionResponse({ id: 'c1', unitPriceSnapshot: '12.50', amount: '25.00', quantity: '2', payrollLockedAt: 'locked' })).toMatchObject({ unitPrice: 12.5, lockedAt: 'locked' })
-    const payroll = normalizePayrollResponse({ id: 'p1', month: '2026-08', status: 'DRAFT', items: [{ id: 'i1', employeeId: 'e1', employeeNameSnapshot: '张三', employeeNumberSnapshot: '001', payableAmount: '6123.45', issues: [], adjustments: [] }] })!
-    expect(payroll.items[0]).toMatchObject({ payableAmount: 6123.45, employee: { name: '张三' } })
+    const payroll = normalizePayrollResponse({
+      id: 'p1', month: '2026-08', status: 'DRAFT', items: [{
+        id: 'i1', employeeId: 'e1', employeeNameSnapshot: '张三', employeeNumberSnapshot: '001',
+        payableAmount: '6123.45', issues: [], adjustments: [],
+        calculationSnapshot: { input: {}, result: { grossEarningsAmount: '7000.50', deductionAmount: '877.05', payableAmount: '6123.45' } }
+      }]
+    })!
+    expect(payroll.items[0]).toMatchObject({
+      payableAmount: 6123.45,
+      employee: { name: '张三' },
+      calculationSnapshot: { result: { grossEarningsAmount: 7000.5, deductionAmount: 877.05, payableAmount: 6123.45 } }
+    })
+    const invalidTotals = normalizePayrollResponse({
+      id: 'p-invalid', month: '2026-08', status: 'DRAFT', items: [{
+        id: 'i-invalid', employeeId: 'e1', payableAmount: '10', issues: [], adjustments: [],
+        calculationSnapshot: { input: { baseSalary: 9999 }, result: { grossEarningsAmount: 'NaN', deductionAmount: Infinity, payableAmount: 10 } }
+      }]
+    })!
+    expect(invalidTotals.items[0].calculationSnapshot.result).toMatchObject({ grossEarningsAmount: 0, deductionAmount: 0, payableAmount: 10 })
     const blocked = normalizePayrollResponse({ id: 'p2', month: '2026-08', status: 'DRAFT', issueCount: 2, items: [] })!
     expect(blocked).toMatchObject({ issueCount: 2, issues: ['当前有 2 项工资确认阻断问题'] })
   })

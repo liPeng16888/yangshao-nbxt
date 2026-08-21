@@ -56,18 +56,25 @@ export const defaultLabReportSmsTemplate: LabReportSmsTemplate = {
 }
 
 export function loadLabReportTemplate(): LabReportTemplate {
-  if (typeof window === 'undefined') return { ...defaultLabReportTemplate }
+  if (typeof window === 'undefined') return cloneDefaultLabReportTemplate()
   try {
     const raw = window.localStorage.getItem(LAB_REPORT_TEMPLATE_STORAGE_KEY)
-    if (!raw) return { ...defaultLabReportTemplate }
-    const parsed = JSON.parse(raw) as Partial<LabReportTemplate>
+    if (!raw) return cloneDefaultLabReportTemplate()
+    const parsed = JSON.parse(raw) as Record<string, unknown>
     return {
-      ...defaultLabReportTemplate,
-      ...parsed,
-      statements: parsed.statements?.length ? parsed.statements : [...defaultLabReportTemplate.statements]
+      title: (parsed.title ?? defaultLabReportTemplate.title) as string,
+      sampleUnit: (parsed.sampleUnit ?? defaultLabReportTemplate.sampleUnit) as string,
+      inspector: (parsed.inspector ?? defaultLabReportTemplate.inspector) as string,
+      reviewer: (parsed.reviewer ?? defaultLabReportTemplate.reviewer) as string,
+      address: (parsed.address ?? defaultLabReportTemplate.address) as string,
+      phone: (parsed.phone ?? defaultLabReportTemplate.phone) as string,
+      statements: (Array.isArray(parsed.statements) && parsed.statements.length
+        ? [...parsed.statements]
+        : [...defaultLabReportTemplate.statements]) as string[],
+      sealImage: (parsed.sealImage ?? defaultLabReportTemplate.sealImage) as string
     }
   } catch {
-    return { ...defaultLabReportTemplate }
+    return cloneDefaultLabReportTemplate()
   }
 }
 
@@ -87,14 +94,18 @@ export function loadLabReportSmsTemplate(): LabReportSmsTemplate {
   try {
     const raw = window.localStorage.getItem(LAB_REPORT_SMS_TEMPLATE_STORAGE_KEY)
     if (!raw) return { ...defaultLabReportSmsTemplate }
-    const parsed = JSON.parse(raw) as Partial<LabReportSmsTemplate>
+    const parsed = JSON.parse(raw) as Record<string, unknown>
     return {
-      ...defaultLabReportSmsTemplate,
-      ...parsed
+      prefix: (parsed.prefix ?? defaultLabReportSmsTemplate.prefix) as string,
+      suffix: (parsed.suffix ?? defaultLabReportSmsTemplate.suffix) as string
     }
   } catch {
     return { ...defaultLabReportSmsTemplate }
   }
+}
+
+function cloneDefaultLabReportTemplate(): LabReportTemplate {
+  return { ...defaultLabReportTemplate, statements: [...defaultLabReportTemplate.statements] }
 }
 
 export function saveLabReportSmsTemplate(template: LabReportSmsTemplate) {
@@ -106,46 +117,6 @@ export function saveLabReportSmsTemplate(template: LabReportSmsTemplate) {
       updatedAt: new Date().toISOString()
     })
   )
-}
-
-export function loadLabReportSampleUnits(): string[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(getLabReportSampleUnitStorageKey())
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return normalizeLabReportSampleUnits(Array.isArray(parsed) ? parsed : [])
-  } catch {
-    return []
-  }
-}
-
-export function saveLabReportSampleUnits(units: string[]): string[] {
-  const normalized = normalizeLabReportSampleUnits(units)
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(getLabReportSampleUnitStorageKey(), JSON.stringify(normalized))
-  }
-  return normalized
-}
-
-function getLabReportSampleUnitStorageKey() {
-  let owner = 'guest'
-  try {
-    const rawUser = window.localStorage.getItem('ys_user')
-    const user = rawUser ? (JSON.parse(rawUser) as { id?: string; account?: string }) : null
-    owner = user?.id || user?.account || owner
-  } catch {
-    // Invalid login cache should not prevent the report from being edited.
-  }
-  return `${LAB_REPORT_SAMPLE_UNIT_STORAGE_PREFIX}${owner}`
-}
-
-function normalizeLabReportSampleUnits(units: unknown[]) {
-  const normalized = units
-    .filter((unit): unit is string => typeof unit === 'string')
-    .map((unit) => unit.trim())
-    .filter(Boolean)
-  return [...new Set(normalized)].slice(0, 100)
 }
 
 export function getBlockDisplayName(block: SampleBlock) {
@@ -259,9 +230,22 @@ export function createLabReportSmsText(blocks: SampleBlock[], selections: LabRep
   return [normalizeSmsTemplatePart(template.prefix), sampleTexts.join('\n\n'), normalizeSmsTemplatePart(template.suffix)].filter(Boolean).join('\n')
 }
 
-export function downloadLabReportAsPng(draft: LabReportDraft, filename = '化验报告.png') {
-  const exportMargin = 28
-  return downloadReportCanvasAsPng(draft, exportMargin, filename)
+const LAB_REPORT_EXPORT_MARGIN = 28
+
+export async function createLabReportPngBlob(draft: LabReportDraft) {
+  try {
+    const canvas = await renderReportCanvas(draft, LAB_REPORT_EXPORT_MARGIN)
+    if (!canvas) return null
+    return canvasToPngBlob(canvas)
+  } catch {
+    return null
+  }
+}
+
+export async function downloadLabReportAsPng(draft: LabReportDraft, filename = '化验报告.png') {
+  const blob = await createLabReportPngBlob(draft)
+  if (!blob) return false
+  return downloadPngBlob(blob, filename)
 }
 
 export function downloadLabReportElementAsPng(element: HTMLElement, filename = '化验报告.png') {
@@ -326,68 +310,31 @@ function downloadSvgAsPng(svg: string, width: number, height: number, exportMarg
 }
 
 function downloadCanvasBlob(canvas: HTMLCanvasElement, filename: string) {
-  return new Promise<boolean>((resolve) => {
+  return canvasToPngBlob(canvas).then((blob) => (blob ? downloadPngBlob(blob, filename) : false))
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob | null>((resolve) => {
     let settled = false
-    const finish = (result: boolean) => {
+    const finish = (blob: Blob | null) => {
       if (settled) return
       settled = true
       window.clearTimeout(timeout)
-      resolve(result)
+      resolve(blob)
     }
-    const timeout = window.setTimeout(() => finish(false), 5000)
+    const timeout = window.setTimeout(() => finish(null), 5000)
 
     try {
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          finish(false)
-          return
-        }
-        const blobUrl = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.download = filename
-        link.href = blobUrl
-        link.style.display = 'none'
-        document.body.appendChild(link)
-        link.click()
-        window.setTimeout(() => {
-          link.remove()
-          URL.revokeObjectURL(blobUrl)
-        }, 1000)
-        finish(true)
-      }, 'image/png')
+      canvas.toBlob((blob) => finish(blob), 'image/png')
     } catch {
-      finish(false)
+      finish(null)
     }
   })
 }
 
-async function downloadReportCanvasAsPng(draft: LabReportDraft, exportMargin: number, filename: string) {
+function downloadPngBlob(blob: Blob, filename: string) {
   try {
-    const layout = createReportCanvasLayout(draft)
-    const canvas = document.createElement('canvas')
-    canvas.width = layout.width + exportMargin * 2
-    canvas.height = layout.height + exportMargin * 2
-    const context = canvas.getContext('2d')
-    if (!context) return false
-
-    context.fillStyle = '#ffffff'
-    context.fillRect(0, 0, canvas.width, canvas.height)
-    context.save()
-    context.translate(exportMargin, exportMargin)
-    const sealImage = draft.sealImage ? await loadImageSafe(draft.sealImage) : null
-    drawReportCanvas(context, draft, layout, sealImage)
-    context.restore()
-
-    return downloadCanvasDataUrl(canvas, filename)
-  } catch {
-    return false
-  }
-}
-
-function downloadCanvasDataUrl(canvas: HTMLCanvasElement, filename: string) {
-  try {
-    const dataUrl = canvas.toDataURL('image/png')
-    const blobUrl = URL.createObjectURL(dataUrlToBlob(dataUrl))
+    const blobUrl = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.download = filename
     link.href = blobUrl
@@ -404,14 +351,27 @@ function downloadCanvasDataUrl(canvas: HTMLCanvasElement, filename: string) {
   }
 }
 
-function dataUrlToBlob(dataUrl: string) {
-  const [, base64] = dataUrl.split(',')
-  const binary = window.atob(base64 || '')
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
+async function renderReportCanvas(draft: LabReportDraft, exportMargin: number) {
+  try {
+    const layout = createReportCanvasLayout(draft)
+    const canvas = document.createElement('canvas')
+    canvas.width = layout.width + exportMargin * 2
+    canvas.height = layout.height + exportMargin * 2
+    const context = canvas.getContext('2d')
+    if (!context) return null
+
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.save()
+    context.translate(exportMargin, exportMargin)
+    const sealImage = draft.sealImage ? await loadImageSafe(draft.sealImage) : null
+    drawReportCanvas(context, draft, layout, sealImage)
+    context.restore()
+
+    return canvas
+  } catch {
+    return null
   }
-  return new Blob([bytes], { type: 'application/octet-stream' })
 }
 
 type ReportCanvasLayout = {

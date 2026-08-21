@@ -12,7 +12,7 @@ export async function createCustomer(payload: CustomerPayload): Promise<Customer
   return request.post('/customers', payload)
 }
 
-export async function deleteCustomer(id: string): Promise<{ id: string }> {
+export async function deleteCustomer(id: string, baseUpdatedAt: string): Promise<{ id: string }> {
   if (useMocks) return mockDeleteCustomer(id)
-  return request.delete(`/customers/${encodeURIComponent(id)}`)
+  return request.delete(`/customers/${encodeURIComponent(id)}`, { data: { baseUpdatedAt } })
 }

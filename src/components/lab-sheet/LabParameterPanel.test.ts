@@ -72,4 +72,29 @@ describe('LabParameterPanel', () => {
 
     expect(wrapper.emitted('save')).toBeUndefined()
   })
+
+  it('keeps all nine parameters collapsed by default on mobile and expands them on demand', async () => {
+    const wrapper = mount(LabParameterPanel, {
+      props: {
+        parameters: defaultLabParameters,
+        mobile: true
+      },
+      global: {
+        stubs: {
+          ElInputNumber: {
+            props: ['modelValue'],
+            template: '<input class="input-number-stub" :value="modelValue" />'
+          }
+        }
+      }
+    })
+
+    expect(wrapper.get('.parameter-mobile-toggle').text()).toContain('9 项计算参数')
+    expect(wrapper.findAll('.input-number-stub')).toHaveLength(0)
+
+    await wrapper.get('.parameter-mobile-toggle').trigger('click')
+
+    expect(wrapper.findAll('.input-number-stub')).toHaveLength(9)
+    expect(wrapper.get('.parameter-grid').classes()).toContain('parameter-grid--mobile')
+  })
 })

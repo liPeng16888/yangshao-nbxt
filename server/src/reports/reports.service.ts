@@ -26,8 +26,12 @@ export class ReportsService {
       include: { sampleBlocks: true }
     })
     const sheetMap = new Map(sheets.map((sheet) => [sheet.date, sheet]))
-    const prepaidRecharges = await this.prisma.prepaidRechargeRecord.findMany({
-      where: { frontendUserId, rechargeDate: { gte: range.startDate, lte: range.endDate } }
+    const prepaidRecharges = await this.prisma.sharedPrepaidRecharge.findMany({
+      where: {
+        ownerFrontendUserId: frontendUserId,
+        rechargeDate: { gte: range.startDate, lte: range.endDate },
+        reversedAt: null
+      }
     })
     const rowMap = new Map<string, ReturnType<ReportsService['emptyIncomeRow']>>()
     dates.forEach((date) => {
@@ -36,27 +40,25 @@ export class ReportsService {
       sheet?.sampleBlocks.forEach((block) => {
         const inputs = block.inputs as Record<string, unknown>
         const amount = this.getSampleAmount(inputs)
-        if (!Number.isFinite(amount) || inputs.paymentStatus === '预存款') return
+        if (!Number.isFinite(amount)) return
         const status = this.getIncomeStatus(inputs)
         row.sampleCount += 1
-        row.totalPrice = toMoney(row.totalPrice + amount)
         const summary = row.statusSummaries.find((item) => item.status === status)
-        if (summary) {
-          summary.count += 1
-          summary.amount = toMoney(summary.amount + amount)
+        if (summary) summary.count += 1
+        if (status !== '预存款') {
+          row.totalPrice = toMoney(row.totalPrice + amount)
+          if (summary) {
+            summary.amount = toMoney(summary.amount + amount)
+          }
         }
       })
       rowMap.set(date, row)
     })
     prepaidRecharges.forEach((recharge) => {
       const row = rowMap.get(recharge.rechargeDate) || this.emptyIncomeRow(recharge.rechargeDate)
-      const amount = toMoney(recharge.amount)
+      const amount = toMoney(recharge.paidAmount)
       const summary = row.statusSummaries.find((item) => item.status === '预存款')
-      if (summary) {
-        summary.count += recharge.usableTimes
-        summary.amount = toMoney(summary.amount + amount)
-      }
-      row.sampleCount += recharge.usableTimes
+      if (summary) summary.amount = toMoney(summary.amount + amount)
       row.totalPrice = toMoney(row.totalPrice + amount)
       rowMap.set(recharge.rechargeDate, row)
     })

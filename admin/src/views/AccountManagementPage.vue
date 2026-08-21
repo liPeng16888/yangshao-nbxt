@@ -4,7 +4,7 @@
       <div class="panel__body">
         <el-tabs v-model="active" @tab-change="loadActive">
           <el-tab-pane label="客户账号" name="frontend" />
-          <el-tab-pane label="子账号" name="sub" />
+          <el-tab-pane label="后台子账号" name="sub" />
         </el-tabs>
       </div>
     </section>
@@ -15,6 +15,11 @@
         <el-button type="primary" @click="inviteVisible = true">生成一次性注册码</el-button>
       </div>
       <el-table :data="frontendUsers" border>
+        <el-table-column type="expand" width="48">
+          <template #default="{ row }">
+            <frontend-sub-accounts-read-only :rows="row.frontendSubAccounts || []" />
+          </template>
+        </el-table-column>
         <el-table-column prop="account" label="账号" width="160" />
         <el-table-column prop="username" label="名称" width="160" />
         <el-table-column label="名称备注" min-width="240">
@@ -60,8 +65,8 @@
 
     <section v-else class="panel">
       <div class="panel__header">
-        <strong>子账号</strong>
-        <el-button type="primary" @click="openSubDialog()">创建子账号</el-button>
+        <strong>后台子账号</strong>
+        <el-button type="primary" @click="openSubDialog()">创建后台子账号</el-button>
       </div>
       <el-table :data="subAdmins" border>
         <el-table-column prop="account" label="账号" width="160" />
@@ -119,11 +124,12 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, reactive, ref } from 'vue'
-import { getFrontendOptions, request } from '../api'
-import type { FrontendOption } from '../types'
+import { getAdminFrontendAccounts, getFrontendOptions, request } from '../api'
+import FrontendSubAccountsReadOnly from '../components/FrontendSubAccountsReadOnly.vue'
+import type { AdminFrontendAccount, FrontendOption } from '../types'
 
 const active = ref('frontend')
-const frontendUsers = ref<any[]>([])
+const frontendUsers = ref<Array<AdminFrontendAccount & { remarkDraft: string }>>([])
 const subAdmins = ref<any[]>([])
 const frontendOptions = ref<FrontendOption[]>([])
 const inviteVisible = ref(false)
@@ -139,7 +145,7 @@ onMounted(async () => {
 
 async function loadActive() {
   if (active.value === 'frontend') {
-    const rows = await request.get<any, any[]>('/admin/accounts/frontend-users')
+    const rows = await getAdminFrontendAccounts()
     frontendUsers.value = rows.map((row) => ({ ...row, remarkDraft: row.displayRemark || '' }))
   }
   else subAdmins.value = await request.get('/admin/accounts/sub-admins')

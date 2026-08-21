@@ -26,6 +26,70 @@ describe('employee attendance store operation state', () => {
     expect(new Set(store.leaves.map(row => row.employeeId)).size).toBeGreaterThan(1)
   })
 
+  it('silences an invalidated scoped leave load and releases only its own loading state', async () => {
+    const store = useEmployeeAttendanceStore()
+    await store.loadLeaves()
+    const originalRows = [...store.leaves]
+    const originalTypes = [...store.leaveTypes]
+    let resolveRows!: (rows: typeof originalRows) => void
+    let rejectRows!: (error: Error) => void
+    const request = vi.spyOn(api, 'getLeaves')
+      .mockReturnValueOnce(new Promise((resolve) => { resolveRows = resolve }))
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectRows = reject }))
+
+    const resolvedController = new AbortController()
+    const resolvedLoad = store.loadLeaves({ signal: resolvedController.signal })
+    expect(store.loading).toBe(true)
+    resolvedController.abort()
+    await Promise.resolve(); await Promise.resolve()
+    expect(store.loading).toBe(false)
+    resolveRows([{ ...originalRows[0]!, id: 'late-resolved-leave' }])
+    await resolvedLoad
+    await Promise.resolve()
+    expect(store.leaves).toEqual(originalRows)
+    expect(store.leaveTypes).toEqual(originalTypes)
+    expect(store.error).toBe('')
+
+    const rejectedController = new AbortController()
+    const rejectedLoad = store.loadLeaves({ signal: rejectedController.signal })
+    expect(store.loading).toBe(true)
+    rejectedController.abort()
+    await Promise.resolve(); await Promise.resolve()
+    expect(store.loading).toBe(false)
+    rejectRows(new Error('卸载后的旧刷新失败'))
+    await rejectedLoad
+    await Promise.resolve()
+    expect(store.leaves).toEqual(originalRows)
+    expect(store.leaveTypes).toEqual(originalTypes)
+    expect(store.error).toBe('')
+    request.mockRestore()
+  })
+
+  it('does not let one scoped leave cancellation cancel another consumer newer load', async () => {
+    const store = useEmployeeAttendanceStore()
+    await store.loadLeaves()
+    const originalRows = [...store.leaves]
+    let resolveOwned!: (rows: typeof originalRows) => void
+    const currentRows = [{ ...originalRows[0]!, id: 'newer-consumer-leave' }]
+    const request = vi.spyOn(api, 'getLeaves')
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOwned = resolve }))
+      .mockResolvedValueOnce(currentRows)
+    const ownedController = new AbortController()
+
+    const ownedLoad = store.loadLeaves({ signal: ownedController.signal })
+    const newerLoad = store.loadLeaves()
+    ownedController.abort()
+    await ownedLoad
+    await newerLoad
+    resolveOwned([{ ...originalRows[0]!, id: 'cancelled-owner-leave' }])
+    await Promise.resolve()
+
+    expect(store.leaves).toEqual(currentRows)
+    expect(store.error).toBe('')
+    expect(store.loading).toBe(false)
+    request.mockRestore()
+  })
+
   it('keeps the latest attendance response when filters change during a pending request', async () => {
     const store = useEmployeeAttendanceStore()
     let resolveFirst!: (value: any[]) => void

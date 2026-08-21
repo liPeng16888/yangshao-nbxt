@@ -1,11 +1,13 @@
 import { mount } from '@vue/test-utils'
+import { defineComponent, nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ElementPlus, { ElMessage } from 'element-plus'
+import { createPinia, setActivePinia } from 'pinia'
 import LabSheetGrid from './LabSheetGrid.vue'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import { calculateSampleResults } from '@/utils/formulaEngine'
-import type { SampleBlock } from '@/types/labSheet'
+import type { SampleBlock, SampleRetest } from '@/types/labSheet'
 import type { LabSampleChangeRequestSummary } from '@/types/labSampleChangeRequest'
 
 const customerEditorStub = {
@@ -13,6 +15,41 @@ const customerEditorStub = {
   props: ['customerRole', 'selectionLimit', 'modelValue', 'selectedCustomers', 'placeholder'],
   emits: ['update', 'blacklistHit'],
   template: '<div class="customer-editor-stub" />'
+}
+
+const prepaidPickerStub = defineComponent({
+  name: 'PrepaidMemberPickerDialog',
+  props: {
+    visible: Boolean,
+    initialPhone: String,
+    initialAmount: Number
+  },
+  emits: ['close', 'confirm'],
+  template: `
+    <section
+      v-if="visible"
+      class="prepaid-picker-stub"
+      :data-initial-phone="initialPhone || ''"
+      :data-initial-amount="initialAmount ?? ''"
+    >
+      <button
+        class="prepaid-picker-confirm"
+        @click="$emit('confirm', { memberId: 'member-1', phone: '13800000000', amount: 30.25, currentBalance: 100 })"
+      >确认</button>
+    </section>
+  `
+})
+
+function memoryStorage(): Storage {
+  const values = new Map<string, string>()
+  return {
+    get length() { return values.size },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, String(value))
+  }
 }
 
 function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock {
@@ -32,7 +69,8 @@ function makeBlock(overrides: Partial<SampleBlock['inputs']> = {}): SampleBlock 
     readonly: false,
     inputs,
     results: calculateSampleResults(inputs, defaultLabParameters),
-    parameterSnapshot: defaultLabParameters
+    parameterSnapshot: defaultLabParameters,
+    retests: []
   }
 }
 
@@ -53,6 +91,11 @@ function makeSummary(overrides: Partial<LabSampleChangeRequestSummary> = {}): La
     ...overrides
   }
 }
+
+beforeEach(() => {
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: memoryStorage() })
+  setActivePinia(createPinia())
+})
 
 describe('LabSheetGrid', () => {
   it('shows request actions only for eligible readonly history samples', async () => {
@@ -127,6 +170,45 @@ describe('LabSheetGrid', () => {
     })
 
     expect(wrapper.get('[data-testid="request-sample-change-block-1"]').attributes('disabled')).toBeDefined()
+  })
+})
+
+function makeRetest(sequence: number): SampleRetest {
+  return {
+    id: `retest-${sequence}`,
+    sampleBlockId: 'block-1',
+    sequence,
+    status: 'ACTIVE',
+    everFilled: false,
+    readonly: false,
+    sensitiveFieldsHidden: false,
+    inputs: {},
+    results: {
+      iron: 0, silicon: 0, aluminum: 0, aluminumSiliconRatio: 0, total: 0,
+      density: 0, calcium: 0, magnesium: 0, titanium: 0, bottleDensity: 0,
+      moisture: 0, burnLoss: 0
+    },
+    parameterSnapshot: defaultLabParameters,
+    voidReason: null,
+    createdById: 'main-1',
+    updatedById: 'main-1',
+    voidedById: null,
+    createdAt: '2026-08-20T09:15:00.000Z',
+    updatedAt: '2026-08-20T09:15:00.000Z',
+    voidedAt: null
+  }
+}
+
+function makeBlockWithRetests(count: number) {
+  const block = makeBlock({ elementNote: '铁' })
+  block.retests = Array.from({ length: count }, (_, index) => makeRetest(index + 1))
+  return block
+}
+
+describe('LabSheetGrid', () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: memoryStorage() })
+    setActivePinia(createPinia())
   })
 
   it('hides only completed sample detection, amount, and payment values without the completed-data grant', () => {
@@ -581,27 +663,192 @@ describe('LabSheetGrid', () => {
     expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: 12.34 }])
   })
 
-  it('uses deduction times without decimals for prepaid samples', async () => {
+  it('opens the member picker and emits one complete prepaid tuple only after confirmation', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
-        blocks: [makeBlock({ sampleNumber: 'A-001', price: null, paymentStatus: '预存款' })]
+        blocks: [makeBlock({ sampleNumber: 'A-001', price: null, paymentStatus: '' })]
       },
       global: {
         plugins: [ElementPlus],
         stubs: {
-          CustomerCellEditor: {
-            template: '<div class="customer-editor-stub" />'
-          }
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
         }
       }
     })
 
-    const amountInput = wrapper.find('.cell--required input')
-    await amountInput.setValue('3.9')
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '预存款')
+    await nextTick()
 
-    expect(wrapper.text()).toContain('扣除次数')
-    expect(wrapper.text()).not.toContain('样品金额')
-    expect(wrapper.emitted('update')).toContainEqual(['block-1', { price: 3 }])
+    expect(wrapper.emitted('update')).toBeUndefined()
+    expect(wrapper.find('.prepaid-picker-stub').exists()).toBe(true)
+
+    await wrapper.get('.prepaid-picker-confirm').trigger('click')
+
+    expect(wrapper.emitted('update')).toEqual([[
+      'block-1',
+      {
+        paymentStatus: '预存款',
+        price: 30.25,
+        prepaidMemberId: 'member-1',
+        prepaidMemberPhone: '13800000000'
+      }
+    ]])
+  })
+
+  it('renders an existing prepaid amount to two decimals and reopens the picker with its member tuple', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({
+          sampleNumber: 'A-001',
+          price: 3.9,
+          paymentStatus: '预存款',
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('扣除金额')
+    expect(wrapper.text()).toContain('3.90')
+    expect(wrapper.text()).not.toContain('扣除次数')
+
+    await wrapper.get('[data-testid="prepaid-picker-trigger-block-1"]').trigger('click')
+
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-phone')).toBe('13800000000')
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-amount')).toBe('3.9')
+  })
+
+  it('keeps historical prepaid samples readable without treating them as linked ledger members', async () => {
+    const block = makeBlock({
+      sampleNumber: 'A-001',
+      price: 8,
+      paymentStatus: '预存款'
+    })
+    block.readonly = true
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [block] },
+      global: {
+        plugins: [ElementPlus],
+        stubs: { CustomerCellEditor: customerEditorStub }
+      }
+    })
+
+    expect(wrapper.text()).toContain('8.00')
+    expect(wrapper.text()).toContain('历史预存款记录（未关联新台账）')
+    expect(wrapper.get('[data-testid="prepaid-picker-trigger-block-1"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="prepaid-picker-trigger-block-1"]').trigger('click')
+    expect(wrapper.emitted('update')).toBeUndefined()
+  })
+
+  it('clears prepaid-only fields in the same patch when switching away from prepaid', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({
+          price: 30.25,
+          paymentStatus: '预存款',
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000'
+        })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
+        }
+      }
+    })
+
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '已结款')
+    await nextTick()
+
+    expect(wrapper.emitted('update')).toEqual([[
+      'block-1',
+      { paymentStatus: '已结款', prepaidMemberId: undefined, prepaidMemberPhone: undefined }
+    ]])
+  })
+
+  it('does not resurrect a cleared prepaid member when prepaid is selected again', async () => {
+    const block = makeBlock({
+      price: 30.25,
+      paymentStatus: '预存款',
+      prepaidMemberId: 'member-1',
+      prepaidMemberPhone: '13800000000'
+    })
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [block] },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
+        }
+      }
+    })
+
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '已结款')
+    await wrapper.setProps({ blocks: [makeBlock({ price: 30.25, paymentStatus: '已结款' })] })
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '预存款')
+    await nextTick()
+
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-phone')).toBe('')
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-amount')).toBe('30.25')
+  })
+
+  it('does not seed stale member fields when switching a non-prepaid block back to prepaid', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({
+          price: 30.25,
+          paymentStatus: '月结款',
+          prepaidMemberId: 'stale-member',
+          prepaidMemberPhone: '13800000000'
+        })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          CustomerCellEditor: customerEditorStub,
+          PrepaidMemberPickerDialog: prepaidPickerStub
+        }
+      }
+    })
+
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '预存款')
+    await nextTick()
+
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-phone')).toBe('')
+    expect(wrapper.get('.prepaid-picker-stub').attributes('data-initial-amount')).toBe('30.25')
+    expect(wrapper.emitted('update')).toBeUndefined()
+  })
+
+  it('treats a non-positive prepaid deduction amount as incomplete', () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlock({
+          sampleNumber: 'A-001',
+          price: 0,
+          paymentStatus: '预存款',
+          prepaidMemberId: 'member-1',
+          prepaidMemberPhone: '13800000000',
+          elementNote: '铁'
+        })]
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: { CustomerCellEditor: { template: '<div class="customer-editor-stub" />' } }
+      }
+    })
+
+    expect(wrapper.find('.blocked-click-layer').attributes('aria-label')).toBe('请先输入大于 0 的扣除金额')
   })
 
   it('supports negative sample amount input and keeps two decimal places', async () => {
@@ -720,5 +967,152 @@ describe('LabSheetGrid', () => {
     const componentSource = readFileSync('src/components/lab-sheet/LabSheetGrid.vue', 'utf8')
 
     expect(componentSource).toMatch(/\.cell--green\.cell--completed\s*\{\s*background:\s*#fff3eb;/)
+  })
+
+  it('renders every retest after original calculation cells and before the amount row', () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [makeBlockWithRetests(2)] },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    const sequenceCell = wrapper.get('[data-block-id="block-1"]')
+    const order = Array.from(sequenceCell.element.parentElement!.children).map((node) => {
+      const element = node as HTMLElement
+      return element.dataset.retestId || element.dataset.field || ''
+    })
+
+    expect(wrapper.findAll('[data-retest-id]')).toHaveLength(2)
+    expect(order.indexOf('retest-1')).toBeLessThan(order.indexOf('retest-2'))
+    expect(order.indexOf('retest-2')).toBeLessThan(order.indexOf('price'))
+  })
+
+  it.each([
+    [0, 3],
+    [1, 4],
+    [2, 5]
+  ])('reserves exact C-W rows for %i retests while A-B keep the amount row aligned', (retestCount, expectedParentSpan) => {
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [makeBlockWithRetests(retestCount)] },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+    const sequenceStack = wrapper.get('.sample-sequence-stack')
+    const sequenceCell = sequenceStack.element.parentElement as HTMLElement
+    const sequencePrimary = wrapper.get('.sample-sequence-primary')
+    const identities = wrapper.findAll('[data-retest-identity-id]')
+    const customerCell = wrapper.get('.cell--customer')
+    const customerStack = wrapper.get('.sample-customer-stack')
+    const recipientRow = wrapper.get('[data-field="recipientCustomerText"]')
+    const bands = wrapper.findAll('[data-retest-id]')
+
+    expect(sequenceCell.style.gridRow).toBe(`span ${expectedParentSpan}`)
+    expect((sequenceStack.element as HTMLElement).style.gridTemplateRows.split(' ')).toHaveLength(expectedParentSpan)
+    expect((sequencePrimary.element as HTMLElement).style.gridRow).toBe('1 / span 2')
+    expect(identities).toHaveLength(retestCount)
+    identities.forEach((identity, index) => {
+      expect((identity.element as HTMLElement).style.gridRow).toBe(`${index + 3} / span 1`)
+      expect(identity.attributes('aria-label')).toContain(`复样${index + 1}`)
+      expect(identity.text()).toContain(`复样${index + 1}`)
+      expect(identity.text()).toContain('有效')
+    })
+    expect((customerCell.element as HTMLElement).style.gridRow).toBe(`span ${expectedParentSpan}`)
+    expect((customerStack.element as HTMLElement).style.gridTemplateRows.split(' ')).toHaveLength(expectedParentSpan)
+    expect((recipientRow.element as HTMLElement).style.gridRow).toBe('-2 / -1')
+    expect(bands).toHaveLength(retestCount)
+    bands.forEach((band) => {
+      expect((band.element as HTMLElement).style.gridColumn).toBe('3 / -1')
+      expect((band.element as HTMLElement).style.gridTemplateColumns.split(' ')).toHaveLength(21)
+      expect(band.find('.sample-retest-band__identity').exists()).toBe(false)
+    })
+    expect(wrapper.find('[data-field="price"]').exists()).toBe(true)
+  })
+
+  it.each([1, 3])('keeps %i retest rows on one inherited border-box height without cumulative drift', (retestCount) => {
+    const wrapper = mount(LabSheetGrid, {
+      attachTo: document.body,
+      props: { blocks: [makeBlockWithRetests(retestCount)] },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+    const grid = wrapper.get('.lab-grid')
+    const sequenceStack = wrapper.get('.sample-sequence-stack')
+    const customerStack = wrapper.get('.sample-customer-stack')
+    const splitCells = [sequenceStack.element.parentElement!, customerStack.element.parentElement!]
+    const expectedRows = [
+      '36px',
+      '36px',
+      ...Array.from({ length: retestCount }, () => 'var(--sample-retest-row-height)'),
+      '36px'
+    ].join(' ')
+
+    expect((grid.element as HTMLElement).style.getPropertyValue('--sample-retest-row-height')).toBe('62px')
+    expect((sequenceStack.element as HTMLElement).style.gridTemplateRows).toBe(expectedRows)
+    expect((customerStack.element as HTMLElement).style.gridTemplateRows).toBe(expectedRows)
+    ;[sequenceStack, customerStack].forEach((stack) => {
+      const style = getComputedStyle(stack.element)
+      expect(style.boxSizing).toBe('border-box')
+      expect(style.height).toBe('calc(100% + 1px)')
+      expect(style.minHeight).toBe('0')
+      expect(style.marginTop).toBe('-1px')
+    })
+    splitCells.forEach((cell) => {
+      const style = getComputedStyle(cell)
+      expect(style.boxSizing).toBe('border-box')
+      expect(style.minHeight).toBe('0')
+    })
+    wrapper.findAll('[data-retest-identity-id]').forEach((identity) => {
+      const style = getComputedStyle(identity.element)
+      expect(style.boxSizing).toBe('border-box')
+      expect(style.height).toBe('var(--sample-retest-row-height)')
+      expect(style.minHeight).toBe('0')
+    })
+    wrapper.findAll('[data-retest-id]').forEach((band) => {
+      const style = getComputedStyle(band.element)
+      expect(style.boxSizing).toBe('border-box')
+      expect(style.height).toBe('var(--sample-retest-row-height, 62px)')
+    })
+    expect((wrapper.get('[data-field="recipientCustomerText"]').element as HTMLElement).style.gridRow).toBe('-2 / -1')
+    wrapper.unmount()
+  })
+
+  it('passes the highlight and forwards exact retest event signatures', async () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        blocks: [makeBlockWithRetests(1)],
+        highlightRetestId: 'retest-1',
+        pendingRetestActionIds: ['retest-1']
+      },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+    const band = wrapper.findComponent({ name: 'SampleRetestBand' })
+
+    expect(band.props('highlighted')).toBe(true)
+    expect(band.props('actionPending')).toBe(true)
+    band.vm.$emit('update', 'retest-1', { ironRaw: 1 })
+    band.vm.$emit('fieldCommit', 'retest-1', 'ironRaw', null, 1)
+    band.vm.$emit('delete', 'retest-1')
+    band.vm.$emit('void', 'retest-1')
+    await nextTick()
+
+    expect(wrapper.emitted('retestUpdate')).toContainEqual(['block-1', 'retest-1', { ironRaw: 1 }])
+    expect(wrapper.emitted('retestFieldCommit')).toContainEqual(['block-1', 'retest-1', 'ironRaw', null, 1])
+    expect(wrapper.emitted('retestDelete')).toContainEqual(['block-1', 'retest-1'])
+    expect(wrapper.emitted('retestVoid')).toContainEqual(['block-1', 'retest-1'])
+  })
+
+  it('locks retests with the completed parent when completed data access is unavailable', () => {
+    const block = makeBlockWithRetests(1)
+    block.inputs.completed = true
+    block.retests[0].inputs.ironRaw = 1
+    block.retests[0].results.iron = 27.94
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [block], canViewCompletedSensitiveData: false },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    const retestBand = wrapper.get('[data-retest-id="retest-1"]')
+    expect(retestBand.get('input').attributes('disabled')).toBeDefined()
+    expect((retestBand.get('input').element as HTMLInputElement).value).toBe('')
+    expect(retestBand.text()).not.toContain('27.94')
+    expect(retestBand.text()).toContain('数据已加密')
+    expect(wrapper.find('[data-testid="delete-retest-retest-1"]').exists()).toBe(false)
   })
 })

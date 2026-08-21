@@ -38,7 +38,7 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="accessGuard.cancelAccess">取消</el-button>
+      <el-button @click="cancelAccess">取消</el-button>
       <el-button v-if="mode === 'password'" type="primary" :loading="loading" @click="submitPassword">确认进入</el-button>
       <el-button v-else type="primary" :loading="loading" @click="submitRecoveryReset">重置并进入</el-button>
     </template>
@@ -64,6 +64,10 @@ const recoveryForm = reactive({
 
 function handleVisibleChange(visible: boolean) {
   if (!visible) accessGuard.cancelAccess()
+}
+
+function cancelAccess() {
+  accessGuard.cancelAccess()
 }
 
 function resetForm() {

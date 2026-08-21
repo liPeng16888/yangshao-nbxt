@@ -1,9 +1,15 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common'
 import { EmployeeLeaveStatus, EmployeeLeaveUnit, EmployeePayrollStatus, EmployeeStatus, Prisma, UserRole } from '@prisma/client'
 import { describe, expect, it, vi } from 'vitest'
+import type { CurrentUser } from '../auth/current-user'
 import { PayrollService } from './payroll.service'
 
 const decimal = (value: number | string) => new Prisma.Decimal(value)
+const rootAdmin: CurrentUser = {
+  id: 'admin-1', account: 'root', username: '主账号', role: UserRole.ROOT_ADMIN,
+  dataOwnerId: 'admin-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: false, isFrontendSubAccount: false
+}
 const workdays = (count: number, scheduledMinutes = 480) => Array.from({ length: count }, (_, index) => ({
   employeeId: employee.id,
   date: `2026-08-${String(index + 1).padStart(2, '0')}`,
@@ -100,17 +106,65 @@ describe('PayrollService frontend payroll', () => {
     expect(item.overtimePay).toEqual(decimal(60))
     expect(item.calculationSnapshot).toMatchObject({
       input: { baseSalary: 6000, scheduledWorkDays: 20, countedLeaveDays: 2, overtimeMinutes: 120 },
-      result: { payableAmount: 5910 }
+      result: { grossEarningsAmount: 6210, deductionAmount: 300, payableAmount: 5910 }
     })
   })
 
-  it('keeps a confirmed payroll snapshot stable when listing it later', async () => {
+  it.each([EmployeePayrollStatus.CONFIRMED, EmployeePayrollStatus.DRAFT])('projects authoritative totals for a legacy %s snapshot without mutating history', async (status) => {
     const { service, prisma } = serviceFixture()
-    const stored = { id: 'run-1', status: EmployeePayrollStatus.CONFIRMED, items: [{ calculationSnapshot: { result: { payableAmount: 7777 } } }] }
+    const stored = {
+      id: 'run-1', status, items: [{
+        payableAmount: decimal(5910),
+        calculationSnapshot: {
+          input: {
+            baseSalary: 6000, attendanceBonus: 300, scheduledWorkDays: 20, restQuotaDays: 1,
+            countedLeaveDays: 2, absenceDays: 0, overtimeMinutes: 120, overtimeHourlyRate: 30,
+            commissionAmount: 100, bonusAmount: 50, adjustments: [{ amount: 25 }, { amount: -25 }]
+          },
+          result: {
+            dailyRate: 300, excessLeaveDays: 1, leaveDeduction: 300, absenceDeduction: 0,
+            overtimeHours: 2, overtimePay: 60, commissionAmount: 100, bonusAmount: 50,
+            adjustmentAmount: 0, attendanceBonus: 0, payableAmount: 5910, issues: []
+          },
+          generatedAt: '2026-08-31T12:00:00.000Z'
+        }
+      }]
+    }
     prisma.employeePayrollRun.findFirst.mockResolvedValue(stored)
 
-    await expect(service.getPayroll('front-1', '2026-08')).resolves.toBe(stored)
+    await expect(service.getPayroll('front-1', '2026-08')).resolves.toMatchObject({
+      items: [{ calculationSnapshot: { result: {
+        grossEarningsAmount: 6235,
+        deductionAmount: 325,
+        payableAmount: 5910
+      } } }]
+    })
+    expect(stored.items[0].calculationSnapshot.result).not.toHaveProperty('grossEarningsAmount')
+    expect(stored.items[0].calculationSnapshot.result).not.toHaveProperty('deductionAmount')
+    expect(prisma.employeePayrollItem.update).not.toHaveBeenCalled()
     expect(prisma.employee.findMany).not.toHaveBeenCalled()
+  })
+
+  it('preserves explicit authoritative totals without interpreting legacy input again', async () => {
+    const { service, prisma } = serviceFixture()
+    prisma.employeePayrollRun.findFirst.mockResolvedValue({
+      id: 'run-explicit',
+      status: EmployeePayrollStatus.CONFIRMED,
+      items: [{
+        calculationSnapshot: {
+          input: { adjustments: { legacy: true } },
+          result: { grossEarningsAmount: 7000.5, deductionAmount: 877.05, payableAmount: 6123.45 }
+        }
+      }]
+    })
+
+    await expect(service.getPayroll('front-1', '2026-08')).resolves.toMatchObject({
+      items: [{ calculationSnapshot: { result: {
+        grossEarningsAmount: 7000.5,
+        deductionAmount: 877.05,
+        payableAmount: 6123.45
+      } } }]
+    })
   })
 
   it('rejects confirmation blockers and leaves the run unlocked', async () => {
@@ -301,7 +355,16 @@ describe('PayrollService frontend payroll', () => {
     await service.createAdjustment('front-1', 'front-1', 'item-1', -100, '扣除')
 
     expect(tx.$executeRawUnsafe).toHaveBeenCalledWith(expect.stringContaining('pg_advisory_xact_lock'), 'employee-payroll:front-1:2026-08')
-    expect(tx.employeePayrollItem.update).toHaveBeenCalledWith({ where: { id: 'item-1' }, data: expect.objectContaining({ payableAmount: decimal(5900), adjustmentAmount: decimal(-100) }) })
+    expect(tx.employeePayrollItem.update).toHaveBeenCalledWith({
+      where: { id: 'item-1' },
+      data: expect.objectContaining({
+        payableAmount: decimal(5900),
+        adjustmentAmount: decimal(-100),
+        calculationSnapshot: expect.objectContaining({
+          result: expect.objectContaining({ grossEarningsAmount: 6000, deductionAmount: 100, payableAmount: 5900 })
+        })
+      })
+    })
   })
 
   it.each([
@@ -696,7 +759,7 @@ describe('PayrollService admin reveal', () => {
     prisma.employee.findFirst.mockResolvedValue({ ...employee, idCardCipher: 'cipher-id', bankCardCipher: 'cipher-bank' })
 
     const result: any = await service.adminRevealEmployee(
-      { id: 'admin-1', account: 'root', username: '主账号', role: UserRole.ROOT_ADMIN },
+      rootAdmin,
       ['front-1'], employee.id, 'current-password'
     )
 
@@ -712,7 +775,7 @@ describe('PayrollService admin reveal', () => {
     passwords.verify.mockResolvedValue(false)
 
     await expect(service.adminRevealEmployee(
-      { id: 'admin-1', account: 'root', username: '主账号', role: UserRole.ROOT_ADMIN },
+      rootAdmin,
       ['front-1'], employee.id, 'wrong'
     )).rejects.toBeInstanceOf(UnauthorizedException)
     expect(prisma.employee.findFirst).not.toHaveBeenCalled()

@@ -1,16 +1,29 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common'
-import { MonthlySettlementStatus, ReminderType } from '@prisma/client'
+import { MonthlySettlementStatus, ReminderType, UserRole } from '@prisma/client'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createEmptyInputs, defaultLabParameters } from '../common/lab'
+import type { CurrentUser } from '../auth/current-user'
 import { AdminLabSampleChangeRequestQueryDto, ApproveLabSampleChangeRequestDto, RejectLabSampleChangeRequestDto } from './dto'
 import { LabSampleChangeRequestStatus } from './lab-sample-change-request.types'
 import { LabSampleChangeRequestsService } from './lab-sample-change-requests.service'
 
-const frontendUser = { id: 'front-1', account: 'front', username: '前台', role: 'FRONTEND_USER' as const }
-const rootAdmin = { id: 'admin-1', account: 'root', username: '超级管理员', role: 'ROOT_ADMIN' as const }
-const subAdmin = { id: 'sub-1', account: 'sub', username: '子管理员', role: 'SUB_ADMIN' as const }
+const frontendUser: CurrentUser = {
+  id: 'front-1', account: 'front', username: '前台', role: UserRole.FRONTEND_USER,
+  dataOwnerId: 'front-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: true, isFrontendSubAccount: false
+}
+const rootAdmin: CurrentUser = {
+  id: 'admin-1', account: 'root', username: '超级管理员', role: UserRole.ROOT_ADMIN,
+  dataOwnerId: 'admin-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: false, isFrontendSubAccount: false
+}
+const subAdmin: CurrentUser = {
+  id: 'sub-1', account: 'sub', username: '子管理员', role: UserRole.SUB_ADMIN,
+  dataOwnerId: 'sub-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: false, isFrontendSubAccount: false
+}
 const grants = { historical: 'history-grant', completedData: 'completed-grant' }
 const historicalDate = '2026-08-19'
 const requestedByIdentity = { id: 'front-1', account: 'front', username: '前台' }

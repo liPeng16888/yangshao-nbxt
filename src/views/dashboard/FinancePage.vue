@@ -1,7 +1,20 @@
 <template>
-  <div class="page-stack">
-    <FinanceEntryForm @submit="handleCreate" />
+  <div class="page-stack" :class="{ 'mobile-page': isMobileLayout }">
+    <MobileFinanceEntryForm v-if="isMobileLayout" :save="handleCreate" />
+    <FinanceEntryForm v-else @submit="handleCreate" />
+    <MobileFinanceEntryList
+      v-if="isMobileLayout"
+      :month="financeStore.month"
+      :entries="financeStore.entries"
+      :loading="financeStore.loading"
+      :load-error="financeStore.loadError"
+      :deleting-id="financeStore.deletingId"
+      @month-change="financeStore.loadEntries"
+      @retry="financeStore.retryEntries"
+      @delete-request="handleDeleteRequest"
+    />
     <FinanceMonthTable
+      v-else
       :month="financeStore.month"
       :entries="financeStore.entries"
       :loading="financeStore.loading"
@@ -13,17 +26,30 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onBeforeUnmount, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FinanceEntryForm from '@/components/finance/FinanceEntryForm.vue'
 import FinanceMonthTable from '@/components/finance/FinanceMonthTable.vue'
+import MobileFinanceEntryForm from '@/components/finance/MobileFinanceEntryForm.vue'
+import MobileFinanceEntryList from '@/components/finance/MobileFinanceEntryList.vue'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useFinanceStore } from '@/stores/finance'
 import type { FinanceEntry, FinancePayload } from '@/types/finance'
+import { tryUseTenantRealtimeStore } from '@/stores/tenantRealtime'
 
 const financeStore = useFinanceStore()
+const tenantRealtime = tryUseTenantRealtimeStore()
+let unregisterRealtime: (() => void) | undefined
+const { isMobileLayout } = useMobileLayout()
 
 onMounted(() => {
   financeStore.loadEntries()
+  unregisterRealtime = tenantRealtime?.registerModule('finance-expenses', { isDirty: () => false, refresh: () => financeStore.loadEntries() })
+})
+
+onBeforeUnmount(() => {
+  unregisterRealtime?.()
+  financeStore.cancelEntryLoads()
 })
 
 async function handleCreate(payloads: FinancePayload[]) {

@@ -7,11 +7,14 @@ export interface ServerSentEvent {
 }
 
 export interface LabSheetRealtimeEvent {
-  type: 'connected' | 'block-saved' | 'parameters-updated' | 'sheet-reloaded'
+  type: 'connected' | 'block-saved' | 'parameters-updated' | 'sheet-reloaded' | 'retests-changed'
   frontendUserId: string
   date: string
   sheetId?: string
   sourceClientId?: string
+  changedById?: string
+  sampleBlockId?: string
+  sampleRetestId?: string
   updatedAt: string
   parameters?: typeof defaultLabParameters & { savedAt?: string }
 }
@@ -36,7 +39,17 @@ export class LabSheetRealtimeService {
   publish(event: LabSheetRealtimeEvent) {
     const channel = this.channels.get(this.channelKey(event.frontendUserId, event.date))
     if (!channel) return
-    channel.next({ data: event })
+    channel.next({ data: event.type === 'retests-changed' ? {
+      type: 'retests-changed',
+      frontendUserId: event.frontendUserId,
+      date: event.date,
+      sheetId: event.sheetId,
+      sampleBlockId: event.sampleBlockId,
+      sampleRetestId: event.sampleRetestId,
+      sourceClientId: event.sourceClientId,
+      changedById: event.changedById,
+      updatedAt: event.updatedAt
+    } : event })
   }
 
   private getChannel(frontendUserId: string, date: string) {

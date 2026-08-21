@@ -29,10 +29,20 @@ const attendanceRequest = {
   delete: (url: string, config?: AxiosRequestConfig): Promise<any> => baseRequest.delete(url, withAttendanceGrant(config)) as any
 }
 
+type VersionedTarget = { id: string; updatedAt?: string }
+const versionedBody = (baseUpdatedAt?: string) => baseUpdatedAt ? { baseUpdatedAt } : {}
+const targetId = (target: VersionedTarget | string) => typeof target === 'string' ? target : target.id
+const targetVersion = (target: VersionedTarget | string) => typeof target === 'string' ? undefined : target.updatedAt
+
 const amount = (value: unknown) => Number(value || 0)
+const finiteAmount = (value: unknown) => {
+  const parsed = Number(value ?? 0)
+  return Number.isFinite(parsed) ? parsed : 0
+}
 const sensitiveEmployeeFields = ['idCard', 'bankCard', 'address', 'emergencyContact'] as const
 export function buildEmployeeMutationPayload(form: EmployeePayload, editing: boolean): EmployeePayload {
   const payload = { ...form }
+  if (!payload.terminationDate?.trim()) delete payload.terminationDate
   if (editing) for (const field of sensitiveEmployeeFields) if (!payload[field]?.trim()) delete payload[field]
   return payload
 }
@@ -71,7 +81,7 @@ export function normalizeMonthlyScheduleResponse(value: unknown): MonthlySchedul
   return {
     id: String(row.id || ''), employeeId: String(row.employeeId || ''), date: String(row.date || ''), isWorkday: Boolean(row.isWorkday),
     segments: responseSegments(row.segments), remark: typeof row.remark === 'string' ? row.remark : undefined,
-    scheduledMinutes: amount(row.scheduledMinutes), breakMinutes: amount(row.breakMinutes)
+    scheduledMinutes: amount(row.scheduledMinutes), breakMinutes: amount(row.breakMinutes), updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : undefined
   }
 }
 function responseActualSegments(value: unknown): ActualAttendanceSegment[] {
@@ -102,7 +112,8 @@ export function normalizeAttendanceResponse(value: unknown): AttendanceRecord {
     checkInAt: typeof row.checkInAt === 'string' ? row.checkInAt : actualSegments[0]?.checkInAt || '',
     checkOutAt: typeof row.checkOutAt === 'string' ? row.checkOutAt : actualSegments.at(-1)?.checkOutAt || '',
     workedMinutes: amount(row.workedMinutes), lateMinutes: amount(row.lateMinutes), earlyLeaveMinutes: amount(row.earlyLeaveMinutes),
-    absenceMinutes: amount(row.absenceMinutes), manuallyEdited: Boolean(row.manuallyEdited), lockedAt: typeof row.lockedAt === 'string' ? row.lockedAt : typeof row.payrollLockedAt === 'string' ? row.payrollLockedAt : null
+    absenceMinutes: amount(row.absenceMinutes), manuallyEdited: Boolean(row.manuallyEdited), updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : undefined,
+    lockedAt: typeof row.lockedAt === 'string' ? row.lockedAt : typeof row.payrollLockedAt === 'string' ? row.payrollLockedAt : null
   }
 }
 export function normalizeLeaveResponse(row: any): LeaveRequest {
@@ -179,7 +190,10 @@ export function normalizePayrollResponse(raw: any): PayrollRun | null {
         overtimeHours: amount(rawResult.overtimeHours ?? amount(rawInput.overtimeMinutes ?? item.overtimeMinutes) / 60),
         overtimePay: amount(rawResult.overtimePay ?? item.overtimePay), commissionAmount: amount(rawResult.commissionAmount ?? item.commissionAmount),
         bonusAmount: amount(rawResult.bonusAmount ?? item.bonusAmount), adjustmentAmount: amount(rawResult.adjustmentAmount ?? item.adjustmentAmount),
-        attendanceBonus: amount(rawResult.attendanceBonus ?? item.attendanceBonus), payableAmount: amount(rawResult.payableAmount ?? item.payableAmount), issues
+        attendanceBonus: amount(rawResult.attendanceBonus ?? item.attendanceBonus),
+        grossEarningsAmount: finiteAmount(rawResult.grossEarningsAmount),
+        deductionAmount: finiteAmount(rawResult.deductionAmount),
+        payableAmount: amount(rawResult.payableAmount ?? item.payableAmount), issues
       },
       generatedAt: item.calculationSnapshot?.generatedAt || item.updatedAt || raw.updatedAt || ''
     }
@@ -199,20 +213,20 @@ export const getEmployees = (query: EmployeeQuery = {}): Promise<Employee[]> => 
 export const getEmployee = (id: string): Promise<Employee> => useMocks ? mock.mockGetEmployee(id) : attendanceRequest.get(`/employee-attendance/employees/${id}`).then(normalizeEmployeeResponse)
 export const revealEmployee = (id: string): Promise<RevealedEmployee> => useMocks ? mock.mockRevealEmployee(id) : attendanceRequest.get(`/employee-attendance/employees/${id}/reveal`).then((row: any) => ({ ...normalizeEmployeeResponse(row), idCard: row.idCard || '', bankCard: row.bankCard || '', address: row.address || '', emergencyContact: row.emergencyContact || '' }))
 export const createEmployee = (payload: EmployeePayload): Promise<Employee> => useMocks ? mock.mockCreateEmployee(payload) : attendanceRequest.post('/employee-attendance/employees', payload).then(normalizeEmployeeResponse)
-export const updateEmployee = (id: string, payload: EmployeePayload): Promise<Employee> => useMocks ? mock.mockUpdateEmployee(id, payload) : attendanceRequest.put(`/employee-attendance/employees/${id}`, payload).then(normalizeEmployeeResponse)
-export const deleteEmployee = async (id: string): Promise<Employee | { ok: true }> => (useMocks ? mock.mockDeleteEmployee(id) : attendanceRequest.delete(`/employee-attendance/employees/${id}`)).then(normalizeDeleteEmployeeResponse)
+export const updateEmployee = (id: string, payload: EmployeePayload, baseUpdatedAt?: string): Promise<Employee> => useMocks ? mock.mockUpdateEmployee(id, payload) : attendanceRequest.put(`/employee-attendance/employees/${id}`, { ...payload, baseUpdatedAt }).then(normalizeEmployeeResponse)
+export const deleteEmployee = async (target: VersionedTarget | string): Promise<Employee | { ok: true }> => (useMocks ? mock.mockDeleteEmployee(targetId(target)) : attendanceRequest.delete(`/employee-attendance/employees/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })).then(normalizeDeleteEmployeeResponse)
 export const uploadEmployeePhoto = (id: string, photo: File): Promise<{ id: string; hasPhoto: boolean }> => { if (useMocks) return mock.mockUploadEmployeePhoto(id, photo); const body = new FormData(); body.append('photo', photo); return attendanceRequest.post(`/employee-attendance/employees/${id}/photo`, body) }
 export const readEmployeePhoto = (id: string): Promise<Blob | null> => useMocks ? mock.mockReadEmployeePhoto(id) : attendanceRequest.get(`/employee-attendance/employees/${id}/photo`, { responseType: 'blob' })
 
 export const getWeeklySchedules = (employeeId?: string): Promise<WeeklySchedule[]> => useMocks ? mock.mockGetWeeklySchedules(employeeId) : attendanceRequest.get('/employee-attendance/weekly-schedules', { params: { employeeId } })
-export const saveWeeklySchedule = (payload: WeeklySchedulePayload, id?: string): Promise<WeeklySchedule> => useMocks ? mock.mockSaveWeeklySchedule(payload) : id ? attendanceRequest.put(`/employee-attendance/weekly-schedules/${id}`, payload) : attendanceRequest.post('/employee-attendance/weekly-schedules', payload)
-export const deleteWeeklySchedule = async (id: string) => useMocks ? mock.mockDeleteWeeklySchedule(id) : attendanceRequest.delete(`/employee-attendance/weekly-schedules/${id}`)
+export const saveWeeklySchedule = (payload: WeeklySchedulePayload, id?: string, baseUpdatedAt?: string): Promise<WeeklySchedule> => useMocks ? mock.mockSaveWeeklySchedule(payload) : id ? attendanceRequest.put(`/employee-attendance/weekly-schedules/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/weekly-schedules', payload)
+export const deleteWeeklySchedule = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteWeeklySchedule(targetId(target)) : attendanceRequest.delete(`/employee-attendance/weekly-schedules/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const getDateOverrides = (query: AttendanceQuery = {}): Promise<DateOverride[]> => { const normalized = normalizeAttendanceQuery(query); return useMocks ? mock.mockGetDateOverrides(normalized) : attendanceRequest.get('/employee-attendance/overrides', { params: normalized }) }
-export const saveDateOverride = (payload: DateOverridePayload, id?: string): Promise<DateOverride> => useMocks ? mock.mockSaveDateOverride(payload, id) : id ? attendanceRequest.put(`/employee-attendance/overrides/${id}`, payload) : attendanceRequest.post('/employee-attendance/overrides', payload)
-export const deleteDateOverride = async (id: string) => useMocks ? mock.mockDeleteDateOverride(id) : attendanceRequest.delete(`/employee-attendance/overrides/${id}`)
+export const saveDateOverride = (payload: DateOverridePayload, id?: string, baseUpdatedAt?: string): Promise<DateOverride> => useMocks ? mock.mockSaveDateOverride(payload, id) : id ? attendanceRequest.put(`/employee-attendance/overrides/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/overrides', payload)
+export const deleteDateOverride = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteDateOverride(targetId(target)) : attendanceRequest.delete(`/employee-attendance/overrides/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const getMonthlySettings = (month?: string): Promise<MonthlySetting[]> => useMocks ? mock.mockGetMonthlySettings(month) : attendanceRequest.get('/employee-attendance/month-settings', { params: { month } }).then((rows: any[]) => rows.map(normalizeMonthlySettingResponse))
 export const saveMonthlySetting = (payload: MonthlySettingPayload): Promise<MonthlySetting> => (useMocks ? mock.mockSaveMonthlySetting(payload) : attendanceRequest.post('/employee-attendance/month-settings', payload)).then(normalizeMonthlySettingResponse)
-export const deleteMonthlySetting = async (id: string) => useMocks ? mock.mockDeleteMonthlySetting(id) : attendanceRequest.delete(`/employee-attendance/month-settings/${id}`)
+export const deleteMonthlySetting = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteMonthlySetting(targetId(target)) : attendanceRequest.delete(`/employee-attendance/month-settings/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 
 export const getMonthlySchedules = (employeeId: string, month: string): Promise<MonthlyScheduleDay[]> => useMocks
   ? mock.mockGetMonthlySchedules(employeeId, month)
@@ -220,9 +234,9 @@ export const getMonthlySchedules = (employeeId: string, month: string): Promise<
 export const saveMonthlyScheduleDay = (payload: MonthlySchedulePayload): Promise<MonthlyScheduleDay> => (useMocks
   ? mock.mockSaveMonthlyScheduleDay(payload)
   : attendanceRequest.post('/employee-attendance/monthly-schedules/day', payload)).then(normalizeMonthlyScheduleResponse)
-export const deleteMonthlyScheduleDay = async (id: string): Promise<void> => {
-  if (useMocks) return mock.mockDeleteMonthlyScheduleDay(id)
-  await attendanceRequest.delete(`/employee-attendance/monthly-schedules/day/${id}`)
+export const deleteMonthlyScheduleDay = async (target: VersionedTarget | string): Promise<void> => {
+  if (useMocks) return mock.mockDeleteMonthlyScheduleDay(targetId(target))
+  await attendanceRequest.delete(`/employee-attendance/monthly-schedules/day/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 }
 export const batchSaveMonthlySchedules = (payload: BatchMonthlySchedulePayload): Promise<BatchMonthlyScheduleResult> => (useMocks
   ? mock.mockBatchSaveMonthlySchedules(payload)
@@ -240,37 +254,37 @@ export const copyPreviousMonthSchedules = (employeeId: string, targetMonth: stri
 })
 
 export const getAttendance = (query: AttendanceQuery = {}): Promise<AttendanceRecord[]> => { const normalized = normalizeAttendanceQuery(query); return useMocks ? mock.mockGetAttendance(normalized) : attendanceRequest.get('/employee-attendance/attendance', { params: normalized }).then((rows: unknown[]) => rows.map(normalizeAttendanceResponse)) }
-export function saveAttendance(payload: EmployeeAttendanceInput, id?: string): Promise<AttendanceRecord>
-export function saveAttendance(payload: EmployeeAttendanceInput, id?: string): Promise<AttendanceRecord> {
+export function saveAttendance(payload: EmployeeAttendanceInput, id?: string, baseUpdatedAt?: string): Promise<AttendanceRecord>
+export function saveAttendance(payload: EmployeeAttendanceInput, id?: string, baseUpdatedAt?: string): Promise<AttendanceRecord> {
   const normalized = normalizeAttendanceMutationPayload(payload)
-  return (useMocks ? mock.mockSaveAttendance(normalized, id) : id ? attendanceRequest.put(`/employee-attendance/attendance/${id}`, normalized) : attendanceRequest.post('/employee-attendance/attendance', normalized)).then(normalizeAttendanceResponse)
+  return (useMocks ? mock.mockSaveAttendance(normalized, id) : id ? attendanceRequest.put(`/employee-attendance/attendance/${id}`, { ...normalized, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/attendance', normalized)).then(normalizeAttendanceResponse)
 }
-export const deleteAttendance = async (id: string) => useMocks ? mock.mockDeleteAttendance(id) : attendanceRequest.delete(`/employee-attendance/attendance/${id}`)
+export const deleteAttendance = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteAttendance(targetId(target)) : attendanceRequest.delete(`/employee-attendance/attendance/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const generateAttendance = (month: string, employeeIds: string[]): Promise<AttendanceGenerationResult> => useMocks
   ? mock.mockGenerateAttendance(month, employeeIds)
   : attendanceRequest.post('/employee-attendance/attendance/generate', { month, employeeIds }).then(normalizeAttendanceGenerationResponse)
 
 export const getLeaveTypes = (): Promise<LeaveType[]> => useMocks ? mock.mockGetLeaveTypes() : attendanceRequest.get('/employee-attendance/leave-types')
-export const saveLeaveType = (payload: LeaveTypePayload, id?: string): Promise<LeaveType> => useMocks ? mock.mockSaveLeaveType(payload, id) : id ? attendanceRequest.put(`/employee-attendance/leave-types/${id}`, payload) : attendanceRequest.post('/employee-attendance/leave-types', payload)
-export const deleteLeaveType = async (id: string) => useMocks ? mock.mockDeleteLeaveType(id) : attendanceRequest.delete(`/employee-attendance/leave-types/${id}`)
+export const saveLeaveType = (payload: LeaveTypePayload, id?: string, baseUpdatedAt?: string): Promise<LeaveType> => useMocks ? mock.mockSaveLeaveType(payload, id) : id ? attendanceRequest.put(`/employee-attendance/leave-types/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/leave-types', payload)
+export const deleteLeaveType = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteLeaveType(targetId(target)) : attendanceRequest.delete(`/employee-attendance/leave-types/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const getLeaves = (query: AttendanceQuery = {}): Promise<LeaveRequest[]> => {
   const normalized = normalizeAttendanceQuery(query)
   const params = { ...normalized, employeeIds: normalized.employeeIds?.length ? normalized.employeeIds.join(',') : undefined }
   return useMocks ? mock.mockGetLeaves(normalized) : attendanceRequest.get('/employee-attendance/leaves', { params }).then((rows: any[]) => rows.map(normalizeLeaveResponse))
 }
-export const saveLeave = (payload: LeaveRequestPayload, id?: string): Promise<LeaveRequest> => (useMocks ? mock.mockSaveLeave(payload, id) : id ? attendanceRequest.put(`/employee-attendance/leaves/${id}`, payload) : attendanceRequest.post('/employee-attendance/leaves', payload)).then(normalizeLeaveResponse)
-export const deleteLeave = async (id: string) => useMocks ? mock.mockDeleteLeave(id) : attendanceRequest.delete(`/employee-attendance/leaves/${id}`)
+export const saveLeave = (payload: LeaveRequestPayload, id?: string, baseUpdatedAt?: string): Promise<LeaveRequest> => (useMocks ? mock.mockSaveLeave(payload, id) : id ? attendanceRequest.put(`/employee-attendance/leaves/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/leaves', payload)).then(normalizeLeaveResponse)
+export const deleteLeave = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteLeave(targetId(target)) : attendanceRequest.delete(`/employee-attendance/leaves/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const reviewLeave = (id: string, action: 'approve' | 'reject', reviewRemark = ''): Promise<LeaveRequest> => (useMocks ? mock.mockReviewLeave(id, action === 'approve' ? 'APPROVED' : 'REJECTED', reviewRemark) : attendanceRequest.post(`/employee-attendance/leaves/${id}/${action}`, { reviewRemark })).then(normalizeLeaveResponse)
 
 export const getCommissionTypes = (): Promise<CommissionType[]> => useMocks ? mock.mockGetCommissionTypes() : attendanceRequest.get('/employee-attendance/commission-types').then((rows: any[]) => rows.map(normalizeCommissionTypeResponse))
-export const saveCommissionType = (payload: CommissionTypePayload, id?: string): Promise<CommissionType> => (useMocks ? mock.mockSaveCommissionType(payload, id) : id ? attendanceRequest.put(`/employee-attendance/commission-types/${id}`, payload) : attendanceRequest.post('/employee-attendance/commission-types', payload)).then(normalizeCommissionTypeResponse)
-export const deleteCommissionType = async (id: string) => useMocks ? mock.mockDeleteCommissionType(id) : attendanceRequest.delete(`/employee-attendance/commission-types/${id}`)
+export const saveCommissionType = (payload: CommissionTypePayload, id?: string, baseUpdatedAt?: string): Promise<CommissionType> => (useMocks ? mock.mockSaveCommissionType(payload, id) : id ? attendanceRequest.put(`/employee-attendance/commission-types/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/commission-types', payload)).then(normalizeCommissionTypeResponse)
+export const deleteCommissionType = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteCommissionType(targetId(target)) : attendanceRequest.delete(`/employee-attendance/commission-types/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const getCommissions = (query: AttendanceQuery = {}): Promise<CommissionRecord[]> => { const normalized = normalizeAttendanceQuery(query); return useMocks ? mock.mockGetCommissions(normalized) : attendanceRequest.get('/employee-attendance/commissions', { params: normalized }).then((rows: any[]) => rows.map(normalizeCommissionResponse)) }
-export const saveCommission = (payload: CommissionPayload, id?: string): Promise<CommissionRecord> => useMocks ? mock.mockSaveCommission(payload, id) : (id ? attendanceRequest.put(`/employee-attendance/commissions/${id}`, payload) : attendanceRequest.post('/employee-attendance/commissions', payload)).then(normalizeCommissionResponse)
-export const deleteCommission = async (id: string) => useMocks ? mock.mockDeleteCommission(id) : attendanceRequest.delete(`/employee-attendance/commissions/${id}`)
+export const saveCommission = (payload: CommissionPayload, id?: string, baseUpdatedAt?: string): Promise<CommissionRecord> => useMocks ? mock.mockSaveCommission(payload, id) : (id ? attendanceRequest.put(`/employee-attendance/commissions/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/commissions', payload)).then(normalizeCommissionResponse)
+export const deleteCommission = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteCommission(targetId(target)) : attendanceRequest.delete(`/employee-attendance/commissions/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const getBonuses = (query: AttendanceQuery = {}): Promise<BonusRecord[]> => { const normalized = normalizeAttendanceQuery(query); return useMocks ? mock.mockGetBonuses(normalized) : attendanceRequest.get('/employee-attendance/bonuses', { params: normalized }).then((rows: any[]) => rows.map(normalizeBonusResponse)) }
-export const saveBonus = (payload: BonusPayload, id?: string): Promise<BonusRecord> => (useMocks ? mock.mockSaveBonus(payload, id) : id ? attendanceRequest.put(`/employee-attendance/bonuses/${id}`, payload) : attendanceRequest.post('/employee-attendance/bonuses', payload)).then(normalizeBonusResponse)
-export const deleteBonus = async (id: string) => useMocks ? mock.mockDeleteBonus(id) : attendanceRequest.delete(`/employee-attendance/bonuses/${id}`)
+export const saveBonus = (payload: BonusPayload, id?: string, baseUpdatedAt?: string): Promise<BonusRecord> => (useMocks ? mock.mockSaveBonus(payload, id) : id ? attendanceRequest.put(`/employee-attendance/bonuses/${id}`, { ...payload, baseUpdatedAt }) : attendanceRequest.post('/employee-attendance/bonuses', payload)).then(normalizeBonusResponse)
+export const deleteBonus = async (target: VersionedTarget | string) => useMocks ? mock.mockDeleteBonus(targetId(target)) : attendanceRequest.delete(`/employee-attendance/bonuses/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const getCompensationTotals = (month: string): Promise<CompensationTotal[]> => useMocks ? mock.mockGetCompensationTotals(month) : attendanceRequest.get('/employee-attendance/compensation/totals', { params: { month } })
 
 export const getOverview = (month: string): Promise<AttendanceOverview> => useMocks ? mock.mockGetOverview(month) : attendanceRequest.get('/employee-attendance/overview', { params: { month } }).then((row: any) => {
@@ -314,7 +328,7 @@ export const getScheduleAttendanceOverview = (employeeId: string | undefined, mo
 export const getPayroll = (month: string): Promise<PayrollRun | null> => useMocks ? mock.mockGetPayroll(month) : attendanceRequest.get('/employee-attendance/payroll', { params: { month } }).then(normalizePayrollResponse)
 export const generatePayroll = (month: string): Promise<PayrollRun> => useMocks ? mock.mockGeneratePayroll(month) : attendanceRequest.post('/employee-attendance/payroll/generate', { month }).then((row) => normalizePayrollResponse(row)!)
 export const createPayrollAdjustment = (itemId: string, payload: { amount: number; reason: string }): Promise<PayrollAdjustment> => (useMocks ? mock.mockCreatePayrollAdjustment(itemId, payload) : attendanceRequest.post(`/employee-attendance/payroll/items/${itemId}/adjustments`, payload)).then(normalizePayrollAdjustmentResponse)
-export const updatePayrollAdjustment = (id: string, payload: { amount: number; reason: string }): Promise<PayrollAdjustment> => (useMocks ? mock.mockUpdatePayrollAdjustment(id, payload) : attendanceRequest.put(`/employee-attendance/payroll/adjustments/${id}`, payload)).then(normalizePayrollAdjustmentResponse)
-export const deletePayrollAdjustment = async (id: string) => useMocks ? mock.mockDeletePayrollAdjustment(id) : attendanceRequest.delete(`/employee-attendance/payroll/adjustments/${id}`)
+export const updatePayrollAdjustment = (id: string, payload: { amount: number; reason: string }, baseUpdatedAt?: string): Promise<PayrollAdjustment> => (useMocks ? mock.mockUpdatePayrollAdjustment(id, payload) : attendanceRequest.put(`/employee-attendance/payroll/adjustments/${id}`, { ...payload, baseUpdatedAt })).then(normalizePayrollAdjustmentResponse)
+export const deletePayrollAdjustment = async (target: VersionedTarget | string) => useMocks ? mock.mockDeletePayrollAdjustment(targetId(target)) : attendanceRequest.delete(`/employee-attendance/payroll/adjustments/${targetId(target)}`, { data: versionedBody(targetVersion(target)) })
 export const confirmPayroll = (id: string): Promise<PayrollRun> => useMocks ? mock.mockConfirmPayroll(id) : attendanceRequest.post(`/employee-attendance/payroll/${id}/confirm`).then((row) => normalizePayrollResponse(row)!)
 export async function reopenPayroll(id: string, reason: string): Promise<PayrollRun> { if (useMocks) return mock.mockReopenPayroll(id, reason); const reopened = await attendanceRequest.post(`/employee-attendance/payroll/${id}/reopen`, { reason }); return (await getPayroll(reopened.month))! }

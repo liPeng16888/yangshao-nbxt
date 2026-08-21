@@ -1,8 +1,9 @@
-import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
-import ElementPlus from 'element-plus'
+import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import ElementPlus, { ElMessage } from 'element-plus'
 import CustomerCellEditor from './CustomerCellEditor.vue'
 import type { Customer } from '@/types/customer'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 vi.mock('@/api/customer', () => ({
   createCustomer: vi.fn(),
@@ -14,8 +15,17 @@ vi.mock('@/api/blacklist', () => ({
   checkBlacklist: vi.fn().mockResolvedValue({ hit: false, records: [] })
 }))
 
+vi.mock('@/utils/clipboard', () => ({
+  writeTextToClipboard: vi.fn()
+}))
+
 const wang: Customer = { id: 'customer-wang', name: '王总', phone: '13000000001' }
 const li: Customer = { id: 'customer-li', name: '李总', phone: '13000000002' }
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.mocked(writeTextToClipboard).mockReset()
+})
 
 describe('CustomerCellEditor', () => {
   it('emits recipient fields for the data recipient role', async () => {
@@ -157,6 +167,41 @@ describe('CustomerCellEditor', () => {
     expect(wrapper.find('[aria-label="复制客户信息"]').exists()).toBe(true)
     expect(wrapper.find('[aria-label="删除已选客户"]').exists()).toBe(false)
     expect(wrapper.findAll('.customer-actions .el-button')).toHaveLength(2)
+  })
+
+  it('prevents a second pending copy and shows one success toast', async () => {
+    let resolveCopy!: () => void
+    vi.mocked(writeTextToClipboard).mockReturnValueOnce(new Promise<void>((resolve) => { resolveCopy = resolve }))
+    const success = vi.spyOn(ElMessage, 'success').mockReturnValue({ close: vi.fn() } as never)
+    const wrapper = mount(CustomerCellEditor, {
+      props: { modelValue: '王总', selectedCustomers: [wang] },
+      global: { plugins: [ElementPlus] }
+    })
+    const copyButton = wrapper.get('[aria-label="复制客户信息"]')
+
+    await copyButton.trigger('click')
+    await copyButton.trigger('click')
+
+    expect(writeTextToClipboard).toHaveBeenCalledTimes(1)
+    expect(copyButton.attributes('disabled')).toBeDefined()
+
+    resolveCopy()
+    await flushPromises()
+    expect(success).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows one error toast when copying customer information fails', async () => {
+    vi.mocked(writeTextToClipboard).mockRejectedValueOnce(new Error('复制失败'))
+    const error = vi.spyOn(ElMessage, 'error').mockReturnValue({ close: vi.fn() } as never)
+    const wrapper = mount(CustomerCellEditor, {
+      props: { modelValue: '王总', selectedCustomers: [wang] },
+      global: { plugins: [ElementPlus] }
+    })
+
+    await wrapper.get('[aria-label="复制客户信息"]').trigger('click')
+    await flushPromises()
+
+    expect(error).toHaveBeenCalledTimes(1)
   })
 
   it('shows the customer role inside an empty field before it is focused', async () => {

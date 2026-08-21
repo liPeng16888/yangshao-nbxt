@@ -1,11 +1,11 @@
 <template>
   <div class="image-list">
-    <template v-if="images.length">
+    <template v-if="safeImages.length">
       <el-image
-        v-for="image in images"
+        v-for="image in safeImages"
         :key="image"
         :src="image"
-        :preview-src-list="images"
+        :preview-src-list="safeImages"
         fit="cover"
         class="image-thumb"
       />
@@ -15,9 +15,14 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{
+import { computed } from 'vue'
+import { isSafeBlacklistImageUrl } from '@/utils/blacklistImages'
+
+const props = defineProps<{
   images: string[]
 }>()
+
+const safeImages = computed(() => props.images.filter(isSafeBlacklistImageUrl))
 </script>
 
 <style scoped lang="scss">

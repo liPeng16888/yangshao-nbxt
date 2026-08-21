@@ -15,8 +15,6 @@ import type {
   MedicineUnit
 } from '@/types/medicineInventory'
 import type { DateRange, FinanceReport, SampleDetectionReport } from '@/types/report'
-import type { PrepaidRechargeRow } from '@/types/financeBills'
-import type { LabParameter, LabParameterKey, LabSheet, LabSampleInput, SampleBlock, SampleBlockSavePayload } from '@/types/labSheet'
 import type {
   CreateLabSampleChangeRequestPayload,
   LabSampleChangePatch,
@@ -24,6 +22,22 @@ import type {
   LabSampleChangeRequestFilters,
   LabSampleChangeRequestSummary
 } from '@/types/labSampleChangeRequest'
+import type {
+  CreateSampleRetestsPayload,
+  DeleteSampleRetestPayload,
+  LabParameter,
+  LabParameterKey,
+  LabSheet,
+  LabSampleInput,
+  SampleBlock,
+  SampleBlockSavePayload,
+  SampleRetest,
+  SampleRetestInput,
+  SampleRetestResult,
+  SaveSampleRetestPayload,
+  VoidSampleRetestPayload
+} from '@/types/labSheet'
+import { sampleRetestInputFields } from '@/types/labSheet'
 import { defaultLabParameters, DEFAULT_SAMPLE_BLOCK_COUNT } from '@/constants/labSheetTemplate'
 import { LAB_SAMPLE_CHANGE_RAW_FIELDS, labSampleChangeFieldLabels } from '@/constants/labSampleChangeRequest'
 import { financeCategoryRules } from '@/constants/reportCategories'
@@ -32,16 +46,34 @@ import { summarizeIncomeRows, summarizeIncomeSheet } from '@/utils/financeBills'
 import { businessDateInBeijing, getReportRange, todayInBeijing } from '@/utils/date'
 import { medicineUnitOptions, validateMedicineQuantity } from '@/utils/medicineInventory'
 import { hasLabDetectionInput } from '@/utils/sampleReport'
+import { hasRetestInput } from '@/utils/sampleRetest'
+import { getMockSharedPrepaidOwnerId, listMockSharedPrepaidIncomeRecharges } from './sharedPrepaidLedger'
+import type {
+  CreateFrontendSubAccountPayload,
+  FrontendSubAccountDto,
+  ResetFrontendSubAccountPasswordPayload,
+  UpdateFrontendSubAccountPayload
+} from '@/types/frontendSubAccount'
 
-const PREPAID_RECHARGE_STORAGE_KEY = 'ys_prepaid_recharge_records'
 const MEDICINE_COMMON_NAME_STORAGE_KEY = 'ys_medicine_common_names'
 
-let currentUser: AuthUser = {
+const mainFrontendUser: AuthUser = {
   id: 'u-admin',
   username: '管理员',
   account: 'admin',
-  role: 'admin' as const
+  role: 'FRONTEND_USER' as const,
+  dataOwnerId: 'u-admin',
+  permissionVersion: 1,
+  permissions: [],
+  requiresAccessGuardPassword: true,
+  isFrontendMainAccount: true,
+  isFrontendSubAccount: false
 }
+
+let currentUser: AuthUser = clone(mainFrontendUser)
+
+let frontendSubAccounts: FrontendSubAccountDto[] = []
+const frontendSubAccountPasswordHashes = new Map<string, string>()
 
 let labParameters: LabParameter = {
   ...defaultLabParameters,
@@ -56,11 +88,14 @@ let customers: StoredCustomer[] = [
   { id: 'c-3', frontendUserId: 'u-admin', name: '渑池送样客户', phone: '13800000003', wechat: 'mianchi-lab', wechatNickname: '渑池样品' }
 ]
 
-let blacklist: BlacklistRecord[] = [
+type MockBlacklistRecord = BlacklistRecord & { uploadedById: string }
+
+let blacklist: MockBlacklistRecord[] = [
   {
     id: 'b-1',
     uploadedAt: dayjs().subtract(2, 'day').toISOString(),
     uploadedBy: '管理员',
+    uploadedById: 'u-admin',
     phone: '13800000002',
     wechat: 'smx-ore',
     wechatNickname: '三门峡客户',
@@ -73,6 +108,7 @@ let blacklist: BlacklistRecord[] = [
     id: 'b-2',
     uploadedAt: dayjs().subtract(8, 'day').toISOString(),
     uploadedBy: '管理员',
+    uploadedById: 'u-admin',
     phone: '13999999999',
     wechat: 'risk-client',
     wechatNickname: '风险客户',
@@ -122,10 +158,34 @@ let medicineCommonNames: MedicineCommonName[] = []
 
 const labSheets = new Map<string, LabSheet>()
 let labSampleChangeRequests: LabSampleChangeRequestDetail[] = []
+const mockLabSheetOwnerById = new Map<string, string>()
+const mockNextRetestSequenceByBlockId = new Map<string, number>()
+const mockRetestWriteRequests = new Map<string, {
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID'
+  fingerprint: string
+  response: unknown
+}>()
+let mockRetestIdCounter = 0
+
+export interface MockSampleRetestAccess {
+  protected: boolean
+  allowed: boolean
+}
+
+const UNPROTECTED_SAMPLE_RETEST_ACCESS: MockSampleRetestAccess = {
+  protected: false,
+  allowed: true
+}
 
 function clone<T>(value: T): T {
   if (value === undefined) return value
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+async function mockPasswordHash(password: string) {
+  const bytes = new TextEncoder().encode(password)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 function delay<T>(value: T, ms = 120) {
@@ -155,7 +215,8 @@ function createEmptyBlock(index: number, parameters: LabParameter, date: string)
     updatedAt: dayjs().toISOString(),
     inputs,
     results: calculateSampleResults(inputs, parameters),
-    parameterSnapshot: clone(parameters)
+    parameterSnapshot: clone(parameters),
+    retests: []
   }
 }
 
@@ -180,21 +241,44 @@ function ensureSheet(date = businessDateInBeijing()) {
       parameters: clone(initialParameters),
       sampleBlocks
     })
+    mockLabSheetOwnerById.set(`sheet-${date}`, currentUser.dataOwnerId || currentUser.id)
   }
   const sheet = labSheets.get(date)!
   const readonly = date !== businessDateInBeijing()
   sheet.readonly = readonly
   sheet.sampleBlocks.forEach((block) => {
     block.readonly = readonly
+    block.retests.forEach((retest) => {
+      retest.readonly = readonly || retest.status === 'VOID'
+    })
   })
   return sheet
 }
 
 export async function mockLogin(payload: LoginPayload): Promise<AuthResponse> {
-  if (payload.account !== 'admin' || payload.password !== 'admin123') {
-    throw new Error('账号或密码错误')
+  if (payload.account === 'admin' && payload.password === 'admin123') {
+    currentUser = clone(mainFrontendUser)
+    return delay({ token: 'mock-token-admin', user: currentUser })
   }
-  return delay({ token: 'mock-token-admin', user: currentUser })
+  const subAccount = frontendSubAccounts.find((item) => item.account === payload.account)
+  const passwordHash = subAccount ? frontendSubAccountPasswordHashes.get(subAccount.id) : undefined
+  if (!subAccount || subAccount.disabled || !passwordHash || passwordHash !== await mockPasswordHash(payload.password)) {
+    throw new Error(subAccount?.disabled ? '子账号已停用，请联系主账号' : '账号或密码错误')
+  }
+  subAccount.lastLoginAt = dayjs().toISOString()
+  currentUser = {
+    id: subAccount.id,
+    username: subAccount.username,
+    account: subAccount.account,
+    role: 'FRONTEND_SUB_USER',
+    dataOwnerId: mainFrontendUser.id,
+    permissionVersion: subAccount.permissionVersion,
+    permissions: subAccount.permissions,
+    requiresAccessGuardPassword: subAccount.requiresAccessGuardPassword,
+    isFrontendMainAccount: false,
+    isFrontendSubAccount: true
+  }
+  return delay({ token: `mock-token-${subAccount.id}-${subAccount.permissionVersion}`, user: currentUser })
 }
 
 export async function mockRegister(payload: RegisterPayload): Promise<AuthResponse> {
@@ -221,16 +305,94 @@ export async function mockUpdatePassword(payload: UpdatePasswordPayload) {
   return delay({ ok: true })
 }
 
-export async function mockCurrentLabSheet() {
-  return delay(ensureSheet())
+export async function mockFrontendSubAccounts() {
+  return delay(frontendSubAccounts)
 }
 
-export async function mockLabSheetByDate(date: string) {
-  return delay(ensureSheet(date))
+export async function mockCreateFrontendSubAccount(payload: CreateFrontendSubAccountPayload) {
+  if (payload.password.length < 6 || payload.password !== payload.confirmPassword) throw new Error('请正确设置子账号密码')
+  if (!payload.permissions.length) throw new Error('请至少选择一个菜单权限')
+  if (payload.account.trim() === mainFrontendUser.account || frontendSubAccounts.some((item) => item.account === payload.account.trim())) throw new Error('登录账号已存在')
+  const now = dayjs().toISOString()
+  const created: FrontendSubAccountDto = {
+    id: `sub-${Date.now()}`,
+    account: payload.account.trim(),
+    username: payload.username.trim(),
+    disabled: false,
+    requiresAccessGuardPassword: payload.requiresAccessGuardPassword,
+    permissionVersion: 1,
+    permissions: Array.from(new Set(payload.permissions)),
+    lastLoginAt: null,
+    createdAt: now,
+    updatedAt: now
+  }
+  frontendSubAccounts.push(created)
+  frontendSubAccountPasswordHashes.set(created.id, await mockPasswordHash(payload.password))
+  return delay(created)
+}
+
+export async function mockUpdateFrontendSubAccount(id: string, payload: UpdateFrontendSubAccountPayload) {
+  const row = frontendSubAccounts.find((item) => item.id === id)
+  if (!row) throw new Error('子账号不存在')
+  row.username = payload.username.trim()
+  row.permissions = Array.from(new Set(payload.permissions))
+  row.requiresAccessGuardPassword = payload.requiresAccessGuardPassword
+  row.permissionVersion += 1
+  row.updatedAt = dayjs().toISOString()
+  return delay(row)
+}
+
+export async function mockSetFrontendSubAccountStatus(id: string, disabled: boolean, disabledReason?: string) {
+  const row = frontendSubAccounts.find((item) => item.id === id)
+  if (!row) throw new Error('子账号不存在')
+  row.disabled = disabled
+  row.disabledReason = disabled ? disabledReason || '已由主账号停用' : null
+  row.permissionVersion += 1
+  row.updatedAt = dayjs().toISOString()
+  return delay({ ok: true })
+}
+
+export async function mockResetFrontendSubAccountPassword(id: string, payload: ResetFrontendSubAccountPasswordPayload) {
+  const row = frontendSubAccounts.find((item) => item.id === id)
+  if (!row) throw new Error('子账号不存在')
+  if (payload.currentPassword !== 'admin123') throw new Error('主账号当前密码错误')
+  if (payload.newPassword.length < 6 || payload.newPassword !== payload.confirmPassword) throw new Error('请正确设置新密码')
+  frontendSubAccountPasswordHashes.set(id, await mockPasswordHash(payload.newPassword))
+  row.permissionVersion += 1
+  row.updatedAt = dayjs().toISOString()
+  return delay({ ok: true })
+}
+
+export async function mockDeleteFrontendSubAccount(id: string) {
+  const index = frontendSubAccounts.findIndex((item) => item.id === id)
+  if (index < 0) throw new Error('子账号不存在')
+  frontendSubAccountPasswordHashes.delete(id)
+  frontendSubAccounts.splice(index, 1)
+  return delay({ ok: true })
+}
+
+export async function mockCurrentLabSheet(access = UNPROTECTED_SAMPLE_RETEST_ACCESS) {
+  return delay(publicMockLabSheet(ensureSheet(), canViewCompletedSampleData(access)))
+}
+
+export async function mockLabSheetByDate(date: string, access = UNPROTECTED_SAMPLE_RETEST_ACCESS) {
+  return delay(publicMockLabSheet(ensureSheet(date), canViewCompletedSampleData(access)))
 }
 
 export async function mockCurrentParameters() {
   return delay(labParameters)
+}
+
+export function setMockSampleRetestParameterSnapshotForTest(retestId: string, parameterSnapshot: unknown) {
+  for (const sheet of labSheets.values()) {
+    for (const block of sheet.sampleBlocks) {
+      const retest = block.retests.find((item) => item.id === retestId)
+      if (!retest) continue
+      retest.parameterSnapshot = parameterSnapshot as never
+      return
+    }
+  }
+  throw new Error('未找到复样')
 }
 
 export async function mockUpdateParameters(parameters: LabParameter) {
@@ -306,6 +468,436 @@ export async function mockSaveSampleBlock(sheetId: string, block: SampleBlockSav
   return delay(nextBlock)
 }
 
+function currentDataOwnerId() {
+  return currentUser.dataOwnerId || currentUser.id
+}
+
+function canViewCompletedSampleData(access: MockSampleRetestAccess) {
+  return !access.protected || access.allowed
+}
+
+function findWritableMockSheet(sheetId: string) {
+  const sheet = Array.from(labSheets.values()).find((item) => item.id === sheetId)
+  if (!sheet || mockLabSheetOwnerById.get(sheet.id) !== currentDataOwnerId()) {
+    throw mockRetestHttpError(404, { code: 'SAMPLE_RETEST_NOT_FOUND', message: '未找到表格' })
+  }
+  if (sheet.date !== businessDateInBeijing()) {
+    throw new Error('历史日期表格仅支持查看，不能修改')
+  }
+  return sheet
+}
+
+function assertMockRetestWritePermission() {
+  if (currentUser.role !== 'FRONTEND_SUB_USER') return
+  if (currentUser.permissions?.includes('DATA_MAIN')) return
+  throw mockRetestHttpError(403, {
+    message: '子账号没有该菜单的访问权限',
+    error: 'Forbidden',
+    statusCode: 403
+  }, '当前子账号没有数据计算权限')
+}
+
+function normalizeMockRetestInputs(value: unknown): SampleRetestInput {
+  const row = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  return Object.fromEntries(sampleRetestInputFields
+    .filter((field) => Object.prototype.hasOwnProperty.call(row, field))
+    .map((field) => {
+      const item = row[field]
+      return [field, typeof item === 'number' && Number.isFinite(item) ? item : null]
+    })) as SampleRetestInput
+}
+
+function createEmptyMockRetestInputs(): SampleRetestInput {
+  return Object.fromEntries(sampleRetestInputFields.map((field) => [field, null])) as SampleRetestInput
+}
+
+function normalizeMockRetestParameters(parameters: LabParameter) {
+  return Object.keys(defaultLabParameters).reduce<LabParameter>((next, key) => {
+    const value = parameters[key as LabParameterKey]
+    next[key as LabParameterKey] = typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : defaultLabParameters[key as LabParameterKey]
+    return next
+  }, { ...defaultLabParameters })
+}
+
+function nextMockRetestTimestamp(previous?: string) {
+  const previousTime = previous ? Date.parse(previous) : Number.NaN
+  const now = Date.now()
+  return new Date(Number.isFinite(previousTime) && previousTime >= now ? previousTime + 1 : now).toISOString()
+}
+
+function stableMockJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
+  if (typeof value === 'number') return JSON.stringify(Number.isFinite(value) ? value : null)
+  if (Array.isArray(value)) return `[${value.map((item) => stableMockJson(item === undefined ? null : item)).join(',')}]`
+  if (value && typeof value === 'object') {
+    const row = value as Record<string, unknown>
+    return `{${Object.keys(row).sort().filter((key) => row[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableMockJson(row[key])}`).join(',')}}`
+  }
+  return JSON.stringify(String(value))
+}
+
+function retestFingerprint(
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID',
+  sheetId: string,
+  payload: unknown,
+  retestId?: string
+) {
+  return stableMockJson({
+    operation,
+    actorUserId: currentUser.id,
+    dataOwnerId: currentDataOwnerId(),
+    sheetId,
+    ...(retestId ? { sampleRetestId: retestId } : {}),
+    payload
+  })
+}
+
+function requireMockIdempotencyKey(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('缺少幂等请求编号')
+  const key = value.trim()
+  if (key.length > 200) throw new Error('幂等请求编号过长')
+  return key
+}
+
+function requireMockBaseUpdatedAt(value: unknown) {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  const timestamp = Date.parse(normalized)
+  if (!normalized || !Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== normalized) {
+    throw new Error('缺少或无效的复样版本时间')
+  }
+  return normalized
+}
+
+function resolveMockRetestWrite<T>(
+  idempotencyKey: string,
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID',
+  fingerprint: string
+): T | null {
+  const request = mockRetestWriteRequests.get(idempotencyKey)
+  if (!request) return null
+  if (request.operation !== operation || request.fingerprint !== fingerprint) {
+    throw new Error('幂等请求编号已用于不同的复样操作')
+  }
+  return clone(request.response) as T
+}
+
+function assertNoMismatchedMockRetestWrite(
+  idempotencyKey: string,
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID',
+  fingerprint: string
+) {
+  const request = mockRetestWriteRequests.get(idempotencyKey)
+  if (request && (request.operation !== operation || request.fingerprint !== fingerprint)) {
+    throw new Error('幂等请求编号已用于不同的复样操作')
+  }
+}
+
+function recordMockRetestWrite(
+  idempotencyKey: string,
+  operation: 'CREATE' | 'SAVE' | 'DELETE' | 'VOID',
+  fingerprint: string,
+  response: unknown
+) {
+  mockRetestWriteRequests.set(idempotencyKey, { operation, fingerprint, response: clone(response) })
+}
+
+function findMockRetest(sheet: LabSheet, retestId: string, canViewCompletedSensitiveData: boolean) {
+  for (const block of sheet.sampleBlocks) {
+    const retest = block.retests.find((item) => item.id === retestId)
+    if (!retest) continue
+    if (block.inputs.completed && !canViewCompletedSensitiveData) {
+      throw new Error('已完成样品需要验证后才能修改复样')
+    }
+    return { block, retest }
+  }
+  throw mockRetestHttpError(404, { code: 'SAMPLE_RETEST_NOT_FOUND', message: '未找到复样' })
+}
+
+function assertMockRetestActive(retest: SampleRetest) {
+  if (retest.status !== 'ACTIVE') throw new Error('已作废的复样不能再修改')
+}
+
+function assertMockExactRetestVersion(retest: SampleRetest, baseUpdatedAt: string) {
+  if (Date.parse(retest.updatedAt) !== Date.parse(baseUpdatedAt)) {
+    throw new Error('该复样已被修改，请刷新后重试')
+  }
+}
+
+function mockRetestConflict(
+  code: 'SAMPLE_RETEST_INPUT_CONFLICT' | 'SAMPLE_RETEST_VERSION_CONFLICT',
+  message: string,
+  fields: string[],
+  retest: SampleRetest
+) {
+  return {
+    response: { status: 409, data: { code, message, fields, retest } },
+    message
+  }
+}
+
+function mockRetestHttpError(
+  status: 403 | 404 | 422,
+  data: {
+    code: 'SAMPLE_RETEST_NOT_FOUND' | 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID'
+    message: string
+  } | {
+    message: string
+    error: 'Forbidden'
+    statusCode: 403
+  },
+  errorMessage = data.message
+) {
+  const error = new Error(errorMessage) as Error & {
+    response: { status: number; data: typeof data }
+  }
+  error.response = { status, data }
+  return error
+}
+
+function publicMockRetest(
+  retest: SampleRetest,
+  block: SampleBlock,
+  sheet: LabSheet,
+  canViewCompletedSensitiveData: boolean
+): SampleRetest {
+  const hidden = Boolean(block.inputs.completed && !canViewCompletedSensitiveData)
+  const inputs: SampleRetestInput = { ...retest.inputs }
+  const parameters = requireStoredMockRetestParameters(retest.parameterSnapshot, true)
+  if (hidden) {
+    for (const field of sampleRetestInputFields) {
+      if (Object.prototype.hasOwnProperty.call(inputs, field)) inputs[field] = null
+    }
+  }
+  const results: SampleRetestResult = calculateSampleResults(inputs, parameters)
+  if (hidden) {
+    for (const field of Object.keys(results) as Array<keyof SampleRetestResult>) results[field] = null
+  }
+  const response: SampleRetest = {
+    ...retest,
+    readonly: sheet.readonly || retest.status === 'VOID',
+    sensitiveFieldsHidden: hidden,
+    inputs,
+    results,
+    parameterSnapshot: hidden ? null : clone(retest.parameterSnapshot)
+  }
+  return clone(response)
+}
+
+function publicMockLabSheet(sheet: LabSheet, canViewCompletedSensitiveData: boolean): LabSheet {
+  return clone({
+    ...sheet,
+    sampleBlocks: sheet.sampleBlocks.map((block) => ({
+      ...block,
+      retests: block.retests.map((retest) => publicMockRetest(
+        retest,
+        block,
+        sheet,
+        canViewCompletedSensitiveData
+      ))
+    }))
+  })
+}
+
+export async function mockCreateSampleRetests(
+  sheetId: string,
+  payload: CreateSampleRetestsPayload,
+  access = UNPROTECTED_SAMPLE_RETEST_ACCESS
+) {
+  const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
+  if (!Array.isArray(payload.sampleBlockIds) || payload.sampleBlockIds.length < 1 || payload.sampleBlockIds.length > 100) {
+    throw new Error('请选择 1 至 100 个样品')
+  }
+  const sampleBlockIds = payload.sampleBlockIds.map((id) => {
+    if (typeof id !== 'string' || !id.trim()) throw new Error('样品编号不能为空')
+    return id.trim()
+  })
+  if (new Set(sampleBlockIds).size !== sampleBlockIds.length) throw new Error('样品选择不能重复')
+
+  const sheet = findWritableMockSheet(sheetId)
+  assertMockRetestWritePermission()
+  const blocks = sampleBlockIds.map((id) => sheet.sampleBlocks.find((block) => block.id === id))
+  if (blocks.some((block) => !block)) {
+    throw mockRetestHttpError(404, { code: 'SAMPLE_RETEST_NOT_FOUND', message: '未找到样品' })
+  }
+  const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
+  if (!canViewCompletedSensitiveData && blocks.some((block) => block!.inputs.completed)) {
+    throw new Error('已完成样品需要验证后才能创建复样')
+  }
+
+  const fingerprint = retestFingerprint('CREATE', sheetId, { sampleBlockIds, idempotencyKey })
+  const duplicate = resolveMockRetestWrite<SampleRetest[]>(idempotencyKey, 'CREATE', fingerprint)
+  if (duplicate) return delay(duplicate)
+
+  const parameterSnapshot = normalizeMockRetestParameters(sheet.parameters)
+  const created = blocks.map((block) => {
+    const parent = block!
+    const sequence = mockNextRetestSequenceByBlockId.get(parent.id)
+      ?? (parent.retests.reduce((highest, retest) => Math.max(highest, retest.sequence), 0) + 1)
+    mockNextRetestSequenceByBlockId.set(parent.id, sequence + 1)
+    const inputs = createEmptyMockRetestInputs()
+    const timestamp = nextMockRetestTimestamp()
+    const retest: SampleRetest = {
+      id: `mock-retest-${++mockRetestIdCounter}`,
+      sampleBlockId: parent.id,
+      sequence,
+      status: 'ACTIVE',
+      everFilled: false,
+      readonly: false,
+      sensitiveFieldsHidden: false,
+      inputs,
+      results: calculateSampleResults(inputs, parameterSnapshot),
+      parameterSnapshot: clone(parameterSnapshot),
+      voidReason: null,
+      createdById: currentUser.id,
+      updatedById: currentUser.id,
+      voidedById: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      voidedAt: null
+    }
+    parent.retests.push(retest)
+    return publicMockRetest(retest, parent, sheet, canViewCompletedSensitiveData)
+  })
+  recordMockRetestWrite(idempotencyKey, 'CREATE', fingerprint, created)
+  return delay(created)
+}
+
+export async function mockSaveSampleRetest(
+  sheetId: string,
+  retestId: string,
+  payload: SaveSampleRetestPayload,
+  access = UNPROTECTED_SAMPLE_RETEST_ACCESS
+) {
+  const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
+  const changedFields = normalizeMockRetestInputs(payload.changedFields)
+  const baseInputs = normalizeMockRetestInputs(payload.baseInputs)
+  const baseUpdatedAt = requireMockBaseUpdatedAt(payload.baseUpdatedAt)
+  const fingerprintPayload = {
+    idempotencyKey,
+    baseUpdatedAt,
+    ...(payload.baseInputs === undefined ? {} : { baseInputs }),
+    changedFields
+  }
+  const sheet = findWritableMockSheet(sheetId)
+  assertMockRetestWritePermission()
+  const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
+  const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
+  const fingerprint = retestFingerprint('SAVE', sheetId, fingerprintPayload, retestId)
+  const duplicate = resolveMockRetestWrite<SampleRetest>(idempotencyKey, 'SAVE', fingerprint)
+  if (duplicate) return delay(duplicate)
+
+  assertMockRetestActive(context.retest)
+  const baseTime = Date.parse(baseUpdatedAt)
+  const currentTime = Date.parse(context.retest.updatedAt)
+  if (currentTime < baseTime) {
+    const message = '复样版本时间与服务器不一致，请刷新后重试'
+    throw mockRetestConflict(
+      'SAMPLE_RETEST_VERSION_CONFLICT',
+      message,
+      Object.keys(changedFields),
+      publicMockRetest(context.retest, context.block, sheet, canViewCompletedSensitiveData)
+    )
+  }
+  if (currentTime > baseTime) {
+    const conflicts = Object.keys(changedFields).filter((field) => (
+      !Object.prototype.hasOwnProperty.call(baseInputs, field) ||
+      (context.retest.inputs[field as keyof SampleRetestInput] ?? null) !==
+        (baseInputs[field as keyof SampleRetestInput] ?? null)
+    ))
+    if (conflicts.length) {
+      const message = '该复样已被另一台设备修改，请确认后再保存'
+      throw mockRetestConflict(
+        'SAMPLE_RETEST_INPUT_CONFLICT',
+        message,
+        conflicts,
+        publicMockRetest(context.retest, context.block, sheet, canViewCompletedSensitiveData)
+      )
+    }
+  }
+
+  const nextInputs = { ...context.retest.inputs, ...changedFields }
+  const parameters = requireStoredMockRetestParameters(context.retest.parameterSnapshot)
+  context.retest.inputs = nextInputs
+  context.retest.results = calculateSampleResults(nextInputs, parameters)
+  context.retest.everFilled = context.retest.everFilled || hasRetestInput(nextInputs)
+  context.retest.updatedById = currentUser.id
+  context.retest.updatedAt = nextMockRetestTimestamp(context.retest.updatedAt)
+  const response = publicMockRetest(context.retest, context.block, sheet, canViewCompletedSensitiveData)
+  recordMockRetestWrite(idempotencyKey, 'SAVE', fingerprint, response)
+  return delay(response)
+}
+
+export async function mockDeleteSampleRetest(
+  sheetId: string,
+  retestId: string,
+  payload: DeleteSampleRetestPayload,
+  access = UNPROTECTED_SAMPLE_RETEST_ACCESS
+) {
+  const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
+  const baseUpdatedAt = requireMockBaseUpdatedAt(payload.baseUpdatedAt)
+  const fingerprint = retestFingerprint('DELETE', sheetId, { idempotencyKey, baseUpdatedAt }, retestId)
+  const sheet = findWritableMockSheet(sheetId)
+  assertMockRetestWritePermission()
+  const duplicate = resolveMockRetestWrite<{ id: string; sampleBlockId: string; deleted: true }>(
+    idempotencyKey, 'DELETE', fingerprint
+  )
+  if (duplicate) return delay(duplicate)
+
+  const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
+  const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
+  assertMockRetestActive(context.retest)
+  assertMockExactRetestVersion(context.retest, baseUpdatedAt)
+  if (context.retest.everFilled || hasRetestInput(context.retest.inputs)) {
+    throw new Error('已录入数据的复样只能作废')
+  }
+  context.block.retests = context.block.retests.filter((item) => item.id !== retestId)
+  const response = { id: retestId, sampleBlockId: context.block.id, deleted: true as const }
+  recordMockRetestWrite(idempotencyKey, 'DELETE', fingerprint, response)
+  return delay(response)
+}
+
+export async function mockVoidSampleRetest(
+  sheetId: string,
+  retestId: string,
+  payload: VoidSampleRetestPayload,
+  access = UNPROTECTED_SAMPLE_RETEST_ACCESS
+) {
+  const idempotencyKey = requireMockIdempotencyKey(payload.idempotencyKey)
+  const baseUpdatedAt = requireMockBaseUpdatedAt(payload.baseUpdatedAt)
+  if (payload.reason !== undefined && payload.reason !== null && typeof payload.reason !== 'string') {
+    throw new Error('作废原因格式错误')
+  }
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() || null : null
+  const fingerprint = retestFingerprint('VOID', sheetId, { idempotencyKey, baseUpdatedAt, reason }, retestId)
+  const sheet = findWritableMockSheet(sheetId)
+  assertMockRetestWritePermission()
+  assertNoMismatchedMockRetestWrite(idempotencyKey, 'VOID', fingerprint)
+  const canViewCompletedSensitiveData = canViewCompletedSampleData(access)
+  const context = findMockRetest(sheet, retestId, canViewCompletedSensitiveData)
+  const duplicate = resolveMockRetestWrite<SampleRetest>(idempotencyKey, 'VOID', fingerprint)
+  if (duplicate) return delay(duplicate)
+
+  assertMockRetestActive(context.retest)
+  assertMockExactRetestVersion(context.retest, baseUpdatedAt)
+  if (!context.retest.everFilled) throw new Error('未录入数据的复样可以直接删除')
+  const timestamp = nextMockRetestTimestamp(context.retest.updatedAt)
+  context.retest.status = 'VOID'
+  context.retest.readonly = true
+  context.retest.voidReason = reason
+  context.retest.voidedAt = timestamp
+  context.retest.voidedById = currentUser.id
+  context.retest.updatedById = currentUser.id
+  context.retest.updatedAt = timestamp
+  const response = publicMockRetest(context.retest, context.block, sheet, canViewCompletedSensitiveData)
+  recordMockRetestWrite(idempotencyKey, 'VOID', fingerprint, response)
+  return delay(response)
+}
+
 function requireCompleteLabParameters(parameters: unknown): LabParameter {
   if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
     throw new Error('参数必须是有限数值')
@@ -318,6 +910,18 @@ function requireCompleteLabParameters(parameters: unknown): LabParameter {
     next[key as LabParameterKey] = value
     return next
   }, { ...defaultLabParameters })
+}
+
+function requireStoredMockRetestParameters(parameters: unknown, read = false): LabParameter {
+  try {
+    return requireCompleteLabParameters(parameters)
+  } catch {
+    const responseMessage = read ? '复样参数快照无效，无法读取' : '复样参数快照无效，无法保存'
+    throw mockRetestHttpError(422, {
+      code: 'SAMPLE_RETEST_PARAMETER_SNAPSHOT_INVALID',
+      message: responseMessage
+    }, '复样参数快照无效')
+  }
 }
 
 export async function mockLabHistory() {
@@ -541,12 +1145,17 @@ function publicCustomer({ frontendUserId: _frontendUserId, ...customer }: Stored
   return customer
 }
 
+function mockBlacklistDto(record: MockBlacklistRecord): BlacklistRecord {
+  const { uploadedById, ...publicRecord } = record
+  return { ...publicRecord, canManage: uploadedById === currentUser.id }
+}
+
 export async function mockSearchBlacklist(keyword = '') {
   const query = keyword.trim().toLowerCase()
   const data = query
     ? blacklist.filter((item) => `${item.phone || ''}${item.wechat || ''}${item.wechatNickname || ''}${item.other || ''}${item.note || ''}`.toLowerCase().includes(query))
     : blacklist
-  return delay(data)
+  return delay(data.map(mockBlacklistDto))
 }
 
 export async function mockCheckBlacklist(keyword: string): Promise<BlacklistCheckResult> {
@@ -560,14 +1169,15 @@ export async function mockCheckBlacklist(keyword: string): Promise<BlacklistChec
     const haystack = `${item.phone || ''} ${item.wechat || ''} ${item.wechatNickname || ''} ${item.other || ''} ${item.note || ''}`.toLowerCase()
     return tokens.some((token) => haystack.includes(token))
   })
-  return delay({ hit: records.length > 0, records })
+  return delay({ hit: records.length > 0, records: records.map(mockBlacklistDto) })
 }
 
 export async function mockCreateBlacklist(payload: BlacklistPayload) {
-  const record: BlacklistRecord = {
+  const record: MockBlacklistRecord = {
     id: `b-${Date.now()}`,
     uploadedAt: dayjs().toISOString(),
     uploadedBy: currentUser.username,
+    uploadedById: currentUser.id,
     phone: payload.phone,
     wechat: payload.wechat,
     wechatNickname: payload.wechatNickname,
@@ -577,26 +1187,26 @@ export async function mockCreateBlacklist(payload: BlacklistPayload) {
     note: payload.note
   }
   blacklist = [record, ...blacklist]
-  return delay(record)
+  return delay(mockBlacklistDto(record))
 }
 
 export async function mockDeleteBlacklist(id: string) {
   const record = blacklist.find((item) => item.id === id)
   if (!record) throw new Error('黑名单记录不存在')
-  if (record.uploadedBy !== currentUser.username) {
+  if (record.uploadedById !== currentUser.id) {
     throw new Error('只能删除自己上传的黑名单')
   }
   blacklist = blacklist.filter((item) => item.id !== id)
-  return delay(record)
+  return delay(mockBlacklistDto(record))
 }
 
 export async function mockUpdateBlacklist(id: string, payload: BlacklistPayload) {
   const index = blacklist.findIndex((item) => item.id === id)
   if (index < 0) throw new Error('黑名单记录不存在')
-  if (blacklist[index].uploadedBy !== currentUser.username) {
+  if (blacklist[index].uploadedById !== currentUser.id) {
     throw new Error('只能补充自己上传的黑名单')
   }
-  const record: BlacklistRecord = {
+  const record: MockBlacklistRecord = {
     ...blacklist[index],
     phone: payload.phone?.trim() || undefined,
     wechat: payload.wechat?.trim() || undefined,
@@ -607,7 +1217,7 @@ export async function mockUpdateBlacklist(id: string, payload: BlacklistPayload)
     note: payload.note?.trim() || undefined
   }
   blacklist[index] = record
-  return delay(record)
+  return delay(mockBlacklistDto(record))
 }
 
 export async function mockFinanceByMonth(month: string) {
@@ -813,7 +1423,7 @@ export async function mockSampleDetectionReport(range: DateRange): Promise<Sampl
   const incomeReport = summarizeIncomeRows(
     startDate.slice(0, 7),
     dates.map((date) => summarizeIncomeSheet(ensureSheet(date))),
-    loadPrepaidRecharges().filter((row) => row.rechargeDate >= startDate && row.rechargeDate <= endDate),
+    listMockSharedPrepaidIncomeRecharges(getMockSharedPrepaidOwnerId(currentUser), startDate, endDate),
     new Set(dates)
   )
   const rows = incomeReport.rows
@@ -837,17 +1447,6 @@ export async function mockSampleDetectionReport(range: DateRange): Promise<Sampl
     },
     rows
   })
-}
-
-function loadPrepaidRecharges(): PrepaidRechargeRow[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(PREPAID_RECHARGE_STORAGE_KEY)
-    if (!raw) return []
-    return JSON.parse(raw) as PrepaidRechargeRow[]
-  } catch {
-    return []
-  }
 }
 
 function classifyFinanceItem(item: string) {
@@ -893,5 +1492,11 @@ export async function mockFinanceCategories() {
 }
 
 export async function mockUploadImages(files: File[]) {
-  return delay(files.map((file) => URL.createObjectURL(file)))
+  const urls = await Promise.all(files.map((file) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('图片读取失败'))
+    reader.readAsDataURL(file)
+  })))
+  return delay(urls)
 }

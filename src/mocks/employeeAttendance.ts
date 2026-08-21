@@ -554,6 +554,8 @@ function payrollItem(emp: EmployeeAttendanceState['employees'][number], month: s
   const overtimePay = money(overtimeMinutes / 60 * emp.overtimeHourlyRate)
   const adjustments = old?.adjustments || []
   const adjustmentAmount = money(adjustments.reduce((sum, row) => sum + row.amount, 0))
+  const positiveAdjustmentAmount = money(adjustments.filter((row) => row.amount > 0).reduce((sum, row) => sum + row.amount, 0))
+  const negativeAdjustmentAmount = money(adjustments.filter((row) => row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0))
   const leaveDeduction = money(dailyRate * excessLeaveDays)
   const absenceDeduction = money(dailyRate * absenceDays)
   const attendanceBonus = excessLeaveDays > 0 || absenceDays > 0 ? 0 : emp.attendanceBonus
@@ -566,6 +568,8 @@ function payrollItem(emp: EmployeeAttendanceState['employees'][number], month: s
   if (lone) issues.push(`有 ${lone} 天打卡必须成对`)
   if (unresolved) issues.push(`有 ${unresolved} 天未处理缺勤`)
   const payableAmount = money(emp.baseSalary + attendanceBonus + overtimePay + commissionAmount + bonusAmount + adjustmentAmount - leaveDeduction - absenceDeduction)
+  const grossEarningsAmount = money(emp.baseSalary + attendanceBonus + overtimePay + commissionAmount + bonusAmount + positiveAdjustmentAmount)
+  const deductionAmount = money(leaveDeduction + absenceDeduction + negativeAdjustmentAmount)
   const input = {
     baseSalary: emp.baseSalary, attendanceBonus: emp.attendanceBonus, scheduledWorkDays,
     restQuotaDays: setting?.restQuotaDays ?? emp.restQuotaDays, countedLeaveDays: money(quotaLeaveDays), absenceDays,
@@ -575,7 +579,7 @@ function payrollItem(emp: EmployeeAttendanceState['employees'][number], month: s
   const result = {
     dailyRate: money(dailyRate), excessLeaveDays: money(excessLeaveDays), leaveDeduction, absenceDeduction,
     overtimeHours: money(overtimeMinutes / 60), overtimePay, commissionAmount, bonusAmount, adjustmentAmount,
-    attendanceBonus, payableAmount, issues: [...issues]
+    attendanceBonus, grossEarningsAmount, deductionAmount, payableAmount, issues: [...issues]
   }
   return {
     id: old?.id || id('payroll-item'), employeeId: emp.id, employee: publicEmployee(emp), payableAmount, issues, adjustments,

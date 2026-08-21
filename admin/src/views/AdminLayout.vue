@@ -92,11 +92,12 @@ import dayjs from 'dayjs'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Box, Calendar, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, List, User } from '@element-plus/icons-vue'
+import { Box, Calendar, Coin, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, List, User } from '@element-plus/icons-vue'
 import { adminMe, currentAdminUser, logoutAdmin, updateAdminProfile } from '../api'
 import type { AdminUser } from '../types'
 import { financeNavigationGroups } from '../config/financeNavigation'
 import { employeeAttendanceNavigation } from '../config/employeeAttendanceNavigation'
+import { prepaidNavigation } from '../config/prepaidNavigation'
 
 interface NavChild {
   path: string
@@ -137,6 +138,12 @@ const navItems = computed<NavItem[]>(() => {
       label: '员工考勤',
       icon: Calendar,
       children: employeeAttendanceNavigation.map(({ path, label }) => ({ path, label }))
+    },
+    {
+      path: '/shared-prepaid',
+      label: '预充值客户',
+      icon: Coin,
+      children: prepaidNavigation.map(({ path, label }) => ({ path, label }))
     },
     { path: '/finance', label: '财务报表', icon: Money, children: financeNavigationGroups.map(({ path, label }) => ({ path, label })) },
     { path: '/todos', label: '待办事项', icon: List },

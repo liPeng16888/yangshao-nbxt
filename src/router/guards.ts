@@ -2,6 +2,7 @@ export interface AuthRedirectInput {
   isLoggedIn: boolean
   toPath: string
   requiresAuth?: boolean
+  authenticatedHome?: string
 }
 
 export const accessGuardFeatures = [
@@ -29,7 +30,7 @@ export function featureForPath(path: string): AccessGuardFeature | null {
 
 export function resolveAuthRedirect(input: AuthRedirectInput) {
   if (input.requiresAuth && !input.isLoggedIn) return '/login'
-  if (input.toPath === '/login' && input.isLoggedIn) return '/data'
+  if (input.toPath === '/login' && input.isLoggedIn) return input.authenticatedHome || '/data'
   return null
 }
 

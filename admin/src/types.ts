@@ -90,6 +90,175 @@ export interface AdminLabSampleChangeRequestQuery {
   date?: string
 }
 
+export type AdminSampleRetestStatus = 'ACTIVE' | 'VOID'
+
+export type AdminSampleRetestInput = Readonly<{
+  ironRaw: number | null
+  siliconRaw: number | null
+  siliconAdjust: number | null
+  aluminumRaw: number | null
+  aluminumAdjust: number | null
+  sulfur: number | null
+  densityRaw: number | null
+  whiteness: number | null
+  calciumRaw: number | null
+  magnesiumRaw: number | null
+  carbon: number | null
+  titaniumRaw: number | null
+  waterSample: number | null
+  bottleWater: number | null
+  bottleWaterSample: number | null
+  moisture: number | null
+  crucible: number | null
+  sampleWeight: number | null
+  burnedCrucibleSample: number | null
+}>
+
+export type AdminSampleRetestResult = Readonly<{
+  iron: number
+  silicon: number
+  aluminum: number
+  aluminumSiliconRatio: number
+  total: number
+  density: number
+  calcium: number
+  magnesium: number
+  titanium: number
+  bottleDensity: number
+  moisture: number
+  burnLoss: number
+}>
+
+export type AdminSampleRetestParameterSnapshot = Readonly<{
+  ironBlank: number
+  ironFactor: number
+  siliconBlank: number
+  siliconFactor: number
+  aluminumFactor1: number
+  aluminumFactor2: number
+  calciumFactor: number
+  magnesiumFactor: number
+  titaniumFactor: number
+}>
+
+export interface AdminSampleRetest {
+  readonly id: string
+  readonly sampleBlockId: string
+  readonly sequence: number
+  readonly status: AdminSampleRetestStatus
+  readonly everFilled: boolean
+  readonly readonly: true
+  readonly sensitiveFieldsHidden: boolean
+  readonly inputs: AdminSampleRetestInput
+  readonly results: AdminSampleRetestResult
+  readonly parameterSnapshot: AdminSampleRetestParameterSnapshot
+  readonly voidReason: string | null
+  readonly createdById: string
+  readonly updatedById: string
+  readonly voidedById: string | null
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly voidedAt: string | null
+}
+
+export interface AdminDataCustomer {
+  id?: string
+  name?: string
+  phone?: string | null
+  wechat?: string | null
+  wechatNickname?: string | null
+  note?: string | null
+}
+
+export interface AdminDataSampleInputs extends Record<string, unknown> {
+  sequence?: string
+  sampleNumber?: string
+  customerId?: string
+  customerIds?: string[]
+  customers?: AdminDataCustomer[]
+  customerText?: string
+  price?: number | null
+  paymentStatus?: string
+  elementNote?: string
+  completed?: boolean
+}
+
+export interface AdminDataSampleBlock {
+  id: string
+  index: number
+  readonly: true
+  inputs: AdminDataSampleInputs
+  results: Record<string, unknown>
+  parameterSnapshot: Record<string, unknown>
+  retests: AdminSampleRetest[]
+}
+
+export interface AdminDataLabSheet {
+  id: string
+  frontendUserId: string
+  name: string
+  date: string
+  readonly: true
+  parameters: Record<string, unknown>
+  sampleBlocks: AdminDataSampleBlock[]
+}
+
+export type FrontendMenuPermission =
+  | 'DATA_MAIN'
+  | 'DATA_STANDARD_SAMPLE'
+  | 'DATA_COEFFICIENT'
+  | 'LAB_REPORT_IMAGE_TEMPLATE'
+  | 'LAB_REPORT_SMS_TEMPLATE'
+  | 'ATTENDANCE_OVERVIEW'
+  | 'ATTENDANCE_EMPLOYEES'
+  | 'ATTENDANCE_SCHEDULES'
+  | 'ATTENDANCE_RECORDS'
+  | 'ATTENDANCE_LEAVE'
+  | 'ATTENDANCE_COMPENSATION'
+  | 'ATTENDANCE_PAYROLL'
+  | 'PREPAID_RECHARGE'
+  | 'PREPAID_CUSTOMERS'
+  | 'PREPAID_CONSUMPTIONS'
+  | 'PREPAID_SETTLEMENTS'
+  | 'FINANCE_EXPENSES'
+  | 'FINANCE_INCOME'
+  | 'FINANCE_UNSETTLED'
+  | 'FINANCE_MONTHLY_SETTLEMENT'
+  | 'REPORTS'
+  | 'MEDICINE_STOCK'
+  | 'MEDICINE_INBOUND'
+  | 'MEDICINE_OUTBOUND'
+  | 'CUSTOMER_OVERVIEW'
+  | 'BLACKLIST'
+
+export interface AdminFrontendSubAccount {
+  id: string
+  account: string
+  username: string
+  disabled: boolean
+  requiresAccessGuardPassword: boolean
+  permissions: FrontendMenuPermission[]
+  createdAt: string
+  lastLoginAt?: string | null
+}
+
+export interface AdminFrontendAccount {
+  id: string
+  account: string
+  username: string
+  displayRemark: string
+  displayName: string
+  role: 'FRONTEND_USER'
+  disabled: boolean
+  disabledReason: string
+  password: string
+  accessGuard: Record<string, unknown>
+  accessGroups: Array<Record<string, any>>
+  frontendSubAccounts: AdminFrontendSubAccount[]
+  createdAt: string
+  lastDataUpdatedAt?: string | null
+}
+
 export interface ApiPageState {
   loading: boolean
 }

@@ -1,18 +1,48 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
+import { createHash } from 'node:crypto'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CurrentUser } from '../auth/current-user'
 import { businessDateInBeijing } from '../common/date'
-import { calculateResults, createEmptyInputs, defaultLabParameters, defaultSampleBlockCount, editableInputFields, hasLabDetectionInput } from '../common/lab'
+import { calculateResults, createEmptyInputs, defaultLabParameters, defaultSampleBlockCount, editableInputFields, hasLabDetectionInput, normalizeLabParameters } from '../common/lab'
 import { LabSheetRealtimeService } from './lab-sheet-realtime.service'
 import { LabCellChangeService } from './lab-cell-change.service'
+import {
+  SharedPrepaidLedgerService,
+  type SharedPrepaidSampleMutation
+} from '../shared-prepaid/shared-prepaid-ledger.service'
+import { SharedPrepaidRealtimeService } from '../shared-prepaid/shared-prepaid-realtime.service'
+import { toSampleRetestDto, type SampleRetestRow } from './sample-retest.dto'
+
+const prepaidTupleFields = ['paymentStatus', 'price', 'prepaidMemberId', 'prepaidMemberPhone']
+
+type LabSaveResponse = Record<string, unknown>
+type LabSaveRequestRow = {
+  idempotencyKey: string
+  requestFingerprint: string
+  sheetId: string
+  sampleBlockId: string
+  responseSnapshot: unknown
+}
+type LabSaveRequestReader = {
+  labSampleSaveRequest: {
+    findUnique(args: { where: { idempotencyKey: string } }): Promise<LabSaveRequestRow | null>
+  }
+}
+type LabSaveRequestWriter = LabSaveRequestReader & {
+  labSampleSaveRequest: LabSaveRequestReader['labSampleSaveRequest'] & {
+    create(args: { data: LabSaveRequestRow }): Promise<LabSaveRequestRow>
+  }
+}
 
 @Injectable()
 export class LabSheetsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: LabSheetRealtimeService,
-    private readonly cellChanges: LabCellChangeService
+    private readonly cellChanges: LabCellChangeService,
+    private readonly sharedPrepaid: SharedPrepaidLedgerService,
+    private readonly sharedPrepaidRealtime: SharedPrepaidRealtimeService
   ) {}
 
   async getSheetForFrontendUser(frontendUserId: string, date = businessDateInBeijing(), canViewCompletedSensitiveData = true) {
@@ -24,7 +54,7 @@ export class LabSheetsService {
     return this.toSheetDto(await this.ensureSheet(frontendUserId, businessDateInBeijing()), canViewCompletedSensitiveData)
   }
 
-  async updateCurrentParameters(frontendUserId: string, parameters: Record<string, number>, sourceClientId?: string) {
+  async updateCurrentParameters(frontendUserId: string, parameters: Record<string, number>, sourceClientId?: string, actorUserId = frontendUserId) {
     const sheet = await this.ensureSheet(frontendUserId, businessDateInBeijing())
     const nextParameters = { ...defaultLabParameters, ...parameters, savedAt: new Date().toISOString() }
     await this.prisma.labSheet.update({ where: { id: sheet.id }, data: { parameters: nextParameters as Prisma.InputJsonValue } })
@@ -35,6 +65,7 @@ export class LabSheetsService {
       sheetId: sheet.id,
       parameters: nextParameters,
       sourceClientId,
+      changedById: actorUserId,
       updatedAt: new Date().toISOString()
     })
     return nextParameters
@@ -44,7 +75,8 @@ export class LabSheetsService {
     frontendUserId: string,
     payload: unknown,
     sourceClientId?: string,
-    canViewCompletedSensitiveData = false
+    canViewCompletedSensitiveData = false,
+    actorUserId = frontendUserId
   ) {
     if (!this.isPlainObject(payload)) throw new BadRequestException('请求格式不正确')
     const startIndex = payload.startIndex
@@ -59,7 +91,7 @@ export class LabSheetsService {
     const updatedSheet = await this.withSheetWriteLock(current.id, async (tx) => {
       const sheet = await tx.labSheet.findUnique({
         where: { id: current.id },
-        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+        include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
       })
       if (!sheet || sheet.frontendUserId !== frontendUserId) throw new NotFoundException('未找到表格')
       this.assertSheetEditable(sheet)
@@ -93,7 +125,7 @@ export class LabSheetsService {
       }
       const reloaded = await tx.labSheet.findUnique({
         where: { id: sheet.id },
-        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+        include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
       })
       if (!reloaded) throw new NotFoundException('未找到表格')
       return reloaded
@@ -106,6 +138,7 @@ export class LabSheetsService {
       date: dto.date,
       sheetId: dto.id,
       sourceClientId,
+      changedById: actorUserId,
       updatedAt: new Date().toISOString()
     })
     return dto
@@ -116,13 +149,14 @@ export class LabSheetsService {
     sheetId: string,
     count: number,
     sourceClientId?: string,
-    canViewCompletedSensitiveData = false
+    canViewCompletedSensitiveData = false,
+    actorUserId = frontendUserId
   ) {
     if (!Number.isInteger(count) || count <= 0) throw new ForbiddenException('新增数量必须是正整数')
     const updatedSheet = await this.withSheetWriteLock(sheetId, async (tx) => {
       const sheet = await tx.labSheet.findUnique({
         where: { id: sheetId },
-        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+        include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
       })
       if (!sheet || sheet.frontendUserId !== frontendUserId) throw new NotFoundException('未找到表格')
       this.assertSheetEditable(sheet)
@@ -144,7 +178,7 @@ export class LabSheetsService {
       })
       const reloaded = await tx.labSheet.findUnique({
         where: { id: sheet.id },
-        include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+        include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
       })
       if (!reloaded) throw new NotFoundException('未找到表格')
       return reloaded
@@ -156,6 +190,7 @@ export class LabSheetsService {
       date: nextSheet.date,
       sheetId: nextSheet.id,
       sourceClientId,
+      changedById: actorUserId,
       updatedAt: new Date().toISOString()
     })
     return nextSheet
@@ -163,67 +198,171 @@ export class LabSheetsService {
 
   async saveSampleBlock(user: CurrentUser, sheetId: string, blockPayload: Record<string, unknown>, sourceClientId?: string, canViewCompletedSensitiveData = true) {
     const blockId = String(blockPayload.id || '')
-    const outcome = await this.withSheetWriteLock(sheetId, async (tx) => {
-      const sheet = await tx.labSheet.findUnique({ where: { id: sheetId } })
-      if (!sheet || sheet.frontendUserId !== user.id) throw new NotFoundException('未找到表格')
-      this.assertSheetEditable(sheet)
-      const block = await tx.sampleBlock.findUnique({ where: { id: blockId } })
-      if (!block || block.sheetId !== sheet.id) throw new NotFoundException('未找到样品')
-      const oldInputs = (block.inputs || {}) as Record<string, unknown>
-      const changedFields = this.normalizeChangedFields(blockPayload)
-      if (!Object.keys(changedFields).length) return { block, sheet, changed: false }
-      const effectiveChangedFields = Object.entries(changedFields).reduce<Record<string, unknown>>((fields, [field, value]) => {
-        if (!this.isJsonEqual(oldInputs[field] ?? null, value ?? null)) fields[field] = value
-        return fields
-      }, {})
-      if (!Object.keys(effectiveChangedFields).length) return { block, sheet, changed: false }
-      this.assertNoInputConflict(block, blockPayload, effectiveChangedFields)
-      const nextInputs = { ...oldInputs, ...effectiveChangedFields }
-      const sheetParameters = (sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
-      const existingSnapshot = (block.parameterSnapshot || sheetParameters) as typeof defaultLabParameters
-      const firstDetectionInput = !hasLabDetectionInput(oldInputs) && hasLabDetectionInput(nextInputs)
-      const parameters = firstDetectionInput && !this.isSegmentedSnapshot(existingSnapshot)
-        ? sheetParameters
-        : existingSnapshot
-      const results = calculateResults(nextInputs, parameters)
-      const saved = await tx.sampleBlock.update({
-        where: { id: block.id },
-        data: {
-          inputs: nextInputs as Prisma.InputJsonValue,
-          results: results as Prisma.InputJsonValue,
-          parameterSnapshot: parameters as Prisma.InputJsonValue
-        }
-      })
-      await this.cellChanges.record(tx, {
-        sheetId: sheet.id,
-        blockId: block.id,
-        frontendUserId: sheet.frontendUserId,
-        changedById: user.id,
-        oldInputs,
-        nextInputs,
-        committedFields: blockPayload.changeLogFields
-      })
-      return { block: saved, sheet, changed: true }
+    const dataOwnerId = user.dataOwnerId || user.id
+    const idempotencyKey = this.requireLabSaveIdempotencyKey(blockPayload.idempotencyKey)
+    const requestFingerprint = this.labSaveRequestFingerprint({
+      actorUserId: user.id,
+      dataOwnerId,
+      sheetId,
+      canViewCompletedSensitiveData,
+      blockPayload
     })
-    const savedDto = this.toBlockDto(outcome.block, false, canViewCompletedSensitiveData)
+    let outcome: {
+      response: LabSaveResponse
+      sheet?: { frontendUserId: string; date: string }
+      changed: boolean
+      prepaidMutation?: SharedPrepaidSampleMutation | null
+    }
+    try {
+      outcome = await this.withSheetWriteLock(sheetId, idempotencyKey, async (tx) => {
+        const sheet = await tx.labSheet.findUnique({ where: { id: sheetId } })
+        if (!sheet || sheet.frontendUserId !== dataOwnerId) throw new NotFoundException('未找到表格')
+        const duplicate = await this.resolveLabSaveRequest(tx as unknown as LabSaveRequestReader, idempotencyKey, requestFingerprint)
+        if (duplicate) return { response: duplicate, changed: false }
+        this.assertSheetEditable(sheet)
+        const block = await tx.sampleBlock.findUnique({
+          where: { id: blockId },
+          include: { retests: { orderBy: { sequence: 'asc' } } }
+        })
+        if (!block || block.sheetId !== sheet.id) throw new NotFoundException('未找到样品')
+        const oldInputs = (block.inputs || {}) as Record<string, unknown>
+        const changedFields = this.normalizeChangedFields(blockPayload)
+        if (!Object.keys(changedFields).length) {
+          const response = this.toStableBlockDto(block, canViewCompletedSensitiveData)
+          await this.createLabSaveRequest(tx as unknown as LabSaveRequestWriter, {
+            idempotencyKey, requestFingerprint, sheetId: sheet.id, sampleBlockId: block.id, responseSnapshot: response
+          })
+          return { response, sheet, changed: false }
+        }
+        const effectiveChangedFields = Object.entries(changedFields).reduce<Record<string, unknown>>((fields, [field, value]) => {
+          if (!this.isJsonEqual(oldInputs[field] ?? null, value ?? null)) fields[field] = value
+          return fields
+        }, {})
+        if (!Object.keys(effectiveChangedFields).length) {
+          const response = this.toStableBlockDto(block, canViewCompletedSensitiveData)
+          await this.createLabSaveRequest(tx as unknown as LabSaveRequestWriter, {
+            idempotencyKey, requestFingerprint, sheetId: sheet.id, sampleBlockId: block.id, responseSnapshot: response
+          })
+          return { response, sheet, changed: false }
+        }
+        this.assertNoInputConflict(block, blockPayload, effectiveChangedFields)
+        const nextInputs = { ...oldInputs, ...effectiveChangedFields }
+        let prepaidMutation: SharedPrepaidSampleMutation | null = null
+        const prepaidTupleChanged = prepaidTupleFields.some((field) => (
+          Object.prototype.hasOwnProperty.call(effectiveChangedFields, field)
+        ))
+        if (prepaidTupleChanged && (oldInputs.paymentStatus === '预存款' || nextInputs.paymentStatus === '预存款')) {
+          prepaidMutation = await this.sharedPrepaid.syncSampleConsumption(tx, {
+            sheetId: sheet.id,
+            sampleBlockId: block.id,
+            sampleIndex: block.index,
+            sheetDate: sheet.date,
+            consumingFrontendUserId: dataOwnerId,
+            actorUserId: user.id,
+            oldInputs,
+            nextInputs,
+            idempotencyKey
+          })
+        }
+        const sheetParameters = (sheet.parameters || defaultLabParameters) as typeof defaultLabParameters
+        const existingSnapshot = (block.parameterSnapshot || sheetParameters) as typeof defaultLabParameters
+        const firstDetectionInput = !hasLabDetectionInput(oldInputs) && hasLabDetectionInput(nextInputs)
+        const parameters = firstDetectionInput && !this.isSegmentedSnapshot(existingSnapshot)
+          ? sheetParameters
+          : existingSnapshot
+        const results = calculateResults(nextInputs, parameters)
+        const saved = await tx.sampleBlock.update({
+          where: { id: block.id },
+          data: {
+            inputs: nextInputs as Prisma.InputJsonValue,
+            results: results as Prisma.InputJsonValue,
+            parameterSnapshot: parameters as Prisma.InputJsonValue
+          },
+          include: { retests: { orderBy: { sequence: 'asc' } } }
+        })
+        await this.cellChanges.record(tx, {
+          sheetId: sheet.id,
+          blockId: block.id,
+          frontendUserId: sheet.frontendUserId,
+          changedById: user.id,
+          oldInputs,
+          nextInputs,
+          committedFields: blockPayload.changeLogFields
+        })
+        const response = this.toStableBlockDto(saved, canViewCompletedSensitiveData)
+        await this.createLabSaveRequest(tx as unknown as LabSaveRequestWriter, {
+          idempotencyKey, requestFingerprint, sheetId: sheet.id, sampleBlockId: block.id, responseSnapshot: response
+        })
+        return { response, sheet, changed: true, prepaidMutation }
+      })
+    } catch (error) {
+      if (!this.isPrismaUniqueConflict(error)) throw error
+      const duplicate = await this.resolveLabSaveRequest(
+        this.prisma as unknown as LabSaveRequestReader,
+        idempotencyKey,
+        requestFingerprint
+      )
+      if (!duplicate) throw error
+      outcome = { response: duplicate, changed: false }
+    }
     if (outcome.changed) {
+      if (outcome.prepaidMutation) {
+        this.publishSharedPrepaidMutation(outcome.prepaidMutation, user.id)
+      }
       this.realtime.publish({
         type: 'block-saved',
-        frontendUserId: outcome.sheet.frontendUserId,
-        date: outcome.sheet.date,
-        sheetId: outcome.sheet.id,
+        frontendUserId: outcome.sheet!.frontendUserId,
+        date: outcome.sheet!.date,
+        sheetId,
         sourceClientId,
+        changedById: user.id,
         updatedAt: new Date().toISOString()
       })
     }
-    return savedDto
+    return outcome.response
+  }
+
+  private publishSharedPrepaidMutation(
+    mutation: SharedPrepaidSampleMutation,
+    changedById: string
+  ) {
+    const updatedAt = new Date().toISOString()
+    this.sharedPrepaidRealtime.publish({
+      module: 'consumptions',
+      entityId: mutation.consumptionId,
+      operation: mutation.operation,
+      changedById,
+      updatedAt
+    })
+    this.sharedPrepaidRealtime.publish({
+      module: 'members',
+      entityId: mutation.memberId,
+      operation: 'update',
+      changedById,
+      updatedAt
+    })
+    this.sharedPrepaidRealtime.publish({
+      module: 'settlements',
+      entityId: mutation.consumptionId,
+      operation: 'update',
+      changedById,
+      updatedAt
+    })
   }
 
   private async withSheetWriteLock<T>(
     sheetId: string,
-    operation: (tx: Prisma.TransactionClient) => Promise<T>
+    operationOrIdempotencyKey: string | ((tx: Prisma.TransactionClient) => Promise<T>),
+    maybeOperation?: (tx: Prisma.TransactionClient) => Promise<T>
   ) {
+    const idempotencyKey = typeof operationOrIdempotencyKey === 'string' ? operationOrIdempotencyKey : ''
+    const operation = typeof operationOrIdempotencyKey === 'function' ? operationOrIdempotencyKey : maybeOperation!
     return this.prisma.$transaction(async (tx) => {
+      if (idempotencyKey) {
+        await tx.$executeRaw(Prisma.sql`
+          SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))
+        `)
+      }
       await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT "id" FROM "LabSheet" WHERE "id" = ${sheetId} FOR UPDATE
       `)
@@ -247,7 +386,7 @@ export class LabSheetsService {
   async ensureSheet(frontendUserId: string, date: string) {
     const existing = await this.prisma.labSheet.findUnique({
       where: { frontendUserId_date: { frontendUserId, date } },
-      include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+      include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
     })
     if (existing) return existing
     const initialParameters = await this.getInitialParametersForNewSheet(frontendUserId, date)
@@ -271,7 +410,7 @@ export class LabSheetsService {
           })
         }
       },
-      include: { sampleBlocks: { orderBy: { index: 'asc' } } }
+      include: { sampleBlocks: { orderBy: { index: 'asc' }, include: { retests: { orderBy: { sequence: 'asc' } } } } }
     })
   }
 
@@ -288,12 +427,7 @@ export class LabSheetsService {
   }
 
   private normalizeLabParameters(parameters: unknown) {
-    if (!this.isPlainObject(parameters)) return { ...defaultLabParameters }
-    return Object.entries(defaultLabParameters).reduce<typeof defaultLabParameters>((next, [key, defaultValue]) => {
-      const value = parameters[key]
-      next[key as keyof typeof defaultLabParameters] = typeof value === 'number' && Number.isFinite(value) ? value : defaultValue
-      return next
-    }, { ...defaultLabParameters })
+    return normalizeLabParameters(parameters)
   }
 
   private requireCompleteLabParameters(parameters: unknown) {
@@ -320,6 +454,94 @@ export class LabSheetsService {
       fields[field] = value ?? null
       return fields
     }, {})
+  }
+
+  private requireLabSaveIdempotencyKey(value: unknown) {
+    if (typeof value !== 'string' || !value.trim()) throw new BadRequestException('缺少幂等请求编号')
+    const key = value.trim()
+    if (key.length > 200) throw new BadRequestException('幂等请求编号过长')
+    return key
+  }
+
+  private labSaveRequestFingerprint(input: {
+    actorUserId: string
+    dataOwnerId: string
+    sheetId: string
+    canViewCompletedSensitiveData: boolean
+    blockPayload: Record<string, unknown>
+  }) {
+    const request = Object.fromEntries(
+      Object.entries(input.blockPayload).filter(([key]) => key !== 'idempotencyKey')
+    )
+    return createHash('sha256').update(this.stableJson({
+      actorUserId: input.actorUserId,
+      dataOwnerId: input.dataOwnerId,
+      sheetId: input.sheetId,
+      canViewCompletedSensitiveData: input.canViewCompletedSensitiveData,
+      request
+    })).digest('hex')
+  }
+
+  private async resolveLabSaveRequest(
+    reader: LabSaveRequestReader,
+    idempotencyKey: string,
+    requestFingerprint: string
+  ): Promise<LabSaveResponse | null> {
+    const request = await reader.labSampleSaveRequest.findUnique({ where: { idempotencyKey } })
+    if (!request) return null
+    if (request.requestFingerprint !== requestFingerprint) this.labSaveIdempotencyConflict()
+    if (!this.isPlainObject(request.responseSnapshot)) {
+      throw new ConflictException({
+        code: 'LAB_SAVE_IDEMPOTENCY_STATE_INVALID',
+        message: '幂等保存记录不完整，请使用新的请求编号'
+      })
+    }
+    return this.cloneJsonObject(request.responseSnapshot)
+  }
+
+  private async createLabSaveRequest(writer: LabSaveRequestWriter, row: LabSaveRequestRow) {
+    await writer.labSampleSaveRequest.create({ data: row })
+  }
+
+  private toStableBlockDto(
+    block: Parameters<LabSheetsService['toBlockDto']>[0],
+    canViewCompletedSensitiveData: boolean
+  ): LabSaveResponse {
+    return this.cloneJsonObject(this.toBlockDto(block, false, canViewCompletedSensitiveData))
+  }
+
+  private cloneJsonObject(value: unknown): Record<string, unknown> {
+    return JSON.parse(JSON.stringify(value)) as Record<string, unknown>
+  }
+
+  private stableJson(value: unknown) {
+    return JSON.stringify(this.canonicalJsonValue(value))
+  }
+
+  private canonicalJsonValue(value: unknown): unknown {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null
+    if (value instanceof Date) return value.toISOString()
+    if (Array.isArray(value)) return value.map((item) => this.canonicalJsonValue(item === undefined ? null : item))
+    if (this.isPlainObject(value)) {
+      return Object.fromEntries(
+        Object.keys(value).sort().flatMap((key) => (
+          value[key] === undefined ? [] : [[key, this.canonicalJsonValue(value[key])]]
+        ))
+      )
+    }
+    return String(value)
+  }
+
+  private isPrismaUniqueConflict(error: unknown) {
+    return (error as { code?: unknown })?.code === 'P2002'
+  }
+
+  private labSaveIdempotencyConflict(): never {
+    throw new ConflictException({
+      code: 'LAB_SAVE_IDEMPOTENCY_CONFLICT',
+      message: '幂等请求编号已用于不同的样品保存'
+    })
   }
 
   private assertNoInputConflict(
@@ -354,7 +576,7 @@ export class LabSheetsService {
     }
   }
 
-  private toBlockDto(block: { id: string; index: number; readonly: boolean; updatedAt?: Date; inputs: unknown; results: unknown; parameterSnapshot: unknown }, sheetReadonly = false, canViewCompletedSensitiveData = false) {
+  private toBlockDto(block: { id: string; index: number; readonly: boolean; updatedAt?: Date; inputs: unknown; results: unknown; parameterSnapshot: unknown; retests?: SampleRetestRow[] }, sheetReadonly = false, canViewCompletedSensitiveData = false) {
     const inputs = (block.inputs || {}) as Record<string, unknown>
     const results = calculateResults(inputs, this.normalizeLabParameters(block.parameterSnapshot))
     const completed = Boolean(inputs.completed)
@@ -367,13 +589,18 @@ export class LabSheetsService {
       sensitiveFieldsHidden: hidden,
       inputs: hidden ? this.redactCompletedInputs(inputs) : inputs,
       results: hidden ? this.redactCompletedResults(results) : results,
-      parameterSnapshot: block.parameterSnapshot
+      parameterSnapshot: block.parameterSnapshot,
+      retests: (block.retests || []).map((retest) => toSampleRetestDto(retest, {
+        parentCompleted: completed,
+        sheetReadonly,
+        canViewCompletedSensitiveData
+      }))
     }
   }
 
   private redactCompletedInputs(inputs: Record<string, unknown>) {
     const redacted = { ...inputs }
-    for (const field of ['ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust', 'sulfur', 'densityRaw', 'whiteness', 'calciumRaw', 'magnesiumRaw', 'carbon', 'titaniumRaw', 'waterSample', 'bottleWater', 'bottleWaterSample', 'moisture', 'crucible', 'sampleWeight', 'burnedCrucibleSample', 'price', 'paymentStatus']) redacted[field] = null
+    for (const field of ['ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust', 'sulfur', 'densityRaw', 'whiteness', 'calciumRaw', 'magnesiumRaw', 'carbon', 'titaniumRaw', 'waterSample', 'bottleWater', 'bottleWaterSample', 'moisture', 'crucible', 'sampleWeight', 'burnedCrucibleSample', 'price', 'paymentStatus', 'prepaidMemberId', 'prepaidMemberPhone']) redacted[field] = null
     return redacted
   }
 

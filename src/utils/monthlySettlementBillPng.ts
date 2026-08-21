@@ -46,8 +46,14 @@ export async function downloadMonthlyBillAsPng(
   draft: MonthlyBillDraft,
   filename = createMonthlyBillFilename(draft)
 ): Promise<boolean> {
+  const blob = await createMonthlyBillPngBlob(draft)
+  if (!blob) return false
+  return downloadPngBlob(blob, filename)
+}
+
+export async function createMonthlyBillPngBlob(draft: MonthlyBillDraft): Promise<Blob | null> {
   try {
-    if (validateMonthlyBillDraft(draft).length) return false
+    if (validateMonthlyBillDraft(draft).length) return null
 
     const layout = createMonthlyBillCanvasLayout(draft)
     const canvas = document.createElement('canvas')
@@ -57,13 +63,13 @@ export async function downloadMonthlyBillAsPng(
     canvas.height = exportHeight * PIXEL_RATIO
 
     const context = canvas.getContext('2d')
-    if (!context) return false
+    if (!context) return null
 
     context.scale(PIXEL_RATIO, PIXEL_RATIO)
     drawMonthlyBillCanvas(context, draft, layout, exportWidth, exportHeight)
-    return downloadCanvasBlob(canvas, filename)
+    return createCanvasPngBlob(canvas)
   } catch {
-    return false
+    return null
   }
 }
 
@@ -290,46 +296,45 @@ function getGroupWidth() {
   return ELEMENT_WIDTH + QUANTITY_WIDTH + PRICE_WIDTH
 }
 
-function downloadCanvasBlob(canvas: HTMLCanvasElement, filename: string) {
-  return new Promise<boolean>((resolve) => {
+function createCanvasPngBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob | null>((resolve) => {
     let settled = false
-    const finish = (result: boolean) => {
+    const finish = (result: Blob | null) => {
       if (settled) return
       settled = true
       window.clearTimeout(timeout)
       resolve(result)
     }
-    const timeout = window.setTimeout(() => finish(false), 5000)
+    const timeout = window.setTimeout(() => finish(null), 5000)
 
     try {
       canvas.toBlob((blob) => {
         if (settled) return
-        if (!blob) {
-          finish(false)
-          return
-        }
-
-        let blobUrl: string | null = null
-        let link: HTMLAnchorElement | null = null
-        try {
-          blobUrl = URL.createObjectURL(blob)
-          link = document.createElement('a')
-          link.download = filename
-          link.href = blobUrl
-          link.style.display = 'none'
-          document.body.appendChild(link)
-          link.click()
-          window.setTimeout(() => cleanupDownload(link, blobUrl), 1000)
-          finish(true)
-        } catch {
-          cleanupDownload(link, blobUrl)
-          finish(false)
-        }
+        finish(blob)
       }, 'image/png')
     } catch {
-      finish(false)
+      finish(null)
     }
   })
+}
+
+function downloadPngBlob(blob: Blob, filename: string) {
+  let blobUrl: string | null = null
+  let link: HTMLAnchorElement | null = null
+  try {
+    blobUrl = URL.createObjectURL(blob)
+    link = document.createElement('a')
+    link.download = filename
+    link.href = blobUrl
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    window.setTimeout(() => cleanupDownload(link, blobUrl), 1000)
+    return true
+  } catch {
+    cleanupDownload(link, blobUrl)
+    return false
+  }
 }
 
 function cleanupDownload(link: HTMLAnchorElement | null, blobUrl: string | null) {

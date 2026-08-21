@@ -44,83 +44,31 @@
 </template>
 
 <script setup lang="ts">
-import type { Component } from 'vue'
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Box, Calendar, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, User, Warning } from '@element-plus/icons-vue'
+import { navigationForUser, type FrontendNavigationLeaf } from '@/config/frontendNavigation'
+import { useAuthStore } from '@/stores/auth'
 
-interface NavChild {
-  path: string
-  label: string
+const iconComponents = {
+  data: DataAnalysis,
+  report: Memo,
+  attendance: Calendar,
+  prepaid: Money,
+  finance: Money,
+  reports: DocumentChecked,
+  medicine: Box,
+  customers: User,
+  blacklist: Warning
 }
-
-interface NavItem {
-  path: string
-  label: string
-  icon: Component
-  children?: NavChild[]
-}
-
-const navItems: NavItem[] = [
-  {
-    path: '/data',
-    label: '数据计算',
-    icon: DataAnalysis,
-    children: [
-      { path: '/data', label: '数据计算' },
-      { path: '/data/standard-sample', label: '标样计算' },
-      { path: '/data/coefficient', label: '系数计算' }
-    ]
-  },
-  {
-    path: '/lab-report',
-    label: '化验报告',
-    icon: Memo,
-    children: [
-      { path: '/lab-report/image-template', label: '化验报告图片模板' },
-      { path: '/lab-report/sms-template', label: '化验短信生成模板' }
-    ]
-  },
-  {
-    path: '/employee-attendance',
-    label: '员工考勤',
-    icon: Calendar,
-    children: [
-      { path: '/employee-attendance/schedules', label: '排班考勤概览' },
-      { path: '/employee-attendance/employees', label: '员工档案' },
-      { path: '/employee-attendance/records', label: '考勤记录' },
-      { path: '/employee-attendance/leave', label: '请假管理' },
-      { path: '/employee-attendance/compensation', label: '提成与奖金' },
-      { path: '/employee-attendance/payroll', label: '工资统计' }
-    ]
-  },
-  {
-    path: '/finance',
-    label: '财务',
-    icon: Money,
-    children: [
-      { path: '/finance/expenses', label: '支出账单' },
-      { path: '/finance/income', label: '收入账单' },
-      { path: '/finance/unsettled', label: '未结款' },
-      { path: '/finance/monthly-settlement', label: '月结款' },
-      { path: '/finance/prepaid', label: '预存款' }
-    ]
-  },
-  { path: '/reports', label: '报表', icon: DocumentChecked },
-  {
-    path: '/medicine-inventory',
-    label: '药品库存',
-    icon: Box,
-    children: [
-      { path: '/medicine-inventory/stock', label: '药品库存' },
-      { path: '/medicine-inventory/inbound', label: '药品入库' },
-      { path: '/medicine-inventory/outbound', label: '药品出库' }
-    ]
-  },
-  { path: '/customers-overview', label: '客户总览', icon: User },
-  { path: '/blacklist', label: '黑名单', icon: Warning }
-]
 
 const route = useRoute()
+let authStore: ReturnType<typeof useAuthStore> | null = null
+try { authStore = useAuthStore() } catch { /* isolated navigation previews may omit Pinia */ }
+const navItems = computed(() => navigationForUser(authStore?.user || null).map((item) => ({
+  ...item,
+  icon: iconComponents[item.icon]
+})))
 defineProps<{
   collapsed: boolean
 }>()
@@ -129,11 +77,11 @@ const emit = defineEmits<{
   toggle: []
 }>()
 
-function isActive(item: NavItem) {
+function isActive(item: { path: string; children?: FrontendNavigationLeaf[] }) {
   return route.path === item.path || route.path.startsWith(`${item.path}/`) || Boolean(item.children?.some((child) => child.path === route.path))
 }
 
-function isChildActive(child: NavChild) {
+function isChildActive(child: FrontendNavigationLeaf) {
   if (child.path === '/data') return route.path === child.path
   return route.path === child.path || route.path.startsWith(`${child.path}/`)
 }

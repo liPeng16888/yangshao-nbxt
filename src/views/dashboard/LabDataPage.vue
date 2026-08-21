@@ -1,55 +1,128 @@
 <template>
-  <div class="page-stack" v-loading="labStore.loading">
+  <div
+    class="page-stack"
+    :class="{ 'page-stack--mobile': isMobileLayout, 'page-stack--mobile-selection': isMobileLayout && selectionMode }"
+    v-loading="labStore.loading"
+  >
     <div class="toolbar">
-      <div class="toolbar-left">
-        <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" @change="handleDateChange" />
-        <el-tag v-if="switchingBusinessDay" type="info" effect="plain">正在切换业务日</el-tag>
-        <el-tag v-else-if="labStore.sheet?.readonly" type="warning" effect="plain">历史副表只读</el-tag>
-        <el-tag v-else type="success" effect="plain">当前表可编辑</el-tag>
-        <el-tag v-if="!isPageReadonly" :type="autoSaveTagType" effect="plain">{{ autoSaveText }}</el-tag>
-        <el-button
-          v-if="!isPageReadonly && (labStore.autoSaveStatus === 'error' || labStore.autoSaveStatus === 'conflict')"
-          size="small"
-          :type="labStore.autoSaveStatus === 'conflict' ? 'danger' : 'primary'"
-          :loading="labStore.saving || labStore.autoSaving"
-          @click="handleSaveRecovery"
-        >
-          {{ labStore.autoSaveStatus === 'conflict' ? '确认保存本机内容' : '重试保存' }}
-        </el-button>
-      </div>
-      <div class="toolbar-right">
-        <el-button @click="openChangeRequestDrawer">修改申请记录</el-button>
-        <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
-          标记样品完成
-        </el-button>
-        <el-button v-if="!canViewCompletedSensitiveData" @click="requestCompletedSampleDataAccess">查看加密数据</el-button>
-        <el-button :icon="EditPen" :loading="labStore.saving" :disabled="isPageReadonly" @click="handleBulkFillSamples">
-          {{ bulkFillButtonText }}
-        </el-button>
-        <el-button :icon="ChatLineSquare" :loading="labStore.saving" @click="handleGenerateSms">
-          {{ smsButtonText }}
-        </el-button>
-        <el-button :icon="DocumentChecked" :loading="labStore.saving" @click="handleGenerateReport">
-          {{ reportButtonText }}
-        </el-button>
-        <el-button v-if="selectionMode" @click="cancelReportSelection">取消选择</el-button>
+      <button
+        v-if="isMobileLayout"
+        class="mobile-toolbar-summary"
+        ref="mobileToolbarSummaryRef"
+        type="button"
+        :aria-expanded="mobileToolbarExpanded"
+        :aria-label="mobileToolbarAccessibleName"
+        @click="mobileToolbarExpanded = !mobileToolbarExpanded"
+      >
+        <span class="mobile-toolbar-summary__date">{{ selectedDate }}</span>
+        <span class="mobile-toolbar-summary__edit">{{ mobileToolbarEditStatus }}</span>
+        <span v-if="!isPageReadonly" class="mobile-toolbar-summary__save" :class="`is-${labStore.autoSaveStatus}`">
+          {{ autoSaveText }}
+        </span>
+        <span class="mobile-toolbar-summary__toggle">{{ mobileToolbarExpanded ? '收起' : '展开' }}</span>
+      </button>
+      <span
+        v-if="isMobileLayout && mobileToolbarLiveStatus"
+        class="mobile-toolbar-live-status"
+        role="status"
+        aria-live="polite"
+      >
+        {{ mobileToolbarLiveStatus }}
+      </span>
+      <div v-if="!isMobileLayout || mobileToolbarExpanded" class="toolbar-content">
+        <div class="toolbar-left">
+          <el-date-picker v-model="selectedDate" type="date" value-format="YYYY-MM-DD" @change="handleDateChange" />
+          <el-tag v-if="switchingBusinessDay" type="info" effect="plain">正在切换业务日</el-tag>
+          <el-tag v-else-if="labStore.sheet?.readonly" type="warning" effect="plain">历史副表只读</el-tag>
+          <el-tag v-else type="success" effect="plain">当前表可编辑</el-tag>
+          <el-tag v-if="!isPageReadonly" :type="autoSaveTagType" effect="plain">{{ autoSaveText }}</el-tag>
+          <el-button
+            class="mobile-toolbar-recovery"
+            :class="{ 'mobile-touch-target': isMobileLayout }"
+            v-if="!isPageReadonly && (labStore.autoSaveStatus === 'error' || labStore.autoSaveStatus === 'conflict')"
+            size="small"
+            :type="labStore.autoSaveStatus === 'conflict' ? 'danger' : 'primary'"
+            :loading="labStore.saving || labStore.autoSaving"
+            @click="handleSaveRecovery"
+          >
+            {{ labStore.autoSaveStatus === 'conflict' ? '确认保存本机内容' : '重试保存' }}
+          </el-button>
+        </div>
+        <div v-if="!isMobileLayout || !selectionMode" class="toolbar-right">
+          <el-button @click="openChangeRequestDrawer">修改申请记录</el-button>
+          <el-button
+            :loading="labStore.saving || creatingRetests"
+            :disabled="isPageReadonly || creatingRetests"
+            @click="openSampleRetestDialog"
+          >
+            样品复样
+          </el-button>
+          <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
+            标记样品完成
+          </el-button>
+          <el-button v-if="!canViewCompletedSensitiveData" @click="requestCompletedSampleDataAccess">查看加密数据</el-button>
+          <el-button :icon="EditPen" :loading="labStore.saving" :disabled="isPageReadonly" @click="handleBulkFillSamples">
+            {{ bulkFillButtonText }}
+          </el-button>
+          <el-button :icon="ChatLineSquare" :loading="labStore.saving" @click="handleGenerateSms">
+            {{ smsButtonText }}
+          </el-button>
+          <el-button :icon="DocumentChecked" :loading="labStore.saving" @click="handleGenerateReport">
+            {{ reportButtonText }}
+          </el-button>
+          <el-button v-if="selectionMode" @click="cancelReportSelection">取消选择</el-button>
+        </div>
       </div>
     </div>
 
-    <LabParameterPanel :parameters="labStore.currentParameters" :saving="labStore.saving" :readonly="isPageReadonly" @save="labStore.saveParameters" />
+    <LabParameterPanel
+      :parameters="labStore.currentParameters"
+      :saving="labStore.saving"
+      :readonly="isPageReadonly"
+      :mobile="isMobileLayout"
+      @save="labStore.saveParameters"
+    />
 
-    <LabSheetGrid
+    <MobileLabSampleList
+      v-if="isMobileLayout"
       :blocks="labStore.sampleBlocks"
       :readonly="isPageReadonly"
       :selection-mode="selectionMode"
       :selected-block-ids="selectedReportBlockIds"
       :highlight-block-id="highlightBlockId"
+      :highlight-retest-id="highlightRetestId"
+      :pending-retest-action-ids="pendingRetestActionIds"
       :can-view-completed-sensitive-data="canViewCompletedSensitiveData"
       :sheet-date="labStore.sheet?.date || selectedDate"
       :sample-change-requests="changeRequestStore.pendingByBlock"
       :sample-change-loading="changeRequestStore.loading || changeRequestStore.withdrawing"
       @update="labStore.patchBlock"
       @field-commit="labStore.commitBlockFieldChange"
+      @retest-update="labStore.patchRetest"
+      @retest-field-commit="handleRetestFieldCommit"
+      @retest-delete="handleRetestDelete"
+      @retest-void="handleRetestVoid"
+      @blacklist-hit="showBlacklistHit"
+      @selection-change="toggleReportBlockSelection"
+      @save-next="handleMobileSaveNext"
+    />
+
+    <LabSheetGrid
+      v-else
+      :blocks="labStore.sampleBlocks"
+      :readonly="isPageReadonly"
+      :selection-mode="selectionMode"
+      :selected-block-ids="selectedReportBlockIds"
+      :highlight-block-id="highlightBlockId"
+      :highlight-retest-id="highlightRetestId"
+      :pending-retest-action-ids="pendingRetestActionIds"
+      :can-view-completed-sensitive-data="canViewCompletedSensitiveData"
+      @update="labStore.patchBlock"
+      @field-commit="labStore.commitBlockFieldChange"
+      @retest-update="labStore.patchRetest"
+      @retest-field-commit="handleRetestFieldCommit"
+      @retest-delete="handleRetestDelete"
+      @retest-void="handleRetestVoid"
       @blacklist-hit="showBlacklistHit"
       @selection-change="toggleReportBlockSelection"
       @request-sample-change="openSampleChangeDialog"
@@ -74,11 +147,27 @@
       @withdraw="withdrawSampleChangeRequest"
     />
 
+    <section v-if="isMobileLayout && selectionMode" class="mobile-selection-bar" aria-label="手机批量操作">
+      <div>
+        <strong>已选 {{ selectedReportBlockIds.length }} 个样品</strong>
+        <span>{{ mobileSelectionHint }}</span>
+      </div>
+      <el-button class="mobile-selection-primary" type="primary" @click="handleMobileSelectionPrimary">
+        {{ mobileSelectionButtonText }}
+      </el-button>
+      <el-button class="mobile-selection-cancel" @click="cancelReportSelection">取消</el-button>
+    </section>
+
     <section class="panel append-panel" v-if="!isPageReadonly">
       <div class="panel__body append-body">
         <span>增加样品数量</span>
-        <el-input v-model.trim="appendCount" placeholder="正整数" class="append-input" />
-        <el-button type="primary" :icon="Plus" :loading="labStore.adding" @click="appendBlocks">确认增加</el-button>
+        <el-input
+          v-model.trim="appendCount"
+          placeholder="正整数"
+          class="append-input"
+          :class="{ 'mobile-touch-target': isMobileLayout }"
+        />
+        <el-button class="append-submit" type="primary" :icon="Plus" :loading="labStore.adding" @click="appendBlocks">确认增加</el-button>
       </div>
     </section>
 
@@ -105,12 +194,21 @@
       @close="completionDialogVisible = false"
     />
 
+    <SampleRetestDialog
+      :visible="retestDialogVisible"
+      :blocks="labStore.sampleBlocks"
+      :saving="labStore.saving || labStore.autoSaving || creatingRetests"
+      @create="applySampleRetestCreation"
+      @close="retestDialogVisible = false"
+    />
+
     <LabReportDialog
       :visible="reportDialogVisible"
       :blocks="labStore.sampleBlocks"
       :selected-block-ids="selectedReportBlockIds"
       :template="reportTemplate"
       :date="selectedDate"
+      :mobile="isMobileLayout"
       @close="reportDialogVisible = false"
     />
 
@@ -119,6 +217,7 @@
       :blocks="labStore.sampleBlocks"
       :selected-block-ids="selectedReportBlockIds"
       :template="smsTemplate"
+      :mobile="isMobileLayout"
       @close="smsDialogVisible = false"
     />
   </div>
@@ -131,7 +230,7 @@ import { ChatLineSquare, CircleCheck, DocumentChecked, EditPen, Plus } from '@el
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import type { BlacklistRecord } from '@/types/blacklist'
-import type { LabSampleInput, SampleBlock } from '@/types/labSheet'
+import type { LabSampleInput, SampleBlock, SampleRetestInputField } from '@/types/labSheet'
 import type { CreateLabSampleChangeRequestPayload } from '@/types/labSampleChangeRequest'
 import type { LabReportSmsTemplate, LabReportTemplate } from '@/types/labReport'
 import BlacklistHitDialog from '@/components/lab-sheet/BlacklistHitDialog.vue'
@@ -140,22 +239,43 @@ import LabParameterPanel from '@/components/lab-sheet/LabParameterPanel.vue'
 import LabSheetGrid from '@/components/lab-sheet/LabSheetGrid.vue'
 import HistoricalSampleChangeDialog from '@/components/lab-sheet/HistoricalSampleChangeDialog.vue'
 import LabSampleChangeRequestDrawer from '@/components/lab-sheet/LabSampleChangeRequestDrawer.vue'
+import MobileLabSampleList from '@/components/lab-sheet/MobileLabSampleList.vue'
 import SampleCompletionDialog from '@/components/lab-sheet/SampleCompletionDialog.vue'
+import SampleRetestDialog from '@/components/lab-sheet/SampleRetestDialog.vue'
 import LabReportDialog from '@/components/lab-report/LabReportDialog.vue'
 import LabSmsDialog from '@/components/lab-report/LabSmsDialog.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
+import { useAuthStore } from '@/stores/auth'
+import {
+  canAccessFrontendPreference,
+  useFrontendPreferencesStore
+} from '@/stores/frontendPreferences'
 import { useLabSheetStore } from '@/stores/labSheet'
 import { useLabSampleChangeRequestStore } from '@/stores/labSampleChangeRequest'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import { businessDateInBeijing, millisecondsUntilNextBusinessDayInBeijing } from '@/utils/date'
-import { loadLabReportSmsTemplate, loadLabReportTemplate } from '@/utils/labReport'
+import { defaultLabReportSmsTemplate, defaultLabReportTemplate } from '@/utils/labReport'
 
 type GenerationMode = 'report' | 'sms' | 'bulkFill' | null
+type RetestCreationContext = {
+  sheetId: string
+  sheetDate: string
+  selectedDate: string
+  businessDate: string
+  routeDate: string
+  routeBlock: string
+  actorId: string
+  ownerId: string
+}
 
 const route = useRoute()
 const router = useRouter()
 const labStore = useLabSheetStore()
 const changeRequestStore = useLabSampleChangeRequestStore()
 const accessGuard = useAccessGuardStore()
+const authStore = useAuthStore()
+const frontendPreferences = useFrontendPreferencesStore()
+const { isMobileLayout } = useMobileLayout()
 const BUSINESS_DAY_PREFLUSH_LEAD_MS = 5_000
 const BUSINESS_DAY_RETRY_MS = 60_000
 
@@ -169,6 +289,8 @@ const reportDialogVisible = ref(false)
 const smsDialogVisible = ref(false)
 const bulkFillDialogVisible = ref(false)
 const completionDialogVisible = ref(false)
+const retestDialogVisible = ref(false)
+const creatingRetests = ref(false)
 const switchingBusinessDay = ref(false)
 const highlightBlockId = ref('')
 const sampleChangeDialogVisible = ref(false)
@@ -176,10 +298,18 @@ const selectedSampleChangeBlock = ref<SampleBlock | null>(null)
 const sampleChangeDrawerVisible = ref(false)
 const submittingSampleChange = ref(false)
 const withdrawingSampleChangeRequestId = ref('')
-const reportTemplate = ref<LabReportTemplate>(loadLabReportTemplate())
-const smsTemplate = ref<LabReportSmsTemplate>(loadLabReportSmsTemplate())
+const highlightRetestId = ref('')
+const pendingRetestActionIds = ref<string[]>([])
+const reportTemplate = ref<LabReportTemplate>({
+  ...defaultLabReportTemplate,
+  statements: [...defaultLabReportTemplate.statements]
+})
+const smsTemplate = ref<LabReportSmsTemplate>({ ...defaultLabReportSmsTemplate })
 let businessDayBoundaryTimer: number | undefined
 let businessDayPreflushTimer: number | undefined
+let retestCreationGeneration = 0
+let retestActionGeneration = 0
+const activeRetestLifecycleActions = new Map<string, number>()
 
 const isPageReadonly = computed(() => Boolean(
   labStore.sheet?.readonly || switchingBusinessDay.value || labStore.applyingParameters
@@ -188,6 +318,14 @@ const canViewCompletedSensitiveData = computed(() => {
   accessGuard.accessSessionRevision
   return accessGuard.hasFeatureAccess('COMPLETED_SAMPLE_DATA')
 })
+const retestActorContextKey = computed(() => {
+  const user = authStore.user
+  return JSON.stringify([user?.id || '', user?.dataOwnerId || user?.id || ''])
+})
+const loadedSheetContextKey = computed(() => JSON.stringify([
+  labStore.sheet?.id || '',
+  labStore.sheet?.date || ''
+]))
 
 const autoSaveText = computed(() => {
   if (labStore.autoSaveStatus === 'pending') return '等待自动保存'
@@ -227,6 +365,36 @@ const bulkFillButtonText = computed(() => {
 })
 
 const selectionMode = computed(() => generationMode.value !== null)
+const mobileToolbarExpanded = ref(false)
+const mobileToolbarSummaryRef = ref<HTMLButtonElement | null>(null)
+const mobileToolbarEditStatus = computed(() => {
+  if (switchingBusinessDay.value) return '正在切换业务日'
+  if (labStore.applyingParameters) return '正在应用参数'
+  if (labStore.sheet?.readonly) return '历史副表只读'
+  return '当前表可编辑'
+})
+const mobileToolbarAccessibleName = computed(() => [
+  mobileToolbarExpanded.value ? '收起数据计算操作' : '展开数据计算操作',
+  selectedDate.value,
+  mobileToolbarEditStatus.value,
+  isPageReadonly.value ? '' : autoSaveText.value
+].filter(Boolean).join('，'))
+const mobileToolbarLiveStatus = computed(() => {
+  if (isPageReadonly.value) return ''
+  if (labStore.autoSaveStatus === 'error' || labStore.autoSaveStatus === 'conflict') return autoSaveText.value
+  return ''
+})
+const mobileSelectionButtonText = computed(() => {
+  if (generationMode.value === 'report') return reportButtonText.value
+  if (generationMode.value === 'sms') return smsButtonText.value
+  if (generationMode.value === 'bulkFill') return bulkFillButtonText.value
+  return '请选择操作'
+})
+const mobileSelectionHint = computed(() => {
+  if (generationMode.value === 'report') return '勾选后生成化验报告'
+  if (generationMode.value === 'sms') return '勾选后生成化验短信'
+  return '勾选后批量填写样品'
+})
 
 onMounted(async () => {
   await accessGuard.loadGroups()
@@ -236,10 +404,30 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  invalidateRetestCreationContext()
   clearBusinessDayTimers()
   unbindBusinessDayListeners()
   labStore.disconnectRealtime()
   changeRequestStore.reset()
+})
+
+watch(isMobileLayout, () => {
+  mobileToolbarExpanded.value = false
+})
+
+watch(selectionMode, (selecting) => {
+  if (isMobileLayout.value && selecting) {
+    mobileToolbarExpanded.value = false
+    void nextTick(() => mobileToolbarSummaryRef.value?.focus())
+  }
+})
+
+watch(retestActorContextKey, (current, previous) => {
+  if (current !== previous) invalidateRetestCreationContext()
+})
+
+watch(loadedSheetContextKey, (current, previous) => {
+  if (current !== previous) invalidateRetestCreationContext()
 })
 
 watch(
@@ -305,6 +493,7 @@ async function checkBusinessDayBoundary() {
   }
   if (switchingBusinessDay.value) return
   switchingBusinessDay.value = true
+  invalidateRetestCreationContext()
   try {
     const loaded = await labStore.loadCurrentSheet()
     if (loaded === false) {
@@ -335,6 +524,7 @@ function handleBusinessDayVisibilityChange() {
 async function loadSheetFromRoute() {
   const queryDate = typeof route.query.date === 'string' ? route.query.date : ''
   const queryBlock = typeof route.query.block === 'string' ? route.query.block : ''
+  invalidateRetestCreationContext()
   if (queryDate) {
     const allowed = await requestHistoricalDateAccess(queryDate, () => loadRouteSheetFromQuery(queryDate, queryBlock))
     if (!allowed) {
@@ -382,6 +572,7 @@ async function loadRouteSheetFromQuery(queryDate: string, queryBlock: string) {
 async function loadSelectedDate(value: string) {
   selectedDate.value = value
   highlightBlockId.value = ''
+  invalidateRetestCreationContext()
   const loaded = await labStore.loadSheetByDate(value)
   if (!loaded) {
     changeRequestStore.reset()
@@ -509,7 +700,9 @@ async function handleGenerateReport() {
   }
   const saved = await labStore.persistAllBlocks({ silent: true })
   if (!saved.success) return
-  reportTemplate.value = loadLabReportTemplate()
+  reportTemplate.value = canAccessFrontendPreference(authStore.user, 'LAB_REPORT_TEMPLATE')
+    ? frontendPreferences.value('LAB_REPORT_TEMPLATE', defaultLabReportTemplate)
+    : cloneDefaultReportTemplate()
   reportDialogVisible.value = true
 }
 
@@ -523,7 +716,9 @@ async function handleGenerateSms() {
   }
   const saved = await labStore.persistAllBlocks({ silent: true })
   if (!saved.success) return
-  smsTemplate.value = loadLabReportSmsTemplate()
+  smsTemplate.value = canAccessFrontendPreference(authStore.user, 'LAB_REPORT_SMS_TEMPLATE')
+    ? frontendPreferences.value('LAB_REPORT_SMS_TEMPLATE', defaultLabReportSmsTemplate)
+    : { ...defaultLabReportSmsTemplate }
   smsDialogVisible.value = true
 }
 
@@ -548,6 +743,153 @@ function openSampleCompletionDialog() {
     return
   }
   completionDialogVisible.value = true
+}
+
+function openSampleRetestDialog() {
+  if (isPageReadonly.value) {
+    ElMessage.warning('历史副表只读，不能创建复样')
+    return
+  }
+  retestDialogVisible.value = true
+}
+
+async function applySampleRetestCreation(payload: { sampleBlockIds: string[] }) {
+  if (creatingRetests.value) return
+  const operationGeneration = ++retestCreationGeneration
+  const operationContext = captureRetestCreationContext()
+  creatingRetests.value = true
+  try {
+    const created = await labStore.createRetests(payload.sampleBlockIds)
+    if (!isCurrentRetestCreationOperation(operationGeneration, operationContext)) return
+    retestDialogVisible.value = false
+    highlightRetestId.value = created[0]?.id || ''
+    ElMessage.success(`已创建 ${created.length} 组复样`)
+  } catch (error) {
+    if (!isCurrentRetestCreationOperation(operationGeneration, operationContext)) return
+    ElMessage.error(error instanceof Error ? error.message : '复样创建失败')
+  } finally {
+    if (operationGeneration === retestCreationGeneration) creatingRetests.value = false
+  }
+}
+
+function captureRetestCreationContext(): RetestCreationContext {
+  const user = authStore.user
+  return {
+    sheetId: labStore.sheet?.id || '',
+    sheetDate: labStore.sheet?.date || '',
+    selectedDate: selectedDate.value,
+    businessDate: businessDateInBeijing(),
+    routeDate: typeof route.query.date === 'string' ? route.query.date : '',
+    routeBlock: typeof route.query.block === 'string' ? route.query.block : '',
+    actorId: user?.id || '',
+    ownerId: user?.dataOwnerId || user?.id || ''
+  }
+}
+
+function isCurrentRetestCreationOperation(generation: number, context: RetestCreationContext) {
+  return generation === retestCreationGeneration &&
+    JSON.stringify(context) === JSON.stringify(captureRetestCreationContext())
+}
+
+function invalidateRetestCreationContext() {
+  retestCreationGeneration += 1
+  retestActionGeneration += 1
+  activeRetestLifecycleActions.clear()
+  pendingRetestActionIds.value = []
+  creatingRetests.value = false
+  retestDialogVisible.value = false
+  highlightRetestId.value = ''
+}
+
+function handleRetestFieldCommit(
+  sampleBlockId: string,
+  retestId: string,
+  _field: SampleRetestInputField,
+  oldValue: unknown,
+  newValue: unknown
+) {
+  if (JSON.stringify(oldValue ?? null) === JSON.stringify(newValue ?? null)) return
+  void labStore.persistRetest(sampleBlockId, retestId)
+}
+
+async function handleRetestDelete(sampleBlockId: string, retestId: string) {
+  const operationGeneration = beginRetestLifecycleAction(retestId)
+  if (operationGeneration === null) return
+  const operationContext = captureRetestCreationContext()
+  try {
+    try {
+      await ElMessageBox.confirm('确认删除这条空白复样吗？', '删除复样', {
+        type: 'warning',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消'
+      })
+    } catch {
+      return
+    }
+    if (!isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
+    try {
+      const deleted = await labStore.deleteRetestRecord(sampleBlockId, retestId)
+      if (!deleted || !isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
+      if (highlightRetestId.value === retestId) highlightRetestId.value = ''
+      ElMessage.success('空白复样已删除')
+    } catch (error) {
+      if (!isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
+      ElMessage.error(error instanceof Error ? error.message : '复样删除失败')
+    }
+  } finally {
+    finishRetestLifecycleAction(retestId, operationGeneration)
+  }
+}
+
+async function handleRetestVoid(sampleBlockId: string, retestId: string) {
+  const operationGeneration = beginRetestLifecycleAction(retestId)
+  if (operationGeneration === null) return
+  const operationContext = captureRetestCreationContext()
+  try {
+    let reason = ''
+    try {
+      const response = await ElMessageBox.prompt('作废后不可恢复，可选填写作废原因。', '作废复样', {
+        type: 'warning',
+        confirmButtonText: '确认作废',
+        cancelButtonText: '取消',
+        inputPlaceholder: '可选：填写作废原因'
+      })
+      reason = response.value || ''
+    } catch {
+      return
+    }
+    if (!isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
+    try {
+      const voided = await labStore.voidRetestRecord(sampleBlockId, retestId, reason)
+      if (!voided || !isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
+      ElMessage.success('复样已作废')
+    } catch (error) {
+      if (!isCurrentRetestActionOperation(retestId, operationGeneration, operationContext)) return
+      ElMessage.error(error instanceof Error ? error.message : '复样作废失败')
+    }
+  } finally {
+    finishRetestLifecycleAction(retestId, operationGeneration)
+  }
+}
+
+function beginRetestLifecycleAction(retestId: string) {
+  if (activeRetestLifecycleActions.has(retestId)) return null
+  const generation = ++retestActionGeneration
+  activeRetestLifecycleActions.set(retestId, generation)
+  pendingRetestActionIds.value = [...pendingRetestActionIds.value, retestId]
+  return generation
+}
+
+function finishRetestLifecycleAction(retestId: string, generation: number) {
+  if (activeRetestLifecycleActions.get(retestId) === generation) {
+    activeRetestLifecycleActions.delete(retestId)
+    pendingRetestActionIds.value = pendingRetestActionIds.value.filter((id) => id !== retestId)
+  }
+}
+
+function isCurrentRetestActionOperation(retestId: string, generation: number, context: RetestCreationContext) {
+  return activeRetestLifecycleActions.get(retestId) === generation &&
+    JSON.stringify(context) === JSON.stringify(captureRetestCreationContext())
 }
 
 async function applySampleCompletion(payload: { blockIds: string[]; completed: boolean }) {
@@ -597,12 +939,21 @@ async function applyBulkSampleFill(payload: { patch: Partial<LabSampleInput> }) 
     ElMessage.warning('请先选择至少一个样品')
     return
   }
-  const fields = getBulkFillChangeLogFields(payload.patch)
   selectedBlocks.forEach((block) => {
+    const blockPatch = { ...payload.patch }
+    if (
+      block.inputs.paymentStatus === '预存款' &&
+      hasPatchField(blockPatch, 'paymentStatus') &&
+      blockPatch.paymentStatus !== '预存款'
+    ) {
+      blockPatch.prepaidMemberId = undefined
+      blockPatch.prepaidMemberPhone = undefined
+    }
+    const fields = getBulkFillChangeLogFields(blockPatch)
     fields.forEach((field) => {
-      labStore.commitBlockFieldChange(block.id, field, block.inputs[field] ?? null, payload.patch[field] ?? null)
+      labStore.commitBlockFieldChange(block.id, field, block.inputs[field] ?? null, blockPatch[field] ?? null)
     })
-    labStore.patchBlock(block.id, payload.patch)
+    labStore.patchBlock(block.id, blockPatch)
   })
   const saved = await labStore.persistAllBlocks({ silent: true })
   if (!saved.success) {
@@ -657,6 +1008,17 @@ async function appendBlocks() {
   }
 }
 
+async function handleMobileSaveNext() {
+  const saved = await labStore.persistAllBlocks({ silent: true })
+  if (!saved.success) ElMessage.error('当前样品尚未全部保存，系统将继续自动重试')
+}
+
+function handleMobileSelectionPrimary() {
+  if (generationMode.value === 'report') return void handleGenerateReport()
+  if (generationMode.value === 'sms') return void handleGenerateSms()
+  if (generationMode.value === 'bulkFill') return void handleBulkFillSamples()
+}
+
 function jumpToBlacklist(id?: string) {
   hitDialogVisible.value = false
   router.push({ path: '/blacklist', query: id ? { hit: id } : undefined })
@@ -665,8 +1027,20 @@ function jumpToBlacklist(id?: string) {
 async function scrollToHighlightedBlock(blockId: string) {
   await nextTick()
   window.setTimeout(() => {
-    document.querySelector(`[data-block-id="${blockId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    const block = Array.from(document.querySelectorAll<HTMLElement>('[data-block-id]'))
+      .find((element) => element.dataset.blockId === blockId)
+    const target = isMobileLayout.value
+      ? block?.querySelector<HTMLElement>('.mobile-sample-card__header') || block
+      : block
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
   }, 120)
+}
+
+function cloneDefaultReportTemplate(): LabReportTemplate {
+  return {
+    ...defaultLabReportTemplate,
+    statements: [...defaultLabReportTemplate.statements]
+  }
 }
 </script>
 
@@ -691,6 +1065,26 @@ async function scrollToHighlightedBlock(blockId: string) {
   gap: 10px;
 }
 
+.toolbar-content {
+  display: contents;
+}
+
+.mobile-toolbar-summary {
+  display: none;
+}
+
+.mobile-toolbar-live-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .toolbar {
   position: sticky;
   top: 74px;
@@ -711,5 +1105,187 @@ async function scrollToHighlightedBlock(blockId: string) {
 
 :deep(.lab-grid-panel) {
   min-height: 0;
+}
+
+.mobile-selection-bar {
+  position: fixed;
+  right: 0;
+  bottom: var(--mobile-page-action-bottom);
+  left: 0;
+  z-index: 19;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 74px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.98);
+  border-top: 1px solid #cbd5e1;
+  box-shadow: 0 -10px 30px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(14px);
+
+  > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  strong {
+    color: #183657;
+    font-size: 14px;
+  }
+
+  span {
+    overflow: hidden;
+    color: #64748b;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :deep(.el-button) {
+    min-height: 44px;
+    margin-left: 0;
+  }
+}
+
+.page-stack--mobile {
+  min-height: calc(100dvh - 140px);
+  gap: 10px;
+  grid-template-rows: none;
+
+  .toolbar {
+    top: calc(56px + env(safe-area-inset-top));
+    display: grid;
+    gap: 8px;
+    margin: -4px -12px 0;
+    padding: 8px 12px;
+    background: rgba(238, 243, 248, 0.98);
+  }
+
+  .mobile-toolbar-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 44px;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0;
+    overflow: hidden;
+    color: #183657;
+    text-align: left;
+    background: transparent;
+    border: 0;
+
+    > span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &__date,
+    &__edit,
+    &__save {
+      font-size: 12px;
+    }
+
+    &__toggle {
+      display: grid;
+      min-height: 44px;
+      place-items: center;
+      color: #2563eb;
+      font-size: 12px;
+    }
+  }
+
+  .toolbar-content {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .toolbar-left {
+    display: grid;
+    grid-template-columns: minmax(145px, 1fr) auto;
+    gap: 6px;
+
+    .mobile-toolbar-recovery {
+      min-height: 44px;
+      margin-left: 0;
+    }
+
+    :deep(.el-date-editor) {
+      width: 100%;
+      min-height: 44px;
+    }
+
+    :deep(.el-tag) {
+      min-height: 28px;
+    }
+  }
+
+  .toolbar-right {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    width: 100%;
+
+    :deep(.el-button) {
+      min-width: 0;
+      min-height: 44px;
+      margin-left: 0;
+      padding-inline: 7px;
+      font-size: 12px;
+    }
+  }
+
+  :deep(.parameter-panel) {
+    position: static;
+  }
+
+  .append-body {
+    display: grid;
+    grid-template-columns: auto minmax(70px, 1fr) auto;
+    padding: 10px;
+  }
+
+  .append-input {
+    width: 100%;
+  }
+
+  :deep(.append-input .el-input__wrapper) {
+    min-height: 44px;
+  }
+
+  .append-submit {
+    min-height: 44px;
+  }
+}
+
+.page-stack--mobile-selection {
+  padding-bottom: 84px;
+}
+
+@media (max-width: 374px) {
+  .mobile-toolbar-summary {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 44px;
+
+    &__edit,
+    &__save {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .mobile-selection-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .mobile-selection-cancel {
+    grid-column: 2;
+  }
 }
 </style>

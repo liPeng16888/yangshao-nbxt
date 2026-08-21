@@ -15,8 +15,16 @@ import { LabSampleChangeRequestsController } from './lab-sample-change-requests.
 import { LabSampleChangeRequestsModule } from './lab-sample-change-requests.module'
 import { LabSampleChangeRequestsService } from './lab-sample-change-requests.service'
 
-const frontendUser: CurrentUser = { id: 'front-1', account: 'front-1', username: '前台一', role: UserRole.FRONTEND_USER }
-const subAdmin: CurrentUser = { id: 'admin-1', account: 'admin-1', username: '子管理员', role: UserRole.SUB_ADMIN }
+const frontendUser: CurrentUser = {
+  id: 'front-1', account: 'front-1', username: '前台一', role: UserRole.FRONTEND_USER,
+  dataOwnerId: 'front-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: true, isFrontendSubAccount: false
+}
+const subAdmin: CurrentUser = {
+  id: 'admin-1', account: 'admin-1', username: '子管理员', role: UserRole.SUB_ADMIN,
+  dataOwnerId: 'admin-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: false, isFrontendSubAccount: false
+}
 
 function fixture() {
   const service = {

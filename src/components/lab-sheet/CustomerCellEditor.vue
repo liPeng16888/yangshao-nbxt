@@ -53,7 +53,7 @@
         <el-button :disabled="disabled" size="small" :icon="Plus" aria-label="新增客户" @click="showCreate = true" />
       </el-tooltip>
       <el-tooltip content="复制客户信息" placement="top">
-        <el-button :disabled="!copyText" size="small" :icon="CopyDocument" aria-label="复制客户信息" @click="copyCustomerInfo" />
+        <el-button :disabled="!copyText || copying" :loading="copying" size="small" :icon="CopyDocument" aria-label="复制客户信息" @click="copyCustomerInfo" />
       </el-tooltip>
     </div>
 
@@ -90,6 +90,7 @@ import type { BlacklistRecord } from '@/types/blacklist'
 import type { Customer } from '@/types/customer'
 import type { LabSampleInput } from '@/types/labSheet'
 import { buildSampleCustomerPatch, type SampleCustomerRole } from '@/utils/sampleCustomers'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
@@ -116,6 +117,7 @@ const isFocused = ref(false)
 const showCreate = ref(false)
 const creating = ref(false)
 const deletingCustomerId = ref('')
+const copying = ref(false)
 const createForm = reactive({
   name: '',
   phone: '',
@@ -235,7 +237,7 @@ async function deleteSavedCustomer(customer: Customer) {
   }
   deletingCustomerId.value = customer.id
   try {
-    await deleteCustomer(customer.id)
+    await deleteCustomer(customer.id, customer.updatedAt || '')
     customerOptions.value = customerOptions.value.filter((item) => item.id !== customer.id)
     const wasSelected = selectedNames.value.includes(customer.name)
     if (wasSelected) {
@@ -277,13 +279,17 @@ async function checkBlacklistAfterCommit(keyword: string) {
 }
 
 async function copyCustomerInfo() {
+  if (copying.value) return
   const text = copyText.value
   if (!text) return
+  copying.value = true
   try {
-    await navigator.clipboard.writeText(text)
+    await writeTextToClipboard(text)
     ElMessage.success('客户信息已复制')
   } catch {
     ElMessage.error('复制失败，请手动复制')
+  } finally {
+    copying.value = false
   }
 }
 

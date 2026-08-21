@@ -10,5 +10,9 @@ describe('customer frontend development server', () => {
       target: 'http://127.0.0.1:3000',
       changeOrigin: true
     })
+    expect(resolved.server?.proxy?.['/uploads']).toMatchObject({
+      target: 'http://127.0.0.1:3000',
+      changeOrigin: true
+    })
   })
 })

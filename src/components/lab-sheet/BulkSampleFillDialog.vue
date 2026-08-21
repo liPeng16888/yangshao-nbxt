@@ -40,7 +40,7 @@
 
       <section class="bulk-fill-item">
         <div class="bulk-fill-item__header">
-          样品金额
+          {{ amountLabel }}
         </div>
         <el-input-number
           v-model="price"
@@ -97,15 +97,16 @@ const emit = defineEmits<{
   blacklistHit: [records: BlacklistRecord[]]
 }>()
 
-const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款']
+const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款']
 const payerCustomerPatch = ref<Partial<LabSampleInput>>({})
 const recipientCustomerPatch = ref<Partial<LabSampleInput>>({})
 const price = ref<number | null>(null)
 const paymentStatus = ref<SamplePaymentStatus | ''>('')
 const elementNote = ref('')
 
-const pricePrecision = computed(() => (paymentStatus.value === '预存款' ? 0 : 2))
-const priceStep = computed(() => (pricePrecision.value === 0 ? 1 : 0.01))
+const amountLabel = computed(() => (paymentStatus.value === '预存款' ? '扣除金额' : '样品金额'))
+const pricePrecision = computed(() => 2)
+const priceStep = computed(() => 0.01)
 
 watch(
   () => props.visible,
@@ -117,6 +118,10 @@ watch(
 async function confirmApply() {
   if (!props.selectedCount) {
     ElMessage.warning('请先选择至少一个样品')
+    return
+  }
+  if (paymentStatus.value === '预存款') {
+    ElMessage.warning('预存款不能批量填写，请逐个样品选择会员并填写扣除金额')
     return
   }
 
@@ -164,7 +169,7 @@ function buildPatch(): Partial<LabSampleInput> {
   }
 
   if (typeof price.value === 'number' && Number.isFinite(price.value)) {
-    patch.price = pricePrecision.value === 0 ? Math.trunc(price.value) : Number(price.value.toFixed(2))
+    patch.price = Number(price.value.toFixed(2))
   }
 
   if (paymentStatus.value) {

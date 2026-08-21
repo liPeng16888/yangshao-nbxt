@@ -5,7 +5,7 @@
       <p>北京时间 {{ beijingTime }}</p>
     </div>
     <div class="topbar-actions">
-      <el-popover placement="bottom-end" width="360" trigger="click" @show="reminderStore.loadReminders">
+      <el-popover v-if="canUseReminders" placement="bottom-end" width="360" trigger="click" @show="reminderStore.loadReminders">
         <template #reference>
           <el-badge :value="reminderStore.unreadCount" :hidden="!reminderStore.unreadCount">
             <el-button :icon="Bell">提醒</el-button>
@@ -24,26 +24,52 @@
         </div>
       </el-popover>
       <el-tag type="info" effect="plain">{{ authStore.user?.username || '未登录' }}</el-tag>
-      <el-button :icon="Lock" @click="accessGuard.openSettings">访问设置</el-button>
+      <el-button v-if="isFrontendMainAccount" :icon="Lock" @click="accessGuard.openSettings">访问设置</el-button>
       <el-button :icon="Setting" @click="openSettings">账号设置</el-button>
       <el-button :icon="SwitchButton" @click="handleLogout">退出登录</el-button>
     </div>
   </header>
-  <el-dialog v-model="settingsVisible" title="账号设置" width="440px" append-to-body>
-    <el-form label-position="top">
-      <el-form-item label="当前密码">
-        <el-input v-model="passwordForm.currentPassword" type="password" show-password />
-      </el-form-item>
-      <el-form-item label="新密码">
-        <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="至少 6 位" />
-      </el-form-item>
-      <el-form-item label="确认新密码">
-        <el-input v-model="passwordForm.confirmPassword" type="password" show-password />
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="settingsVisible = false">取消</el-button>
-      <el-button type="primary" :loading="settingsSaving" @click="savePassword">保存密码</el-button>
+  <el-dialog v-model="settingsVisible" title="账号设置" :width="isFrontendMainAccount ? '1080px' : '440px'" append-to-body>
+    <el-tabs v-if="isFrontendMainAccount" v-model="settingsTab">
+      <el-tab-pane label="修改密码" name="password">
+        <div class="password-panel">
+          <el-form label-position="top">
+            <el-form-item label="当前密码">
+              <el-input v-model="passwordForm.currentPassword" type="password" show-password />
+            </el-form-item>
+            <el-form-item label="新密码">
+              <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="至少 6 位" />
+            </el-form-item>
+            <el-form-item label="确认新密码">
+              <el-input v-model="passwordForm.confirmPassword" type="password" show-password />
+            </el-form-item>
+          </el-form>
+          <div class="password-actions">
+            <el-button @click="settingsVisible = false">取消</el-button>
+            <el-button type="primary" :loading="settingsSaving" @click="savePassword">保存密码</el-button>
+          </div>
+        </div>
+      </el-tab-pane>
+      <el-tab-pane label="子账号管理" name="subaccounts" lazy>
+        <frontend-sub-account-manager />
+      </el-tab-pane>
+    </el-tabs>
+    <template v-else>
+      <el-form label-position="top">
+        <el-form-item label="当前密码">
+          <el-input v-model="passwordForm.currentPassword" type="password" show-password />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="至少 6 位" />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="passwordForm.confirmPassword" type="password" show-password />
+        </el-form-item>
+      </el-form>
+      <div class="password-actions">
+        <el-button @click="settingsVisible = false">取消</el-button>
+        <el-button type="primary" :loading="settingsSaving" @click="savePassword">保存密码</el-button>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -58,6 +84,7 @@ import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { useLabSheetStore } from '@/stores/labSheet'
 import { useReminderStore } from '@/stores/reminder'
+import FrontendSubAccountManager from '@/components/account/FrontendSubAccountManager.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -67,6 +94,7 @@ const reminderStore = useReminderStore()
 const accessGuard = useAccessGuardStore()
 const beijingTime = ref(dayjs().format('YYYY-MM-DD HH:mm:ss'))
 const settingsVisible = ref(false)
+const settingsTab = ref('password')
 const settingsSaving = ref(false)
 const passwordForm = reactive({
   currentPassword: '',
@@ -76,12 +104,14 @@ const passwordForm = reactive({
 let timer: number | undefined
 
 const currentTitle = computed(() => String(route.meta.title || '工作台'))
+const isFrontendMainAccount = computed(() => authStore.user?.role === 'FRONTEND_USER' && authStore.user?.isFrontendMainAccount !== false)
+const canUseReminders = computed(() => !authStore.user?.isFrontendSubAccount || authStore.user.permissions?.some((permission) => permission.startsWith('FINANCE_')))
 
 onMounted(() => {
   timer = window.setInterval(() => {
     beijingTime.value = dayjs().format('YYYY-MM-DD HH:mm:ss')
   }, 1000)
-  void reminderStore.loadReminders()
+  if (canUseReminders.value) void reminderStore.loadReminders()
 })
 
 onBeforeUnmount(() => {
@@ -98,6 +128,7 @@ function openSettings() {
   passwordForm.currentPassword = ''
   passwordForm.newPassword = ''
   passwordForm.confirmPassword = ''
+  settingsTab.value = 'password'
   settingsVisible.value = true
 }
 
@@ -122,7 +153,8 @@ async function savePassword() {
       confirmPassword: passwordForm.confirmPassword
     })
     settingsVisible.value = false
-    ElMessage.success('密码已修改')
+    ElMessage.success('密码已修改，请重新登录')
+    await handleLogout()
   } finally {
     settingsSaving.value = false
   }
@@ -168,5 +200,16 @@ async function savePassword() {
   justify-content: space-between;
   color: #8a97a8;
   font-size: 12px;
+}
+
+.password-panel {
+  max-width: 440px;
+}
+
+.password-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
 }
 </style>

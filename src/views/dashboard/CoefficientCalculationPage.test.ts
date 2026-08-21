@@ -1,10 +1,13 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia } from 'pinia'
-import { defineComponent, h, nextTick } from 'vue'
+import { defineComponent, h, nextTick, onScopeDispose, ref } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultLabParameters } from '@/constants/labSheetTemplate'
 import { useLabSheetStore } from '@/stores/labSheet'
+import { useAuthStore } from '@/stores/auth'
+import type { AuthUser } from '@/types/auth'
 import type { LabFormulaResult, LabSheet, SampleBlock } from '@/types/labSheet'
+import CoefficientCalculationDesktopView from '@/components/coefficient/CoefficientCalculationDesktopView.vue'
 import CoefficientCalculationPage from './CoefficientCalculationPage.vue'
 
 const apiMocks = vi.hoisted(() => ({
@@ -22,22 +25,78 @@ const messageMocks = vi.hoisted(() => ({
 }))
 
 const messageBoxMocks = vi.hoisted(() => ({ confirm: vi.fn() }))
+const draftMocks = vi.hoisted(() => ({
+  adapters: [] as Array<any>,
+  instances: [] as Array<any>,
+  payload: undefined as unknown,
+  serverVersion: undefined as unknown,
+  status: 'idle',
+  retry: vi.fn(),
+  overwrite: vi.fn()
+}))
+const layoutMocks = vi.hoisted(() => ({ isMobileLayout: undefined as any }))
+const mountedWrappers: VueWrapper[] = []
 
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>()
   return {
     get length() { return values.size },
-    clear: () => values.clear(),
+    clear: () => { values.clear(); draftMocks.payload = undefined },
     getItem: (key) => values.get(key) ?? null,
     key: (index) => Array.from(values.keys())[index] ?? null,
     removeItem: (key) => values.delete(key),
-    setItem: (key, value) => values.set(key, value)
+    setItem: (key, value) => {
+      values.set(key, value)
+      if (key.startsWith('ys_coefficient_calculation_inputs:')) draftMocks.payload = JSON.parse(value)
+    }
   }
 }
 
 vi.mock('@/api/labSheet', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/labSheet')>()),
   ...apiMocks
+}))
+
+vi.mock('@/composables/useCalculationDraft', () => ({
+  useCalculationDraft: (adapter: any) => {
+    draftMocks.adapters.push(adapter)
+    adapter.apply(draftMocks.payload === undefined ? adapter.defaults() : (adapter.migrateLegacy ?? adapter.normalize)(draftMocks.payload))
+    const status = ref(draftMocks.status)
+    const updatedAt = ref<string | null>(null)
+    const conflict = ref(draftMocks.status === 'conflict' ? { serverDraft: true } : null)
+    const scheduleSave = vi.fn(() => {
+      try {
+        window.localStorage.setItem(adapter.legacyStorageKey, JSON.stringify(adapter.snapshot()))
+      } catch {
+        status.value = 'error'
+      }
+    })
+    const useServerVersion = vi.fn(() => {
+      if (draftMocks.serverVersion !== undefined) adapter.apply(draftMocks.serverVersion)
+      status.value = 'saved'
+      conflict.value = null
+    })
+    const instance = {
+      status,
+      updatedAt,
+      conflict,
+      load: async () => {
+        status.value = 'idle'
+      },
+      scheduleSave,
+      retry: draftMocks.retry,
+      useServerVersion,
+      overwriteServerVersion: draftMocks.overwrite,
+      disposed: false
+    }
+    draftMocks.instances.push(instance)
+    onScopeDispose(() => { instance.disposed = true })
+    return instance
+  }
+}))
+
+vi.mock('@/composables/useMobileLayout', () => ({
+  useMobileLayout: () => ({ isMobileLayout: layoutMocks.isMobileLayout })
 }))
 
 vi.mock('element-plus', async (importOriginal) => ({
@@ -103,7 +162,8 @@ function makeBlock(index: number): SampleBlock {
     readonly: false,
     inputs: { sequence: String(index).padStart(3, '0') },
     results: {} as LabFormulaResult,
-    parameterSnapshot: { ...defaultLabParameters }
+    parameterSnapshot: { ...defaultLabParameters },
+    retests: []
   }
 }
 
@@ -115,6 +175,12 @@ function makeSheet(indices = [1, 2, 3, 4]): LabSheet {
     parameters: { ...defaultLabParameters },
     sampleBlocks: indices.map(makeBlock)
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((fulfill) => { resolve = fulfill })
+  return { promise, resolve }
 }
 
 const CoefficientApplicationDialogStub = defineComponent({
@@ -138,8 +204,15 @@ const CoefficientApplicationDialogStub = defineComponent({
   }
 })
 
-function mountPage() {
+function authUser(id: string): AuthUser {
+  return { id, account: id, username: `User ${id}`, role: 'FRONTEND_USER' }
+}
+
+function mountPage(options: { user?: AuthUser | null; mobile?: boolean } = {}) {
   const pinia = createPinia()
+  const authStore = useAuthStore(pinia)
+  authStore.user = options.user === undefined ? authUser('frontend-user-8') : options.user
+  layoutMocks.isMobileLayout.value = options.mobile ?? false
   const wrapper = mount(CoefficientCalculationPage, {
     global: {
       plugins: [pinia],
@@ -155,7 +228,8 @@ function mountPage() {
       }
     }
   })
-  return { wrapper, store: useLabSheetStore(pinia) }
+  mountedWrappers.push(wrapper)
+  return { wrapper, store: useLabSheetStore(pinia), authStore }
 }
 
 function seedIndependentRows(options: {
@@ -164,7 +238,7 @@ function seedIndependentRows(options: {
   standardAddCount?: unknown
   calculationAddCount?: unknown
 }) {
-  window.localStorage.setItem('ys_coefficient_calculation_inputs:guest', JSON.stringify({
+  window.localStorage.setItem('ys_coefficient_calculation_inputs:frontend-user-8', JSON.stringify({
     parameters: { ironBlank: 0.123, ironFactor: 29.1 },
     standardRows: options.standardRows,
     calculationRows: options.calculationRows,
@@ -207,7 +281,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
       value: createMemoryStorage()
     })
     window.localStorage.clear()
-    window.localStorage.setItem('ys_coefficient_calculation_inputs:guest', JSON.stringify({
+    window.localStorage.setItem('ys_coefficient_calculation_inputs:frontend-user-8', JSON.stringify({
       parameters: { ironBlank: 0.123, ironFactor: 29.1 }
     }))
     apiMocks.createLabSheetEventSource.mockReturnValue(null)
@@ -220,15 +294,125 @@ describe('CoefficientCalculationPage coefficient application', () => {
     messageMocks.success.mockReset()
     messageMocks.warning.mockReset()
     messageBoxMocks.confirm.mockReset()
+    draftMocks.adapters.length = 0
+    draftMocks.instances.length = 0
+    draftMocks.status = 'idle'
+    draftMocks.serverVersion = undefined
+    draftMocks.retry.mockReset()
+    draftMocks.overwrite.mockReset()
+    layoutMocks.isMobileLayout = ref(false)
   })
 
   afterEach(() => {
+    mountedWrappers.splice(0).forEach((wrapper) => wrapper.unmount())
     vi.clearAllMocks()
     window.localStorage.clear()
   })
 
+  it('marks the extracted desktop editor while preserving its existing rows', () => {
+    const { wrapper } = mountPage()
+
+    expect(wrapper.get('[data-testid="coefficient-desktop-view"]')).toBeTruthy()
+    expect(wrapper.findAll('[data-testid="standard-row"]')).toHaveLength(3)
+    expect(wrapper.findAll('[data-testid="calculation-row"]')).toHaveLength(3)
+  })
+
+  it('mounts exactly one desktop or mobile editor while keeping one draft controller', async () => {
+    const { wrapper } = mountPage({ mobile: false })
+    expect(wrapper.find('[data-testid="coefficient-desktop-view"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="coefficient-mobile-view"]').exists()).toBe(false)
+    expect(draftMocks.adapters).toHaveLength(1)
+
+    layoutMocks.isMobileLayout.value = true
+    await nextTick()
+    expect(wrapper.find('[data-testid="coefficient-desktop-view"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="coefficient-mobile-view"]').exists()).toBe(true)
+    expect(draftMocks.adapters).toHaveLength(1)
+  })
+
+  it('uses exact account-scoped coefficient keys and never mounts a guest controller', () => {
+    mountPage({ user: authUser('coefficient-account-a') })
+    expect(draftMocks.adapters[0].kind).toBe('coefficient')
+    expect(draftMocks.adapters[0].legacyStorageKey).toBe('ys_coefficient_calculation_inputs:coefficient-account-a')
+    expect(draftMocks.adapters[0].cacheStorageKey).toBe('ys_calculation_draft_cache:coefficient:coefficient-account-a')
+
+    const missing = mountPage({ user: null }).wrapper
+    const blank = mountPage({ user: authUser('   ') }).wrapper
+    expect(missing.find('[data-testid="coefficient-account-pending"]').exists()).toBe(true)
+    expect(blank.find('[data-testid="coefficient-account-pending"]').exists()).toBe(true)
+    expect(draftMocks.adapters).toHaveLength(1)
+    expect(draftMocks.adapters.some((adapter) => adapter.legacyStorageKey.includes('guest'))).toBe(false)
+  })
+
+  it('disposes account A and hides its rows on switch and logout', async () => {
+    seedIndependentRows({ standardRows: [{ id: 'account-a-row', code: 'ACCOUNT-A', autoCode: false }] })
+    const { wrapper, authStore } = mountPage({ user: authUser('account-a') })
+    expect(rowCodes(wrapper, 'standard')).toEqual(['ACCOUNT-A'])
+    const accountA = draftMocks.instances[0]
+
+    draftMocks.payload = undefined
+    authStore.user = authUser('account-b')
+    await nextTick()
+    expect(accountA.disposed).toBe(true)
+    expect(rowCodes(wrapper, 'standard')).not.toContain('ACCOUNT-A')
+    expect(draftMocks.adapters.at(-1).legacyStorageKey).toBe('ys_coefficient_calculation_inputs:account-b')
+
+    const accountB = draftMocks.instances.at(-1)
+    authStore.user = null
+    await nextTick()
+    expect(accountB.disposed).toBe(true)
+    expect(wrapper.find('[data-testid="coefficient-account-pending"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="coefficient-desktop-view"]').exists()).toBe(false)
+  })
+
+  it('keeps draft sync failures visible and retryable without disabling calculation', async () => {
+    draftMocks.status = 'error'
+    const { wrapper } = mountPage()
+    expect(wrapper.text()).toContain('保存失败，请重试')
+    expect(wrapper.find('[data-testid="coefficient-desktop-view"]').exists()).toBe(true)
+
+    await wrapper.findAll('button').find((button) => button.text() === '重试保存')!.trigger('click')
+    expect(draftMocks.retry).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires confirmation before overwriting a conflicting coefficient draft', async () => {
+    draftMocks.status = 'conflict'
+    messageBoxMocks.confirm.mockRejectedValueOnce('cancel')
+    const { wrapper } = mountPage()
+    const overwrite = wrapper.findAll('button').find((button) => button.text() === '覆盖服务器版本')!
+
+    await overwrite.trigger('click')
+    await flushPromises()
+    expect(draftMocks.overwrite).not.toHaveBeenCalled()
+
+    messageBoxMocks.confirm.mockResolvedValueOnce('confirm')
+    await overwrite.trigger('click')
+    await flushPromises()
+    expect(draftMocks.overwrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies a conflicting server version without immediately resaving it', async () => {
+    draftMocks.status = 'conflict'
+    const current = draftMocks.payload as any
+    draftMocks.serverVersion = {
+      ...current,
+      parameters: { ...defaultLabParameters, ironBlank: 0.777 },
+      standardAddCount: 1,
+      calculationAddCount: 1,
+      standardRows: [{ id: 'server-standard', code: 'SERVER', autoCode: false, aluminum: null, silicon: null, iron: null, calcium: null, magnesium: null, titanium: null }],
+      calculationRows: [{ id: 'server-calculation', code: 'SERVER', autoCode: false, inputs: { ironRaw: null, siliconRaw: null, aluminumRaw: null, calciumRaw: null, magnesiumRaw: null, titaniumRaw: null } }]
+    }
+    const { wrapper } = mountPage()
+    const instance = draftMocks.instances[0]
+
+    await wrapper.findAll('button').find((button) => button.text() === '加载服务器版本')!.trigger('click')
+    await nextTick()
+    expect(draftMocks.adapters[0].snapshot().parameters.ironBlank).toBe(0.777)
+    expect(instance.scheduleSave).not.toHaveBeenCalled()
+  })
+
   it('keeps different stored row counts independent', () => {
-    window.localStorage.setItem('ys_coefficient_calculation_inputs:guest', JSON.stringify({
+    window.localStorage.setItem('ys_coefficient_calculation_inputs:frontend-user-8', JSON.stringify({
       addCount: 2,
       standardRows: [{ code: '001' }, { code: '002' }],
       calculationRows: [{ code: '001', inputs: {} }]
@@ -274,7 +458,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
     expect(rowCodes(wrapper, 'calculation')).toEqual(['001', '002', '003'])
   })
 
-  it('falls back each table containing a null row item without crashing', () => {
+  it('preserves valid legacy rows instead of replacing a table when another row item is malformed', () => {
     seedIndependentRows({
       standardRows: [{ id: 'standard-valid', code: '001' }, null],
       calculationRows: [null]
@@ -282,7 +466,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
 
     const { wrapper } = mountPage()
 
-    expect(rowCodes(wrapper, 'standard')).toEqual(['001', '002', '003'])
+    expect(rowCodes(wrapper, 'standard')).toEqual(['001'])
     expect(rowCodes(wrapper, 'calculation')).toEqual(['001', '002', '003'])
   })
 
@@ -308,7 +492,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
   })
 
   it('migrates the legacy add count into two independent persisted counts', async () => {
-    window.localStorage.setItem('ys_coefficient_calculation_inputs:guest', JSON.stringify({
+    window.localStorage.setItem('ys_coefficient_calculation_inputs:frontend-user-8', JSON.stringify({
       addCount: 2,
       standardRows: [{ code: '001' }],
       calculationRows: [{ code: '001', inputs: {} }]
@@ -316,7 +500,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
     const { wrapper } = mountPage()
     await wrapper.get('[data-testid="add-standard-rows"]').trigger('click')
     await nextTick()
-    const stored = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:guest')!)
+    const stored = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:frontend-user-8')!)
     expect(stored.standardAddCount).toBe(2)
     expect(stored.calculationAddCount).toBe(2)
     expect(stored).not.toHaveProperty('addCount')
@@ -339,9 +523,9 @@ describe('CoefficientCalculationPage coefficient application', () => {
 
     await wrapper.get('[data-testid="add-standard-rows"]').trigger('click')
     await nextTick()
-    const stored = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:guest')!)
+    const stored = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:frontend-user-8')!)
 
-    expect(wrapper.findAll('[data-testid="standard-row"]')).toHaveLength(1 + expectedCount)
+    expect(wrapper.findAll('[data-testid="standard-row"]')).toHaveLength(Math.min(50, 1 + expectedCount))
     expect(stored.standardAddCount).toBe(expectedCount)
     expect(stored.calculationAddCount).toBe(expectedCount)
   })
@@ -367,9 +551,9 @@ describe('CoefficientCalculationPage coefficient application', () => {
     await setAddCount(wrapper, kind, liveCount)
     await wrapper.get(`[data-testid="add-${kind}-rows"]`).trigger('click')
     await nextTick()
-    const stored = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:guest')!)
+    const stored = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:frontend-user-8')!)
 
-    expect(wrapper.findAll(`[data-testid="${kind}-row"]`)).toHaveLength(1 + expectedCount)
+    expect(wrapper.findAll(`[data-testid="${kind}-row"]`)).toHaveLength(Math.min(50, 1 + expectedCount))
     expect(stored[`${kind}AddCount`]).toBe(expectedCount)
   })
 
@@ -378,6 +562,23 @@ describe('CoefficientCalculationPage coefficient application', () => {
 
     expect(getAddCountInput(wrapper, 'standard').props('valueOnClear')).toBe('min')
     expect(getAddCountInput(wrapper, 'calculation').props('valueOnClear')).toBe('min')
+  })
+
+  it('round-trips the real 50-row adapter and rejects a corrupted 51-row live state', async () => {
+    const { wrapper } = mountPage()
+    await setAddCount(wrapper, 'standard', 50)
+    await wrapper.get('[data-testid="add-standard-rows"]').trigger('click')
+    await nextTick()
+    const adapter = draftMocks.adapters[0]
+    const payload = adapter.snapshot()
+
+    expect(adapter.normalize(payload).standardRows).toHaveLength(50)
+    const calculation = wrapper.getComponent(CoefficientCalculationDesktopView).props('calculation') as any
+    calculation.standardRows.push({ ...calculation.standardRows[0], id: 'corrupted-live-row-51' })
+    expect(() => adapter.snapshot()).toThrow()
+    await nextTick()
+    expect(draftMocks.instances[0].status.value).toBe('error')
+    expect(JSON.parse(window.localStorage.getItem(adapter.legacyStorageKey)!).standardRows).toHaveLength(50)
   })
 
   it('adds rows to each table independently', async () => {
@@ -455,7 +656,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
 
     await editedInput.setValue('CUSTOM-EDITED')
     await nextTick()
-    const storedAfterEdit = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:guest')!)
+    const storedAfterEdit = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:frontend-user-8')!)
     expect(storedAfterEdit.calculationRows[1]).toMatchObject({ code: 'CUSTOM-EDITED', autoCode: false })
     firstMount.wrapper.unmount()
 
@@ -466,7 +667,7 @@ describe('CoefficientCalculationPage coefficient application', () => {
     await flushPromises()
 
     expect(rowCodes(wrapper, 'calculation')).toEqual(['CUSTOM-EDITED', '002'])
-    const storedAfterDelete = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:guest')!)
+    const storedAfterDelete = JSON.parse(window.localStorage.getItem('ys_coefficient_calculation_inputs:frontend-user-8')!)
     expect(storedAfterDelete.calculationRows[0]).toMatchObject({ code: 'CUSTOM-EDITED', autoCode: false })
   })
 
@@ -628,6 +829,37 @@ describe('CoefficientCalculationPage coefficient application', () => {
     vi.useRealTimers()
   })
 
+  it('flushes a dirty sample block before applying parameters', async () => {
+    vi.useFakeTimers()
+    const { wrapper, store } = mountPage()
+    await openApplicationDialog(wrapper)
+    store.patchBlock('block-1', { sampleNumber: 'ORDER-001' })
+
+    await wrapper.get('[data-testid="dialog-confirm"]').trigger('click')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+
+    expect(apiMocks.saveSampleBlock).toHaveBeenCalledTimes(1)
+    expect(apiMocks.applyCurrentParametersFromIndex).toHaveBeenCalledTimes(1)
+    expect(apiMocks.saveSampleBlock.mock.invocationCallOrder[0]).toBeLessThan(apiMocks.applyCurrentParametersFromIndex.mock.invocationCallOrder[0])
+    vi.useRealTimers()
+  })
+
+  it('prevents duplicate parameter application while the first request is pending', async () => {
+    const pending = deferred<LabSheet>()
+    apiMocks.applyCurrentParametersFromIndex.mockImplementationOnce(() => pending.promise)
+    const { wrapper } = mountPage()
+    await openApplicationDialog(wrapper)
+
+    const confirm = wrapper.get('[data-testid="dialog-confirm"]')
+    await confirm.trigger('click')
+    await confirm.trigger('click')
+    expect(apiMocks.applyCurrentParametersFromIndex).toHaveBeenCalledTimes(1)
+
+    pending.resolve(makeSheet())
+    await flushPromises()
+  })
+
   it('refreshes the current sheet and requires reselection when the chosen boundary no longer exists', async () => {
     apiMocks.getCurrentLabSheet
       .mockResolvedValueOnce(makeSheet([1, 2, 3, 4]))
@@ -649,5 +881,23 @@ describe('CoefficientCalculationPage coefficient application', () => {
     expect(wrapper.find('[data-testid="coefficient-application-dialog"]').exists()).toBe(true)
     expect(messageMocks.success).not.toHaveBeenCalled()
     expect(messageMocks.error).toHaveBeenCalledWith('起始样品已不存在，已刷新当天数据，请重新选择')
+  })
+
+  it('keeps stale-boundary application retryable and explains when the required refresh rejects', async () => {
+    apiMocks.getCurrentLabSheet
+      .mockResolvedValueOnce(makeSheet([1, 2, 3, 4]))
+      .mockRejectedValueOnce(new Error('refresh offline'))
+    apiMocks.applyCurrentParametersFromIndex.mockRejectedValueOnce({
+      response: { data: { message: '起始样品不存在，请刷新后重新选择' } }
+    })
+    const { wrapper } = mountPage()
+
+    await openApplicationDialog(wrapper)
+    await wrapper.get('[data-testid="dialog-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="coefficient-application-dialog"]').exists()).toBe(true)
+    expect(messageMocks.error).toHaveBeenCalledWith('起始样品已不存在，但当天数据刷新失败，请稍后重试')
+    expect(messageMocks.success).not.toHaveBeenCalled()
   })
 })

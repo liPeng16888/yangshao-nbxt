@@ -11,12 +11,20 @@ export const ZONED_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):\d{
 const trim = (value: unknown) => typeof value === 'string' ? value.trim() : value
 const number = (value: unknown) => value === '' || value === null || value === undefined ? value : Number(value)
 
+export class OptimisticVersionDto {
+  @Transform(({ value }) => trim(value)) @IsOptional() @IsString() baseUpdatedAt?: string
+}
+
+export class RequiredOptimisticVersionDto {
+  @Transform(({ value }) => trim(value)) @IsString() @IsNotEmpty() baseUpdatedAt!: string
+}
+
 export class EmployeeQueryDto {
   @Transform(({ value }) => trim(value)) @IsOptional() @IsString() keyword?: string
   @IsOptional() @IsEnum(EmployeeStatus) status?: EmployeeStatus
 }
 
-export class CreateEmployeeDto {
+export class CreateEmployeeDto extends OptimisticVersionDto {
   @Transform(({ value }) => trim(value)) @IsString() @IsNotEmpty() employeeNumber!: string
   @Transform(({ value }) => trim(value)) @IsString() @IsNotEmpty() name!: string
   @IsOptional() @IsEnum(EmployeeStatus) status?: EmployeeStatus
@@ -33,7 +41,7 @@ export class CreateEmployeeDto {
   @Transform(({ value }) => number(value)) @IsOptional() @IsNumber() @Min(0) restQuotaDays?: number
 }
 
-export class WeeklyScheduleDto {
+export class WeeklyScheduleDto extends OptimisticVersionDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Transform(({ value }) => number(value)) @IsInt() @Min(0) @Max(6) weekday!: number
   @IsBoolean() isWorkday!: boolean
@@ -42,7 +50,7 @@ export class WeeklyScheduleDto {
   @Transform(({ value }) => number(value)) @IsInt() @Min(0) @Max(1440) scheduledMinutes!: number
 }
 
-export class DateOverrideDto {
+export class DateOverrideDto extends OptimisticVersionDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Matches(BUSINESS_DATE_PATTERN) date!: string
   @IsBoolean() isWorkday!: boolean
@@ -52,7 +60,7 @@ export class DateOverrideDto {
   @Transform(({ value }) => trim(value)) @IsOptional() @IsString() remark?: string
 }
 
-export class MonthlySettingDto {
+export class MonthlySettingDto extends OptimisticVersionDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Matches(BUSINESS_MONTH_PATTERN) month!: string
   @Transform(({ value }) => number(value)) @IsNumber() @Min(0) restQuotaDays!: number
@@ -63,7 +71,7 @@ export class ScheduleSegmentDto {
   @Matches(CLOCK_END_TIME_PATTERN) endTime!: string
 }
 
-export class MonthlyScheduleDayDto {
+export class MonthlyScheduleDayDto extends OptimisticVersionDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Matches(BUSINESS_DATE_PATTERN) date!: string
   @IsBoolean() isWorkday!: boolean
@@ -104,7 +112,7 @@ export class ActualAttendanceSegmentDto {
   @Matches(ZONED_DATE_TIME_PATTERN) checkOutAt!: string
 }
 
-export class AttendanceDto {
+export class AttendanceDto extends OptimisticVersionDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Matches(BUSINESS_DATE_PATTERN) date!: string
   @ValidateNested({ each: true }) @Type(() => ActualAttendanceSegmentDto) @IsArray() actualSegments!: ActualAttendanceSegmentDto[]
@@ -118,13 +126,13 @@ export class GenerateAttendanceDto {
   @IsArray() @IsString({ each: true }) employeeIds!: string[]
 }
 
-export class LeaveTypeDto {
+export class LeaveTypeDto extends OptimisticVersionDto {
   @Transform(({ value }) => trim(value)) @IsString() @IsNotEmpty() name!: string
   @IsOptional() @IsBoolean() active?: boolean
   @IsBoolean() countsTowardRestQuota!: boolean
 }
 
-export class LeaveRequestDto {
+export class LeaveRequestDto extends OptimisticVersionDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @IsString() @IsNotEmpty() leaveTypeId!: string
   @Matches(BUSINESS_DATE_PATTERN) startDate!: string
@@ -138,14 +146,14 @@ export class ReviewLeaveDto {
   @Transform(({ value }) => trim(value)) @IsOptional() @IsString() reviewRemark?: string
 }
 
-export class CommissionTypeDto {
+export class CommissionTypeDto extends OptimisticVersionDto {
   @Transform(({ value }) => trim(value)) @IsString() @IsNotEmpty() name!: string
   @Transform(({ value }) => trim(value)) @IsString() @IsNotEmpty() unitName!: string
   @Transform(({ value }) => number(value)) @IsNumber() @Min(0) unitPrice!: number
   @IsOptional() @IsBoolean() active?: boolean
 }
 
-export class CommissionRecordDto {
+export class CommissionRecordDto extends OptimisticVersionDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @IsString() @IsNotEmpty() commissionTypeId!: string
   @Matches(BUSINESS_DATE_PATTERN) date!: string
@@ -154,7 +162,7 @@ export class CommissionRecordDto {
   @Transform(({ value }) => trim(value)) @IsOptional() @IsString() remark?: string
 }
 
-export class BonusDto {
+export class BonusDto extends OptimisticVersionDto {
   @IsString() @IsNotEmpty() employeeId!: string
   @Matches(BUSINESS_DATE_PATTERN) date!: string
   @Transform(({ value }) => number(value)) @IsNumber() amount!: number
@@ -178,7 +186,7 @@ export class PayrollGenerateDto {
   @Matches(BUSINESS_MONTH_PATTERN) month!: string
 }
 
-export class PayrollAdjustmentDto {
+export class PayrollAdjustmentDto extends OptimisticVersionDto {
   @Transform(({ value }) => number(value)) @IsNumber() amount!: number
   @Transform(({ value }) => trim(value)) @IsString() @IsNotEmpty() reason!: string
 }

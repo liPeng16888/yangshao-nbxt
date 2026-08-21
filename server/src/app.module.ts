@@ -14,6 +14,10 @@ import { ReportsModule } from './reports/reports.module'
 import { CustomerOverviewModule } from './customer-overview/customer-overview.module'
 import { MedicineInventoryModule } from './medicine-inventory/medicine-inventory.module'
 import { EmployeeAttendanceModule } from './employee-attendance/employee-attendance.module'
+import { TenantRealtimeModule } from './realtime/tenant-realtime.module'
+import { SharedPrepaidModule } from './shared-prepaid/shared-prepaid.module'
+import { FrontendPreferencesModule } from './frontend-preferences/frontend-preferences.module'
+import { CalculationDraftModule } from './calculation-drafts/calculation-draft.module'
 
 @Module({
   imports: [
@@ -31,7 +35,11 @@ import { EmployeeAttendanceModule } from './employee-attendance/employee-attenda
     CustomerOverviewModule,
     AdminModule,
     MedicineInventoryModule,
-    EmployeeAttendanceModule
+    EmployeeAttendanceModule,
+    TenantRealtimeModule,
+    SharedPrepaidModule,
+    FrontendPreferencesModule,
+    CalculationDraftModule
   ]
 })
 export class AppModule {}

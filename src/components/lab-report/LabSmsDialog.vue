@@ -1,6 +1,20 @@
 <template>
-  <el-dialog :model-value="visible" width="960px" class="lab-sms-dialog" :title="dialogTitle" @close="emit('close')">
-    <div v-if="step === 'elements'" class="element-step">
+  <el-dialog
+    :model-value="visible"
+    width="960px"
+    class="lab-sms-dialog"
+    :fullscreen="mobile"
+    :style="mobile ? mobileLabDialogFrameStyle : undefined"
+    :body-class="mobile ? mobileLabDialogBodyClass : undefined"
+    :footer-class="mobile ? mobileLabDialogFooterClass : undefined"
+    :title="dialogTitle"
+    @close="emit('close')"
+  >
+    <div
+      v-if="step === 'elements'"
+      class="element-step lab-sms-dialog-content"
+      :class="{ 'element-step--mobile': mobile, 'lab-sms-dialog-content--mobile': mobile }"
+    >
       <el-alert
         title="优先使用数据计算中已选择的化验元素；未填写的样品保持空白，可在这里手动选择。"
         type="info"
@@ -42,10 +56,14 @@
       </div>
     </div>
 
-    <div v-else class="sms-preview-step">
+    <div
+      v-else
+      class="sms-preview-step lab-sms-dialog-content"
+      :class="{ 'sms-preview-step--mobile': mobile, 'lab-sms-dialog-content--mobile': mobile }"
+    >
       <div class="preview-actions">
         <el-button @click="step = 'elements'">返回选择元素</el-button>
-        <el-button type="primary" @click="copySmsText">复制短信</el-button>
+        <el-button type="primary" :loading="copying" :disabled="copying" @click="copySmsText">复制短信</el-button>
       </div>
       <el-input v-model="smsText" type="textarea" :rows="16" resize="vertical" />
     </div>
@@ -53,7 +71,7 @@
     <template #footer>
       <el-button @click="emit('close')">关闭</el-button>
       <el-button v-if="step === 'elements'" type="primary" @click="createSmsPreview">生成短信</el-button>
-      <el-button v-else type="primary" @click="copySmsText">复制短信</el-button>
+      <el-button v-else type="primary" :loading="copying" :disabled="copying" @click="copySmsText">复制短信</el-button>
     </template>
   </el-dialog>
 </template>
@@ -64,18 +82,25 @@ import { ElMessage } from 'element-plus'
 import type { LabReportElementKey, LabReportSmsTemplate } from '@/types/labReport'
 import type { SampleBlock } from '@/types/labSheet'
 import {
+  mobileLabDialogBodyClass,
+  mobileLabDialogFooterClass,
+  mobileLabDialogFrameStyle
+} from './mobileLabDialogLayout'
+import {
   createLabReportSmsText,
   getBlockCustomerName,
   getBlockDisplayName,
   labReportElements,
   parseLabElementKeys
 } from '@/utils/labReport'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 const props = defineProps<{
   visible: boolean
   blocks: SampleBlock[]
   selectedBlockIds: string[]
   template: LabReportSmsTemplate
+  mobile?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -86,6 +111,7 @@ const step = ref<'elements' | 'preview'>('elements')
 const selectionMap = ref<Record<string, LabReportElementKey[]>>({})
 const bulkElementKeys = ref<LabReportElementKey[]>([])
 const smsText = ref('')
+const copying = ref(false)
 
 const selectedBlocks = computed(() => props.blocks.filter((block) => props.selectedBlockIds.includes(block.id)))
 const dialogTitle = computed(() => (step.value === 'elements' ? '选择化验短信检测元素' : '化验短信预览'))
@@ -155,16 +181,20 @@ function createSmsPreview() {
 }
 
 async function copySmsText() {
+  if (copying.value) return
   const text = smsText.value.trim()
   if (!text) {
     ElMessage.warning('暂无短信内容可复制')
     return
   }
+  copying.value = true
   try {
-    await navigator.clipboard.writeText(text)
+    await writeTextToClipboard(text)
     ElMessage.success('短信内容已复制')
   } catch {
     ElMessage.error('复制失败，请手动复制短信内容')
+  } finally {
+    copying.value = false
   }
 }
 </script>
@@ -282,5 +312,84 @@ async function copySmsText() {
   .bulk-element-card__actions {
     justify-content: flex-start;
   }
+}
+
+.lab-sms-dialog-content--mobile {
+  min-width: 0;
+  max-width: 100%;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  overflow-x: clip;
+}
+
+.element-step--mobile .sample-element-list {
+  max-height: calc(100dvh - 290px);
+  overscroll-behavior: contain;
+}
+
+.element-step--mobile .element-checkboxes {
+  grid-template-columns: 1fr;
+}
+
+.element-step--mobile .bulk-element-card__header,
+.element-step--mobile .sample-element-card__header {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.element-step--mobile .bulk-element-card__actions,
+.sms-preview-step--mobile .preview-actions {
+  display: grid;
+  justify-content: stretch;
+  width: 100%;
+  grid-template-columns: 1fr;
+}
+
+.element-step--mobile .bulk-element-card__actions :deep(.el-button),
+.sms-preview-step--mobile .preview-actions :deep(.el-button),
+.lab-sms-dialog-content--mobile :deep(.el-checkbox),
+.lab-sms-dialog-content--mobile :deep(.el-textarea__inner) {
+  min-height: 44px;
+  margin: 0;
+}
+
+.sms-preview-step--mobile :deep(.el-textarea__inner) {
+  max-height: calc(100dvh - 220px);
+  font-size: 16px;
+}
+
+:global(.lab-sms-dialog.is-fullscreen) {
+  display: flex;
+  flex-direction: column;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  overflow: hidden;
+}
+
+:global(.lab-sms-dialog.is-fullscreen .lab-mobile-action-dialog__body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+:global(.lab-sms-dialog.is-fullscreen .el-dialog__header) {
+  padding-top: calc(12px + env(safe-area-inset-top));
+}
+
+:global(.lab-sms-dialog.is-fullscreen .lab-mobile-action-dialog__footer) {
+  flex: 0 0 auto;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+:global(.lab-sms-dialog.is-fullscreen .el-dialog__footer .el-button),
+:global(.lab-sms-dialog.is-fullscreen .el-dialog__headerbtn) {
+  min-width: 44px;
+  min-height: 44px;
 }
 </style>

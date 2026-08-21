@@ -11,11 +11,12 @@ import {
 import type { CurrentUser } from '../auth/current-user'
 import { PasswordService } from '../auth/password.service'
 import { PrismaService } from '../prisma/prisma.service'
+import { requiredBaseUpdatedAt, staleWrite } from '../common/optimistic-concurrency'
 import type { AdminEmployeeAttendanceQueryDto } from './employee-attendance.dto'
 import { EmployeeDataCipherService } from './employee-data-cipher.service'
 import { breakMinutes, deriveAttendanceMetrics } from './attendance-intervals'
 import { deriveAttendanceCalendarDay } from './attendance-calendar'
-import { calculatePayroll, type PayrollCalculationInput } from './payroll-calculator'
+import { calculatePayroll, derivePayrollTotals, type PayrollCalculationInput } from './payroll-calculator'
 import { PayrollMonthLockService } from './payroll-month-lock.service'
 
 type Db = Prisma.TransactionClient | PrismaService
@@ -198,12 +199,13 @@ export class PayrollService {
     })
   }
 
-  getPayroll(frontendUserId: string, month: string) {
+  async getPayroll(frontendUserId: string, month: string) {
     this.assertMonth(month)
-    return this.prisma.employeePayrollRun.findFirst({
+    const run = await this.prisma.employeePayrollRun.findFirst({
       where: { frontendUserId, month },
       include: { items: { include: { adjustments: true }, orderBy: { employeeNumberSnapshot: 'asc' } } }
     })
+    return this.projectPayrollTotals(run)
   }
 
   async createAdjustment(frontendUserId: string, actorUserId: string, payrollItemId: string, amount: number, reason: string) {
@@ -221,13 +223,14 @@ export class PayrollService {
     })
   }
 
-  async updateAdjustment(frontendUserId: string, actorUserId: string, id: string, amount: number, reason: string) {
+  async updateAdjustment(frontendUserId: string, actorUserId: string, id: string, amount: number, reason: string, baseUpdatedAt?: string) {
     const normalized = this.adjustment(amount, reason)
     const owned = await this.prisma.employeePayrollAdjustment.findFirst({ where: { id, frontendUserId }, include: { payrollItem: { include: { payrollRun: { select: { month: true } } } } } })
     if (!owned) throw new NotFoundException('工资调整不存在')
     return this.serializedMonth(frontendUserId, owned.payrollItem.payrollRun.month, async (tx) => {
       const current = await tx.employeePayrollAdjustment.findFirst({ where: { id, frontendUserId } })
       if (!current) throw new NotFoundException('工资调整不存在')
+      this.assertVersion(current, baseUpdatedAt)
       const item = await this.draftItem(tx, frontendUserId, current.payrollItemId)
       const row = await tx.employeePayrollAdjustment.update({ where: { id }, data: normalized })
       await this.recalculateItem(tx, item)
@@ -236,12 +239,13 @@ export class PayrollService {
     })
   }
 
-  async deleteAdjustment(frontendUserId: string, actorUserId: string, id: string) {
+  async deleteAdjustment(frontendUserId: string, actorUserId: string, id: string, baseUpdatedAt?: string) {
     const owned = await this.prisma.employeePayrollAdjustment.findFirst({ where: { id, frontendUserId }, include: { payrollItem: { include: { payrollRun: { select: { month: true } } } } } })
     if (!owned) throw new NotFoundException('工资调整不存在')
     return this.serializedMonth(frontendUserId, owned.payrollItem.payrollRun.month, async (tx) => {
       const current = await tx.employeePayrollAdjustment.findFirst({ where: { id, frontendUserId } })
       if (!current) throw new NotFoundException('工资调整不存在')
+      this.assertVersion(current, baseUpdatedAt)
       const item = await this.draftItem(tx, frontendUserId, current.payrollItemId)
       await tx.employeePayrollAdjustment.delete({ where: { id } })
       await this.recalculateItem(tx, item)
@@ -579,6 +583,30 @@ export class PayrollService {
     } })
   }
 
+  private projectPayrollTotals(run: any) {
+    if (!run) return run
+    return {
+      ...run,
+      items: (run.items || []).map((item: any) => {
+        const snapshot = item.calculationSnapshot as any
+        if (!snapshot?.input || !snapshot?.result) return item
+        if (snapshot.result.grossEarningsAmount != null && snapshot.result.deductionAmount != null) return item
+        const derived = derivePayrollTotals(snapshot.input, snapshot.result)
+        return {
+          ...item,
+          calculationSnapshot: {
+            ...snapshot,
+            result: {
+              ...snapshot.result,
+              grossEarningsAmount: snapshot.result.grossEarningsAmount ?? derived.grossEarningsAmount,
+              deductionAmount: snapshot.result.deductionAmount ?? derived.deductionAmount
+            }
+          }
+        }
+      })
+    }
+  }
+
   private async setLocks(tx: Prisma.TransactionClient, frontendUserId: string, month: string, value: Date | null) {
     const [start, end] = this.monthBounds(month)
     const data = { payrollLockedAt: value }
@@ -603,6 +631,12 @@ export class PayrollService {
     const normalizedReason = String(reason || '').trim()
     if (!normalizedReason) throw new BadRequestException('调整原因不能为空')
     return { amount: this.money(value), reason: normalizedReason }
+  }
+
+  private assertVersion(current: { updatedAt: Date | string }, baseUpdatedAt?: string) {
+    if (!(current as { updatedAt?: Date | string }).updatedAt && !baseUpdatedAt) return
+    const expected = requiredBaseUpdatedAt(baseUpdatedAt)
+    if (new Date(current.updatedAt).getTime() !== expected.getTime()) staleWrite(current)
   }
 
   private safeEmployee(row: any, reveal: boolean) {

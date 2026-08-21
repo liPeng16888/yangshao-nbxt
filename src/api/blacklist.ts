@@ -2,9 +2,9 @@ import request, { useMocks } from '@/utils/request'
 import type { BlacklistCheckResult, BlacklistPayload, BlacklistRecord, BlacklistUpdatePayload } from '@/types/blacklist'
 import { mockCheckBlacklist, mockCreateBlacklist, mockDeleteBlacklist, mockSearchBlacklist, mockUpdateBlacklist } from '@/mocks/db'
 
-export async function searchBlacklist(keyword = ''): Promise<BlacklistRecord[]> {
+export async function searchBlacklist(keyword = '', options: { signal?: AbortSignal } = {}): Promise<BlacklistRecord[]> {
   if (useMocks) return mockSearchBlacklist(keyword)
-  return request.get('/blacklist', { params: { keyword } })
+  return request.get('/blacklist', { params: { keyword }, signal: options.signal })
 }
 
 export async function checkBlacklist(keyword: string): Promise<BlacklistCheckResult> {
@@ -17,9 +17,9 @@ export async function createBlacklist(payload: BlacklistPayload): Promise<Blackl
   return request.post('/blacklist', payload)
 }
 
-export async function deleteBlacklist(id: string): Promise<BlacklistRecord> {
+export async function deleteBlacklist(id: string, baseUpdatedAt: string): Promise<BlacklistRecord> {
   if (useMocks) return mockDeleteBlacklist(id)
-  return request.delete(`/blacklist/${id}`)
+  return request.delete(`/blacklist/${id}`, { data: { baseUpdatedAt } })
 }
 
 export async function updateBlacklist(id: string, payload: BlacklistUpdatePayload): Promise<BlacklistRecord> {

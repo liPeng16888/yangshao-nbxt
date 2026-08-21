@@ -28,11 +28,20 @@
             <span>常用组合</span>
             <small>可创建多组，一键套用</small>
           </div>
-          <div v-if="groups.length" class="element-groups">
+          <div v-if="elementGroupConflict" class="element-group-conflict">
+            <strong>常用组合存在同步冲突</strong>
+            <span>请选择服务器内容，或确认后用本机内容覆盖。</span>
+            <div>
+              <el-button size="small" :disabled="catalogueResolving" @click="resolveGroupConflict('server')">加载服务器内容</el-button>
+              <el-button size="small" type="warning" :disabled="catalogueResolving" @click="resolveGroupConflict('overwrite')">用本机内容覆盖</el-button>
+            </div>
+          </div>
+          <div v-if="!canAccessElementGroups" class="element-picker__empty">当前账号无权使用常用组合</div>
+          <div v-else-if="groups.length" class="element-groups">
             <div v-for="group in groups" :key="group.id" class="element-group">
               <el-button size="small" plain @click="applyGroup(group)">{{ group.name }}</el-button>
               <span>{{ formatElementKeys(group.elementKeys) }}</span>
-              <el-button link type="danger" :icon="Delete" @click="deleteGroup(group.id)">删除</el-button>
+              <el-button link type="danger" :icon="Delete" :disabled="catalogueMutationLocked" @click="deleteGroup(group.id)">删除</el-button>
             </div>
           </div>
           <div v-else class="element-picker__empty">暂无常用组合</div>
@@ -44,9 +53,16 @@
           </el-checkbox>
         </el-checkbox-group>
 
-        <div class="element-picker__create">
+        <div v-if="canAccessElementGroups" class="element-picker__create">
           <el-input v-model.trim="groupName" size="small" placeholder="输入组合名称" clearable />
-          <el-button size="small" type="primary" :icon="Plus" :disabled="!canSaveGroup" @click="saveCurrentGroup">
+          <el-button
+            size="small"
+            type="primary"
+            :icon="Plus"
+            :loading="catalogueSaving || sharedCatalogueSaving"
+            :disabled="!canSaveGroup || catalogueMutationLocked"
+            @click="saveCurrentGroup"
+          >
             保存当前选择为组合
           </el-button>
         </div>
@@ -61,9 +77,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
+import {
+  canAccessFrontendPreference,
+  frontendPreferenceOwnerId,
+  useFrontendPreferencesStore
+} from '@/stores/frontendPreferences'
 import type { LabReportElementKey } from '@/types/labReport'
 import { getSmsElementLabel, labReportElements, parseLabElementKeys } from '@/utils/labReport'
 
@@ -71,6 +93,12 @@ interface ElementGroup {
   id: string
   name: string
   elementKeys: LabReportElementKey[]
+}
+
+type ElementGroupOperationContext = {
+  generation: number
+  actorKey: string
+  ownerId: string
 }
 
 const props = defineProps<{
@@ -82,13 +110,33 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
 
-const STORAGE_KEY = 'ys_lab_element_groups'
+const preferences = useFrontendPreferencesStore()
+const authStore = useAuthStore()
 const panelVisible = ref(false)
 const selectedKeys = ref<LabReportElementKey[]>([])
-const groups = ref<ElementGroup[]>([])
 const groupName = ref('')
+const catalogueSaving = ref(false)
+const catalogueResolving = ref(false)
+let fallbackGroupIdSequence = 0
+let catalogueOperationGeneration = 0
 
 const knownKeys = new Set(labReportElements.map((element) => element.key))
+const actorKey = computed(() => frontendPreferenceActorKey(authStore.user))
+const canAccessElementGroups = computed(() => canAccessFrontendPreference(
+  authStore.user,
+  'LAB_ELEMENT_GROUPS'
+))
+const sharedCatalogueSaving = computed(() => preferences.statuses.LAB_ELEMENT_GROUPS === 'saving')
+const elementGroupConflict = computed(() => canAccessElementGroups.value &&
+  preferences.statuses.LAB_ELEMENT_GROUPS === 'conflict' &&
+  Boolean(preferences.conflicts.LAB_ELEMENT_GROUPS))
+const catalogueMutationLocked = computed(() => !canAccessElementGroups.value ||
+  catalogueSaving.value || catalogueResolving.value || sharedCatalogueSaving.value || elementGroupConflict.value)
+const groups = computed(() => {
+  void preferences.statuses.LAB_ELEMENT_GROUPS
+  if (!canAccessElementGroups.value) return []
+  return normalizeElementGroups(preferences.value<unknown>('LAB_ELEMENT_GROUPS', []))
+})
 
 const displayText = computed(() => {
   const text = formatElementKeys(selectedKeys.value)
@@ -105,8 +153,14 @@ watch(
   { immediate: true }
 )
 
-onMounted(() => {
-  groups.value = loadGroups()
+watch(
+  actorKey,
+  () => invalidateCatalogueOperations(),
+  { flush: 'sync' }
+)
+
+onBeforeUnmount(() => {
+  invalidateCatalogueOperations()
 })
 
 function handleSelectionChange(value: string[]) {
@@ -124,29 +178,115 @@ function clearSelection() {
   emit('update:modelValue', '')
 }
 
-function saveCurrentGroup() {
-  if (!canSaveGroup.value) return
+async function saveCurrentGroup() {
+  if (!canSaveGroup.value || catalogueMutationLocked.value) return
+  const operation = captureCatalogueOperation()
+  if (!operation) return
   const name = groupName.value.trim()
   const elementKeys = sortKeys(selectedKeys.value)
   const existingIndex = groups.value.findIndex((group) => group.name === name)
   const group: ElementGroup = {
-    id: existingIndex >= 0 ? groups.value[existingIndex].id : `group-${Date.now()}`,
+    id: existingIndex >= 0 ? groups.value[existingIndex].id : createGroupId(),
     name,
     elementKeys
   }
-  if (existingIndex >= 0) {
-    groups.value.splice(existingIndex, 1, group)
-  } else {
-    groups.value.push(group)
+  const next = existingIndex >= 0
+    ? groups.value.map((item, index) => index === existingIndex ? group : item)
+    : [...groups.value, group]
+  catalogueSaving.value = true
+  try {
+    const result = await preferences.save('LAB_ELEMENT_GROUPS', normalizeElementGroups(next))
+    if (!isCurrentCatalogueOperation(operation)) return
+    handleCatalogueSaveResult(result, '常用组合已保存')
+    if (result === 'saved' || result === 'queued') groupName.value = ''
+  } finally {
+    if (isCurrentCatalogueOperation(operation)) catalogueSaving.value = false
   }
-  saveGroups(groups.value)
-  groupName.value = ''
-  ElMessage.success('常用组合已保存')
 }
 
-function deleteGroup(groupId: string) {
-  groups.value = groups.value.filter((group) => group.id !== groupId)
-  saveGroups(groups.value)
+async function deleteGroup(groupId: string) {
+  if (catalogueMutationLocked.value) return
+  const operation = captureCatalogueOperation()
+  if (!operation) return
+  const next = normalizeElementGroups(groups.value.filter((group) => group.id !== groupId))
+  catalogueSaving.value = true
+  try {
+    const result = await preferences.save('LAB_ELEMENT_GROUPS', next)
+    if (!isCurrentCatalogueOperation(operation)) return
+    handleCatalogueSaveResult(result, '常用组合已删除')
+  } finally {
+    if (isCurrentCatalogueOperation(operation)) catalogueSaving.value = false
+  }
+}
+
+async function resolveGroupConflict(strategy: 'server' | 'overwrite') {
+  if (!canAccessElementGroups.value || catalogueResolving.value ||
+    preferences.statuses.LAB_ELEMENT_GROUPS !== 'conflict') return
+  const operation = captureCatalogueOperation()
+  if (!operation) return
+  catalogueResolving.value = true
+  try {
+    if (strategy === 'overwrite') {
+      try {
+        await ElMessageBox.confirm(
+          '覆盖会用本机常用组合替换服务器上的最新内容，确认继续吗？',
+          '确认覆盖常用组合',
+          {
+            type: 'warning',
+            confirmButtonText: '确认覆盖',
+            cancelButtonText: '取消'
+          }
+        )
+      } catch (error) {
+        if (error === 'cancel' || error === 'close') return
+        if (!isCurrentCatalogueOperation(operation)) return
+        ElMessage.error('常用组合冲突处理失败，请稍后重试')
+        return
+      }
+    }
+    if (!isCurrentCatalogueOperation(operation) ||
+      preferences.statuses.LAB_ELEMENT_GROUPS !== 'conflict') return
+    const result = await preferences.resolveConflict('LAB_ELEMENT_GROUPS', strategy)
+    if (!isCurrentCatalogueOperation(operation)) return
+    handleConflictResult(result, strategy)
+  } finally {
+    if (isCurrentCatalogueOperation(operation)) catalogueResolving.value = false
+  }
+}
+
+function invalidateCatalogueOperations() {
+  catalogueOperationGeneration += 1
+  catalogueSaving.value = false
+  catalogueResolving.value = false
+}
+
+function captureCatalogueOperation(): ElementGroupOperationContext | null {
+  if (!canAccessElementGroups.value) return null
+  return {
+    generation: catalogueOperationGeneration,
+    actorKey: actorKey.value,
+    ownerId: frontendPreferenceOwnerId(authStore.user)
+  }
+}
+
+function isCurrentCatalogueOperation(operation: ElementGroupOperationContext) {
+  return operation.generation === catalogueOperationGeneration &&
+    operation.actorKey === actorKey.value &&
+    operation.ownerId === frontendPreferenceOwnerId(authStore.user) &&
+    canAccessElementGroups.value
+}
+
+function frontendPreferenceActorKey(user: typeof authStore.user) {
+  if (!user) return ''
+  return JSON.stringify({
+    actorId: user.id,
+    ownerId: frontendPreferenceOwnerId(user),
+    role: user.role,
+    isMain: Boolean(user.isFrontendMainAccount),
+    isSub: Boolean(user.isFrontendSubAccount),
+    permissionVersion: user.permissionVersion ?? 0,
+    permissions: [...(user.permissions ?? [])].sort()
+  })
 }
 
 function commitSelection() {
@@ -169,24 +309,71 @@ function parseElementKeys(value: string) {
   return parseLabElementKeys(value)
 }
 
-function loadGroups(): ElementGroup[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as Partial<ElementGroup>[]
-    return parsed
-      .filter((group): group is ElementGroup => Boolean(group.id && group.name && Array.isArray(group.elementKeys)))
-      .map((group) => ({ ...group, elementKeys: sortKeys(group.elementKeys.filter((key) => knownKeys.has(key))) }))
-      .filter((group) => group.elementKeys.length)
-  } catch {
-    return []
+function normalizeElementGroups(value: unknown): ElementGroup[] {
+  if (!Array.isArray(value)) return []
+  const ids = new Set<string>()
+  const names = new Set<string>()
+  const normalized: ElementGroup[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const candidate = item as Partial<ElementGroup>
+    const id = typeof candidate.id === 'string' ? candidate.id.trim() : ''
+    const name = typeof candidate.name === 'string' ? candidate.name.trim() : ''
+    const elementKeys = Array.isArray(candidate.elementKeys)
+      ? sortKeys(candidate.elementKeys.filter((key): key is LabReportElementKey => knownKeys.has(key as LabReportElementKey)))
+      : []
+    if (!id || !name || !elementKeys.length || ids.has(id) || names.has(name)) continue
+    ids.add(id)
+    names.add(name)
+    normalized.push({ id, name, elementKeys })
+    if (normalized.length === 100) break
   }
+  return normalized
 }
 
-function saveGroups(nextGroups: ElementGroup[]) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextGroups))
+function createGroupId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  fallbackGroupIdSequence += 1
+  const random = `${Math.random().toString(36).slice(2, 10)}-${fallbackGroupIdSequence.toString(36)}`
+  return `group-${Date.now()}-${random}`
+}
+
+function handleCatalogueSaveResult(
+  result: 'saved' | 'queued' | 'conflict' | 'error',
+  successMessage: string
+) {
+  if (result === 'saved') {
+    ElMessage.success(successMessage)
+    return
+  }
+  if (result === 'queued') {
+    ElMessage.warning('已保存到本机，联网后请确认同步')
+    return
+  }
+  if (result === 'conflict') {
+    ElMessage.warning('常用组合发生同步冲突，请使用页面同步提示处理')
+    return
+  }
+  ElMessage.error('常用组合保存失败，请稍后重试')
+}
+
+function handleConflictResult(
+  result: 'saved' | 'queued' | 'conflict' | 'error',
+  strategy: 'server' | 'overwrite'
+) {
+  if (result === 'saved') {
+    ElMessage.success(strategy === 'server' ? '已加载服务器常用组合' : '已用本机常用组合覆盖')
+    return
+  }
+  if (result === 'queued') {
+    ElMessage.warning('已保存到本机，联网后请确认同步')
+    return
+  }
+  if (result === 'conflict') {
+    ElMessage.warning('服务器内容已再次更新，请重新确认冲突内容')
+    return
+  }
+  ElMessage.error('常用组合冲突处理失败，请稍后重试')
 }
 </script>
 
@@ -268,6 +455,23 @@ function saveGroups(nextGroups: ElementGroup[]) {
   background: #f8fbff;
   border: 1px solid #dce5ef;
   border-radius: 8px;
+}
+
+.element-group-conflict {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  font-size: 13px;
+
+  > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 }
 
 .element-groups {

@@ -11,14 +11,18 @@ const frontendUser: CurrentUser = {
   id: 'front-1',
   account: 'front-1',
   username: '前台一',
-  role: UserRole.FRONTEND_USER
+  role: UserRole.FRONTEND_USER,
+  dataOwnerId: 'front-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: true, isFrontendSubAccount: false
 }
 
 const subAdmin: CurrentUser = {
   id: 'admin-1',
   account: 'admin-1',
   username: '子管理员',
-  role: UserRole.SUB_ADMIN
+  role: UserRole.SUB_ADMIN,
+  dataOwnerId: 'admin-1', permissionVersion: 1, permissions: [], requiresAccessGuardPassword: true,
+  isFrontendMainAccount: false, isFrontendSubAccount: false
 }
 
 function createMedicineInventoryService() {
@@ -54,11 +58,12 @@ describe('medicine inventory routes', () => {
 
     await controller.createInbound(frontendUser, body as never)
 
-    expect(service.createInbound).toHaveBeenCalledWith('front-1', {
+    expect(service.createInbound).toHaveBeenCalledWith('front-1', 'front-1', {
       occurredOn: '2026-08-02',
       name: '盐酸',
       unit: 'BOTTLE',
-      quantity: 1
+      quantity: 1,
+      remark: undefined
     })
   })
 

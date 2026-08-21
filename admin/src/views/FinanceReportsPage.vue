@@ -184,40 +184,6 @@
       </el-table>
     </section>
 
-    <section v-else-if="active === 'prepaidRecharges'" class="panel">
-      <el-table :data="filteredRows" border>
-        <el-table-column prop="rechargeDate" label="充值日期" width="120" />
-        <el-table-column prop="name" label="名称" width="150" />
-        <el-table-column prop="customer" label="客户名称" min-width="180" />
-        <el-table-column label="预存金额" width="130"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
-        <el-table-column prop="usableTimes" label="可使用次数" width="120" />
-        <el-table-column prop="remark" label="备注" min-width="220" />
-        <el-table-column prop="createdAt" label="添加时间" width="180" />
-      </el-table>
-    </section>
-
-    <section v-else-if="active === 'prepaidCustomers'" class="panel">
-      <el-table :data="filteredRows" border>
-        <el-table-column prop="name" label="名称" width="150" />
-        <el-table-column prop="customer" label="客户名称" min-width="180" />
-        <el-table-column label="累计充值金额" width="140"><template #default="{ row }">¥{{ money(row.totalAmount) }}</template></el-table-column>
-        <el-table-column prop="totalUsableTimes" label="累计可用次数" width="130" />
-        <el-table-column prop="usedTimes" label="已使用次数" width="120" />
-        <el-table-column prop="availableTimes" label="可使用次数" width="120" />
-        <el-table-column prop="remark" label="备注" min-width="220" />
-      </el-table>
-    </section>
-
-    <section v-else class="panel">
-      <el-table :data="filteredRows" border>
-        <el-table-column prop="date" label="日期" width="120" />
-        <el-table-column prop="name" label="名称" width="150" />
-        <el-table-column prop="customer" label="客户名称" min-width="180" />
-        <el-table-column prop="sampleCount" label="样品数量" width="120" />
-        <el-table-column prop="remark" label="备注" min-width="220" />
-      </el-table>
-    </section>
-
   </div>
 </template>
 
@@ -264,24 +230,16 @@ const customerFilterTabs = new Set([
   'unsettled',
   'monthlyDaily',
   'monthlyBills',
-  'monthlyCustomers',
-  'prepaidRecharges',
-  'prepaidCustomers',
-  'prepaidDaily'
+  'monthlyCustomers'
 ])
 const customerSelections = reactive<Record<string, string[]>>({
   unsettled: [],
   monthlyDaily: [],
   monthlyBills: [],
-  monthlyCustomers: [],
-  prepaidRecharges: [],
-  prepaidCustomers: [],
-  prepaidDaily: []
+  monthlyCustomers: []
 })
 const customerFilterRows = computed<any[]>(() => {
   if (active.value === 'monthlyBills') return report.value.summaryRows || []
-  if (active.value === 'prepaidCustomers') return report.value.customerRows || []
-  if (active.value === 'prepaidDaily') return report.value.dailyRows || []
   return rows.value
 })
 const customerOptions = computed(() => financeCustomerOptions(customerFilterRows.value))
@@ -367,13 +325,11 @@ async function loadActive() {
     else if (requestedTab === 'unsettled') response = await request.get('/admin/finance/unsettled', { params })
     else if (requestedTab === 'monthlyDaily') response = await request.get('/admin/finance/monthly-daily', { params })
     else if (requestedTab === 'monthlyBills') response = await request.get('/admin/finance/monthly-bills', { params })
-    else if (requestedTab === 'monthlyCustomers') response = await request.get('/admin/finance/monthly-customers', { params })
-    else if (requestedTab === 'prepaidRecharges') response = await request.get('/admin/finance/prepaid-recharges', { params })
-    else response = await request.get('/admin/finance/prepaid-report', { params })
+    else response = await request.get('/admin/finance/monthly-customers', { params })
 
     if (!shouldApplyFinanceResponse(requestedTab, active.value, requestId, latestLoadRequestId)) return
 
-    if (['income', 'expenses', 'monthlyBills', 'prepaidCustomers', 'prepaidDaily'].includes(requestedTab)) {
+    if (['income', 'expenses', 'monthlyBills'].includes(requestedTab)) {
       report.value = response
     } else {
       rows.value = response
@@ -391,8 +347,6 @@ async function loadActive() {
 
 function customerRowsFromResponse(tab: string, response: any): any[] {
   if (tab === 'monthlyBills') return response?.summaryRows || []
-  if (tab === 'prepaidCustomers') return response?.customerRows || []
-  if (tab === 'prepaidDaily') return response?.dailyRows || []
   return Array.isArray(response) ? response : []
 }
 

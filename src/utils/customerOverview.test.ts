@@ -49,4 +49,14 @@ describe('filterAndSortCustomerRows', () => {
     expect(filterAndSortCustomerRows(rows, [], 'firstDetectionDate', 'asc').map((row) => row.customerKey)).toEqual(['a', 'c', 'b'])
     expect(filterAndSortCustomerRows(rows, [], 'lastDetectionDate', 'desc').map((row) => row.customerKey)).toEqual(['c', 'b', 'a'])
   })
+
+  it('uses the existing customer-display tiebreaker deterministically for equal sort values', () => {
+    const tiedRows: CustomerOverviewRow[] = [
+      { ...rows[0], customerKey: 'later', customer: '客户乙', customerDisplay: '客户乙', sampleCount: 4 },
+      { ...rows[1], customerKey: 'first', customer: '客户甲', customerDisplay: '客户甲', sampleCount: 4 }
+    ]
+
+    expect(filterAndSortCustomerRows(tiedRows, [], 'sampleCount', 'asc').map((row) => row.customerKey)).toEqual(['first', 'later'])
+    expect(filterAndSortCustomerRows(tiedRows, [], 'sampleCount', 'desc').map((row) => row.customerKey)).toEqual(['first', 'later'])
+  })
 })

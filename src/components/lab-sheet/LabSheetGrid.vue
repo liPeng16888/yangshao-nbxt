@@ -46,34 +46,59 @@
     </div>
     <div ref="scrollRef" class="lab-grid-scroll" @focusin="handleFieldFocusIn" @focusout="handleFieldFocusOut" @scroll="emitScrollState">
       <div class="lab-grid-zoom-stage" :style="zoomStageStyle">
-        <div ref="gridRef" class="lab-grid" :style="{ gridTemplateColumns: gridColumns, transform: `scale(${zoomScale})` }">
+        <div
+          ref="gridRef"
+          class="lab-grid"
+          :style="{
+            gridTemplateColumns: gridColumns,
+            transform: `scale(${zoomScale})`,
+            '--sample-retest-row-height': SAMPLE_RETEST_ROW_HEIGHT
+          }"
+        >
           <template v-for="block in blocks" :key="block.id">
             <div v-for="column in labSheetColumns" :key="`${block.id}-h-${column.key}`" class="cell cell--header">
               {{ column.label }}
             </div>
 
             <div
-              class="cell cell--input cell--rowspan-3 cell--green"
+              class="cell cell--input cell--green cell--split"
               :class="{
                 'cell--completed': block.inputs.completed,
                 'cell--selection-target': selectionMode,
                 'cell--highlight': block.id === highlightBlockId
               }"
+              :style="{
+                gridRow: `span ${getBlockRowSpan(block)}`,
+                boxSizing: 'border-box',
+                minHeight: '0'
+              }"
               :data-block-id="block.id"
               @click="handleSequenceCellClick(block.id, $event)"
             >
-              <div class="sequence-editor" :data-block-id="block.id" data-field="sequence">
-                <el-checkbox
-                  v-if="selectionMode"
-                  :model-value="selectedBlockIds.includes(block.id)"
-                  @change="(checked: string | number | boolean) => handleSelectionChange(block.id, checked)"
-                />
-                <el-input
-                  size="small"
-                  :disabled="isDisabled(block)"
-                  :model-value="block.inputs.sequence"
-                  @update:model-value="(value) => updateText(block.id, 'sequence', value)"
-                />
+              <div
+                class="sample-sequence-stack"
+                :style="{
+                  gridTemplateRows: getCustomerGridRows(block),
+                  boxSizing: 'border-box',
+                  height: 'calc(100% + 1px)',
+                  minHeight: '0',
+                  marginTop: '-1px'
+                }"
+              >
+                <div class="sample-sequence-primary" style="grid-row: 1 / span 2">
+                  <div class="sequence-editor" :data-block-id="block.id" data-field="sequence">
+                    <el-checkbox
+                      v-if="selectionMode"
+                      :model-value="selectedBlockIds.includes(block.id)"
+                      @change="(checked: string | number | boolean) => handleSelectionChange(block.id, checked)"
+                    />
+                    <el-input
+                      size="small"
+                      :disabled="isDisabled(block)"
+                    :model-value="block.inputs.sequence"
+                    @update:model-value="(value) => updateText(block.id, 'sequence', value)"
+                  />
+                </div>
                 <div v-if="canShowHistoricalActions(block)" class="sample-change-actions">
                   <template v-if="pendingSampleChangeRequest(block.id)">
                     <el-tag size="small" type="warning" effect="plain">待审批</el-tag>
@@ -83,9 +108,7 @@
                       size="small"
                       :disabled="sampleChangeLoading"
                       @click.stop="emit('viewSampleChangeRequest', pendingSampleChangeRequest(block.id)!.id)"
-                    >
-                      查看
-                    </el-button>
+                    >查看</el-button>
                     <el-button
                       :data-testid="`withdraw-sample-change-${pendingSampleChangeRequest(block.id)!.id}`"
                       link
@@ -93,9 +116,7 @@
                       type="danger"
                       :disabled="sampleChangeLoading"
                       @click.stop="emit('withdrawSampleChangeRequest', pendingSampleChangeRequest(block.id)!.id)"
-                    >
-                      撤回
-                    </el-button>
+                    >撤回</el-button>
                   </template>
                   <el-button
                     v-else
@@ -105,14 +126,46 @@
                     type="primary"
                     :disabled="sampleChangeLoading"
                     @click.stop="emit('requestSampleChange', block.id)"
-                  >
-                    申请修改
-                  </el-button>
+                  >申请修改</el-button>
+                </div>
+              </div>
+                <div
+                  v-for="(retest, retestIndex) in block.retests"
+                  :key="`${retest.id}-identity`"
+                  class="sample-retest-identity"
+                  :class="{ 'is-void': retest.status === 'VOID' }"
+                  :style="{
+                    gridRow: `${retestIndex + 3} / span 1`,
+                    boxSizing: 'border-box',
+                    height: 'var(--sample-retest-row-height)',
+                    minHeight: '0'
+                  }"
+                  :data-retest-identity-id="retest.id"
+                  :aria-label="`复样${retest.sequence}，${retest.status === 'VOID' ? '已作废' : '有效'}`"
+                >
+                  <strong>复样{{ retest.sequence }}</strong>
+                  <span>{{ retest.status === 'VOID' ? '已作废' : '有效' }}</span>
                 </div>
               </div>
             </div>
-            <div class="cell cell--input cell--rowspan-3 cell--customer cell--split">
-              <div class="sample-customer-stack">
+            <div
+              class="cell cell--input cell--customer cell--split"
+              :style="{
+                gridRow: `span ${getBlockRowSpan(block)}`,
+                boxSizing: 'border-box',
+                minHeight: '0'
+              }"
+            >
+              <div
+                class="sample-customer-stack"
+                :style="{
+                  gridTemplateRows: getCustomerGridRows(block),
+                  boxSizing: 'border-box',
+                  height: 'calc(100% + 1px)',
+                  minHeight: '0',
+                  marginTop: '-1px'
+                }"
+              >
                 <div class="sample-number-editor" :data-block-id="block.id" data-field="sampleNumber">
                   <el-input
                     size="small"
@@ -136,7 +189,12 @@
                     />
                   </div>
                 </div>
-                <div class="customer-role-row" :data-block-id="block.id" data-field="recipientCustomerText">
+                <div
+                  class="customer-role-row"
+                  style="grid-row: -2 / -1"
+                  :data-block-id="block.id"
+                  data-field="recipientCustomerText"
+                >
                   <div class="customer-editor-wrap">
                     <CustomerCellEditor
                       customer-role="recipient"
@@ -193,9 +251,42 @@
               <FormulaCell class="cell--span-3" :value="block.results.burnLoss" />
             </template>
 
+            <SampleRetestBand
+              v-for="retest in block.retests"
+              :key="retest.id"
+              :parent="block"
+              :retest="retest"
+              :readonly="readonly"
+              :sensitive-hidden="isCompletedSensitiveHidden(block.id)"
+              :highlighted="retest.id === highlightRetestId"
+              :action-pending="pendingRetestActionIds.includes(retest.id)"
+              @update="(retestId, patch) => emit('retestUpdate', block.id, retestId, patch)"
+              @field-commit="(retestId, field, oldValue, newValue) => emit('retestFieldCommit', block.id, retestId, field, oldValue, newValue)"
+              @delete="(retestId) => emit('retestDelete', block.id, retestId)"
+              @void="(retestId) => emit('retestVoid', block.id, retestId)"
+            />
+
             <div class="cell cell--label cell--remark cell--required-label">{{ getAmountLabel(block) }}</div>
             <div v-if="isCompletedSensitiveHidden(block.id)" class="cell cell--input cell--remark completed-data-compact-mask" :data-block-id="block.id" data-field="price" aria-label="样品金额已加密">
               <span aria-hidden="true">🔒</span>
+            </div>
+            <div
+              v-else-if="isPrepaidBlock(block)"
+              class="cell cell--input cell--remark cell--prepaid-picker"
+              :class="{ 'cell--required': isAmountRequired(block) }"
+              :data-block-id="block.id"
+              data-field="price"
+            >
+              <button
+                type="button"
+                class="prepaid-picker-trigger"
+                :data-testid="`prepaid-picker-trigger-${block.id}`"
+                :disabled="isDisabled(block)"
+                @click="openPrepaidPicker(block)"
+              >
+                <strong>{{ formatPrepaidAmount(block.inputs.price) }}</strong>
+                <span>{{ prepaidMemberCaption(block) }}</span>
+              </button>
             </div>
             <NumberInputCell
               v-else
@@ -259,6 +350,14 @@
         </div>
       </div>
     </div>
+    <PrepaidMemberPickerDialog
+      v-if="prepaidPickerVisible"
+      :visible="prepaidPickerVisible"
+      :initial-phone="activePrepaidInitialPhone"
+      :initial-amount="activePrepaidBlock?.inputs.price ?? null"
+      @close="closePrepaidPicker"
+      @confirm="confirmPrepaidSelection"
+    />
   </section>
 </template>
 
@@ -268,12 +367,32 @@ import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 import { ScaleToOriginal, ZoomIn, ZoomOut } from '@element-plus/icons-vue'
 import CustomerCellEditor from './CustomerCellEditor.vue'
 import LabElementSelector from './LabElementSelector.vue'
+import SampleRetestBand from './SampleRetestBand.vue'
+import PrepaidMemberPickerDialog from '@/components/prepaid/PrepaidMemberPickerDialog.vue'
 import type { BlacklistRecord } from '@/types/blacklist'
-import type { LabSampleInput, SampleBlock, SamplePaymentStatus } from '@/types/labSheet'
 import type { LabSampleChangeRequestSummary } from '@/types/labSampleChangeRequest'
+import { isHistoricalSampleChangeEligible } from '@/utils/labSampleChangeRequest'
+import type {
+  LabSampleInput,
+  PrepaidMemberPickerResult,
+  SampleBlock,
+  SamplePaymentStatus,
+  SampleRetestInput,
+  SampleRetestInputField
+} from '@/types/labSheet'
 import { labSheetColumns } from '@/constants/labSheetTemplate'
 import { formatFormulaValue, parseNumericInput } from '@/utils/formulaEngine'
-import { isHistoricalSampleChangeEligible } from '@/utils/labSampleChangeRequest'
+import {
+  getSampleAmountLabel as getAmountLabel,
+  getSampleAmountPrecision as getAmountPrecision,
+  getSampleCalculationBlockMessage as getCalculationBlockMessage,
+  isCompletedSampleSensitiveHidden,
+  isSampleAmountRequired as isAmountRequired,
+  isSampleCalculationBlocked as isCalculationBlocked,
+  isSampleElementNoteRequired as isElementNoteRequired,
+  isSamplePaymentStatusRequired as isPaymentStatusRequired,
+  samplePaymentStatusOptions as sharedPaymentStatusOptions
+} from '@/utils/labSampleRules'
 
 const props = defineProps<{
   blocks: SampleBlock[]
@@ -281,6 +400,8 @@ const props = defineProps<{
   selectionMode?: boolean
   selectedBlockIds?: string[]
   highlightBlockId?: string
+  highlightRetestId?: string
+  pendingRetestActionIds?: string[]
   canViewCompletedSensitiveData?: boolean
   sheetDate?: string
   sampleChangeRequests?: Record<string, LabSampleChangeRequestSummary>
@@ -296,6 +417,10 @@ const emit = defineEmits<{
   requestSampleChange: [blockId: string]
   viewSampleChangeRequest: [requestId: string]
   withdrawSampleChangeRequest: [requestId: string]
+  retestUpdate: [sampleBlockId: string, retestId: string, patch: Partial<SampleRetestInput>]
+  retestFieldCommit: [sampleBlockId: string, retestId: string, field: SampleRetestInputField, oldValue: unknown, newValue: unknown]
+  retestDelete: [sampleBlockId: string, retestId: string]
+  retestVoid: [sampleBlockId: string, retestId: string]
 }>()
 
 export type LabGridScrollState = {
@@ -306,6 +431,21 @@ export type LabGridScrollState = {
 }
 
 const gridColumns = computed(() => labSheetColumns.map((column) => `${column.width}px`).join(' '))
+const SAMPLE_RETEST_ROW_HEIGHT = '62px'
+
+function getBlockRowSpan(block: SampleBlock) {
+  return 3 + block.retests.length
+}
+
+function getCustomerGridRows(block: SampleBlock) {
+  return [
+    '36px',
+    '36px',
+    ...block.retests.map(() => 'var(--sample-retest-row-height)'),
+    '36px'
+  ].join(' ')
+}
+
 const selectionMode = computed(() => Boolean(props.selectionMode))
 const selectedBlockIds = computed(() => props.selectedBlockIds || [])
 const highlightBlockId = computed(() => props.highlightBlockId || '')
@@ -317,12 +457,25 @@ function pendingSampleChangeRequest(blockId: string) {
 function canShowHistoricalActions(block: SampleBlock) {
   return Boolean(props.sheetDate && isDisabled(block) && isHistoricalSampleChangeEligible(block, props.sheetDate))
 }
+const highlightRetestId = computed(() => props.highlightRetestId || '')
+const pendingRetestActionIds = computed(() => props.pendingRetestActionIds || [])
 function isCompletedSensitiveHidden(blockId: string) {
-  return Boolean(props.blocks.find((block) => block.id === blockId)?.inputs.completed && !props.canViewCompletedSensitiveData)
+  const block = props.blocks.find((item) => item.id === blockId)
+  return block ? isCompletedSampleSensitiveHidden(block, Boolean(props.canViewCompletedSensitiveData)) : false
 }
 const scrollRef = ref<HTMLElement | null>(null)
 const gridRef = ref<HTMLElement | null>(null)
-const paymentStatusOptions: SamplePaymentStatus[] = ['已结款', '未结款', '月结款', '预存款']
+const paymentStatusOptions: SamplePaymentStatus[] = sharedPaymentStatusOptions
+const prepaidPickerVisible = ref(false)
+const activePrepaidBlockId = ref('')
+const activePrepaidBlock = computed(() => (
+  props.blocks.find((block) => block.id === activePrepaidBlockId.value)
+))
+const activePrepaidInitialPhone = computed(() => (
+  activePrepaidBlock.value?.inputs.paymentStatus === '预存款'
+    ? activePrepaidBlock.value.inputs.prepaidMemberPhone || ''
+    : ''
+))
 let resizeObserver: ResizeObserver | null = null
 const focusedFieldValues = new Map<string, unknown>()
 
@@ -441,6 +594,13 @@ watch(
   }
 )
 
+watch(
+  () => props.blocks.map((block) => block.retests.length).join(','),
+  () => {
+    void refreshScrollState()
+  }
+)
+
 watch(minZoomPercent, () => {
   clampCurrentZoom()
 })
@@ -456,63 +616,8 @@ function isDisabled(block: SampleBlock) {
   return Boolean(props.readonly || block.readonly)
 }
 
-function isAmountRequired(block: SampleBlock) {
-  return Boolean(
-    block.inputs.sampleNumber?.trim() ||
-      block.inputs.customerText?.trim() ||
-      block.inputs.customerIds?.length ||
-      block.inputs.customers?.length
-  )
-}
-
 function isPrepaidBlock(block: SampleBlock) {
   return block.inputs.paymentStatus === '预存款'
-}
-
-function getAmountLabel(block: SampleBlock) {
-  return isPrepaidBlock(block) ? '扣除次数' : '样品金额'
-}
-
-function getAmountPrecision(block: SampleBlock) {
-  return isPrepaidBlock(block) ? 0 : 2
-}
-
-function hasSampleAmount(block: SampleBlock) {
-  return typeof block.inputs.price === 'number' && Number.isFinite(block.inputs.price)
-}
-
-function hasPaymentStatus(block: SampleBlock) {
-  return Boolean(block.inputs.paymentStatus)
-}
-
-function hasElementNote(block: SampleBlock) {
-  return Boolean(block.inputs.elementNote?.trim())
-}
-
-function isPaymentStatusRequired(block: SampleBlock) {
-  return isAmountRequired(block)
-}
-
-function isElementNoteRequired(block: SampleBlock) {
-  return isAmountRequired(block)
-}
-
-function isCalculationBlocked(block: SampleBlock) {
-  return isAmountRequired(block) && (!hasSampleAmount(block) || !hasPaymentStatus(block) || !hasElementNote(block))
-}
-
-function getCalculationBlockMessage(block: SampleBlock) {
-  const missingActions: string[] = []
-  if (!hasSampleAmount(block)) missingActions.push(isPrepaidBlock(block) ? '输入扣除次数' : '输入样品金额')
-  if (!hasPaymentStatus(block)) missingActions.push('选择费用状态')
-  if (!hasElementNote(block)) missingActions.push('选择化验元素')
-
-  if (missingActions.length === 1) return `请先${missingActions[0]}`
-  if (missingActions.length === 2) return `请先${missingActions[0]}并${missingActions[1]}`
-  if (missingActions.length > 2) {
-    return `请先${missingActions.slice(0, -1).join('、')}并${missingActions.at(-1)}`
-  }
-  return '请先完善样品金额、费用状态和化验元素'
 }
 
 function warnCalculationPrerequisite(message: string) {
@@ -548,7 +653,51 @@ function updateText(blockId: string, field: keyof LabSampleInput, value: string 
 }
 
 function updatePaymentStatus(blockId: string, value: string | number | boolean | undefined) {
-  emitUpdate(blockId, { paymentStatus: String(value || '') as SamplePaymentStatus | '' })
+  const block = props.blocks.find((item) => item.id === blockId)
+  if (!block) return
+  const paymentStatus = String(value || '') as SamplePaymentStatus | ''
+  if (paymentStatus === '预存款') {
+    openPrepaidPicker(block)
+    return
+  }
+
+  const patch: Partial<LabSampleInput> = { paymentStatus }
+  if (isPrepaidBlock(block) || block.inputs.prepaidMemberId || block.inputs.prepaidMemberPhone) {
+    patch.prepaidMemberId = undefined
+    patch.prepaidMemberPhone = undefined
+  }
+  emitUpdate(blockId, patch)
+}
+
+function openPrepaidPicker(block: SampleBlock) {
+  if (isDisabled(block)) return
+  activePrepaidBlockId.value = block.id
+  prepaidPickerVisible.value = true
+}
+
+function closePrepaidPicker() {
+  prepaidPickerVisible.value = false
+  activePrepaidBlockId.value = ''
+}
+
+function confirmPrepaidSelection(result: PrepaidMemberPickerResult) {
+  if (!activePrepaidBlockId.value) return
+  emitUpdate(activePrepaidBlockId.value, {
+    paymentStatus: '预存款',
+    price: result.amount,
+    prepaidMemberId: result.memberId,
+    prepaidMemberPhone: result.phone
+  })
+  closePrepaidPicker()
+}
+
+function formatPrepaidAmount(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)} 元` : '选择会员并填写金额'
+}
+
+function prepaidMemberCaption(block: SampleBlock) {
+  if (block.inputs.prepaidMemberId && block.inputs.prepaidMemberPhone) return block.inputs.prepaidMemberPhone
+  return '历史预存款记录（未关联新台账）'
 }
 
 function handleFieldFocusIn(event: FocusEvent) {
@@ -812,6 +961,32 @@ const FormulaCell = defineComponent({
   background: #ffffff;
 }
 
+.prepaid-picker-trigger {
+  display: grid;
+  width: 100%;
+  min-height: 32px;
+  place-content: center;
+  gap: 1px;
+  padding: 2px 6px;
+  color: #0f172a;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+
+  strong {
+    font-variant-numeric: tabular-nums;
+  }
+
+  span {
+    color: #64748b;
+    font-size: 11px;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+  }
+}
+
 .cell--blocked {
   background: #f8fafc;
   cursor: not-allowed;
@@ -854,15 +1029,55 @@ const FormulaCell = defineComponent({
 }
 
 .cell--split {
+  box-sizing: border-box;
   align-items: stretch;
+  min-height: 0;
   padding: 0;
 }
 
+.sample-sequence-stack,
 .sample-customer-stack {
+  box-sizing: border-box;
   display: grid;
+  height: calc(100% + 1px);
   width: 100%;
-  min-height: 100%;
-  grid-template-rows: 36px 36px 36px;
+  min-height: 0;
+  margin-top: -1px;
+}
+
+.sample-sequence-primary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.sample-retest-identity {
+  box-sizing: border-box;
+  display: flex;
+  height: var(--sample-retest-row-height);
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: #174a7a;
+  background: #edf7ff;
+  border-top: 1px solid #111827;
+  border-bottom: 1px solid #111827;
+
+  strong {
+    font-size: 14px;
+  }
+
+  span {
+    font-size: 11px;
+  }
+
+  &.is-void {
+    color: #64748b;
+    background: #eef2f6;
+  }
 }
 
 .sample-number-editor,

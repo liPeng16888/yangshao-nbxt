@@ -7,6 +7,8 @@
     "dev": "vite --host 0.0.0.0",
     "dev:admin": "pnpm --filter yangshao-admin dev",
     "dev:server": "pnpm --filter yangshao-server dev",
+    "desktop:test": "pnpm --filter @yangshao/desktop test",
+    "desktop:build": "pnpm --filter @yangshao/desktop build",
     "build": "vue-tsc --noEmit && vite build",
     "build:admin": "pnpm --filter yangshao-admin build",
     "build:server": "pnpm --filter yangshao-server build",
@@ -35,8 +37,10 @@
     "@vue/test-utils": "^2.4.6",
     "jsdom": "^25.0.1",
     "typescript": "^5.7.2",
+    "vite-plugin-pwa": "^1.3.0",
     "vitest": "^2.1.8",
-    "vue-tsc": "^2.2.0"
+    "vue-tsc": "^2.2.0",
+    "workbox-window": "^7.4.1"
   },
   "packageManager": "pnpm@11.7.0"
 }

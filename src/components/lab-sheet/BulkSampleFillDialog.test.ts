@@ -77,4 +77,21 @@ describe('BulkSampleFillDialog', () => {
       }
     })
   })
+
+  it('safely disallows ambiguous prepaid bulk deductions without member semantics', async () => {
+    const wrapper = mountDialog()
+    const select = wrapper.findComponent({ name: 'ElSelect' })
+    expect(wrapper.findAllComponents({ name: 'ElOption' }).map((option) => option.props('value'))).not.toContain('预存款')
+
+    select.vm.$emit('update:modelValue', '预存款')
+    const numberInput = wrapper.findComponent({ name: 'ElInputNumber' })
+    numberInput.vm.$emit('update:modelValue', 12.345)
+    await nextTick()
+
+    const confirmButton = wrapper.findAll('button').find((button) => button.text().includes('确认填充'))
+    await confirmButton!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.emitted('apply')).toBeUndefined()
+  })
 })

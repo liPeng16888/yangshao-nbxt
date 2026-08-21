@@ -15,6 +15,7 @@ function makeBlock(inputs: Partial<LabSampleInput> = {}, overrides: Partial<Samp
     inputs: { sequence: '001', completed: true, sampleNumber: '原样品', customerIds: [], customerText: '', price: null, paymentStatus: '', ...inputs },
     results: { iron: 1, silicon: 2, aluminum: 3, aluminumSiliconRatio: 4, total: 5, density: 6, calcium: 7, magnesium: 8, titanium: 9, bottleDensity: 10, moisture: 11, burnLoss: 12 },
     parameterSnapshot: { ...defaultLabParameters },
+    retests: [],
     ...overrides
   }
 }

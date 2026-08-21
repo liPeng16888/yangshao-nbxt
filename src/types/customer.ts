@@ -1,5 +1,6 @@
 export interface Customer {
   id: string
+  updatedAt?: string
   name: string
   phone?: string
   wechat?: string

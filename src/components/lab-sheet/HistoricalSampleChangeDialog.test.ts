@@ -73,6 +73,7 @@ function makeBlock(inputs: Partial<LabSampleInput> = {}, overrides: Partial<Samp
     inputs: mergedInputs,
     results: calculateSampleResults(mergedInputs, defaultLabParameters),
     parameterSnapshot: { ...defaultLabParameters },
+    retests: [],
     ...overrides
   }
 }

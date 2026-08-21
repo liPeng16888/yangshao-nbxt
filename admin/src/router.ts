@@ -11,8 +11,10 @@ import CustomerOverviewPage from './views/CustomerOverviewPage.vue'
 import MedicineInventoryPage from './views/MedicineInventoryPage.vue'
 import TodoPage from './views/TodoPage.vue'
 import EmployeeAttendancePage from './views/EmployeeAttendancePage.vue'
+import SharedPrepaidReadOnlyPage from './views/SharedPrepaidReadOnlyPage.vue'
 import { financeNavigationGroups } from './config/financeNavigation'
 import { employeeAttendanceNavigation } from './config/employeeAttendanceNavigation'
+import { prepaidNavigation } from './config/prepaidNavigation'
 
 const financeRoutes = financeNavigationGroups.flatMap((group) =>
   group.children.map((child) => ({
@@ -28,6 +30,12 @@ const employeeAttendanceRoutes = employeeAttendanceNavigation.map((item) => ({
   meta: { title: item.label, employeeAttendancePage: item.page }
 }))
 
+const sharedPrepaidRoutes = prepaidNavigation.map((item) => ({
+  path: item.path.slice(1),
+  component: SharedPrepaidReadOnlyPage,
+  meta: { title: item.label, sharedPrepaidPage: item.page }
+}))
+
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -41,6 +49,8 @@ export const router = createRouter({
         { path: 'employee-attendance', redirect: '/employee-attendance/schedules' },
         { path: 'employee-attendance/overview', redirect: '/employee-attendance/schedules' },
         ...employeeAttendanceRoutes,
+        { path: 'shared-prepaid', redirect: '/shared-prepaid/recharges' },
+        ...sharedPrepaidRoutes,
         { path: 'employee-attendance/:pathMatch(.*)*', redirect: '/employee-attendance/schedules' },
         { path: 'finance', redirect: '/finance/income' },
         ...financeRoutes,

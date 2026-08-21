@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { calculateResults, createEmptyInputs, defaultLabParameters, hasLabDetectionInput, hasVisibleSampleBlockInput } from './lab'
+import {
+  calculateResults,
+  createEmptyInputs,
+  createEmptyRetestInputs,
+  defaultLabParameters,
+  hasLabDetectionInput,
+  hasVisibleSampleBlockInput,
+  normalizeLabDetectionInputs
+} from './lab'
 
 describe('server lab helpers', () => {
   it('creates empty sample inputs with padded sequence', () => {
@@ -28,6 +36,12 @@ describe('server lab helpers', () => {
     expect(hasLabDetectionInput({ ironRaw: 0 })).toBe(true)
     expect(hasLabDetectionInput({ calciumRaw: '0.8' })).toBe(true)
     expect(hasLabDetectionInput({ moisture: 4.268 })).toBe(true)
+  })
+
+  it('normalizes only finite retest detection inputs and treats zero as data', () => {
+    expect(normalizeLabDetectionInputs({ ironRaw: 0, sampleNumber: '禁止复制', sulfur: '', carbon: Infinity }))
+      .toEqual({ ironRaw: 0, sulfur: null, carbon: null })
+    expect(hasLabDetectionInput(createEmptyRetestInputs())).toBe(false)
   })
 
   it('keeps a sample visible in admin statistics when any saved sample field has content', () => {

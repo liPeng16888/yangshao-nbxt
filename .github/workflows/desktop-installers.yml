@@ -1,0 +1,247 @@
+name: Build private desktop installers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-installers-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '11.7.0'
+  ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: 'false'
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+jobs:
+  validate:
+    name: Validate desktop and web applications
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          package-manager-cache: true
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter yangshao-server prisma:generate
+
+      - name: Test desktop shell
+        run: pnpm desktop:test
+
+      - name: Test customer frontend
+        run: >-
+          ./node_modules/.bin/vitest run --dir src
+          --exclude '**/.worktrees/**'
+          --exclude '**/.pnpm-store/**'
+          --exclude '**/.superpowers/**'
+
+      - name: Test admin frontend
+        run: >-
+          ./node_modules/.bin/vitest run --dir admin/src
+          --exclude '**/.worktrees/**'
+          --exclude '**/.pnpm-store/**'
+          --exclude '**/.superpowers/**'
+
+      - name: Test server
+        run: ./server/node_modules/.bin/vitest run --root server
+
+      - name: Build all applications
+        run: |
+          pnpm desktop:build
+          pnpm build:all
+
+      - name: Verify production endpoints
+        run: |
+          curl --fail --silent --show-error --location --max-time 30 --retry 2 https://www.ysjc.art/ --output /dev/null
+          curl --fail --silent --show-error --location --max-time 30 --retry 2 https://ys.ysjc.art/admin/login --output /dev/null
+
+  windows:
+    name: Build Windows x64 installers
+    needs: validate
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [internal, backend]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          package-manager-cache: true
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build ${{ matrix.target }} Windows installer
+        shell: pwsh
+        env:
+          YANGSHAO_DESKTOP_TARGET: ${{ matrix.target }}
+        run: pnpm --filter @yangshao/desktop run pack -- --win --x64
+
+      - name: Verify Windows installer metadata
+        shell: pwsh
+        run: |
+          $prefix = if ('${{ matrix.target }}' -eq 'internal') { 'Yangshao-Internal-System' } else { 'Yangshao-Backend-System' }
+          $installer = "desktop/release/${{ matrix.target }}/$prefix-1.0.2-win-x64.exe"
+          $asarRelative = "desktop/release/${{ matrix.target }}/win-unpacked/resources/app.asar"
+          if (-not (Test-Path -LiteralPath $installer)) { throw "Missing installer: $installer" }
+          if ((Get-Item -LiteralPath $installer).Length -le 0) { throw "Empty installer: $installer" }
+          if (-not (Test-Path -LiteralPath $asarRelative)) { throw "Missing app.asar: $asarRelative" }
+          $asar = (Resolve-Path -LiteralPath $asarRelative).Path
+          $asarEntries = (pnpm --filter @yangshao/desktop exec asar list $asar) -replace '\\', '/'
+          foreach ($runtimeFile in @('dist/build-info.json', 'dist/main.js', 'dist/find-preload.cjs')) {
+            if ($asarEntries -notcontains "/$runtimeFile") { throw "Missing $runtimeFile in $asar" }
+          }
+          (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLower() + "  " + (Split-Path -Leaf $installer) | Set-Content -Encoding ascii "desktop/release/${{ matrix.target }}/SHA256SUMS-${{ matrix.target }}-win.txt"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.target }}-windows-x64
+          path: |
+            desktop/release/${{ matrix.target }}/*.exe
+            desktop/release/${{ matrix.target }}/SHA256SUMS-${{ matrix.target }}-win.txt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  macos:
+    name: Build macOS arm64 installers
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [internal, backend]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          package-manager-cache: true
+
+      - name: Verify native arm64 runner
+        run: test "$(uname -m)" = "arm64"
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build ${{ matrix.target }} macOS installer
+        env:
+          YANGSHAO_DESKTOP_TARGET: ${{ matrix.target }}
+        run: pnpm --filter @yangshao/desktop run pack -- --mac --arm64
+
+      - name: Verify macOS app metadata and DMG
+        run: |
+          if [ "${{ matrix.target }}" = "internal" ]; then
+            prefix='Yangshao-Internal-System'
+            app_name='仰韶化验内部系统'
+            bundle_id='art.ysjc.internal-system'
+          else
+            prefix='Yangshao-Backend-System'
+            app_name='仰韶化验后端系统'
+            bundle_id='art.ysjc.backend-system'
+          fi
+          app_path="desktop/release/${{ matrix.target }}/mac-arm64/$app_name.app"
+          dmg="desktop/release/${{ matrix.target }}/$prefix-1.0.2-mac-arm64.dmg"
+          asar="$(pwd)/$app_path/Contents/Resources/app.asar"
+          test -d "$app_path"
+          test -s "$dmg"
+          test -s "$asar"
+          asar_entries="$(pnpm --filter @yangshao/desktop exec asar list "$asar")"
+          for runtime_file in dist/build-info.json dist/main.js dist/find-preload.cjs; do
+            printf '%s\n' "$asar_entries" | grep -Fxq "/$runtime_file"
+          done
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$app_path/Contents/Info.plist")" = "$bundle_id"
+          test "$(plutil -extract LSMinimumSystemVersion raw -o - "$app_path/Contents/Info.plist")" = "13.0.0"
+          test "$(plutil -extract ElectronAsarIntegrity raw -o - "$app_path/Contents/Info.plist")" = "Resources/app.asar"
+          file "$app_path/Contents/MacOS/$app_name" | grep -q 'arm64'
+          codesign --verify --deep --strict "$app_path"
+          shasum -a 256 "$dmg" | sed 's#  .*/#  #' > "desktop/release/${{ matrix.target }}/SHA256SUMS-${{ matrix.target }}-mac.txt"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.target }}-macos-arm64
+          path: |
+            desktop/release/${{ matrix.target }}/*.dmg
+            desktop/release/${{ matrix.target }}/SHA256SUMS-${{ matrix.target }}-mac.txt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  bundle:
+    name: Bundle four private installers
+    needs: [windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: desktop-installers
+          merge-multiple: true
+
+      - name: Verify exact artifact set and generate checksums
+        working-directory: desktop-installers
+        run: |
+          expected=(
+            Yangshao-Internal-System-1.0.2-win-x64.exe
+            Yangshao-Backend-System-1.0.2-win-x64.exe
+            Yangshao-Internal-System-1.0.2-mac-arm64.dmg
+            Yangshao-Backend-System-1.0.2-mac-arm64.dmg
+          )
+          for file in "${expected[@]}"; do
+            test -s "$file"
+          done
+          actual="$(find . -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dmg' \) | wc -l | tr -d ' ')"
+          test "$actual" = "4"
+          sha256sum "${expected[@]}" > SHA256SUMS.txt
+          rm -f SHA256SUMS-*-win.txt SHA256SUMS-*-mac.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Yangshao-Desktop-Installers-1.0.2
+          path: |
+            desktop-installers/Yangshao-Internal-System-1.0.2-win-x64.exe
+            desktop-installers/Yangshao-Backend-System-1.0.2-win-x64.exe
+            desktop-installers/Yangshao-Internal-System-1.0.2-mac-arm64.dmg
+            desktop-installers/Yangshao-Backend-System-1.0.2-mac-arm64.dmg
+            desktop-installers/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

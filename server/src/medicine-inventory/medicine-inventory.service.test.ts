@@ -281,6 +281,22 @@ describe('MedicineInventoryService inventory transactions', () => {
     expect(result.movement.quantity).toBe(1.5)
   })
 
+  it('publishes only metadata with the actual subaccount actor after an inbound commit', async () => {
+    const realtime = { publish: vi.fn() }
+    service = new MedicineInventoryService(prisma as never, realtime as never)
+    tx.medicineInventoryItem.upsert.mockResolvedValue(medicineItem())
+    tx.medicineInventoryMovement.create.mockResolvedValue(medicineMovement())
+
+    await service.createInbound('front-1', 'sub-1', {
+      occurredOn: '2026-08-02', name: '盐酸', unit: MedicineUnit.GRAM, quantity: '1.500'
+    })
+
+    expect(realtime.publish).toHaveBeenCalledWith({
+      dataOwnerId: 'front-1', module: 'medicine-inventory', entityId: 'movement-1',
+      operation: 'create', changedById: 'sub-1', updatedAt: createdAt.toISOString()
+    })
+  })
+
   it('uses different item keys for the same normalized name with different units', async () => {
     tx.medicineInventoryItem.upsert
       .mockResolvedValueOnce(medicineItem({ unit: MedicineUnit.BOTTLE }))

@@ -2,8 +2,9 @@
   <el-dialog
     :model-value="visible"
     :title="dialogTitle"
-    width="min(980px, calc(100vw - 32px))"
-    class="payroll-export-dialog"
+    :width="isMobileLayout ? '100%' : 'min(980px, calc(100vw - 32px))'"
+    :fullscreen="isMobileLayout"
+    :class="['payroll-export-dialog', { 'payroll-export-dialog--mobile': isMobileLayout }]"
     :close-on-click-modal="!exporting"
     :close-on-press-escape="!exporting"
     @close="requestClose"
@@ -83,8 +84,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useMobileLayout } from '@/composables/useMobileLayout'
 import type { PayrollItem, PayrollRun } from '@/types/employeeAttendance'
 import {
   downloadEmployeePayrollPng,
@@ -103,6 +105,7 @@ const emit = defineEmits<{
   close: []
 }>()
 
+const { isMobileLayout } = useMobileLayout()
 const exporting = ref(false)
 const dialogTitle = computed(() => props.item ? '导出个人工资条' : '导出全员工资汇总')
 let dialogGeneration = 0
@@ -110,6 +113,10 @@ let dialogGeneration = 0
 watch(() => props.visible, (visible) => {
   dialogGeneration += 1
   if (visible) exporting.value = false
+})
+watch(isMobileLayout, () => {
+  dialogGeneration += 1
+  exporting.value = false
 })
 
 function deduction(value: number) {
@@ -146,6 +153,8 @@ async function exportPng() {
     if (generation === dialogGeneration) exporting.value = false
   }
 }
+
+onBeforeUnmount(() => { dialogGeneration += 1 })
 </script>
 
 <style scoped lang="scss">
@@ -240,4 +249,19 @@ table {
 @media (max-width: 680px) {
   .payroll-slip-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+:global(.payroll-export-dialog--mobile) {
+  box-sizing: border-box;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100dvh;
+  margin: 0 !important;
+  padding-top: max(16px, env(safe-area-inset-top));
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+
+:global(.payroll-export-dialog--mobile .el-dialog__body) { overflow: auto; min-width: 0; }
+:global(.payroll-export-dialog--mobile .el-button) { min-height: 44px; }
+:global(.payroll-export-dialog--mobile .payroll-summary-table-wrap) { max-width: 100%; }
+:global(.payroll-export-dialog--mobile .payroll-preview) { overflow-wrap: anywhere; }
 </style>

@@ -257,11 +257,12 @@ describe('admin lab sample change request Mock lifecycle', () => {
   it('requires a trimmed rejection reason and rejects the whole pending request without changing the sample', async () => {
     const api = await importMockApi()
     const [summary] = await api.getAdminLabSampleChangeRequests({ status: 'PENDING' })
-    const [sheetBefore] = await api.request.get('/admin/data-statistics/lab-sheets') as any[]
+    const sheetQuery = { params: { date: summary!.date } }
+    const [sheetBefore] = await api.request.get('/admin/data-statistics/lab-sheets', sheetQuery) as any[]
 
     await expect(api.rejectAdminLabSampleChangeRequest(summary!.id, '  ')).rejects.toThrow('请填写拒绝原因')
     const rejected = await api.rejectAdminLabSampleChangeRequest(summary!.id, '  记录有误  ')
-    const [sheetAfter] = await api.request.get('/admin/data-statistics/lab-sheets') as any[]
+    const [sheetAfter] = await api.request.get('/admin/data-statistics/lab-sheets', sheetQuery) as any[]
 
     expect(rejected).toMatchObject({
       status: 'REJECTED', review: { remark: '记录有误' },
