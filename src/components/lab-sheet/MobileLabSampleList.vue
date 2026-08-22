@@ -247,49 +247,79 @@
           </div>
 
           <section
-            v-for="group in mobileFieldGroups"
-            :key="group.key"
             class="mobile-form-section mobile-collapsible-section mobile-calculation-group"
             :class="{
-              'mobile-collapsible-section--expanded': isGroupExpanded(block.id, group.key),
-              'mobile-calculation-group--expanded': isGroupExpanded(block.id, group.key)
+              'mobile-collapsible-section--expanded': isGroupExpanded(block.id, 'calculation'),
+              'mobile-calculation-group--expanded': isGroupExpanded(block.id, 'calculation')
             }"
-            :data-mobile-group="group.key"
+            data-mobile-group="calculation"
           >
             <button
               class="mobile-group-toggle"
               type="button"
-              :aria-expanded="isGroupExpanded(block.id, group.key)"
-              @click="toggleGroup(block.id, group.key)"
+              :aria-expanded="isGroupExpanded(block.id, 'calculation')"
+              @click="toggleGroup(block.id, 'calculation')"
             >
-              <strong>{{ group.label }}</strong>
-              <small>{{ isGroupExpanded(block.id, group.key) ? '收起' : '展开' }}</small>
-              <span aria-hidden="true">{{ isGroupExpanded(block.id, group.key) ? '⌃' : '⌄' }}</span>
+              <strong>检测数据</strong>
+              <small>{{ isGroupExpanded(block.id, 'calculation') ? '收起' : '展开' }}</small>
+              <span aria-hidden="true">{{ isGroupExpanded(block.id, 'calculation') ? '⌃' : '⌄' }}</span>
             </button>
-            <div v-if="isGroupExpanded(block.id, group.key)" class="mobile-collapsible-section__content">
-              <div class="mobile-field-grid">
-                <label v-for="field in group.fields" :key="field.key" class="mobile-field">
-                  <span>{{ field.label }}</span>
-                  <input
-                    :data-mobile-field="field.key"
-                    type="text"
-                    inputmode="decimal"
-                    :value="formatNumberInput(block, field.key)"
-                    :disabled="isDisabled(block) || isSampleCalculationBlocked(block)"
-                    enterkeyhint="next"
-                    @focus="rememberNumberField(block, field.key, $event)"
-                    @input="updateNumber(block, field.key, $event)"
-                    @blur="commitNumber(block, field.key, $event)"
-                    @keydown.enter.prevent="focusNextField"
-                  />
-                </label>
+            <div
+              v-if="isGroupExpanded(block.id, 'calculation')"
+              class="mobile-collapsible-section__content mobile-collapsible-section__content--calculation"
+            >
+              <div class="mobile-calculation-tabs" role="tablist" aria-label="检测数据分类">
+                <button
+                  v-for="group in mobileFieldGroups"
+                  :id="calculationTabId(block.id, group.key)"
+                  :key="group.key"
+                  class="mobile-calculation-tab"
+                  :class="{ 'mobile-calculation-tab--active': activeCalculationTab(block.id) === group.key }"
+                  type="button"
+                  role="tab"
+                  :aria-controls="calculationPanelId(block.id, group.key)"
+                  :aria-selected="activeCalculationTab(block.id) === group.key"
+                  @click="selectCalculationTab(block.id, group.key)"
+                >
+                  {{ group.label }}
+                </button>
               </div>
-              <div class="mobile-result-grid">
-                <div v-for="result in group.results" :key="result.label" class="mobile-result">
-                  <span>{{ result.label }}</span>
-                  <strong>{{ formatResult(getResultValue(block, result)) }}</strong>
+
+              <template v-for="group in mobileFieldGroups" :key="group.key">
+                <div
+                  v-if="activeCalculationTab(block.id) === group.key"
+                  :id="calculationPanelId(block.id, group.key)"
+                  class="mobile-calculation-panel"
+                  role="tabpanel"
+                  :aria-labelledby="calculationTabId(block.id, group.key)"
+                  :data-mobile-calculation-panel="group.key"
+                  :data-mobile-group="group.key"
+                >
+                  <div class="mobile-field-grid">
+                    <label v-for="field in group.fields" :key="field.key" class="mobile-field">
+                      <span>{{ field.label }}</span>
+                      <input
+                        :data-mobile-field="field.key"
+                        type="text"
+                        inputmode="decimal"
+                        :value="formatNumberInput(block, field.key)"
+                        :disabled="isDisabled(block) || isSampleCalculationBlocked(block)"
+                        enterkeyhint="next"
+                        @focus="rememberNumberField(block, field.key, $event)"
+                        @input="updateNumber(block, field.key, $event)"
+                        @blur="commitNumber(block, field.key, $event)"
+                        @keydown.enter.prevent="focusNextField"
+                      />
+                    </label>
+                  </div>
+                  <div class="mobile-result-grid">
+                    <div v-for="result in group.results" :key="result.label" class="mobile-result">
+                      <span>{{ result.label }}</span>
+                      <strong>{{ formatResult(getResultValue(block, result)) }}</strong>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </template>
             </div>
           </section>
         </template>
@@ -349,12 +379,13 @@ type MobileResultField = {
   key: keyof LabSampleInput | keyof LabFormulaResult
 }
 type MobileFieldGroup = {
-  key: string
+  key: CalculationTabKey
   label: string
   fields: MobileInputField[]
   results: MobileResultField[]
 }
 type IdentityTabKey = 'basic' | 'customers' | 'settlement'
+type CalculationTabKey = 'metal' | 'otherElements' | 'density' | 'water' | 'burn'
 
 const identityTabs: Array<{ key: IdentityTabKey; label: string }> = [
   { key: 'basic', label: '基础' },
@@ -377,18 +408,8 @@ const mobileFieldGroups: MobileFieldGroup[] = [
     ]
   },
   {
-    key: 'density',
-    label: '比重 / 白度',
-    fields: [
-      { key: 'densityRaw', label: '比重' }, { key: 'whiteness', label: '白度' }
-    ],
-    results: [
-      { label: '比重结果', source: 'result', key: 'density' }, { label: '白度', source: 'input', key: 'whiteness' }
-    ]
-  },
-  {
     key: 'otherElements',
-    label: '其他元素',
+    label: '微量元素',
     fields: [
       { key: 'sulfur', label: '硫' }, { key: 'calciumRaw', label: '钙' }, { key: 'magnesiumRaw', label: '镁' },
       { key: 'carbon', label: '碳' }, { key: 'titaniumRaw', label: '钛' }
@@ -397,6 +418,16 @@ const mobileFieldGroups: MobileFieldGroup[] = [
       { label: '硫', source: 'input', key: 'sulfur' },
       { label: '钙结果', source: 'result', key: 'calcium' }, { label: '镁结果', source: 'result', key: 'magnesium' },
       { label: '碳', source: 'input', key: 'carbon' }, { label: '钛结果', source: 'result', key: 'titanium' }
+    ]
+  },
+  {
+    key: 'density',
+    label: '比重/白度',
+    fields: [
+      { key: 'densityRaw', label: '比重' }, { key: 'whiteness', label: '白度' }
+    ],
+    results: [
+      { label: '比重结果', source: 'result', key: 'density' }, { label: '白度', source: 'input', key: 'whiteness' }
     ]
   },
   {
@@ -448,6 +479,7 @@ const initiallyExpandedBlockId = props.highlightBlockId || findRetestParentId(pr
 const expandedBlockIds = ref(new Set(initiallyExpandedBlockId ? [initiallyExpandedBlockId] : []))
 const expandedGroupKeysByBlock = ref(new Map<string, Set<string>>())
 const identityTabByBlock = ref(new Map<string, IdentityTabKey>())
+const calculationTabByBlock = ref(new Map<string, CalculationTabKey>())
 const focusedFieldValues = new Map<string, unknown>()
 const numericInputDrafts = ref(new Map<string, string>())
 const effectiveRetestHighlightId = ref('')
@@ -497,6 +529,8 @@ watch(
     if (nextExpandedGroups.size !== expandedGroupKeysByBlock.value.size) expandedGroupKeysByBlock.value = nextExpandedGroups
     const nextIdentityTabs = new Map([...identityTabByBlock.value].filter(([blockId]) => allowedIds.has(blockId)))
     if (nextIdentityTabs.size !== identityTabByBlock.value.size) identityTabByBlock.value = nextIdentityTabs
+    const nextCalculationTabs = new Map([...calculationTabByBlock.value].filter(([blockId]) => allowedIds.has(blockId)))
+    if (nextCalculationTabs.size !== calculationTabByBlock.value.size) calculationTabByBlock.value = nextCalculationTabs
   }
 )
 
@@ -575,6 +609,26 @@ function identityPanelId(blockId: string, tab: IdentityTabKey) {
   return `mobile-identity-panel-${blockId}-${tab}`
 }
 
+function activeCalculationTab(blockId: string): CalculationTabKey {
+  return calculationTabByBlock.value.get(blockId) || 'metal'
+}
+
+function selectCalculationTab(blockId: string, tab: CalculationTabKey) {
+  if (activeCalculationTab(blockId) === tab) return
+  const nextCalculationTabs = new Map(calculationTabByBlock.value)
+  if (tab === 'metal') nextCalculationTabs.delete(blockId)
+  else nextCalculationTabs.set(blockId, tab)
+  calculationTabByBlock.value = nextCalculationTabs
+}
+
+function calculationTabId(blockId: string, tab: CalculationTabKey) {
+  return `mobile-calculation-tab-${blockId}-${tab}`
+}
+
+function calculationPanelId(blockId: string, tab: CalculationTabKey) {
+  return `mobile-calculation-panel-${blockId}-${tab}`
+}
+
 function resetGroups(blockId: string) {
   if (expandedGroupKeysByBlock.value.has(blockId)) {
     const nextExpandedGroups = new Map(expandedGroupKeysByBlock.value)
@@ -585,6 +639,11 @@ function resetGroups(blockId: string) {
     const nextIdentityTabs = new Map(identityTabByBlock.value)
     nextIdentityTabs.delete(blockId)
     identityTabByBlock.value = nextIdentityTabs
+  }
+  if (calculationTabByBlock.value.has(blockId)) {
+    const nextCalculationTabs = new Map(calculationTabByBlock.value)
+    nextCalculationTabs.delete(blockId)
+    calculationTabByBlock.value = nextCalculationTabs
   }
 }
 
@@ -927,6 +986,11 @@ async function scrollToBlock(blockId: string) {
   padding: 0;
 }
 
+.mobile-collapsible-section__content--calculation {
+  gap: 0;
+  padding: 0;
+}
+
 .mobile-identity-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -957,9 +1021,48 @@ async function scrollToBlock(blockId: string) {
   border-bottom-color: #2563eb;
 }
 
+.mobile-calculation-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 0 4px;
+}
+
+.mobile-calculation-tab {
+  position: relative;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 2px;
+  overflow: hidden;
+  color: #334155;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &:focus-visible {
+    z-index: 1;
+    outline: 3px solid rgba(63, 111, 153, 0.2);
+    outline-offset: -3px;
+  }
+}
+
+.mobile-calculation-tab--active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+}
+
 .mobile-identity-panel {
   display: grid;
   gap: 8px;
+  padding: 10px;
+  border-top: 1px solid #e5ebf1;
+}
+
+.mobile-calculation-panel {
+  display: grid;
+  gap: 10px;
   padding: 10px;
   border-top: 1px solid #e5ebf1;
 }

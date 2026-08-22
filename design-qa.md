@@ -1,4 +1,4 @@
-# 方案 3 手机端样品信息 Design QA
+# 方案 3 手机端样品信息与检测数据 Design QA
 
 ## Comparison target
 
@@ -59,5 +59,54 @@
 ## Follow-up polish
 
 - 可在用户实机长文本数据下再检查客户名和动态样品金额标签的截断表现。
+
+## 检测数据页签扩展（2026-08-22）
+
+### Comparison target
+
+- Source visual truth: `/Users/zhangpengfei/.codex/generated_images/01a01def-6727-7052-bf46-1ca8b8fa3c5c/exec-4b23288c-57ff-455d-82ed-ddb8934a7fa9.png`，复用已选方案 3 的页签、蓝色激活线、面板边框与间距语言。
+- Implementation screenshot: `/private/tmp/yangshao-calculation-tabs.png`。
+- Combined side-by-side evidence: `/private/tmp/yangshao-calculation-tabs-compare.png`。
+- Route: `http://127.0.0.1:5173/data`，Codex In-app Browser。
+- Viewport: `390 x 844` CSS px；implementation 为 `390 x 844`、device scale 1。source 原始 `853 x 1844`，对比页按比例归一化到 `390 x 844`。
+- State: 样品 001 展开，“检测数据”展开，“金属元素”页签选中。
+
+### Findings
+
+- 无 P0 / P1 / P2 问题。
+- 五个页签在 390px 视口内等宽排列，每个约 `67.6 x 44px`，没有换行、裁切或页面横向溢出。
+- “其他元素”已改为“微量元素”，并与“比重/白度”按用户确认顺序互换。
+
+### Required fidelity surfaces
+
+- Fonts and typography: 延续方案 3 的系统中文字体、600 字重和蓝色激活态；五页签使用 12px 单行标签以适配 390px 宽度，正文输入与结果字号保持原组件层级。
+- Spacing and layout rhythm: 检测数据使用同一折叠卡片、44px 页签、10px 面板内边距；字段两列、结果卡片三列，未产生挤压或额外空白区。
+- Colors and visual tokens: 沿用方案 3 的深蓝标题、冷灰边框、淡蓝结果底色与蓝色激活线，无新色系漂移。
+- Image quality and asset fidelity: 检测数据区域不需要新增图片资产；品牌与现有页面资产保持原样，未增加占位素材。
+- Copy and content: 页签顺序精确为“金属元素、微量元素、比重/白度、水份、灼烧”；每个面板只展示所属输入与计算结果。
+
+### Interaction and accessibility evidence
+
+- 五页签均使用 `role="tab"`、`aria-selected`、`aria-controls`；当前内容使用 `role="tabpanel"` 和 `aria-labelledby`。
+- 已逐项点击五个页签并验证字段映射：金属 5 项、微量 5 项、比重/白度 2 项、水份 4 项、灼烧 3 项；计算结果随页签一并切换。
+- 当前可编辑样品的所有检测输入均保持 enabled；原有输入、失焦提交、自动保存、只读与脱敏逻辑继续复用。
+- 页面水平溢出 `0px`；浏览器控制台 error 为 0。现有 Element Plus checkbox 弃用提示仍为 warning，不是本次改动引入。
+
+### Full-view and focused comparison evidence
+
+- Full-view: 并排图同时显示方案 3 样品信息参考和检测数据实现，确认折叠卡片、页签层级、蓝色激活线与表单密度一致。
+- Focused region: implementation 截图将检测数据区域置于 390px 视口中央，五页签文字、两列输入和三列结果均清晰可辨，因此无需额外裁剪。
+
+### Comparison history
+
+- Iteration 2: 首次并排比较未发现可操作的 P0 / P1 / P2 问题；五页签一次通过，无需视觉修复循环。
+
+### Implementation checklist
+
+- [x] 五个检测数据分组已合并为一个折叠区和五个页签。
+- [x] “微量元素”重命名及页签顺序调整完成。
+- [x] 每个样品独立记录当前检测页签，重新打开样品回到“金属元素”。
+- [x] 原输入、结果、自动保存、只读和脱敏逻辑不变。
+- [x] 390 x 844 真实浏览器下无横向溢出、无控制台 error。
 
 final result: passed

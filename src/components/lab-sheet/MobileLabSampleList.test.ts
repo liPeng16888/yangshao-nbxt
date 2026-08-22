@@ -140,18 +140,14 @@ describe('MobileLabSampleList', () => {
     delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
   })
 
-  it('opens one sample with sample information and all five calculation groups collapsed by default', async () => {
+  it('opens one sample with sample information and calculation data collapsed by default', async () => {
     const wrapper = mountList()
 
     expect(wrapper.findAll('.mobile-sample-card--expanded')).toHaveLength(1)
     expect(wrapper.get('.mobile-sample-card--expanded').attributes('data-block-id')).toBe('block-1')
     expect(wrapper.findAll('.mobile-group-toggle').map((toggle) => toggle.text())).toEqual([
       expect.stringContaining('样品信息'),
-      expect.stringContaining('金属元素'),
-      expect.stringContaining('比重 / 白度'),
-      expect.stringContaining('其他元素'),
-      expect.stringContaining('水份'),
-      expect.stringContaining('灼烧')
+      expect.stringContaining('检测数据')
     ])
     expect(wrapper.findAll('.mobile-group-toggle').every((toggle) => toggle.attributes('aria-expanded') === 'false')).toBe(true)
     expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(0)
@@ -162,7 +158,7 @@ describe('MobileLabSampleList', () => {
     await getGroupToggle(wrapper, '样品信息').trigger('click')
     expect(wrapper.find('[data-mobile-field="sequence"]').exists()).toBe(true)
 
-    await getGroupToggle(wrapper, '金属元素').trigger('click')
+    await getGroupToggle(wrapper, '检测数据').trigger('click')
 
     expect(wrapper.find('[data-mobile-field="ironRaw"]').attributes('inputmode')).toBe('decimal')
     expect(wrapper.text()).toContain('铝硅比')
@@ -231,42 +227,63 @@ describe('MobileLabSampleList', () => {
     expect(getIdentityTab(wrapper.get('[data-block-id="block-1"]'), '基础').attributes('aria-selected')).toBe('true')
   })
 
-  it('places sulfur, calcium, magnesium, carbon and titanium in an independent element group', async () => {
+  it('groups calculation fields and results into the requested ordered tabs with metal selected first', async () => {
     const wrapper = mountList()
 
-    await getGroupToggle(wrapper, '其他元素').trigger('click')
+    await getGroupToggle(wrapper, '检测数据').trigger('click')
+
+    const tablist = wrapper.get('[role="tablist"][aria-label="检测数据分类"]')
+    const tabs = tablist.findAll('[role="tab"]')
+    expect(tabs.map((tab) => tab.text())).toEqual(['金属元素', '微量元素', '比重/白度', '水份', '灼烧'])
+    expect(tabs.map((tab) => tab.attributes('aria-selected'))).toEqual(['true', 'false', 'false', 'false', 'false'])
+    expect(wrapper.get('[role="tabpanel"][data-mobile-calculation-panel]').attributes('data-mobile-calculation-panel')).toBe('metal')
+    expect(wrapper.get('[data-mobile-group="metal"]').findAll('input[data-mobile-field]').map((input) => input.attributes('data-mobile-field'))).toEqual([
+      'ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust'
+    ])
+    expect(wrapper.text()).toContain('铝硅比')
+    expect(wrapper.text()).toContain(calculateSampleResults(wrapper.props('blocks')[0].inputs, defaultLabParameters).total.toFixed(2))
+  })
+
+  it('places sulfur, calcium, magnesium, carbon and titanium in the micro-elements tab', async () => {
+    const wrapper = mountList()
+
+    await getGroupToggle(wrapper, '检测数据').trigger('click')
+    await getCalculationTab(wrapper, '微量元素').trigger('click')
 
     expect(wrapper.get('[data-mobile-group="otherElements"]').findAll('input[data-mobile-field]').map((input) => input.attributes('data-mobile-field'))).toEqual([
       'sulfur', 'calciumRaw', 'magnesiumRaw', 'carbon', 'titaniumRaw'
     ])
 
-    await getGroupToggle(wrapper, '金属元素').trigger('click')
+    await getCalculationTab(wrapper, '金属元素').trigger('click')
 
     expect(wrapper.get('[data-mobile-group="metal"]').findAll('input[data-mobile-field]').map((input) => input.attributes('data-mobile-field'))).toEqual([
       'ironRaw', 'siliconRaw', 'siliconAdjust', 'aluminumRaw', 'aluminumAdjust'
     ])
   })
 
-  it('toggles calculation groups independently and resets them after reopening the sample', async () => {
-    const wrapper = mountList()
+  it('keeps calculation tabs independent and resets a reopened sample to metal', async () => {
+    const wrapper = mountList({ selectionMode: true })
+    const firstCard = wrapper.get('[data-block-id="block-1"]')
 
-    await getGroupToggle(wrapper, '样品信息').trigger('click')
-    await getGroupToggle(wrapper, '金属元素').trigger('click')
-    await getGroupToggle(wrapper, '比重 / 白度').trigger('click')
-    expect(wrapper.findAll('.mobile-collapsible-section--expanded')).toHaveLength(3)
-    expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(2)
+    await getGroupToggle(firstCard, '检测数据').trigger('click')
+    await getCalculationTab(firstCard, '微量元素').trigger('click')
+    await wrapper.findAll('.mobile-sample-card__toggle')[1].trigger('click')
+    const secondCard = wrapper.get('[data-block-id="block-2"]')
+    await getGroupToggle(secondCard, '检测数据').trigger('click')
+
+    expect(getCalculationTab(firstCard, '微量元素').attributes('aria-selected')).toBe('true')
+    expect(getCalculationTab(secondCard, '金属元素').attributes('aria-selected')).toBe('true')
 
     await wrapper.findAll('.mobile-sample-card__toggle')[0].trigger('click')
     await wrapper.findAll('.mobile-sample-card__toggle')[0].trigger('click')
+    await getGroupToggle(wrapper.get('[data-block-id="block-1"]'), '检测数据').trigger('click')
 
-    expect(wrapper.findAll('.mobile-calculation-group--expanded')).toHaveLength(0)
-    expect(wrapper.findAll('.mobile-collapsible-section--expanded')).toHaveLength(0)
-    expect(wrapper.findAll('.mobile-group-toggle').every((toggle) => toggle.attributes('aria-expanded') === 'false')).toBe(true)
+    expect(getCalculationTab(wrapper.get('[data-block-id="block-1"]'), '金属元素').attributes('aria-selected')).toBe('true')
   })
 
   it('emits parsed updates and commits, then saves and expands the next sample', async () => {
     const wrapper = mountList()
-    await getGroupToggle(wrapper, '金属元素').trigger('click')
+    await getGroupToggle(wrapper, '检测数据').trigger('click')
     const iron = wrapper.get('input[data-mobile-field="ironRaw"]')
 
     await iron.trigger('focus')
@@ -347,7 +364,7 @@ describe('MobileLabSampleList', () => {
 
     await wrapper.setProps({ canViewCompletedSensitiveData: true })
     await getIdentityTab(wrapper, '结算').trigger('click')
-    await getGroupToggle(wrapper, '金属元素').trigger('click')
+    await getGroupToggle(wrapper, '检测数据').trigger('click')
     expect(wrapper.find('[data-mobile-field="ironRaw"]').exists()).toBe(true)
     expect(wrapper.find('[data-mobile-field="price"]').exists()).toBe(true)
   })
@@ -561,5 +578,11 @@ function getGroupToggle(wrapper: { findAll: ReturnType<typeof mountList>['findAl
 function getIdentityTab(wrapper: { findAll: ReturnType<typeof mountList>['findAll'] }, label: string) {
   const tab = wrapper.findAll('[role="tab"]').find((button) => button.text() === label)
   if (!tab) throw new Error(`Missing sample information tab: ${label}`)
+  return tab
+}
+
+function getCalculationTab(wrapper: { findAll: ReturnType<typeof mountList>['findAll'] }, label: string) {
+  const tab = wrapper.findAll('.mobile-calculation-tab').find((button) => button.text() === label)
+  if (!tab) throw new Error(`Missing calculation data tab: ${label}`)
   return tab
 }
