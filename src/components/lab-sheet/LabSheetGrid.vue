@@ -85,7 +85,7 @@
                   marginTop: '-1px'
                 }"
               >
-                <div class="sample-sequence-primary" style="grid-row: 1 / span 2">
+                <div class="sample-sequence-primary" style="grid-row: 1 / span 2; transform: translateY(18px)">
                   <div class="sequence-editor" :data-block-id="block.id" data-field="sequence">
                     <el-checkbox
                       v-if="selectionMode"
@@ -95,11 +95,16 @@
                     <el-input
                       size="small"
                       :disabled="isDisabled(block)"
-                    :model-value="block.inputs.sequence"
-                    @update:model-value="(value) => updateText(block.id, 'sequence', value)"
-                  />
+                      :model-value="block.inputs.sequence"
+                      @update:model-value="(value) => updateText(block.id, 'sequence', value)"
+                    />
+                  </div>
                 </div>
-                <div v-if="canShowHistoricalActions(block)" class="sample-change-actions">
+                <div
+                  v-if="canShowHistoricalActions(block)"
+                  class="sample-change-actions"
+                  style="grid-row: -2 / -1"
+                >
                   <template v-if="pendingSampleChangeRequest(block.id)">
                     <el-tag size="small" type="warning" effect="plain">待审批</el-tag>
                     <el-button
@@ -128,7 +133,6 @@
                     @click.stop="emit('requestSampleChange', block.id)"
                   >申请修改</el-button>
                 </div>
-              </div>
                 <div
                   v-for="(retest, retestIndex) in block.retests"
                   :key="`${retest.id}-identity`"

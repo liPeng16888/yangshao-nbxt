@@ -114,6 +114,26 @@ describe('LabSheetGrid', () => {
     expect(wrapper.emitted('requestSampleChange')).toEqual([['block-1']])
   })
 
+  it('centers the sequence and anchors historical change actions to the bottom row', () => {
+    const wrapper = mount(LabSheetGrid, {
+      props: {
+        readonly: true,
+        sheetDate: '2026-06-24',
+        blocks: [makeBlock({ sampleNumber: '历史样品' })]
+      },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    const stack = wrapper.get('.sample-sequence-stack')
+    const primary = wrapper.get('.sample-sequence-primary')
+    const actions = wrapper.get('.sample-change-actions')
+
+    expect(primary.element.parentElement).toBe(stack.element)
+    expect(actions.element.parentElement).toBe(stack.element)
+    expect((actions.element as HTMLElement).style.gridRow).toBe('-2 / -1')
+    expect(getComputedStyle(primary.element).transform).toBe('translateY(18px)')
+  })
+
   it('shows pending view and withdraw actions without enabling cell editing', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
