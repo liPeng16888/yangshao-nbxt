@@ -127,6 +127,25 @@ describe('MobileSampleRetests', () => {
     expect(wrapper.text()).not.toMatch(/差值|偏差|合格/)
   })
 
+  it('offers the complete calculation form when the parent has no element selection', async () => {
+    const wrapper = mountRetests(makeParent([makeRetest(1, {
+      inputs: { ironRaw: 1 },
+      results: {
+        ...calculateSampleResults({ ironRaw: 1 }, defaultLabParameters),
+        iron: 27.94
+      }
+    })], {
+      inputs: { sequence: '001', sampleNumber: '铝土矿 A', elementNote: '' }
+    }))
+
+    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+
+    expect(wrapper.findAll('input[data-retest-field]')).toHaveLength(19)
+    expect(wrapper.get('input[data-retest-field="ironRaw"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-retest-field-card="ironRaw"] output').text()).toBe('27.94')
+    expect(wrapper.get('[data-retest-result-card="aluminumSiliconRatio"] output').text()).toBe('0.00')
+  })
+
   it('shows shared output-only formula results for the selected parent element', async () => {
     const retest = makeRetest(1, {
       inputs: { ironRaw: 1, siliconRaw: 2, aluminumRaw: 3 },

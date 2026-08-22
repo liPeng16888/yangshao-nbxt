@@ -43,6 +43,7 @@ export const retestGridColumns: RetestGridColumn[] = [
 
 export function isRetestColumnEnabled(elementNote: string, column: RetestGridColumn) {
   const selected = new Set(parseLabElementKeys(elementNote))
+  if (selected.size === 0) return true
   return column.elementKeys.some((key) => selected.has(key))
 }
 

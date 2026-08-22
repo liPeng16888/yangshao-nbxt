@@ -142,9 +142,31 @@
                   }"
                   :data-retest-identity-id="retest.id"
                   :aria-label="`复样${retest.sequence}，${retest.status === 'VOID' ? '已作废' : '有效'}`"
+                  :aria-busy="isRetestActionPending(retest.id) ? 'true' : undefined"
+                  :title="getRetestIdentityTitle(retest)"
                 >
                   <strong>复样{{ retest.sequence }}</strong>
-                  <span>{{ retest.status === 'VOID' ? '已作废' : '有效' }}</span>
+                  <span>{{ getRetestIdentityStatus(retest) }}</span>
+                  <button
+                    v-if="canManageRetest(block, retest) && isBlankRetest(retest)"
+                    type="button"
+                    class="sample-retest-identity__action"
+                    :disabled="isRetestActionPending(retest.id)"
+                    :aria-busy="isRetestActionPending(retest.id) ? 'true' : undefined"
+                    :data-testid="`delete-retest-${retest.id}`"
+                    :aria-label="`删除空白复样${retest.sequence}`"
+                    @click.stop="emit('retestDelete', block.id, retest.id)"
+                  >{{ isRetestActionPending(retest.id) ? '处理中…' : '删除' }}</button>
+                  <button
+                    v-else-if="canManageRetest(block, retest)"
+                    type="button"
+                    class="sample-retest-identity__action"
+                    :disabled="isRetestActionPending(retest.id)"
+                    :aria-busy="isRetestActionPending(retest.id) ? 'true' : undefined"
+                    :data-testid="`void-retest-${retest.id}`"
+                    :aria-label="`作废复样${retest.sequence}`"
+                    @click.stop="emit('retestVoid', block.id, retest.id)"
+                  >{{ isRetestActionPending(retest.id) ? '处理中…' : '作废' }}</button>
                 </div>
               </div>
             </div>
@@ -191,7 +213,7 @@
                 </div>
                 <div
                   class="customer-role-row"
-                  style="grid-row: -2 / -1"
+                  style="grid-row: 3 / -1"
                   :data-block-id="block.id"
                   data-field="recipientCustomerText"
                 >
@@ -259,11 +281,8 @@
               :readonly="readonly"
               :sensitive-hidden="isCompletedSensitiveHidden(block.id)"
               :highlighted="retest.id === highlightRetestId"
-              :action-pending="pendingRetestActionIds.includes(retest.id)"
               @update="(retestId, patch) => emit('retestUpdate', block.id, retestId, patch)"
               @field-commit="(retestId, field, oldValue, newValue) => emit('retestFieldCommit', block.id, retestId, field, oldValue, newValue)"
-              @delete="(retestId) => emit('retestDelete', block.id, retestId)"
-              @void="(retestId) => emit('retestVoid', block.id, retestId)"
             />
 
             <div class="cell cell--label cell--remark cell--required-label">{{ getAmountLabel(block) }}</div>
@@ -377,6 +396,7 @@ import type {
   PrepaidMemberPickerResult,
   SampleBlock,
   SamplePaymentStatus,
+  SampleRetest,
   SampleRetestInput,
   SampleRetestInputField
 } from '@/types/labSheet'
@@ -393,6 +413,7 @@ import {
   isSamplePaymentStatusRequired as isPaymentStatusRequired,
   samplePaymentStatusOptions as sharedPaymentStatusOptions
 } from '@/utils/labSampleRules'
+import { hasRetestInput } from '@/utils/sampleRetest'
 
 const props = defineProps<{
   blocks: SampleBlock[]
@@ -614,6 +635,51 @@ defineExpose({
 
 function isDisabled(block: SampleBlock) {
   return Boolean(props.readonly || block.readonly)
+}
+
+function isRetestActionPending(retestId: string) {
+  return pendingRetestActionIds.value.includes(retestId)
+}
+
+function isBlankRetest(retest: SampleRetest) {
+  return !retest.everFilled && !hasRetestInput(retest.inputs)
+}
+
+function canManageRetest(block: SampleBlock, retest: SampleRetest) {
+  return Boolean(
+    retest.status === 'ACTIVE' &&
+    !isDisabled(block) &&
+    !retest.readonly &&
+    !isCompletedSensitiveHidden(block.id) &&
+    !retest.sensitiveFieldsHidden
+  )
+}
+
+function getRetestIdentityStatus(retest: SampleRetest) {
+  if (retest.status === 'VOID') return '已作废'
+  return isRetestActionPending(retest.id) ? '处理中' : '已保存'
+}
+
+function formatRetestTimestamp(value?: string) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return '--'
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(date)
+}
+
+function getRetestIdentityTitle(retest: SampleRetest) {
+  const snapshotAt = retest.parameterSnapshot?.savedAt || retest.createdAt
+  const status = retest.status === 'VOID'
+    ? `已作废 ${formatRetestTimestamp(retest.voidedAt || retest.updatedAt)}${retest.voidReason ? `：${retest.voidReason}` : ''}`
+    : `已保存 ${formatRetestTimestamp(retest.updatedAt)}`
+  return `参数快照 ${formatRetestTimestamp(snapshotAt)} · ${status}`
 }
 
 function isPrepaidBlock(block: SampleBlock) {
@@ -1060,7 +1126,8 @@ const FormulaCell = defineComponent({
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 1px;
+  padding: 2px;
   color: #174a7a;
   background: #edf7ff;
   border-top: 1px solid #111827;
@@ -1071,12 +1138,30 @@ const FormulaCell = defineComponent({
   }
 
   span {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   &.is-void {
     color: #64748b;
     background: #eef2f6;
+  }
+}
+
+.sample-retest-identity__action {
+  min-height: 20px;
+  padding: 1px 8px;
+  color: #2563eb;
+  background: #ffffff;
+  border: 1px solid #bfdbfe;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+
+  &:disabled {
+    color: #64748b;
+    background: #f1f5f9;
+    cursor: wait;
   }
 }
 

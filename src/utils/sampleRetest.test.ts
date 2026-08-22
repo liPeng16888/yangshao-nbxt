@@ -50,6 +50,11 @@ describe('sample retest shared grid mapping', () => {
     expect(enabledRetestFields('铁')).not.toContain('titaniumRaw')
   })
 
+  it('falls back to the complete calculation mapping when no parent element is selected', () => {
+    expect(enabledRetestFields('')).toHaveLength(19)
+    expect(retestGridColumns.every((column) => isRetestColumnEnabled('', column))).toBe(true)
+  })
+
   it('treats zero as entered data and never exposes difference columns', () => {
     expect(hasRetestInput({ ironRaw: 0 })).toBe(true)
     expect(hasRetestInput({ ironRaw: Number.NaN })).toBe(false)

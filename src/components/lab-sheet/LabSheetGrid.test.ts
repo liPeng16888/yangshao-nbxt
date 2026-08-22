@@ -990,7 +990,7 @@ describe('LabSheetGrid', () => {
     [0, 3],
     [1, 4],
     [2, 5]
-  ])('reserves exact C-W rows for %i retests while A-B keep the amount row aligned', (retestCount, expectedParentSpan) => {
+  ])('reserves exact C-W rows for %i retests while the data-sending area remains visible', (retestCount, expectedParentSpan) => {
     const wrapper = mount(LabSheetGrid, {
       props: { blocks: [makeBlockWithRetests(retestCount)] },
       global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
@@ -1012,16 +1012,17 @@ describe('LabSheetGrid', () => {
       expect((identity.element as HTMLElement).style.gridRow).toBe(`${index + 3} / span 1`)
       expect(identity.attributes('aria-label')).toContain(`复样${index + 1}`)
       expect(identity.text()).toContain(`复样${index + 1}`)
-      expect(identity.text()).toContain('有效')
+      expect(identity.text()).toContain('已保存')
     })
     expect((customerCell.element as HTMLElement).style.gridRow).toBe(`span ${expectedParentSpan}`)
     expect((customerStack.element as HTMLElement).style.gridTemplateRows.split(' ')).toHaveLength(expectedParentSpan)
-    expect((recipientRow.element as HTMLElement).style.gridRow).toBe('-2 / -1')
+    expect((recipientRow.element as HTMLElement).style.gridRow).toBe('3 / -1')
     expect(bands).toHaveLength(retestCount)
     bands.forEach((band) => {
       expect((band.element as HTMLElement).style.gridColumn).toBe('3 / -1')
       expect((band.element as HTMLElement).style.gridTemplateColumns.split(' ')).toHaveLength(21)
       expect(band.find('.sample-retest-band__identity').exists()).toBe(false)
+      expect(band.find('.sample-retest-band__meta').exists()).toBe(false)
     })
     expect(wrapper.find('[data-field="price"]').exists()).toBe(true)
   })
@@ -1069,11 +1070,53 @@ describe('LabSheetGrid', () => {
       expect(style.boxSizing).toBe('border-box')
       expect(style.height).toBe('var(--sample-retest-row-height, 62px)')
     })
-    expect((wrapper.get('[data-field="recipientCustomerText"]').element as HTMLElement).style.gridRow).toBe('-2 / -1')
+    expect((wrapper.get('[data-field="recipientCustomerText"]').element as HTMLElement).style.gridRow).toBe('3 / -1')
     wrapper.unmount()
   })
 
-  it('passes the highlight and forwards exact retest event signatures', async () => {
+  it('keeps retest status and lifecycle actions in the sequence column instead of covering data sending', async () => {
+    const block = makeBlockWithRetests(2)
+    block.retests[1].everFilled = true
+    block.retests[1].inputs.ironRaw = 1
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [block] },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    const blankIdentity = wrapper.get('[data-retest-identity-id="retest-1"]')
+    const filledIdentity = wrapper.get('[data-retest-identity-id="retest-2"]')
+    expect(blankIdentity.attributes('title') || '').toContain('参数快照')
+    expect(blankIdentity.attributes('title') || '').toContain('已保存')
+    expect(blankIdentity.get('[data-testid="delete-retest-retest-1"]').text()).toBe('删除')
+    expect(filledIdentity.get('[data-testid="void-retest-retest-2"]').text()).toBe('作废')
+    expect(wrapper.find('.sample-retest-band__meta').exists()).toBe(false)
+
+    await blankIdentity.get('[data-testid="delete-retest-retest-1"]').trigger('click')
+    await filledIdentity.get('[data-testid="void-retest-retest-2"]').trigger('click')
+    expect(wrapper.emitted('retestDelete')).toContainEqual(['block-1', 'retest-1'])
+    expect(wrapper.emitted('retestVoid')).toContainEqual(['block-1', 'retest-2'])
+  })
+
+  it('locks the sequence-column lifecycle action while pending and hides it for readonly retests', async () => {
+    const block = makeBlockWithRetests(1)
+    const wrapper = mount(LabSheetGrid, {
+      props: { blocks: [block], pendingRetestActionIds: ['retest-1'] },
+      global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } }
+    })
+
+    const pendingButton = wrapper.get('[data-retest-identity-id="retest-1"] [data-testid="delete-retest-retest-1"]')
+    expect(pendingButton.attributes('disabled')).toBeDefined()
+    expect(pendingButton.attributes('aria-busy')).toBe('true')
+    expect(pendingButton.text()).toBe('处理中…')
+    await pendingButton.trigger('click')
+    expect(wrapper.emitted('retestDelete')).toBeUndefined()
+
+    block.retests[0].readonly = true
+    await wrapper.setProps({ blocks: [block], pendingRetestActionIds: [] })
+    expect(wrapper.find('[data-retest-identity-id="retest-1"] [data-testid^="delete-retest-"]').exists()).toBe(false)
+  })
+
+  it('passes the highlight and forwards exact retest input event signatures', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {
         blocks: [makeBlockWithRetests(1)],
@@ -1085,17 +1128,12 @@ describe('LabSheetGrid', () => {
     const band = wrapper.findComponent({ name: 'SampleRetestBand' })
 
     expect(band.props('highlighted')).toBe(true)
-    expect(band.props('actionPending')).toBe(true)
     band.vm.$emit('update', 'retest-1', { ironRaw: 1 })
     band.vm.$emit('fieldCommit', 'retest-1', 'ironRaw', null, 1)
-    band.vm.$emit('delete', 'retest-1')
-    band.vm.$emit('void', 'retest-1')
     await nextTick()
 
     expect(wrapper.emitted('retestUpdate')).toContainEqual(['block-1', 'retest-1', { ironRaw: 1 }])
     expect(wrapper.emitted('retestFieldCommit')).toContainEqual(['block-1', 'retest-1', 'ironRaw', null, 1])
-    expect(wrapper.emitted('retestDelete')).toContainEqual(['block-1', 'retest-1'])
-    expect(wrapper.emitted('retestVoid')).toContainEqual(['block-1', 'retest-1'])
   })
 
   it('locks retests with the completed parent when completed data access is unavailable', () => {

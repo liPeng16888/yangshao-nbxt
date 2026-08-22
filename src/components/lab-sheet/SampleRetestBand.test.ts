@@ -95,7 +95,21 @@ describe('SampleRetestBand', () => {
     expect(wrapper.find('.sample-retest-band__identity').exists()).toBe(false)
   })
 
-  it('fits the bordered band and every inner region inside one inherited 62px row', () => {
+  it('renders the complete editable calculation row when the parent has no element selection', () => {
+    const wrapper = mount(SampleRetestBand, {
+      props: {
+        parent: makeParent({ inputs: { sequence: '001', sampleNumber: 'A-001', elementNote: '' } }),
+        retest: makeRetest()
+      }
+    })
+
+    expect(wrapper.findAll('input[data-retest-field]')).toHaveLength(19)
+    expect(wrapper.get('input[data-retest-field="ironRaw"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-retest-column="C"] .sample-retest-band__result').text()).toBe('27.94')
+    expect(wrapper.get('[data-retest-column="H"] .sample-retest-band__result').text()).toBe('0.00')
+  })
+
+  it('fits the bordered calculation band and every cell inside one inherited 62px row', () => {
     const host = document.createElement('div')
     host.style.setProperty('--sample-retest-row-height', '62px')
     document.body.append(host)
@@ -106,7 +120,6 @@ describe('SampleRetestBand', () => {
 
     const bandStyle = getComputedStyle(wrapper.element)
     const cellStyle = getComputedStyle(wrapper.get('[data-retest-column="C"]').element)
-    const metaStyle = getComputedStyle(wrapper.get('.sample-retest-band__meta').element)
 
     expect(host.style.getPropertyValue('--sample-retest-row-height')).toBe('62px')
     expect(bandStyle.boxSizing).toBe('border-box')
@@ -115,22 +128,17 @@ describe('SampleRetestBand', () => {
     expect(cellStyle.boxSizing).toBe('border-box')
     expect(cellStyle.height).toBe('100%')
     expect(cellStyle.minHeight).toBe('0')
-    expect(metaStyle.boxSizing).toBe('border-box')
-    expect(metaStyle.height).toBe('var(--sample-retest-row-height, 62px)')
-    expect(metaStyle.minHeight).toBe('0')
-    expect(metaStyle.top).toBe('-1px')
-    expect(metaStyle.bottom).toBe('auto')
+    expect(wrapper.find('.sample-retest-band__meta').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('exposes its sequence accessibly while showing snapshot, save status, and no comparison judgement', () => {
+  it('exposes its sequence accessibly without comparison judgement or metadata over the data-sending column', () => {
     const wrapper = mount(SampleRetestBand, {
       props: { parent: makeParent(), retest: makeRetest() }
     })
 
     expect(wrapper.attributes('aria-label')).toBe('复样1')
-    expect(wrapper.text()).toContain('参数快照')
-    expect(wrapper.text()).toContain('已保存')
+    expect(wrapper.find('.sample-retest-band__meta').exists()).toBe(false)
     expect(wrapper.text()).not.toMatch(/差值|偏差|合格/)
   })
 
@@ -167,52 +175,6 @@ describe('SampleRetestBand', () => {
     expect(wrapper.emitted('fieldCommit')).toContainEqual(['retest-1', 'ironRaw', null, expectedValue])
   })
 
-  it('offers delete only while blank and void only after data has ever been saved', async () => {
-    const wrapper = mount(SampleRetestBand, {
-      props: { parent: makeParent(), retest: makeRetest({ inputs: {} }) }
-    })
-
-    expect(wrapper.get('[data-testid="delete-retest-retest-1"]').text()).toBe('删除')
-    expect(wrapper.find('[data-testid="void-retest-retest-1"]').exists()).toBe(false)
-    await wrapper.get('[data-testid="delete-retest-retest-1"]').trigger('click')
-    expect(wrapper.emitted('delete')).toContainEqual(['retest-1'])
-
-    await wrapper.setProps({ retest: makeRetest({ everFilled: true }) })
-    expect(wrapper.find('[data-testid="delete-retest-retest-1"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="void-retest-retest-1"]').text()).toBe('作废')
-    await wrapper.get('[data-testid="void-retest-retest-1"]').trigger('click')
-    expect(wrapper.emitted('void')).toContainEqual(['retest-1'])
-  })
-
-  it('switches to void as soon as a local input exists before everFilled is refreshed', () => {
-    const wrapper = mount(SampleRetestBand, {
-      props: {
-        parent: makeParent(),
-        retest: makeRetest({ everFilled: false, inputs: { ironRaw: 0 } })
-      }
-    })
-
-    expect(wrapper.find('[data-testid="delete-retest-retest-1"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="void-retest-retest-1"]').text()).toBe('作废')
-  })
-
-  it.each([
-    ['delete', makeRetest({ inputs: {} }), 'delete-retest-retest-1'],
-    ['void', makeRetest({ everFilled: true }), 'void-retest-retest-1']
-  ] as const)('disables the %s lifecycle action and exposes busy state while it is pending', async (_action, retest, testId) => {
-    const wrapper = mount(SampleRetestBand, {
-      props: { parent: makeParent(), retest, actionPending: true }
-    })
-    const button = wrapper.get(`[data-testid="${testId}"]`)
-
-    expect(wrapper.attributes('aria-busy')).toBe('true')
-    expect(button.attributes('disabled')).toBeDefined()
-    expect(button.text()).toBe('处理中…')
-    await button.trigger('click')
-    expect(wrapper.emitted('delete')).toBeUndefined()
-    expect(wrapper.emitted('void')).toBeUndefined()
-  })
-
   it.each([
     ['VOID', { status: 'VOID', everFilled: true, readonly: true }],
     ['readonly', { readonly: true }],
@@ -226,11 +188,8 @@ describe('SampleRetestBand', () => {
     })
 
     expect(wrapper.findAll('input[data-retest-field]').every((input) => input.attributes('disabled') !== undefined)).toBe(true)
-    expect(wrapper.find('[data-testid^="delete-retest-"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid^="void-retest-"]').exists()).toBe(false)
     if ('status' in retestOverrides && retestOverrides.status === 'VOID') {
       expect(wrapper.classes()).toContain('is-void')
-      expect(wrapper.text()).toContain('已作废')
     }
     if ('sensitiveFieldsHidden' in retestOverrides && retestOverrides.sensitiveFieldsHidden) {
       expect(wrapper.text()).toContain('数据已加密')

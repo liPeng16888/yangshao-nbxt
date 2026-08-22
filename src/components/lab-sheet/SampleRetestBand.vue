@@ -16,42 +16,8 @@
     }"
     :data-retest-id="retest.id"
     :aria-label="`复样${retest.sequence}`"
-    :aria-busy="actionPending ? 'true' : undefined"
   >
-    <div
-      class="sample-retest-band__meta"
-      :style="{
-        boxSizing: 'border-box',
-        height: retestRowHeight,
-        minHeight: '0',
-        top: '-1px',
-        bottom: 'auto'
-      }"
-    >
-      <span>参数快照 {{ formatTimestamp(retest.parameterSnapshot?.savedAt || retest.createdAt) }}</span>
-      <span>{{ retest.status === 'VOID' ? voidStatusText : `已保存 ${formatTimestamp(retest.updatedAt)}` }}</span>
-      <span v-if="sensitiveHidden" class="sample-retest-band__locked-message">数据已加密</span>
-      <div v-if="canManage" class="sample-retest-band__actions">
-        <button
-          v-if="isBlank"
-          type="button"
-          :disabled="actionPending"
-          :aria-busy="actionPending ? 'true' : undefined"
-          :data-testid="`delete-retest-${retest.id}`"
-          :aria-label="`删除空白复样${retest.sequence}`"
-          @click="emit('delete', retest.id)"
-        >{{ actionPending ? '处理中…' : '删除' }}</button>
-        <button
-          v-else
-          type="button"
-          :disabled="actionPending"
-          :aria-busy="actionPending ? 'true' : undefined"
-          :data-testid="`void-retest-${retest.id}`"
-          :aria-label="`作废复样${retest.sequence}`"
-          @click="emit('void', retest.id)"
-        >{{ actionPending ? '处理中…' : '作废' }}</button>
-      </div>
-    </div>
+    <span v-if="sensitiveHidden" class="sample-retest-band__locked-message">数据已加密</span>
 
     <div
       v-for="column in retestGridColumns"
@@ -89,7 +55,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { labSheetColumns } from '@/constants/labSheetTemplate'
 import type { SampleBlock, SampleRetest, SampleRetestInput, SampleRetestInputField } from '@/types/labSheet'
 import { formatFormulaValue, parseNumericInput } from '@/utils/formulaEngine'
-import { hasRetestInput, isRetestColumnEnabled, retestGridColumns, type RetestGridColumn } from '@/utils/sampleRetest'
+import { isRetestColumnEnabled, retestGridColumns, type RetestGridColumn } from '@/utils/sampleRetest'
 
 defineOptions({ name: 'SampleRetestBand' })
 
@@ -99,14 +65,11 @@ const props = defineProps<{
   readonly?: boolean
   sensitiveHidden?: boolean
   highlighted?: boolean
-  actionPending?: boolean
 }>()
 
 const emit = defineEmits<{
   update: [retestId: string, patch: Partial<SampleRetestInput>]
   fieldCommit: [retestId: string, field: SampleRetestInputField, oldValue: unknown, newValue: unknown]
-  delete: [retestId: string]
-  void: [retestId: string]
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
@@ -123,13 +86,6 @@ const locked = computed(() => Boolean(
   props.retest.status === 'VOID' ||
   sensitiveHidden.value
 ))
-const canManage = computed(() => props.retest.status === 'ACTIVE' && !locked.value)
-const isBlank = computed(() => !props.retest.everFilled && !hasRetestInput(props.retest.inputs))
-const voidStatusText = computed(() => {
-  const timestamp = props.retest.voidedAt ? ` ${formatTimestamp(props.retest.voidedAt)}` : ''
-  const reason = props.retest.voidReason ? `：${props.retest.voidReason}` : ''
-  return `已作废${timestamp}${reason}`
-})
 
 function isColumnEnabled(column: RetestGridColumn) {
   return isRetestColumnEnabled(props.parent.inputs.elementNote || '', column)
@@ -144,20 +100,6 @@ function formatResult(field?: RetestGridColumn['resultField']) {
   if (!field || sensitiveHidden.value) return ''
   const value = props.retest.results[field]
   return typeof value === 'number' && Number.isFinite(value) ? formatFormulaValue(value) : ''
-}
-
-function formatTimestamp(value?: string) {
-  if (!value) return '--'
-  const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return '--'
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  }).format(date)
 }
 
 function handleFocus(field: SampleRetestInputField) {
@@ -217,7 +159,6 @@ watch(
   transition: background-color 160ms ease, box-shadow 160ms ease;
 }
 
-.sample-retest-band__meta,
 .sample-retest-band__cell {
   box-sizing: border-box;
   height: 100%;
@@ -230,56 +171,15 @@ watch(
   border-right: 1px solid #111827;
 }
 
-.sample-retest-band__meta {
+.sample-retest-band__locked-message {
   position: absolute;
-  top: -1px;
-  bottom: auto;
+  inset: 0;
   z-index: 1;
-  box-sizing: border-box;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 4px 6px;
-  text-align: center;
-  border-top: 1px solid #111827;
-  border-bottom: 1px solid #111827;
-}
-
-.sample-retest-band__meta {
-  left: -240px;
-  width: 240px;
-  align-items: stretch;
   color: #64748b;
-  font-size: 10px;
-  line-height: 1.2;
-}
-
-.sample-retest-band__actions {
-  display: flex;
-  justify-content: center;
-
-  button {
-    min-height: 24px;
-    padding: 2px 10px;
-    color: #2563eb;
-    background: #ffffff;
-    border: 1px solid #bfdbfe;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 11px;
-
-    &:disabled {
-      color: #64748b;
-      background: #f1f5f9;
-      cursor: wait;
-    }
-  }
-}
-
-.sample-retest-band__locked-message {
-  color: #64748b;
+  background: rgba(241, 245, 249, 0.9);
   font-weight: 600;
 }
 
