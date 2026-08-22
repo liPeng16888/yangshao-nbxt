@@ -550,6 +550,28 @@ describe('LabDataPage table layout', () => {
     wrapper.unmount()
   })
 
+  it('passes historical change request state to the desktop grid', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
+    mocks.labStore.sheet = { date: '2026-06-24', readonly: true }
+    const pendingRequest = {
+      id: 'request-1',
+      blockId: 'block-1',
+      status: 'PENDING'
+    } as LabSampleChangeRequestSummary
+    mocks.changeRequestStore.pendingByBlock = { 'block-1': pendingRequest }
+    mocks.changeRequestStore.loading = true
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    const grid = wrapper.getComponent({ name: 'LabSheetGrid' })
+    expect(grid.props('sheetDate')).toBe('2026-06-24')
+    expect(grid.props('sampleChangeRequests')).toEqual({ 'block-1': pendingRequest })
+    expect(grid.props('sampleChangeLoading')).toBe(true)
+    wrapper.unmount()
+  })
+
   it('resets request state for current and future sheets instead of loading summaries', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-20T04:00:00.000Z'))
