@@ -58,120 +58,177 @@
             <small>{{ isGroupExpanded(block.id, 'identity') ? '收起' : '展开' }}</small>
             <span aria-hidden="true">{{ isGroupExpanded(block.id, 'identity') ? '⌃' : '⌄' }}</span>
           </button>
-          <div v-if="isGroupExpanded(block.id, 'identity')" class="mobile-collapsible-section__content">
-            <div class="mobile-field-grid mobile-field-grid--identity">
-            <label class="mobile-field">
-              <span>编号</span>
-              <input
-                data-mobile-field="sequence"
-                :value="block.inputs.sequence || ''"
-                :disabled="isDisabled(block)"
-                enterkeyhint="next"
-                @focus="rememberField(block, 'sequence')"
-                @input="updateText(block, 'sequence', $event)"
-                @blur="commitText(block, 'sequence', $event)"
-                @keydown.enter.prevent="focusNextField"
-              />
-            </label>
-            <label class="mobile-field">
-              <span>样品名称</span>
-              <input
-                data-mobile-field="sampleNumber"
-                :value="block.inputs.sampleNumber || ''"
-                :disabled="isDisabled(block)"
-                enterkeyhint="next"
-                placeholder="输入样品名称"
-                @focus="rememberField(block, 'sampleNumber')"
-                @input="updateText(block, 'sampleNumber', $event)"
-                @blur="commitText(block, 'sampleNumber', $event)"
-                @keydown.enter.prevent="focusNextField"
-              />
-            </label>
-            <div class="mobile-field mobile-field--wide" data-mobile-field="customerText">
-              <span>付款客户</span>
-              <CustomerCellEditor
-                class="mobile-customer-editor"
-                customer-role="payer"
-                :selection-limit="1"
-                :model-value="block.inputs.customerText"
-                :selected-customers="block.inputs.customers"
-                :disabled="isDisabled(block)"
-                placeholder="选择付款客户"
-                @update="(patch) => handleCustomerUpdate(block, patch, 'customerText')"
-                @blacklist-hit="(records) => emit('blacklistHit', records)"
-              />
-            </div>
-            <div class="mobile-field mobile-field--wide" data-mobile-field="recipientCustomerText">
-              <span>数据接收客户</span>
-              <CustomerCellEditor
-                class="mobile-customer-editor"
-                customer-role="recipient"
-                :selection-limit="0"
-                :model-value="block.inputs.recipientCustomerText"
-                :selected-customers="block.inputs.recipientCustomers"
-                :disabled="isDisabled(block)"
-                placeholder="选择数据接收客户"
-                @update="(patch) => handleCustomerUpdate(block, patch, 'recipientCustomerText')"
-                @blacklist-hit="(records) => emit('blacklistHit', records)"
-              />
+          <div
+            v-if="isGroupExpanded(block.id, 'identity')"
+            class="mobile-collapsible-section__content mobile-collapsible-section__content--identity"
+          >
+            <div class="mobile-identity-tabs" role="tablist" aria-label="样品信息分类">
+              <button
+                v-for="tab in identityTabs"
+                :id="identityTabId(block.id, tab.key)"
+                :key="tab.key"
+                class="mobile-identity-tab"
+                :class="{ 'mobile-identity-tab--active': activeIdentityTab(block.id) === tab.key }"
+                type="button"
+                role="tab"
+                :aria-controls="identityPanelId(block.id, tab.key)"
+                :aria-selected="activeIdentityTab(block.id) === tab.key"
+                @click="selectIdentityTab(block.id, tab.key)"
+              >
+                {{ tab.label }}
+              </button>
             </div>
 
-            <template v-if="isSensitiveHidden(block)">
-              <div class="mobile-field mobile-field--locked"><span>{{ getSampleAmountLabel(block) }}</span><b>🔒 已隐藏</b></div>
-              <div class="mobile-field mobile-field--locked"><span>结款状态</span><b>🔒 已隐藏</b></div>
-            </template>
-            <template v-else>
-              <label class="mobile-field" :class="{ 'mobile-field--required': isSampleAmountRequired(block) }">
-                <span>{{ getSampleAmountLabel(block) }}</span>
-                <input
-                  data-mobile-field="price"
-                  type="text"
-                  inputmode="decimal"
-                  :value="formatNumberInput(block, 'price', getSampleAmountPrecision(block))"
-                  :disabled="isDisabled(block)"
-                  enterkeyhint="next"
-                  @focus="rememberNumberField(block, 'price', $event)"
-                  @input="updateNumber(block, 'price', $event)"
-                  @blur="commitNumber(block, 'price', $event)"
-                  @keydown.enter.prevent="focusNextField"
-                />
-              </label>
-              <label class="mobile-field" :class="{ 'mobile-field--required': isSamplePaymentStatusRequired(block) }">
-                <span>结款状态</span>
-                <select
-                  data-mobile-field="paymentStatus"
-                  :value="block.inputs.paymentStatus || ''"
-                  :disabled="isDisabled(block)"
-                  @change="updatePaymentStatus(block, $event)"
+            <div
+              v-if="activeIdentityTab(block.id) === 'basic'"
+              :id="identityPanelId(block.id, 'basic')"
+              class="mobile-identity-panel"
+              role="tabpanel"
+              :aria-labelledby="identityTabId(block.id, 'basic')"
+              data-mobile-identity-panel="basic"
+            >
+              <div class="mobile-field-grid mobile-field-grid--identity">
+                <label class="mobile-field">
+                  <span>编号</span>
+                  <input
+                    data-mobile-field="sequence"
+                    :value="block.inputs.sequence || ''"
+                    :disabled="isDisabled(block)"
+                    enterkeyhint="next"
+                    @focus="rememberField(block, 'sequence')"
+                    @input="updateText(block, 'sequence', $event)"
+                    @blur="commitText(block, 'sequence', $event)"
+                    @keydown.enter.prevent="focusNextField"
+                  />
+                </label>
+                <label class="mobile-field">
+                  <span>样品名称</span>
+                  <input
+                    data-mobile-field="sampleNumber"
+                    :value="block.inputs.sampleNumber || ''"
+                    :disabled="isDisabled(block)"
+                    enterkeyhint="next"
+                    placeholder="输入样品名称"
+                    @focus="rememberField(block, 'sampleNumber')"
+                    @input="updateText(block, 'sampleNumber', $event)"
+                    @blur="commitText(block, 'sampleNumber', $event)"
+                    @keydown.enter.prevent="focusNextField"
+                  />
+                </label>
+                <div
+                  class="mobile-field mobile-field--wide"
+                  :class="{ 'mobile-field--required': isSampleElementNoteRequired(block) }"
+                  data-mobile-field="elementNote"
                 >
-                  <option value="">请选择</option>
-                  <option v-for="status in samplePaymentStatusOptions" :key="status" :value="status">{{ status }}</option>
-                </select>
-              </label>
-            </template>
-
-            <div class="mobile-field mobile-field--wide" :class="{ 'mobile-field--required': isSampleElementNoteRequired(block) }" data-mobile-field="elementNote">
-              <span>化验元素</span>
-              <LabElementSelector
-                :model-value="block.inputs.elementNote"
-                :disabled="isDisabled(block)"
-                @update:model-value="(value) => updateElementNote(block, value)"
-              />
+                  <span>化验元素</span>
+                  <LabElementSelector
+                    :model-value="block.inputs.elementNote"
+                    :disabled="isDisabled(block)"
+                    @update:model-value="(value) => updateElementNote(block, value)"
+                  />
+                </div>
+                <label class="mobile-field mobile-field--wide">
+                  <span>备注</span>
+                  <textarea
+                    data-mobile-field="note"
+                    rows="1"
+                    :value="block.inputs.note || ''"
+                    :disabled="isDisabled(block)"
+                    enterkeyhint="done"
+                    placeholder="输入备注"
+                    @focus="rememberField(block, 'note')"
+                    @input="updateText(block, 'note', $event)"
+                    @blur="commitText(block, 'note', $event)"
+                  />
+                </label>
+              </div>
             </div>
-            <label class="mobile-field mobile-field--wide">
-              <span>备注</span>
-              <textarea
-                data-mobile-field="note"
-                rows="1"
-                :value="block.inputs.note || ''"
-                :disabled="isDisabled(block)"
-                enterkeyhint="done"
-                placeholder="输入备注"
-                @focus="rememberField(block, 'note')"
-                @input="updateText(block, 'note', $event)"
-                @blur="commitText(block, 'note', $event)"
-              />
-            </label>
+
+            <div
+              v-else-if="activeIdentityTab(block.id) === 'customers'"
+              :id="identityPanelId(block.id, 'customers')"
+              class="mobile-identity-panel"
+              role="tabpanel"
+              :aria-labelledby="identityTabId(block.id, 'customers')"
+              data-mobile-identity-panel="customers"
+            >
+              <div class="mobile-field-grid mobile-field-grid--customers">
+                <div class="mobile-field mobile-field--wide" data-mobile-field="customerText">
+                  <span>付款客户</span>
+                  <CustomerCellEditor
+                    class="mobile-customer-editor"
+                    customer-role="payer"
+                    :selection-limit="1"
+                    :model-value="block.inputs.customerText"
+                    :selected-customers="block.inputs.customers"
+                    :disabled="isDisabled(block)"
+                    placeholder="选择付款客户"
+                    @update="(patch) => handleCustomerUpdate(block, patch, 'customerText')"
+                    @blacklist-hit="(records) => emit('blacklistHit', records)"
+                  />
+                </div>
+                <div class="mobile-field mobile-field--wide" data-mobile-field="recipientCustomerText">
+                  <span>数据接收客户</span>
+                  <CustomerCellEditor
+                    class="mobile-customer-editor"
+                    customer-role="recipient"
+                    :selection-limit="0"
+                    :model-value="block.inputs.recipientCustomerText"
+                    :selected-customers="block.inputs.recipientCustomers"
+                    :disabled="isDisabled(block)"
+                    placeholder="选择数据接收客户"
+                    @update="(patch) => handleCustomerUpdate(block, patch, 'recipientCustomerText')"
+                    @blacklist-hit="(records) => emit('blacklistHit', records)"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-else
+              :id="identityPanelId(block.id, 'settlement')"
+              class="mobile-identity-panel"
+              role="tabpanel"
+              :aria-labelledby="identityTabId(block.id, 'settlement')"
+              data-mobile-identity-panel="settlement"
+            >
+              <div class="mobile-field-grid mobile-field-grid--settlement">
+                <template v-if="isSensitiveHidden(block)">
+                  <div class="mobile-field mobile-field--locked"><span>{{ getSampleAmountLabel(block) }}</span><b>🔒 已隐藏</b></div>
+                  <div class="mobile-field mobile-field--locked"><span>结款状态</span><b>🔒 已隐藏</b></div>
+                </template>
+                <template v-else>
+                  <label class="mobile-field" :class="{ 'mobile-field--required': isSampleAmountRequired(block) }">
+                    <span>{{ getSampleAmountLabel(block) }}</span>
+                    <input
+                      data-mobile-field="price"
+                      type="text"
+                      inputmode="decimal"
+                      :value="formatNumberInput(block, 'price', getSampleAmountPrecision(block))"
+                      :disabled="isDisabled(block)"
+                      enterkeyhint="next"
+                      placeholder="请输入金额"
+                      @focus="rememberNumberField(block, 'price', $event)"
+                      @input="updateNumber(block, 'price', $event)"
+                      @blur="commitNumber(block, 'price', $event)"
+                      @keydown.enter.prevent="focusNextField"
+                    />
+                  </label>
+                  <label class="mobile-field" :class="{ 'mobile-field--required': isSamplePaymentStatusRequired(block) }">
+                    <span>结款状态</span>
+                    <select
+                      data-mobile-field="paymentStatus"
+                      :value="block.inputs.paymentStatus || ''"
+                      :disabled="isDisabled(block)"
+                      @change="updatePaymentStatus(block, $event)"
+                    >
+                      <option value="">请选择</option>
+                      <option v-for="status in samplePaymentStatusOptions" :key="status" :value="status">{{ status }}</option>
+                    </select>
+                  </label>
+                </template>
+              </div>
+              <p v-if="!isSensitiveHidden(block)" class="mobile-settlement-helper">金额和结款状态将随当前样品自动保存</p>
             </div>
           </div>
         </section>
@@ -297,6 +354,13 @@ type MobileFieldGroup = {
   fields: MobileInputField[]
   results: MobileResultField[]
 }
+type IdentityTabKey = 'basic' | 'customers' | 'settlement'
+
+const identityTabs: Array<{ key: IdentityTabKey; label: string }> = [
+  { key: 'basic', label: '基础' },
+  { key: 'customers', label: '客户' },
+  { key: 'settlement', label: '结算' }
+]
 
 const mobileFieldGroups: MobileFieldGroup[] = [
   {
@@ -383,6 +447,7 @@ const emit = defineEmits<{
 const initiallyExpandedBlockId = props.highlightBlockId || findRetestParentId(props.highlightRetestId) || props.blocks[0]?.id || ''
 const expandedBlockIds = ref(new Set(initiallyExpandedBlockId ? [initiallyExpandedBlockId] : []))
 const expandedGroupKeysByBlock = ref(new Map<string, Set<string>>())
+const identityTabByBlock = ref(new Map<string, IdentityTabKey>())
 const focusedFieldValues = new Map<string, unknown>()
 const numericInputDrafts = ref(new Map<string, string>())
 const effectiveRetestHighlightId = ref('')
@@ -430,6 +495,8 @@ watch(
     if (nextExpandedIds.size !== expandedBlockIds.value.size) expandedBlockIds.value = nextExpandedIds
     const nextExpandedGroups = new Map([...expandedGroupKeysByBlock.value].filter(([blockId]) => allowedIds.has(blockId)))
     if (nextExpandedGroups.size !== expandedGroupKeysByBlock.value.size) expandedGroupKeysByBlock.value = nextExpandedGroups
+    const nextIdentityTabs = new Map([...identityTabByBlock.value].filter(([blockId]) => allowedIds.has(blockId)))
+    if (nextIdentityTabs.size !== identityTabByBlock.value.size) identityTabByBlock.value = nextIdentityTabs
   }
 )
 
@@ -488,11 +555,37 @@ function toggleGroup(blockId: string, groupKey: string) {
   expandedGroupKeysByBlock.value = nextExpandedGroups
 }
 
+function activeIdentityTab(blockId: string): IdentityTabKey {
+  return identityTabByBlock.value.get(blockId) || 'basic'
+}
+
+function selectIdentityTab(blockId: string, tab: IdentityTabKey) {
+  if (activeIdentityTab(blockId) === tab) return
+  const nextIdentityTabs = new Map(identityTabByBlock.value)
+  if (tab === 'basic') nextIdentityTabs.delete(blockId)
+  else nextIdentityTabs.set(blockId, tab)
+  identityTabByBlock.value = nextIdentityTabs
+}
+
+function identityTabId(blockId: string, tab: IdentityTabKey) {
+  return `mobile-identity-tab-${blockId}-${tab}`
+}
+
+function identityPanelId(blockId: string, tab: IdentityTabKey) {
+  return `mobile-identity-panel-${blockId}-${tab}`
+}
+
 function resetGroups(blockId: string) {
-  if (!expandedGroupKeysByBlock.value.has(blockId)) return
-  const nextExpandedGroups = new Map(expandedGroupKeysByBlock.value)
-  nextExpandedGroups.delete(blockId)
-  expandedGroupKeysByBlock.value = nextExpandedGroups
+  if (expandedGroupKeysByBlock.value.has(blockId)) {
+    const nextExpandedGroups = new Map(expandedGroupKeysByBlock.value)
+    nextExpandedGroups.delete(blockId)
+    expandedGroupKeysByBlock.value = nextExpandedGroups
+  }
+  if (identityTabByBlock.value.has(blockId)) {
+    const nextIdentityTabs = new Map(identityTabByBlock.value)
+    nextIdentityTabs.delete(blockId)
+    identityTabByBlock.value = nextIdentityTabs
+  }
 }
 
 function isDisabled(block: SampleBlock) {
@@ -829,6 +922,48 @@ async function scrollToBlock(blockId: string) {
   }
 }
 
+.mobile-collapsible-section__content--identity {
+  gap: 0;
+  padding: 0;
+}
+
+.mobile-identity-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0 10px;
+}
+
+.mobile-identity-tab {
+  position: relative;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 6px;
+  color: #334155;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: 14px;
+  font-weight: 600;
+
+  &:focus-visible {
+    z-index: 1;
+    outline: 3px solid rgba(63, 111, 153, 0.2);
+    outline-offset: -3px;
+  }
+}
+
+.mobile-identity-tab--active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+}
+
+.mobile-identity-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid #e5ebf1;
+}
+
 .mobile-field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -837,6 +972,22 @@ async function scrollToBlock(blockId: string) {
 
 .mobile-field-grid--identity {
   grid-template-columns: minmax(90px, 0.7fr) minmax(0, 1.3fr);
+}
+
+.mobile-field-grid--customers {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.mobile-field-grid--settlement {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mobile-settlement-helper {
+  margin: 0;
+  color: #8293a6;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .mobile-field {
@@ -1002,6 +1153,12 @@ async function scrollToBlock(blockId: string) {
   }
 }
 
+@media (max-width: 340px) {
+  .mobile-field-grid--settlement {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (orientation: landscape) and (max-height: 520px) {
   .mobile-field-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1009,6 +1166,14 @@ async function scrollToBlock(blockId: string) {
 
   .mobile-field--wide {
     grid-column: span 2;
+  }
+
+  .mobile-field-grid--customers {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mobile-field-grid--settlement {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

@@ -169,6 +169,68 @@ describe('MobileLabSampleList', () => {
     expect(wrapper.text()).toContain(calculateSampleResults(wrapper.props('blocks')[0].inputs, defaultLabParameters).total.toFixed(2))
   })
 
+  it('splits sample information into compact tabs with basic fields selected first', async () => {
+    const wrapper = mountList()
+
+    await getGroupToggle(wrapper, '样品信息').trigger('click')
+
+    const tablist = wrapper.get('[role="tablist"][aria-label="样品信息分类"]')
+    const tabs = tablist.findAll('[role="tab"]')
+    expect(tabs.map((tab) => tab.text())).toEqual(['基础', '客户', '结算'])
+    expect(tabs.map((tab) => tab.attributes('aria-selected'))).toEqual(['true', 'false', 'false'])
+    expect(wrapper.get('[role="tabpanel"]').attributes('data-mobile-identity-panel')).toBe('basic')
+    expect(wrapper.get('[role="tabpanel"]').findAll('[data-mobile-field]').map((field) => field.attributes('data-mobile-field'))).toEqual([
+      'sequence', 'sampleNumber', 'elementNote', 'note'
+    ])
+    expect(wrapper.find('.mobile-customer-editor').exists()).toBe(false)
+    expect(wrapper.find('[data-mobile-field="price"]').exists()).toBe(false)
+  })
+
+  it('shows only customer or settlement controls when their sample-information tab is selected', async () => {
+    const wrapper = mountList()
+
+    await getGroupToggle(wrapper, '样品信息').trigger('click')
+    await getIdentityTab(wrapper, '客户').trigger('click')
+
+    expect(getIdentityTab(wrapper, '客户').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('[role="tabpanel"]').attributes('data-mobile-identity-panel')).toBe('customers')
+    expect(wrapper.get('[role="tabpanel"]').findAll('[data-mobile-field]').map((field) => field.attributes('data-mobile-field'))).toEqual([
+      'customerText', 'recipientCustomerText'
+    ])
+    expect(wrapper.findAll('.mobile-customer-editor')).toHaveLength(2)
+    expect(wrapper.find('[data-mobile-field="sequence"]').exists()).toBe(false)
+
+    await getIdentityTab(wrapper, '结算').trigger('click')
+
+    expect(getIdentityTab(wrapper, '结算').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('[role="tabpanel"]').attributes('data-mobile-identity-panel')).toBe('settlement')
+    expect(wrapper.get('[role="tabpanel"]').findAll('[data-mobile-field]').map((field) => field.attributes('data-mobile-field'))).toEqual([
+      'price', 'paymentStatus'
+    ])
+    expect(wrapper.find('.mobile-customer-editor').exists()).toBe(false)
+    expect(wrapper.text()).toContain('金额和结款状态将随当前样品自动保存')
+  })
+
+  it('keeps sample-information tabs independent and resets a reopened sample to basic', async () => {
+    const wrapper = mountList({ selectionMode: true })
+    const firstCard = wrapper.get('[data-block-id="block-1"]')
+
+    await getGroupToggle(firstCard, '样品信息').trigger('click')
+    await getIdentityTab(firstCard, '客户').trigger('click')
+    await wrapper.findAll('.mobile-sample-card__toggle')[1].trigger('click')
+    const secondCard = wrapper.get('[data-block-id="block-2"]')
+    await getGroupToggle(secondCard, '样品信息').trigger('click')
+
+    expect(getIdentityTab(firstCard, '客户').attributes('aria-selected')).toBe('true')
+    expect(getIdentityTab(secondCard, '基础').attributes('aria-selected')).toBe('true')
+
+    await wrapper.findAll('.mobile-sample-card__toggle')[0].trigger('click')
+    await wrapper.findAll('.mobile-sample-card__toggle')[0].trigger('click')
+    await getGroupToggle(wrapper.get('[data-block-id="block-1"]'), '样品信息').trigger('click')
+
+    expect(getIdentityTab(wrapper.get('[data-block-id="block-1"]'), '基础').attributes('aria-selected')).toBe('true')
+  })
+
   it('places sulfur, calcium, magnesium, carbon and titanium in an independent element group', async () => {
     const wrapper = mountList()
 
@@ -228,6 +290,7 @@ describe('MobileLabSampleList', () => {
     const identityToggle = list.findAll('.mobile-group-toggle').find((button) => button.text().includes('样品信息'))
     if (!identityToggle) throw new Error('Missing mobile sample information toggle')
     await identityToggle.trigger('click')
+    await getIdentityTab(list, '结算').trigger('click')
     const amount = list.get<HTMLInputElement>('input[data-mobile-field="price"]')
     const input = amount.element
 
@@ -283,6 +346,7 @@ describe('MobileLabSampleList', () => {
     expect(wrapper.find('[data-mobile-field="sampleNumber"]').exists()).toBe(true)
 
     await wrapper.setProps({ canViewCompletedSensitiveData: true })
+    await getIdentityTab(wrapper, '结算').trigger('click')
     await getGroupToggle(wrapper, '金属元素').trigger('click')
     expect(wrapper.find('[data-mobile-field="ironRaw"]').exists()).toBe(true)
     expect(wrapper.find('[data-mobile-field="price"]').exists()).toBe(true)
@@ -327,6 +391,7 @@ describe('MobileLabSampleList', () => {
   it('marks customer controls for mobile-sized touch targets', async () => {
     const wrapper = mountList()
     await getGroupToggle(wrapper, '样品信息').trigger('click')
+    await getIdentityTab(wrapper, '客户').trigger('click')
 
     expect(wrapper.findAll('.mobile-customer-editor')).toHaveLength(2)
   })
@@ -487,8 +552,14 @@ function expandedBlockIds(wrapper: ReturnType<typeof mountList>) {
   return wrapper.findAll('.mobile-sample-card--expanded').map((card) => card.attributes('data-block-id'))
 }
 
-function getGroupToggle(wrapper: ReturnType<typeof mountList>, label: string) {
+function getGroupToggle(wrapper: { findAll: ReturnType<typeof mountList>['findAll'] }, label: string) {
   const toggle = wrapper.findAll('.mobile-group-toggle').find((button) => button.text().includes(label))
   if (!toggle) throw new Error(`Missing mobile group toggle: ${label}`)
   return toggle
+}
+
+function getIdentityTab(wrapper: { findAll: ReturnType<typeof mountList>['findAll'] }, label: string) {
+  const tab = wrapper.findAll('[role="tab"]').find((button) => button.text() === label)
+  if (!tab) throw new Error(`Missing sample information tab: ${label}`)
+  return tab
 }
