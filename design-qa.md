@@ -110,3 +110,59 @@
 - [x] 390 x 844 真实浏览器下无横向溢出、无控制台 error。
 
 final result: passed
+
+## 复样逐条折叠与同版计算界面（2026-08-22）
+
+### Comparison target
+
+- Source visual truth: `/private/tmp/yangshao-mobile-retest-qa/source-parent-calculation.png`，取自同一页面原始样品的“检测数据”计算面板。
+- Implementation screenshot: `/private/tmp/yangshao-mobile-retest-qa/implementation-retest-calculation.png`。
+- Final interaction screenshot: `/private/tmp/yangshao-mobile-retest-qa/final-mobile-retests.png`。
+- Combined side-by-side evidence: `/private/tmp/yangshao-mobile-retest-qa/retest-calculation-compare.png`。
+- Route: `http://127.0.0.1:5173/data`，Codex In-app Browser。
+- CSS viewport: `551 x 882`；页面 `body`、根节点和视口宽度均为 `551px`，横向溢出为 `0px`。
+- State: 样品 001 含复样1、复样2；复样1收起、复样2展开，“金属元素”页签选中。
+
+### Findings
+
+- 无 P0 / P1 / P2 问题。
+- 复样集合保留总折叠层，每组复样改为独立紧凑行，默认收起；一次只展开一组，避免多组计算表同时占据手机首屏。
+- 展开的复样沿用原样品五页签计算结构；嵌套区域仅因父卡片内边距而略窄，字段、结果和操作无裁切。
+
+### Required fidelity surfaces
+
+- Fonts and typography: 复用原样品系统中文字体、深蓝标题、12px 页签和计算结果层级；“复样1、复样2”序号稳定可辨。
+- Spacing and layout rhythm: 单组收起时只保留紧凑标题行；展开后为五页签、两列输入、三列结果，与原样品计算面板一致。
+- Colors and visual tokens: 继续使用现有白底、冷灰边框、淡蓝结果块、蓝色激活线和绿色 ACTIVE 状态，无新增色系漂移。
+- Image quality and asset fidelity: 本区域不需要新增图片资产；全部图标、状态和按钮继续由现有项目组件渲染。
+- Copy and content: 复样页签顺序精确为“金属元素、微量元素、比重/白度、水份、灼烧”；展开区继续显示创建时间、参数快照、保存时间及删除/作废动作。
+
+### Interaction and accessibility evidence
+
+- 外层“复样记录（2）”控制集合显隐；内层每条复样都有独立按钮、展开/收起文字和方向符号。
+- 已验证复样1展开时复样2自动收起，复样2展开时页面仅保留一个计算面板。
+- 五个计算页签继续使用 `role="tab"`、`aria-selected`、`aria-controls`，面板使用 `role="tabpanel"`。
+- 新建或高亮复样会自动展开对应行并定位首个可用输入；普通手动切换不会重复消费旧高亮。
+- 可编辑、待处理锁定、只读、完成数据脱敏、VOID、删除与作废语义继续复用原复样状态机。
+- 浏览器中当前金属页签包含 5 个输入和 5 个结果；微量元素页签字段映射已逐项验证。
+- 控制台 error 为 0；页面横向溢出为 0px。
+
+### Full-view and focused comparison evidence
+
+- Full-view: `/private/tmp/yangshao-mobile-retest-qa/final-full-page.png` 覆盖手机端整页，确认复样区位于原样品计算组之后且未挤压底部导航。
+- Focused region: `/private/tmp/yangshao-mobile-retest-qa/final-mobile-retests.png` 清晰显示两条复样、单开状态、元信息、操作按钮和完整金属计算面板。
+- Side-by-side: `/private/tmp/yangshao-mobile-retest-qa/retest-calculation-compare.png` 证明复样与原样品使用相同页签顺序、两列输入、三列结果和视觉令牌。
+
+### Comparison history
+
+- Iteration 1: 首次浏览器对照即满足折叠密度、单开规则和同版计算布局，无需额外视觉修复。
+
+### Implementation checklist
+
+- [x] 复样1、复样2……分别显示为紧凑折叠行。
+- [x] 一次只展开一组复样；集合关闭时所有内层复样归位为收起。
+- [x] 展开后显示与原样品一致的五页签输入与计算结果。
+- [x] 新建/高亮复样自动展开并聚焦；删除、作废、只读和脱敏不回退。
+- [x] 浏览器无横向溢出、无控制台 error。
+
+final result: passed

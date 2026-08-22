@@ -71,6 +71,13 @@ function installScrollIntoViewMock(implementation: (this: HTMLElement) => void =
   return mock
 }
 
+async function expandRetest(wrapper: ReturnType<typeof mountRetests>, retestId: string) {
+  const collectionToggle = wrapper.get('[data-testid="mobile-retests-toggle"]')
+  if (collectionToggle.attributes('aria-expanded') !== 'true') await collectionToggle.trigger('click')
+  const retestToggle = wrapper.get(`[data-testid="mobile-retest-toggle-${retestId}"]`)
+  if (retestToggle.attributes('aria-expanded') !== 'true') await retestToggle.trigger('click')
+}
+
 describe('MobileSampleRetests', () => {
   afterEach(() => {
     document.body.innerHTML = ''
@@ -78,7 +85,7 @@ describe('MobileSampleRetests', () => {
     delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
   })
 
-  it('expands the sorted records, edits one retest, and exposes delete or void by lifecycle', async () => {
+  it('shows sorted compact retest rows and expands only one calculation form at a time', async () => {
     const wrapper = mountRetests(makeParent([makeRetest(2), makeRetest(1)]))
     const toggle = wrapper.get('[data-testid="mobile-retests-toggle"]')
 
@@ -90,6 +97,13 @@ describe('MobileSampleRetests', () => {
       'retest-1',
       'retest-2'
     ])
+    expect(wrapper.find('input[data-retest-field]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="mobile-retest-toggle-retest-1"]').text()).toContain('复样1')
+    expect(wrapper.get('[data-testid="mobile-retest-toggle-retest-2"]').text()).toContain('复样2')
+
+    await wrapper.get('[data-testid="mobile-retest-toggle-retest-1"]').trigger('click')
+    expect(wrapper.get('[data-testid="mobile-retest-toggle-retest-1"]').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('[data-testid="mobile-retest-toggle-retest-2"]').attributes('aria-expanded')).toBe('false')
     const iron = wrapper.get('[data-retest-id="retest-1"] input[data-retest-field="ironRaw"]')
     await iron.trigger('focus')
     await iron.setValue('1')
@@ -98,7 +112,33 @@ describe('MobileSampleRetests', () => {
     expect(wrapper.emitted('update')).toContainEqual(['retest-1', { ironRaw: 1 }])
     expect(wrapper.emitted('fieldCommit')).toContainEqual(['retest-1', 'ironRaw', null, 1])
     expect(wrapper.get('[data-retest-id="retest-1"]').text()).toContain('删除')
+
+    await wrapper.get('[data-testid="mobile-retest-toggle-retest-2"]').trigger('click')
+    expect(wrapper.get('[data-testid="mobile-retest-toggle-retest-1"]').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[data-testid="mobile-retest-toggle-retest-2"]').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.find('[data-retest-id="retest-1"] input[data-retest-field]').exists()).toBe(false)
     expect(wrapper.get('[data-retest-id="retest-2"]').text()).toContain('作废')
+  })
+
+  it('uses the same five calculation tabs and renders only the active category', async () => {
+    const wrapper = mountRetests(makeParent([makeRetest(1)], {
+      inputs: { sequence: '001', sampleNumber: '铝土矿 A', elementNote: '' }
+    }))
+    await expandRetest(wrapper, 'retest-1')
+
+    const tabs = wrapper.findAll('[role="tab"]')
+    expect(tabs.map((tab) => tab.text())).toEqual(['金属元素', '微量元素', '比重/白度', '水份', '灼烧'])
+    expect(tabs.map((tab) => tab.attributes('aria-selected'))).toEqual(['true', 'false', 'false', 'false', 'false'])
+    expect(wrapper.find('[data-mobile-retest-panel="metal"] input[data-retest-field="ironRaw"]').exists()).toBe(true)
+    expect(wrapper.find('input[data-retest-field="calciumRaw"]').exists()).toBe(false)
+
+    await tabs[1]!.trigger('click')
+    expect(wrapper.find('[data-mobile-retest-panel="otherElements"] input[data-retest-field="calciumRaw"]').exists()).toBe(true)
+    expect(wrapper.find('input[data-retest-field="ironRaw"]').exists()).toBe(false)
+
+    await wrapper.get('[role="tab"][aria-controls="mobile-retest-panel-retest-1-water"]').trigger('click')
+    expect(wrapper.find('[data-mobile-retest-panel="water"] input[data-retest-field="waterSample"]').exists()).toBe(true)
+    expect(wrapper.find('[data-mobile-retest-panel="water"] [data-retest-result-card="bottleDensity"]').exists()).toBe(true)
   })
 
   it('uses only the shared parent-element mapping and shows frozen results without comparison text', async () => {
@@ -113,15 +153,16 @@ describe('MobileSampleRetests', () => {
       }
     })
     const wrapper = mountRetests(makeParent([retest]))
-    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await expandRetest(wrapper, 'retest-1')
 
+    expect(wrapper.findAll('input[data-retest-field]').map((input) => input.attributes('data-retest-field'))).toEqual(['ironRaw'])
+    expect(wrapper.find('input[data-retest-field="siliconRaw"]').exists()).toBe(false)
+    expect(wrapper.get('[data-retest-result-card="iron"] output').text()).toBe('27.94')
+    await wrapper.get('[role="tab"][aria-controls="mobile-retest-panel-retest-1-otherElements"]').trigger('click')
     expect(wrapper.findAll('input[data-retest-field]').map((input) => input.attributes('data-retest-field'))).toEqual([
-      'ironRaw',
       'calciumRaw',
       'magnesiumRaw'
     ])
-    expect(wrapper.find('input[data-retest-field="siliconRaw"]').exists()).toBe(false)
-    expect(wrapper.get('[data-retest-field-card="ironRaw"] output').text()).toBe('27.94')
     expect(wrapper.text()).toContain('参数快照')
     expect(wrapper.text()).toContain('创建时间')
     expect(wrapper.text()).not.toMatch(/差值|偏差|合格/)
@@ -138,11 +179,17 @@ describe('MobileSampleRetests', () => {
       inputs: { sequence: '001', sampleNumber: '铝土矿 A', elementNote: '' }
     }))
 
-    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await expandRetest(wrapper, 'retest-1')
 
-    expect(wrapper.findAll('input[data-retest-field]')).toHaveLength(19)
+    const allFields = new Set<string>()
+    for (const tab of wrapper.findAll('[role="tab"]')) {
+      await tab.trigger('click')
+      wrapper.findAll('input[data-retest-field]').forEach((input) => allFields.add(input.attributes('data-retest-field')!))
+    }
+    expect([...allFields]).toHaveLength(19)
+    await wrapper.get('[role="tab"][aria-controls="mobile-retest-panel-retest-1-metal"]').trigger('click')
     expect(wrapper.get('input[data-retest-field="ironRaw"]').attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('[data-retest-field-card="ironRaw"] output').text()).toBe('27.94')
+    expect(wrapper.get('[data-retest-result-card="iron"] output').text()).toBe('27.94')
     expect(wrapper.get('[data-retest-result-card="aluminumSiliconRatio"] output').text()).toBe('0.00')
   })
 
@@ -158,7 +205,7 @@ describe('MobileSampleRetests', () => {
     const wrapper = mountRetests(makeParent([retest], {
       inputs: { sequence: '001', elementNote: '铝硅比' }
     }))
-    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await expandRetest(wrapper, 'retest-1')
 
     expect(wrapper.get('[data-retest-result-card="aluminumSiliconRatio"] output').text()).toBe('1.50')
     expect(wrapper.get('[data-retest-result-card="total"] output').text()).toBe('44.25')
@@ -174,7 +221,7 @@ describe('MobileSampleRetests', () => {
     const wrapper = mountRetests(makeParent([makeRetest(1), voided]))
 
     expect(wrapper.get('[data-testid="mobile-retests-toggle"]').text()).toContain('复样记录（2）')
-    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await expandRetest(wrapper, 'retest-2')
     const card = wrapper.get('[data-retest-id="retest-2"]')
     expect(card.classes()).toContain('is-void')
     expect(card.text()).toContain('已作废')
@@ -193,7 +240,7 @@ describe('MobileSampleRetests', () => {
       makeParent([makeRetest(1, retestOverrides as Partial<SampleRetest>)], parentOverrides as Partial<SampleBlock>),
       propsOverrides
     )
-    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await expandRetest(wrapper, 'retest-1')
 
     expect(wrapper.findAll('input[data-retest-field]').every((input) => input.attributes('disabled') !== undefined)).toBe(true)
     expect(wrapper.find('[data-testid^="delete-retest-"]').exists()).toBe(false)
@@ -206,7 +253,7 @@ describe('MobileSampleRetests', () => {
       results: { ...calculateSampleResults({ ironRaw: 91.234 }, defaultLabParameters), iron: 88.765 }
     })
     const wrapper = mountRetests(makeParent([retest]), { sensitiveHidden: true })
-    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await expandRetest(wrapper, 'retest-1')
 
     expect(wrapper.text()).toContain('数据已加密')
     expect(wrapper.find('input[data-retest-field]').exists()).toBe(false)
@@ -218,7 +265,7 @@ describe('MobileSampleRetests', () => {
   it('commits zero as entered data and switches lifecycle from delete to void after local state updates', async () => {
     const retest = reactive(makeRetest(1, { inputs: {}, everFilled: false }))
     const wrapper = mountRetests(makeParent([retest]))
-    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await expandRetest(wrapper, 'retest-1')
     const input = wrapper.get('input[data-retest-field="ironRaw"]')
 
     await input.trigger('focus')
@@ -236,7 +283,7 @@ describe('MobileSampleRetests', () => {
     const wrapper = mountRetests(makeParent([makeRetest(1), makeRetest(2)]), {
       pendingRetestActionIds: ['retest-1']
     })
-    await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await expandRetest(wrapper, 'retest-1')
     const pendingCard = wrapper.get('[data-retest-id="retest-1"]')
     const pendingButton = pendingCard.get('[data-testid="delete-retest-retest-1"]')
     const pendingInput = pendingCard.get<HTMLInputElement>('input[data-retest-field="ironRaw"]')
@@ -254,6 +301,7 @@ describe('MobileSampleRetests', () => {
     expect(wrapper.emitted('fieldCommit')).toBeUndefined()
     expect(wrapper.emitted('delete')).toBeUndefined()
 
+    await wrapper.get('[data-testid="mobile-retest-toggle-retest-2"]').trigger('click')
     const independentInput = wrapper.get('[data-retest-id="retest-2"] input[data-retest-field="ironRaw"]')
     expect(independentInput.attributes('disabled')).toBeUndefined()
     await independentInput.trigger('focus')
@@ -263,10 +311,12 @@ describe('MobileSampleRetests', () => {
     expect(wrapper.emitted('fieldCommit')).toContainEqual(['retest-2', 'ironRaw', 0.5, 2])
 
     await wrapper.setProps({ pendingRetestActionIds: [] })
-    expect(pendingInput.attributes('disabled')).toBeUndefined()
-    await pendingInput.trigger('focus')
-    await pendingInput.setValue('1')
-    await pendingInput.trigger('blur')
+    await wrapper.get('[data-testid="mobile-retest-toggle-retest-1"]').trigger('click')
+    const restoredInput = wrapper.get('[data-retest-id="retest-1"] input[data-retest-field="ironRaw"]')
+    expect(restoredInput.attributes('disabled')).toBeUndefined()
+    await restoredInput.trigger('focus')
+    await restoredInput.setValue('1')
+    await restoredInput.trigger('blur')
     expect(wrapper.emitted('update')).toContainEqual(['retest-1', { ironRaw: 1 }])
     expect(wrapper.emitted('fieldCommit')).toContainEqual(['retest-1', 'ironRaw', null, 1])
   })

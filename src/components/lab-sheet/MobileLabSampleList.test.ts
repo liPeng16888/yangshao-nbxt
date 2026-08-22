@@ -419,11 +419,13 @@ describe('MobileLabSampleList', () => {
     const wrapper = mountList({ blocks: [parent] })
 
     await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-retest-toggle-retest-1"]').trigger('click')
     const input = wrapper.get('[data-retest-id="retest-1"] input[data-retest-field="ironRaw"]')
     await input.trigger('focus')
     await input.setValue('0')
     await input.trigger('blur')
     await wrapper.get('[data-testid="delete-retest-retest-1"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-retest-toggle-retest-2"]').trigger('click')
     await wrapper.get('[data-testid="void-retest-retest-2"]').trigger('click')
 
     expect(wrapper.emitted('retestUpdate')).toContainEqual(['block-1', 'retest-1', { ironRaw: 0 }])
@@ -541,6 +543,7 @@ describe('MobileLabSampleList', () => {
     const wrapper = mountList({ blocks: [parent], canViewCompletedSensitiveData: false })
 
     await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-retest-toggle-retest-1"]').trigger('click')
     expect(wrapper.text()).toContain('数据已加密')
     expect(wrapper.find('[data-retest-id] input').exists()).toBe(false)
     expect(wrapper.html()).not.toContain('91.234')
@@ -559,6 +562,7 @@ describe('MobileLabSampleList', () => {
       pendingRetestActionIds: ['retest-2']
     })
     await wrapper.get('[data-testid="mobile-retests-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="mobile-retest-toggle-retest-2"]').trigger('click')
 
     expect(wrapper.get('[data-retest-id="retest-2"] input').attributes('disabled')).toBeDefined()
     expect(wrapper.find('[data-testid="void-retest-retest-2"]').exists()).toBe(false)

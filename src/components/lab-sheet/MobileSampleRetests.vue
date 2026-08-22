@@ -10,7 +10,7 @@
       class="mobile-sample-retests__toggle"
       type="button"
       :aria-expanded="expanded"
-      @click="expanded = !expanded"
+      @click="toggleCollection"
     >
       <strong>复样记录（{{ sortedRetests.length }}）</strong>
       <span>{{ expanded ? '收起' : '展开' }}</span>
@@ -25,92 +25,137 @@
         :class="{
           'is-void': retest.status === 'VOID',
           'is-locked': isLocked(retest),
+          'is-expanded': isRetestExpanded(retest.id),
           'is-highlighted': retest.id === highlightRetestId
         }"
         :data-retest-id="retest.id"
         :aria-label="`复样${retest.sequence}`"
         :aria-busy="isActionPending(retest.id) ? 'true' : undefined"
       >
-        <header class="mobile-retest-card__header">
-          <div>
+        <button
+          class="mobile-retest-card__toggle"
+          type="button"
+          :data-testid="`mobile-retest-toggle-${retest.id}`"
+          :aria-expanded="isRetestExpanded(retest.id)"
+          :aria-controls="retestBodyId(retest.id)"
+          @click="toggleRetest(retest.id)"
+        >
+          <span class="mobile-retest-card__title">
             <strong>复样{{ retest.sequence }}</strong>
-            <span :class="retest.status === 'VOID' ? 'is-void' : 'is-active'">
+            <span class="mobile-retest-card__status" :class="retest.status === 'VOID' ? 'is-void' : 'is-active'">
               {{ retest.status === 'VOID' ? '已作废' : 'ACTIVE' }}
             </span>
-          </div>
-          <div v-if="canManage(retest)" class="mobile-retest-card__actions">
-            <button
-              v-if="isBlank(retest)"
-              type="button"
-              :disabled="isActionPending(retest.id)"
-              :aria-busy="isActionPending(retest.id) ? 'true' : undefined"
-              :data-testid="`delete-retest-${retest.id}`"
-              :aria-label="`删除空白复样${retest.sequence}`"
-              @click="emit('delete', retest.id)"
-            >{{ isActionPending(retest.id) ? '处理中…' : '删除' }}</button>
-            <button
-              v-else
-              type="button"
-              :disabled="isActionPending(retest.id)"
-              :aria-busy="isActionPending(retest.id) ? 'true' : undefined"
-              :data-testid="`void-retest-${retest.id}`"
-              :aria-label="`作废复样${retest.sequence}`"
-              @click="emit('void', retest.id)"
-            >{{ isActionPending(retest.id) ? '处理中…' : '作废' }}</button>
-          </div>
-        </header>
-
-        <div class="mobile-retest-card__meta">
-          <span>创建时间 {{ formatTimestamp(retest.createdAt) }}</span>
-          <span>参数快照 {{ formatTimestamp(retest.parameterSnapshot?.savedAt || retest.createdAt) }}</span>
-          <span v-if="retest.status === 'VOID'">
-            作废时间 {{ formatTimestamp(retest.voidedAt || undefined) }}<template v-if="retest.voidReason">：{{ retest.voidReason }}</template>
           </span>
-          <span v-else>已保存 {{ formatTimestamp(retest.updatedAt) }}</span>
-        </div>
+          <small>{{ isRetestExpanded(retest.id) ? '收起' : '展开' }}</small>
+          <i aria-hidden="true">{{ isRetestExpanded(retest.id) ? '⌃' : '⌄' }}</i>
+        </button>
 
-        <div v-if="isSensitiveHidden(retest)" class="mobile-retest-card__sensitive-lock">
-          <span aria-hidden="true">🔒</span>
-          <strong>复样数据已加密</strong>
-        </div>
+        <div
+          v-if="isRetestExpanded(retest.id)"
+          :id="retestBodyId(retest.id)"
+          class="mobile-retest-card__body"
+        >
+          <div class="mobile-retest-card__summary">
+            <div class="mobile-retest-card__meta">
+              <span>创建时间 {{ formatTimestamp(retest.createdAt) }}</span>
+              <span>参数快照 {{ formatTimestamp(retest.parameterSnapshot?.savedAt || retest.createdAt) }}</span>
+              <span v-if="retest.status === 'VOID'">
+                作废时间 {{ formatTimestamp(retest.voidedAt || undefined) }}<template v-if="retest.voidReason">：{{ retest.voidReason }}</template>
+              </span>
+              <span v-else>已保存 {{ formatTimestamp(retest.updatedAt) }}</span>
+            </div>
+            <div v-if="canManage(retest)" class="mobile-retest-card__actions">
+              <button
+                v-if="isBlank(retest)"
+                type="button"
+                :disabled="isActionPending(retest.id)"
+                :aria-busy="isActionPending(retest.id) ? 'true' : undefined"
+                :data-testid="`delete-retest-${retest.id}`"
+                :aria-label="`删除空白复样${retest.sequence}`"
+                @click="emit('delete', retest.id)"
+              >{{ isActionPending(retest.id) ? '处理中…' : '删除' }}</button>
+              <button
+                v-else
+                type="button"
+                :disabled="isActionPending(retest.id)"
+                :aria-busy="isActionPending(retest.id) ? 'true' : undefined"
+                :data-testid="`void-retest-${retest.id}`"
+                :aria-label="`作废复样${retest.sequence}`"
+                @click="emit('void', retest.id)"
+              >{{ isActionPending(retest.id) ? '处理中…' : '作废' }}</button>
+            </div>
+          </div>
 
-        <div v-else class="mobile-retest-card__fields">
-          <label
-            v-for="column in enabledColumns"
-            :key="column.inputField"
-            class="mobile-retest-field"
-            :data-retest-field-card="column.inputField"
-          >
-            <span>{{ column.label }}</span>
-            <input
-              v-if="column.inputField"
-              type="text"
-              inputmode="decimal"
-              enterkeyhint="next"
-              :value="formatInputValue(retest, column.inputField)"
-              :disabled="isLocked(retest)"
-              :data-retest-field="column.inputField"
-              :aria-label="`复样${retest.sequence}${column.label}检测输入`"
-              @focus="handleFocus(retest, column.inputField, $event)"
-              @input="handleInput(retest, column.inputField, $event)"
-              @blur="handleBlur(retest, column.inputField, $event)"
-            />
-            <output
-              v-if="column.resultField"
-              :aria-label="`复样${retest.sequence}${column.label}计算结果`"
-            >{{ formatResult(retest, column.resultField) }}</output>
-          </label>
-          <div
-            v-for="column in enabledOutputOnlyColumns"
-            :key="column.resultField"
-            class="mobile-retest-field mobile-retest-field--result-only"
-            :data-retest-result-card="column.resultField"
-          >
-            <span>{{ column.label }}</span>
-            <output
-              v-if="column.resultField"
-              :aria-label="`复样${retest.sequence}${column.label}计算结果`"
-            >{{ formatResult(retest, column.resultField) }}</output>
+          <div v-if="isSensitiveHidden(retest)" class="mobile-retest-card__sensitive-lock">
+            <span aria-hidden="true">🔒</span>
+            <strong>复样数据已加密</strong>
+          </div>
+
+          <div v-else class="mobile-retest-calculation">
+            <div class="mobile-retest-calculation__tabs" role="tablist" :aria-label="`复样${retest.sequence}检测数据分类`">
+              <button
+                v-for="group in mobileCalculationGroups"
+                :id="retestTabId(retest.id, group.key)"
+                :key="group.key"
+                class="mobile-retest-calculation__tab"
+                :class="{ 'is-active': activeCalculationTab(retest.id) === group.key }"
+                type="button"
+                role="tab"
+                :aria-controls="retestPanelId(retest.id, group.key)"
+                :aria-selected="activeCalculationTab(retest.id) === group.key"
+                @click="selectCalculationTab(retest.id, group.key)"
+              >{{ group.label }}</button>
+            </div>
+
+            <template v-for="group in mobileCalculationGroups" :key="group.key">
+              <div
+                v-if="activeCalculationTab(retest.id) === group.key"
+                :id="retestPanelId(retest.id, group.key)"
+                class="mobile-retest-calculation__panel"
+                role="tabpanel"
+                :aria-labelledby="retestTabId(retest.id, group.key)"
+                :data-mobile-retest-panel="group.key"
+              >
+                <div v-if="visibleFields(group).length" class="mobile-retest-card__fields">
+                  <label
+                    v-for="field in visibleFields(group)"
+                    :key="field.key"
+                    class="mobile-retest-field"
+                    :data-retest-field-card="field.key"
+                  >
+                    <span>{{ field.label }}</span>
+                    <input
+                      type="text"
+                      inputmode="decimal"
+                      enterkeyhint="next"
+                      :value="formatInputValue(retest, field.key)"
+                      :disabled="isLocked(retest)"
+                      :data-retest-field="field.key"
+                      :aria-label="`复样${retest.sequence}${field.label}检测输入`"
+                      @focus="handleFocus(retest, field.key, $event)"
+                      @input="handleInput(retest, field.key, $event)"
+                      @blur="handleBlur(retest, field.key, $event)"
+                    />
+                  </label>
+                </div>
+                <div v-if="visibleResults(group).length" class="mobile-retest-results">
+                  <div
+                    v-for="result in visibleResults(group)"
+                    :key="`${result.source}-${result.key}`"
+                    class="mobile-retest-result"
+                    :data-retest-result-card="result.key"
+                  >
+                    <span>{{ result.label }}</span>
+                    <output :aria-label="`复样${retest.sequence}${result.label}计算结果`">
+                      {{ formatCalculationResult(retest, result) }}
+                    </output>
+                  </div>
+                </div>
+                <p v-if="!visibleFields(group).length && !visibleResults(group).length" class="mobile-retest-calculation__empty">
+                  当前样品未选择此类化验元素
+                </p>
+              </div>
+            </template>
           </div>
         </div>
       </article>
@@ -128,11 +173,16 @@ import type {
 } from '@/types/labSheet'
 import { formatFormulaValue, parseNumericInput } from '@/utils/formulaEngine'
 import {
+  mobileCalculationGroups,
+  type MobileCalculationGroup,
+  type MobileCalculationResultField,
+  type MobileCalculationTabKey
+} from '@/utils/mobileLabCalculation'
+import {
   enabledRetestFields,
   hasRetestInput,
   isRetestColumnEnabled,
-  retestGridColumns,
-  type RetestGridColumn
+  retestGridColumns
 } from '@/utils/sampleRetest'
 
 defineOptions({ name: 'MobileSampleRetests' })
@@ -155,18 +205,78 @@ const emit = defineEmits<{
 
 const rootRef = ref<HTMLElement | null>(null)
 const expanded = ref(false)
+const expandedRetestId = ref('')
+const activeCalculationTabByRetest = ref(new Map<string, MobileCalculationTabKey>())
 const focusedValues = new Map<string, unknown>()
 const numericInputDrafts = ref(new Map<string, string>())
 const sortedRetests = computed(() => [...props.parent.retests].sort((left, right) => left.sequence - right.sequence))
-const enabledColumns = computed<RetestGridColumn[]>(() => {
-  const enabledFields = new Set(enabledRetestFields(props.parent.inputs.elementNote || ''))
-  return retestGridColumns.filter((column) => column.inputField && enabledFields.has(column.inputField))
-})
-const enabledOutputOnlyColumns = computed<RetestGridColumn[]>(() => retestGridColumns.filter((column) => (
-  !column.inputField &&
-  Boolean(column.resultField) &&
-  isRetestColumnEnabled(props.parent.inputs.elementNote || '', column)
-)))
+const enabledInputFields = computed(() => new Set(enabledRetestFields(props.parent.inputs.elementNote || '')))
+
+function toggleCollection() {
+  expanded.value = !expanded.value
+  if (!expanded.value) {
+    expandedRetestId.value = ''
+    activeCalculationTabByRetest.value = new Map()
+  }
+}
+
+function isRetestExpanded(retestId: string) {
+  return expandedRetestId.value === retestId
+}
+
+function firstAvailableTab() {
+  return mobileCalculationGroups.find((group) => visibleFields(group).length)?.key || 'metal'
+}
+
+function openRetest(retestId: string) {
+  expandedRetestId.value = retestId
+  if (!activeCalculationTabByRetest.value.has(retestId)) {
+    selectCalculationTab(retestId, firstAvailableTab())
+  }
+}
+
+function toggleRetest(retestId: string) {
+  if (isRetestExpanded(retestId)) {
+    expandedRetestId.value = ''
+    return
+  }
+  openRetest(retestId)
+}
+
+function activeCalculationTab(retestId: string): MobileCalculationTabKey {
+  return activeCalculationTabByRetest.value.get(retestId) || 'metal'
+}
+
+function selectCalculationTab(retestId: string, tab: MobileCalculationTabKey) {
+  const nextTabs = new Map(activeCalculationTabByRetest.value)
+  if (tab === 'metal') nextTabs.delete(retestId)
+  else nextTabs.set(retestId, tab)
+  activeCalculationTabByRetest.value = nextTabs
+}
+
+function retestBodyId(retestId: string) {
+  return `mobile-retest-body-${retestId}`
+}
+
+function retestTabId(retestId: string, tab: MobileCalculationTabKey) {
+  return `mobile-retest-tab-${retestId}-${tab}`
+}
+
+function retestPanelId(retestId: string, tab: MobileCalculationTabKey) {
+  return `mobile-retest-panel-${retestId}-${tab}`
+}
+
+function visibleFields(group: MobileCalculationGroup) {
+  return group.fields.filter((field) => enabledInputFields.value.has(field.key))
+}
+
+function visibleResults(group: MobileCalculationGroup) {
+  return group.results.filter((result) => {
+    if (result.source === 'input') return enabledInputFields.value.has(result.key)
+    const column = retestGridColumns.find((candidate) => candidate.resultField === result.key)
+    return Boolean(column && isRetestColumnEnabled(props.parent.inputs.elementNote || '', column))
+  })
+}
 
 function isSensitiveHidden(retest: SampleRetest) {
   return Boolean(props.sensitiveHidden || props.parent.sensitiveFieldsHidden || retest.sensitiveFieldsHidden)
@@ -209,8 +319,8 @@ function formatInputValue(retest: SampleRetest, field: SampleRetestInputField) {
   return typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
 }
 
-function formatResult(retest: SampleRetest, field: NonNullable<RetestGridColumn['resultField']>) {
-  const value = retest.results[field]
+function formatCalculationResult(retest: SampleRetest, result: MobileCalculationResultField) {
+  const value = result.source === 'result' ? retest.results[result.key] : retest.inputs[result.key]
   return typeof value === 'number' && Number.isFinite(value) ? formatFormulaValue(value) : '—'
 }
 
@@ -262,6 +372,15 @@ let highlightGeneration = 0
 let consumedHighlightRetestId = ''
 
 watch(
+  () => props.parent.retests.map((retest) => retest.id).join('|'),
+  () => {
+    if (expandedRetestId.value && !props.parent.retests.some((retest) => retest.id === expandedRetestId.value)) {
+      expandedRetestId.value = ''
+    }
+  }
+)
+
+watch(
   [
     () => props.highlightRetestId || '',
     () => props.parent.retests.map((retest) => retest.id).join('|')
@@ -273,6 +392,7 @@ watch(
     if (consumedHighlightRetestId === highlightRetestId) return
     if (!props.parent.retests.some((retest) => retest.id === highlightRetestId)) return
     expanded.value = true
+    openRetest(highlightRetestId)
     await nextTick()
     await nextTick()
     if (generation !== highlightGeneration || props.highlightRetestId !== highlightRetestId) return
@@ -334,15 +454,13 @@ onBeforeUnmount(() => {
 
 .mobile-sample-retests__content {
   display: grid;
-  gap: 9px;
-  padding: 9px;
+  gap: 8px;
+  padding: 8px;
   border-top: 1px solid #d4e1ed;
 }
 
 .mobile-retest-card {
-  display: grid;
-  gap: 9px;
-  padding: 10px;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid #d6e1ec;
   border-radius: 10px;
@@ -354,44 +472,88 @@ onBeforeUnmount(() => {
   background: #f1f5f9;
 }
 
+.mobile-retest-card.is-expanded {
+  border-color: #b8cbde;
+}
+
 .mobile-retest-card.is-highlighted {
   border-color: #f59e0b;
   box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
 }
 
-.mobile-retest-card__header {
+.mobile-retest-card__toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 18px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  color: #183657;
+  background: transparent;
+  border: 0;
+  text-align: left;
+
+  small,
+  i {
+    color: #5f7488;
+    font-size: 12px;
+    font-style: normal;
+  }
+
+  &:focus-visible {
+    outline: 3px solid rgba(63, 111, 153, 0.22);
+    outline-offset: -3px;
+  }
+}
+
+.mobile-retest-card__title {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-
-  > div:first-child {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
+  gap: 7px;
+  min-width: 0;
 
   strong {
     color: #183657;
     font-size: 15px;
   }
+}
 
-  span {
-    padding: 3px 7px;
-    border-radius: 999px;
-    font-size: 10px;
-    font-weight: 700;
-  }
+.mobile-retest-card__status {
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
 
-  span.is-active {
+  &.is-active {
     color: #166534;
     background: #dcfce7;
   }
 
-  span.is-void {
+  &.is-void {
     color: #64748b;
     background: #e2e8f0;
   }
+}
+
+.mobile-retest-card__body {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  background: #ffffff;
+  border-top: 1px solid #e1e9f1;
+}
+
+.mobile-retest-card.is-void .mobile-retest-card__body,
+.mobile-retest-card.is-locked .mobile-retest-card__body {
+  background: #f8fafc;
+}
+
+.mobile-retest-card__summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
 }
 
 .mobile-retest-card__actions button {
@@ -461,22 +623,92 @@ onBeforeUnmount(() => {
     }
   }
 
+}
+
+.mobile-retest-calculation {
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #dce6ef;
+  border-radius: 9px;
+}
+
+.mobile-retest-calculation__tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 0 4px;
+}
+
+.mobile-retest-calculation__tab {
+  position: relative;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 2px;
+  overflow: hidden;
+  color: #334155;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &.is-active {
+    color: #2563eb;
+    border-bottom-color: #2563eb;
+  }
+
+  &:focus-visible {
+    z-index: 1;
+    outline: 3px solid rgba(63, 111, 153, 0.2);
+    outline-offset: -3px;
+  }
+}
+
+.mobile-retest-calculation__panel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border-top: 1px solid #e5ebf1;
+}
+
+.mobile-retest-results {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.mobile-retest-result {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px;
+  background: #edf5fb;
+  border-radius: 8px;
+
+  span {
+    overflow: hidden;
+    color: #64748b;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   output {
-    display: flex;
-    align-items: center;
-    min-height: 38px;
-    padding: 6px 9px;
-    color: #172033;
-    background: #edf5fb;
-    border-radius: 8px;
+    color: #b1261c;
     font-size: 14px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
   }
 }
 
-.mobile-retest-field--result-only {
-  align-content: end;
+.mobile-retest-calculation__empty {
+  margin: 0;
+  padding: 8px;
+  color: #8293a6;
+  background: #f8fafc;
+  border-radius: 8px;
+  font-size: 12px;
+  text-align: center;
 }
 
 .mobile-retest-card__sensitive-lock {
@@ -490,12 +722,6 @@ onBeforeUnmount(() => {
   border: 1px dashed #fdba74;
   border-radius: 9px;
   font-size: 13px;
-}
-
-@media (max-width: 374px) {
-  .mobile-retest-card__fields {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (orientation: landscape) and (max-height: 520px) {

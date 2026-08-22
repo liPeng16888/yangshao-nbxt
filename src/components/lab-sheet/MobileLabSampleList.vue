@@ -361,6 +361,11 @@ import type {
 } from '@/types/labSheet'
 import { formatFormulaValue, parseNumericInput } from '@/utils/formulaEngine'
 import {
+  mobileCalculationGroups as mobileFieldGroups,
+  type MobileCalculationResultField as MobileResultField,
+  type MobileCalculationTabKey as CalculationTabKey
+} from '@/utils/mobileLabCalculation'
+import {
   getSampleAmountLabel,
   getSampleAmountPrecision,
   getSampleCalculationBlockMessage,
@@ -372,84 +377,12 @@ import {
   samplePaymentStatusOptions
 } from '@/utils/labSampleRules'
 
-type MobileInputField = { key: keyof LabSampleInput; label: string }
-type MobileResultField = {
-  label: string
-  source: 'input' | 'result'
-  key: keyof LabSampleInput | keyof LabFormulaResult
-}
-type MobileFieldGroup = {
-  key: CalculationTabKey
-  label: string
-  fields: MobileInputField[]
-  results: MobileResultField[]
-}
 type IdentityTabKey = 'basic' | 'customers' | 'settlement'
-type CalculationTabKey = 'metal' | 'otherElements' | 'density' | 'water' | 'burn'
 
 const identityTabs: Array<{ key: IdentityTabKey; label: string }> = [
   { key: 'basic', label: '基础' },
   { key: 'customers', label: '客户' },
   { key: 'settlement', label: '结算' }
-]
-
-const mobileFieldGroups: MobileFieldGroup[] = [
-  {
-    key: 'metal',
-    label: '金属元素',
-    fields: [
-      { key: 'ironRaw', label: '铁' }, { key: 'siliconRaw', label: '硅' }, { key: 'siliconAdjust', label: '硅调整数' },
-      { key: 'aluminumRaw', label: '铝' }, { key: 'aluminumAdjust', label: '铝调整数' }
-    ],
-    results: [
-      { label: '铁结果', source: 'result', key: 'iron' }, { label: '硅结果', source: 'result', key: 'silicon' },
-      { label: '铝结果', source: 'result', key: 'aluminum' }, { label: '铝硅比', source: 'result', key: 'aluminumSiliconRatio' },
-      { label: '合量', source: 'result', key: 'total' }
-    ]
-  },
-  {
-    key: 'otherElements',
-    label: '微量元素',
-    fields: [
-      { key: 'sulfur', label: '硫' }, { key: 'calciumRaw', label: '钙' }, { key: 'magnesiumRaw', label: '镁' },
-      { key: 'carbon', label: '碳' }, { key: 'titaniumRaw', label: '钛' }
-    ],
-    results: [
-      { label: '硫', source: 'input', key: 'sulfur' },
-      { label: '钙结果', source: 'result', key: 'calcium' }, { label: '镁结果', source: 'result', key: 'magnesium' },
-      { label: '碳', source: 'input', key: 'carbon' }, { label: '钛结果', source: 'result', key: 'titanium' }
-    ]
-  },
-  {
-    key: 'density',
-    label: '比重/白度',
-    fields: [
-      { key: 'densityRaw', label: '比重' }, { key: 'whiteness', label: '白度' }
-    ],
-    results: [
-      { label: '比重结果', source: 'result', key: 'density' }, { label: '白度', source: 'input', key: 'whiteness' }
-    ]
-  },
-  {
-    key: 'water',
-    label: '水份',
-    fields: [
-      { key: 'waterSample', label: '样' }, { key: 'bottleWater', label: '瓶＋水' },
-      { key: 'bottleWaterSample', label: '瓶＋水＋样' }, { key: 'moisture', label: '水份' }
-    ],
-    results: [
-      { label: '水份', source: 'result', key: 'moisture' }, { label: '瓶比重', source: 'result', key: 'bottleDensity' }
-    ]
-  },
-  {
-    key: 'burn',
-    label: '灼烧',
-    fields: [
-      { key: 'crucible', label: '坩埚' }, { key: 'sampleWeight', label: '样重' },
-      { key: 'burnedCrucibleSample', label: '烧坩埚＋样' }
-    ],
-    results: [{ label: '烧失量', source: 'result', key: 'burnLoss' }]
-  }
 ]
 
 const props = defineProps<{
