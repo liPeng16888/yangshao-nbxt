@@ -21,7 +21,7 @@ export class LoadingCoordinator {
 
   constructor(
     private readonly callbacks: LoadingCoordinatorCallbacks,
-    private readonly timeoutMs = 15_000,
+    private readonly timeoutMs = 120_000,
   ) {}
 
   start(mode: LoadingMode): number {

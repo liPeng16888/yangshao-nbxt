@@ -96,7 +96,7 @@ describe('main-process loading flow integration', () => {
       const oldLoad = mainWindow.webContents.loads[0]!
       loadingWindow.webContents.loads[0]!.deferred.resolve()
       await flushPromises()
-      vi.advanceTimersByTime(15_000)
+      vi.advanceTimersByTime(120_000)
       const offlineLoad = mainWindow.webContents.loads[1]!
       offlineLoad.deferred.resolve()
       await flushPromises()
@@ -144,7 +144,7 @@ describe('main-process loading flow integration', () => {
     await flushPromises()
 
     flow.reload(false)
-    vi.advanceTimersByTime(15_000)
+    vi.advanceTimersByTime(120_000)
     mainWindow.webContents.loads[1]!.deferred.resolve()
     await flushPromises()
     flow.retry()
@@ -241,7 +241,7 @@ describe('main-process loading flow integration', () => {
     vi.useFakeTimers()
     const { flow, mainWindow, quit } = fixture()
     flow.startStartup()
-    vi.advanceTimersByTime(15_000)
+    vi.advanceTimersByTime(120_000)
     mainWindow.webContents.loads[1]!.deferred.resolve()
     await flushPromises()
 

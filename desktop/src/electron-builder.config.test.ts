@@ -52,7 +52,7 @@ describe('electron-builder target configuration', () => {
         buildResources: 'build/icons/internal',
       },
       extraMetadata: {
-        version: '1.0.2',
+        version: '1.0.3',
       },
       win: {
         target: [{ target: 'nsis', arch: ['x64'] }],
@@ -105,7 +105,7 @@ describe('electron-builder target configuration', () => {
 
     expect(config.files).toEqual(['dist/**/*', 'package.json'])
     expect(config.extraMetadata?.main).toBe('dist/main.js')
-    expect(config.extraMetadata?.version).toBe('1.0.2')
+    expect(config.extraMetadata?.version).toBe('1.0.3')
     expect(() => createBuilderConfig('admin')).toThrow(
       'Unsupported desktop target: admin',
     )

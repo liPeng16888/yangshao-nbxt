@@ -38,7 +38,7 @@ import {
   withMainDocumentCsp,
   type ResponseHeaders,
 } from './security-policy.js'
-import { clearHttpCache, resolveUserDataPath } from './session.js'
+import { prepareOnlineShellSession, resolveUserDataPath } from './session.js'
 import {
   createLoadingWindowOptions,
   createWindowOptions,
@@ -302,7 +302,7 @@ async function startApplication(): Promise<void> {
   await app.whenReady()
   app.setAppUserModelId(target.appId)
   configureDefaultSession()
-  await clearHttpCache(session.defaultSession)
+  await prepareOnlineShellSession(session.defaultSession, target)
   installApplicationMenu()
   mainWindow = createMainWindow()
 

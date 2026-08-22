@@ -63,10 +63,10 @@ describe('private desktop installer workflow', () => {
 
   it('bundles exactly four installers with SHA-256 for 30 private days', () => {
     const expectedFilenames = [
-      'Yangshao-Internal-System-1.0.2-win-x64.exe',
-      'Yangshao-Backend-System-1.0.2-win-x64.exe',
-      'Yangshao-Internal-System-1.0.2-mac-arm64.dmg',
-      'Yangshao-Backend-System-1.0.2-mac-arm64.dmg',
+      'Yangshao-Internal-System-1.0.3-win-x64.exe',
+      'Yangshao-Backend-System-1.0.3-win-x64.exe',
+      'Yangshao-Internal-System-1.0.3-mac-arm64.dmg',
+      'Yangshao-Backend-System-1.0.3-mac-arm64.dmg',
     ]
     for (const filename of expectedFilenames) {
       expect(workflow).toContain(filename)
@@ -83,7 +83,7 @@ describe('private desktop installer workflow', () => {
     expect(workflow).not.toContain('1.0.0')
     expect(workflow).toContain('SHA256SUMS.txt')
     expect(workflow).toContain('retention-days: 30')
-    expect(workflow).toContain('name: Yangshao-Desktop-Installers-1.0.2')
+    expect(workflow).toContain('name: Yangshao-Desktop-Installers-1.0.3')
   })
 
   it('checks every packaged runtime before uploading an installer', () => {

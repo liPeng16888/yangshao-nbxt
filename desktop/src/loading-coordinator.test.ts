@@ -22,20 +22,20 @@ describe('desktop loading coordinator', () => {
 
     const generation = coordinator.start('reload')
     coordinator.finish(generation)
-    vi.advanceTimersByTime(15_000)
+    vi.advanceTimersByTime(120_000)
 
     expect(effects.show).toHaveBeenCalledWith('reload')
     expect(effects.hide).toHaveBeenCalledOnce()
     expect(effects.showOffline).not.toHaveBeenCalled()
   })
 
-  it('times out once after 15 seconds and a late finish cannot hide the failure', () => {
+  it('allows a slow first load and times out once only after 120 seconds', () => {
     vi.useFakeTimers()
     const effects = callbacks()
     const coordinator = new LoadingCoordinator(effects)
 
     const generation = coordinator.start('startup')
-    vi.advanceTimersByTime(14_999)
+    vi.advanceTimersByTime(119_999)
     expect(effects.showOffline).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
 
@@ -53,17 +53,17 @@ describe('desktop loading coordinator', () => {
     const coordinator = new LoadingCoordinator(effects)
 
     const oldGeneration = coordinator.start('startup')
-    vi.advanceTimersByTime(10_000)
+    vi.advanceTimersByTime(60_000)
     const activeGeneration = coordinator.start('recovery')
     coordinator.finish(oldGeneration)
     coordinator.fail('load', oldGeneration)
-    vi.advanceTimersByTime(5_000)
+    vi.advanceTimersByTime(60_000)
 
     expect(effects.hide).not.toHaveBeenCalled()
     expect(effects.showOffline).not.toHaveBeenCalled()
 
     coordinator.finish(activeGeneration)
-    vi.advanceTimersByTime(15_000)
+    vi.advanceTimersByTime(120_000)
 
     expect(effects.show).toHaveBeenNthCalledWith(1, 'startup')
     expect(effects.show).toHaveBeenNthCalledWith(2, 'recovery')
@@ -81,7 +81,7 @@ describe('desktop loading coordinator', () => {
     coordinator.finish(generation)
     coordinator.fail('unresponsive', generation)
     coordinator.start('recovery')
-    vi.advanceTimersByTime(30_000)
+    vi.advanceTimersByTime(240_000)
 
     expect(effects.show).toHaveBeenCalledOnce()
     expect(effects.hide).not.toHaveBeenCalled()

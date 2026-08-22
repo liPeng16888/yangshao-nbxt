@@ -118,7 +118,7 @@ describe('desktop build information', () => {
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { scripts?: Record<string, string>; version?: string }
 
-    expect(packageJson.version).toBe('1.0.2')
+    expect(packageJson.version).toBe('1.0.3')
     expect(packageJson.scripts?.build).toBe(
       'tsc -p tsconfig.json && node scripts/write-build-info.mjs',
     )

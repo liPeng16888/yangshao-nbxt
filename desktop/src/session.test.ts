@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { desktopTargets } from './config'
-import { clearHttpCache, resolveUserDataPath } from './session'
+import { prepareOnlineShellSession, resolveUserDataPath } from './session'
 
 describe('desktop session isolation', () => {
   it('places each target in its own userData directory', () => {
@@ -13,17 +13,21 @@ describe('desktop session isolation', () => {
     ).toBe('/Users/example/Library/Application Support/YangshaoBackendSystem')
   })
 
-  it('clears only HTTP cache and preserves authentication storage', async () => {
+  it('keeps reusable HTTP assets while removing stale application workers only', async () => {
     const session = {
       clearCache: vi.fn().mockResolvedValue(undefined),
       clearStorageData: vi.fn().mockResolvedValue(undefined),
       clearAuthCache: vi.fn().mockResolvedValue(undefined),
     }
 
-    await clearHttpCache(session)
+    await prepareOnlineShellSession(session, desktopTargets.internal)
 
-    expect(session.clearCache).toHaveBeenCalledOnce()
-    expect(session.clearStorageData).not.toHaveBeenCalled()
+    expect(session.clearCache).not.toHaveBeenCalled()
+    expect(session.clearStorageData).toHaveBeenCalledOnce()
+    expect(session.clearStorageData).toHaveBeenCalledWith({
+      origin: desktopTargets.internal.allowedOrigin,
+      storages: ['serviceworkers', 'cachestorage'],
+    })
     expect(session.clearAuthCache).not.toHaveBeenCalled()
   })
 })

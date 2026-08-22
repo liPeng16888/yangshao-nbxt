@@ -109,7 +109,7 @@ jobs:
         shell: pwsh
         run: |
           $prefix = if ('${{ matrix.target }}' -eq 'internal') { 'Yangshao-Internal-System' } else { 'Yangshao-Backend-System' }
-          $installer = "desktop/release/${{ matrix.target }}/$prefix-1.0.2-win-x64.exe"
+          $installer = "desktop/release/${{ matrix.target }}/$prefix-1.0.3-win-x64.exe"
           $asarRelative = "desktop/release/${{ matrix.target }}/win-unpacked/resources/app.asar"
           if (-not (Test-Path -LiteralPath $installer)) { throw "Missing installer: $installer" }
           if ((Get-Item -LiteralPath $installer).Length -le 0) { throw "Empty installer: $installer" }
@@ -178,7 +178,7 @@ jobs:
             bundle_id='art.ysjc.backend-system'
           fi
           app_path="desktop/release/${{ matrix.target }}/mac-arm64/$app_name.app"
-          dmg="desktop/release/${{ matrix.target }}/$prefix-1.0.2-mac-arm64.dmg"
+          dmg="desktop/release/${{ matrix.target }}/$prefix-1.0.3-mac-arm64.dmg"
           asar="$(pwd)/$app_path/Contents/Resources/app.asar"
           test -d "$app_path"
           test -s "$dmg"
@@ -220,10 +220,10 @@ jobs:
         working-directory: desktop-installers
         run: |
           expected=(
-            Yangshao-Internal-System-1.0.2-win-x64.exe
-            Yangshao-Backend-System-1.0.2-win-x64.exe
-            Yangshao-Internal-System-1.0.2-mac-arm64.dmg
-            Yangshao-Backend-System-1.0.2-mac-arm64.dmg
+            Yangshao-Internal-System-1.0.3-win-x64.exe
+            Yangshao-Backend-System-1.0.3-win-x64.exe
+            Yangshao-Internal-System-1.0.3-mac-arm64.dmg
+            Yangshao-Backend-System-1.0.3-mac-arm64.dmg
           )
           for file in "${expected[@]}"; do
             test -s "$file"
@@ -235,12 +235,12 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: Yangshao-Desktop-Installers-1.0.2
+          name: Yangshao-Desktop-Installers-1.0.3
           path: |
-            desktop-installers/Yangshao-Internal-System-1.0.2-win-x64.exe
-            desktop-installers/Yangshao-Backend-System-1.0.2-win-x64.exe
-            desktop-installers/Yangshao-Internal-System-1.0.2-mac-arm64.dmg
-            desktop-installers/Yangshao-Backend-System-1.0.2-mac-arm64.dmg
+            desktop-installers/Yangshao-Internal-System-1.0.3-win-x64.exe
+            desktop-installers/Yangshao-Backend-System-1.0.3-win-x64.exe
+            desktop-installers/Yangshao-Internal-System-1.0.3-mac-arm64.dmg
+            desktop-installers/Yangshao-Backend-System-1.0.3-mac-arm64.dmg
             desktop-installers/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
