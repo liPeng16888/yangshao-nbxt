@@ -19,7 +19,8 @@ const stores = vi.hoisted(() => ({
   markFinished: vi.fn(),
   authUser: {
     id: 'main-1', account: 'main-1', username: '主账号', role: 'FRONTEND_USER',
-    dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false
+    dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false,
+    requiresAccessGuardPassword: true
   },
   preferenceStore: { hasPendingChanges: false, records: {} as Record<string, unknown> }
 }))
@@ -62,6 +63,12 @@ vi.mock('@/utils/frontendPreferenceMigration', () => ({
 describe('AppLayout authenticated realtime lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    stores.loadGroups.mockResolvedValue(undefined)
+    Object.assign(stores.authUser, {
+      id: 'main-1', account: 'main-1', username: '主账号', role: 'FRONTEND_USER',
+      dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false,
+      requiresAccessGuardPassword: true
+    })
     stores.preferenceStore.hasPendingChanges = false
     stores.preferenceStore.records = {}
     stores.preferenceLoadAll.mockResolvedValue('loaded')
@@ -78,6 +85,34 @@ describe('AppLayout authenticated realtime lifecycle', () => {
       key: (index: number) => Array.from(values.keys())[index] || null,
       get length() { return values.size }
     })
+  })
+
+  it('skips access-group loading for a subaccount exempt from secondary passwords', () => {
+    Object.assign(stores.authUser, {
+      role: 'FRONTEND_SUB_USER',
+      isFrontendMainAccount: false,
+      isFrontendSubAccount: true,
+      requiresAccessGuardPassword: false
+    })
+
+    const wrapper = mount(AppLayout, {
+      global: { stubs: { AppSidebar: true, AppTopbar: true, RouterView: true, ElAlert: true } }
+    })
+
+    expect(stores.loadGroups).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('contains access-group loading failures without interrupting the app shell', async () => {
+    stores.loadGroups.mockRejectedValueOnce(new Error('无权管理访问组合'))
+
+    const wrapper = mount(AppLayout, {
+      global: { stubs: { AppSidebar: true, AppTopbar: true, RouterView: true, ElAlert: true } }
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.app-shell').exists()).toBe(true)
+    wrapper.unmount()
   })
 
   it('starts shared prepaid realtime on mount and stops it on unmount', () => {

@@ -9,8 +9,12 @@ const api = vi.hoisted(() => ({
   getAccessGuardGroups: vi.fn(),
   verifyAccessGuardGroup: vi.fn()
 }))
+const auth = vi.hoisted(() => ({
+  user: { role: 'FRONTEND_USER', isFrontendMainAccount: true, isFrontendSubAccount: false }
+}))
 
 vi.mock('@/api/accessGuard', async (importOriginal) => ({ ...await importOriginal<Record<string, unknown>>(), ...api }))
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => auth }))
 
 import AccessGuardDialog from './AccessGuardDialog.vue'
 import { useAccessGuardStore } from '@/stores/accessGuard'
@@ -26,7 +30,30 @@ function memoryStorage(): Storage {
 describe('AccessGuardDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    auth.user = { role: 'FRONTEND_USER', isFrontendMainAccount: true, isFrontendSubAccount: false }
     Object.defineProperty(window, 'localStorage', { configurable: true, value: memoryStorage() })
+  })
+
+  it('does not offer a subaccount the main account password-recovery flow', async () => {
+    auth.user = { role: 'FRONTEND_SUB_USER', isFrontendMainAccount: false, isFrontendSubAccount: true }
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    api.getAccessGuardGroups.mockResolvedValue([{
+      id: 'attendance-group', name: '员工考勤', enabled: true, ttlMinutes: 5,
+      password: '', recoveryPrompt: '', recoveryAnswer: '', grantVersion: 2,
+      features: ['EMPLOYEE_ATTENDANCE']
+    }])
+    const store = useAccessGuardStore(pinia)
+    await store.loadGroups()
+    store.requestFeatureAccess('EMPLOYEE_ATTENDANCE', {
+      title: '员工敏感信息验证', message: '请输入密码', onSuccess: vi.fn()
+    })
+
+    const wrapper = mount(AccessGuardDialog, { global: { plugins: [pinia, ElementPlus], stubs: { teleport: true } } })
+    await nextTick()
+
+    expect(wrapper.text()).not.toContain('忘记密码')
+    wrapper.unmount()
   })
 
   it('closes and invalidates the owned prompt when its visible Cancel button emits a MouseEvent', async () => {

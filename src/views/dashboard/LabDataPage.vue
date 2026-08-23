@@ -400,7 +400,13 @@ const mobileSelectionHint = computed(() => {
 })
 
 onMounted(async () => {
-  await accessGuard.loadGroups()
+  if (authStore.user?.requiresAccessGuardPassword !== false) {
+    try {
+      await accessGuard.loadGroups()
+    } catch {
+      // Loading the sheet must not be blocked by an unavailable access-group summary.
+    }
+  }
   await loadSheetFromRoute()
   bindBusinessDayListeners()
   await checkBusinessDayBoundary()

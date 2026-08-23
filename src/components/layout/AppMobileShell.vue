@@ -43,7 +43,7 @@
       </nav>
 
       <div class="mobile-drawer-actions">
-        <button class="mobile-access-settings" type="button" @click="openAccessSettings">
+        <button v-if="isFrontendMainAccount" class="mobile-access-settings" type="button" @click="openAccessSettings">
           <Lock />
           <span>访问设置</span>
         </button>
@@ -79,6 +79,9 @@ const accessGuard = useAccessGuardStore()
 const labSheetStore = useLabSheetStore()
 const menuVisible = ref(false)
 const currentTitle = computed(() => String(route.meta.title || '工作台'))
+const isFrontendMainAccount = computed(() => (
+  authStore.user?.role === 'FRONTEND_USER' && authStore.user?.isFrontendMainAccount !== false
+))
 const { navigationItems, section, children, activeChild, showSecondaryNav } = useCustomerNavigation()
 
 function openAccessSettings() {

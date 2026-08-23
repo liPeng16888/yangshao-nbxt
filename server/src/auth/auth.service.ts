@@ -172,13 +172,17 @@ export class AuthService {
   }
 
   async getAccessGuardGroups(currentUser: CurrentUser) {
-    this.assertFrontendUser(currentUser)
+    if (currentUser.role !== UserRole.FRONTEND_USER && currentUser.role !== UserRole.FRONTEND_SUB_USER) {
+      throw new ForbiddenException('无权查看访问组合')
+    }
     const groups = await this.prisma.accessGuardGroup.findMany({
-      where: { frontendUserId: currentUser.id },
+      where: { frontendUserId: currentUser.dataOwnerId },
       include: { features: { orderBy: { feature: 'asc' } } },
       orderBy: { createdAt: 'asc' }
     })
-    return groups.map((group) => this.accessGuardGroupDto(group))
+    return groups.map((group) => currentUser.role === UserRole.FRONTEND_USER
+      ? this.accessGuardGroupDto(group)
+      : this.accessGuardGroupSummaryDto(group))
   }
 
   async createAccessGuardGroup(currentUser: CurrentUser, dto: AccessGuardGroupDto) {
@@ -349,6 +353,24 @@ export class AuthService {
       password: group.password,
       recoveryPrompt: group.recoveryPrompt,
       recoveryAnswer: group.recoveryAnswer,
+      features: group.features.map((feature) => feature.feature)
+    }
+  }
+
+  private accessGuardGroupSummaryDto(group: {
+    id: string
+    name: string
+    enabled: boolean
+    ttlMinutes: number
+    grantVersion: number
+    features: Array<{ feature: AccessGuardFeature }>
+  }) {
+    return {
+      id: group.id,
+      name: group.name,
+      enabled: group.enabled,
+      ttlMinutes: group.ttlMinutes,
+      grantVersion: group.grantVersion,
       features: group.features.map((feature) => feature.feature)
     }
   }

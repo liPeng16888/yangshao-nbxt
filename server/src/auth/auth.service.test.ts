@@ -156,6 +156,64 @@ describe('AuthService access-grant revocation', () => {
   })
 })
 
+describe('AuthService access-group visibility', () => {
+  const groupRow = {
+    id: 'group-1', name: '数据保护', enabled: true, ttlMinutes: 10, grantVersion: 4,
+    password: 'parent-secret', recoveryPrompt: '主账号提示', recoveryAnswer: 'parent-answer',
+    features: [
+      { feature: AccessGuardFeature.HISTORICAL_DATES },
+      { feature: AccessGuardFeature.COMPLETED_SAMPLE_DATA }
+    ]
+  }
+  const prisma = {
+    accessGuardGroup: {
+      findMany: vi.fn().mockResolvedValue([groupRow]),
+      create: vi.fn(), findFirst: vi.fn(), deleteMany: vi.fn()
+    },
+    accessGuardGroupFeature: { findFirst: vi.fn() }
+  }
+  const service = new AuthService(
+    prisma as never,
+    { verify: vi.fn(), hash: vi.fn(), encryptForDisplay: vi.fn() } as never,
+    { get: vi.fn(() => secret) } as never
+  )
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    prisma.accessGuardGroup.findMany.mockResolvedValue([groupRow])
+  })
+
+  it('lets a subaccount read its parent groups without exposing recovery or password secrets', async () => {
+    const result = await service.getAccessGuardGroups(requiredSubUser)
+
+    expect(prisma.accessGuardGroup.findMany).toHaveBeenCalledWith({
+      where: { frontendUserId: 'front-1' },
+      include: { features: { orderBy: { feature: 'asc' } } },
+      orderBy: { createdAt: 'asc' }
+    })
+    expect(result).toEqual([{
+      id: 'group-1', name: '数据保护', enabled: true, ttlMinutes: 10, grantVersion: 4,
+      features: [AccessGuardFeature.HISTORICAL_DATES, AccessGuardFeature.COMPLETED_SAMPLE_DATA]
+    }])
+  })
+
+  it('keeps full group settings available to the owning main account', async () => {
+    await expect(service.getAccessGuardGroups(frontendUser)).resolves.toEqual([{
+      id: 'group-1', name: '数据保护', enabled: true, ttlMinutes: 10, grantVersion: 4,
+      password: 'parent-secret', recoveryPrompt: '主账号提示', recoveryAnswer: 'parent-answer',
+      features: [AccessGuardFeature.HISTORICAL_DATES, AccessGuardFeature.COMPLETED_SAMPLE_DATA]
+    }])
+  })
+
+  it('still rejects access-group mutations from a subaccount', async () => {
+    await expect(service.createAccessGuardGroup(requiredSubUser, {
+      name: '越权组合', enabled: true, ttlMinutes: 5, password: '1234',
+      recoveryPrompt: '提示', recoveryAnswer: '答案', features: [AccessGuardFeature.HISTORICAL_DATES]
+    })).rejects.toThrow('无权管理访问组合')
+    expect(prisma.accessGuardGroup.create).not.toHaveBeenCalled()
+  })
+})
+
 describe('frontend account identity resolution', () => {
   it('uses a frontend main account as its own data owner', async () => {
     const prisma = {

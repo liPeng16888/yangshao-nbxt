@@ -65,7 +65,9 @@ const { showSecondaryNav } = useCustomerNavigation()
 
 onMounted(() => {
   sidebarCollapsed.value = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'
-  void accessGuard.loadGroups()
+  if (authStore.user?.requiresAccessGuardPassword !== false) {
+    void accessGuard.loadGroups().catch(() => undefined)
+  }
   void loadPreferencesAndMigrate()
   unregisterPreferences = tenantRealtime.registerModule('frontend-preferences', {
     isDirty: () => frontendPreferences.hasPendingChanges,

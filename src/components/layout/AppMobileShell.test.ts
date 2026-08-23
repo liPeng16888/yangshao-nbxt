@@ -124,6 +124,7 @@ describe('AppMobileShell', () => {
     await wrapper.get('.mobile-menu-button').trigger('click')
     expect(wrapper.findAll('.mobile-drawer-nav a').map((item) => item.attributes('href')))
       .toEqual(['/data/standard-sample', '/prepaid/customers'])
+    expect(wrapper.find('.mobile-access-settings').exists()).toBe(false)
   })
 
   it('keeps the customer overview a single-page mobile route without a secondary rail', () => {

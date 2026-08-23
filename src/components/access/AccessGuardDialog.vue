@@ -14,7 +14,7 @@
       <el-form-item label="访问密码">
         <el-input v-model="password" type="password" show-password autofocus @keyup.enter="submitPassword" />
       </el-form-item>
-      <el-button link type="primary" class="access-guard-dialog__link" @click="mode = 'recovery'">忘记密码</el-button>
+      <el-button v-if="isFrontendMainAccount" link type="primary" class="access-guard-dialog__link" @click="mode = 'recovery'">忘记密码</el-button>
     </el-form>
 
     <el-form v-else label-position="top" @submit.prevent>
@@ -46,13 +46,18 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
 import { useAccessGuardStore } from '@/stores/accessGuard'
+import { useAuthStore } from '@/stores/auth'
 
 const accessGuard = useAccessGuardStore()
+const authStore = useAuthStore()
 const { dialogVisible, accessTitle, accessMessage, settings } = storeToRefs(accessGuard)
+const isFrontendMainAccount = computed(() => (
+  authStore.user?.role === 'FRONTEND_USER' && authStore.user?.isFrontendMainAccount !== false
+))
 const mode = ref<'password' | 'recovery'>('password')
 const loading = ref(false)
 const password = ref('')

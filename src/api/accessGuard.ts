@@ -66,7 +66,13 @@ export function selectAccessGuardGrant(sessions: StoredAccessGuardSessions, feat
 }
 
 function normalizeGroup(group: AccessGuardGroup): AccessGuardGroup {
-  return { ...group, grantVersion: Number.isInteger(group.grantVersion) && group.grantVersion > 0 ? group.grantVersion : 1 }
+  return {
+    ...group,
+    password: typeof group.password === 'string' ? group.password : '',
+    recoveryPrompt: typeof group.recoveryPrompt === 'string' ? group.recoveryPrompt : '',
+    recoveryAnswer: typeof group.recoveryAnswer === 'string' ? group.recoveryAnswer : '',
+    grantVersion: Number.isInteger(group.grantVersion) && group.grantVersion > 0 ? group.grantVersion : 1
+  }
 }
 
 function readGroups(): AccessGuardGroup[] {

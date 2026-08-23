@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   authUser: {
     id: 'main-1', account: 'main-1', username: '主账号', role: 'FRONTEND_USER',
     dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false,
-    permissions: []
+    permissions: [], requiresAccessGuardPassword: true
   },
   mobileLayout: {
     isMobileLayout: { __v_isRef: true, value: false }
@@ -497,7 +497,7 @@ describe('LabDataPage table layout', () => {
     Object.assign(authUserState, {
       id: 'main-1', account: 'main-1', username: '主账号', role: 'FRONTEND_USER',
       dataOwnerId: 'main-1', isFrontendMainAccount: true, isFrontendSubAccount: false,
-      permissions: []
+      permissions: [], requiresAccessGuardPassword: true
     })
   })
 
@@ -518,6 +518,46 @@ describe('LabDataPage table layout', () => {
     await settleMountedPage()
 
     expect((wrapper.find('.date-picker-stub').element as HTMLInputElement).value).toBe('2026-07-30')
+    wrapper.unmount()
+  })
+
+  it('loads the current sheet for a permitted subaccount even when access groups fail to load', async () => {
+    Object.assign(authUserState, {
+      id: 'sub-1', account: 'sub-1', username: '子账号', role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1', isFrontendMainAccount: false, isFrontendSubAccount: true,
+      permissions: ['DATA_MAIN'], requiresAccessGuardPassword: true
+    })
+    mocks.labStore.sheet = null
+    mocks.accessGuard.loadGroups.mockRejectedValueOnce(new Error('无权管理访问组合'))
+    mocks.labStore.loadCurrentSheet.mockImplementation(async () => {
+      mocks.labStore.sheet = { date: '2026-08-20', readonly: false }
+      return true
+    })
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(mocks.labStore.loadCurrentSheet).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('skips access-group loading for a subaccount exempt from secondary passwords', async () => {
+    Object.assign(authUserState, {
+      id: 'sub-1', account: 'sub-1', username: '子账号', role: 'FRONTEND_SUB_USER',
+      dataOwnerId: 'main-1', isFrontendMainAccount: false, isFrontendSubAccount: true,
+      permissions: ['DATA_MAIN'], requiresAccessGuardPassword: false
+    })
+    mocks.labStore.sheet = null
+    mocks.labStore.loadCurrentSheet.mockImplementation(async () => {
+      mocks.labStore.sheet = { date: '2026-08-20', readonly: false }
+      return true
+    })
+
+    const wrapper = mountPage()
+    await settleMountedPage()
+
+    expect(mocks.accessGuard.loadGroups).not.toHaveBeenCalled()
+    expect(mocks.labStore.loadCurrentSheet).toHaveBeenCalled()
     wrapper.unmount()
   })
 
