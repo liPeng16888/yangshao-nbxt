@@ -116,7 +116,7 @@ async function submitRecoveryReset() {
 <style scoped>
 .access-guard-dialog__message {
   margin-bottom: 14px;
-  color: #475569;
+  color: var(--ui-text-secondary);
   line-height: 1.6;
 }
 

@@ -417,7 +417,7 @@ onBeforeUnmount(() => {
 <style scoped lang="scss">
 .mobile-sample-retests {
   overflow: hidden;
-  background: #f8fbff;
+  background: var(--ui-surface-subtle);
   border: 1px solid #bfd2e4;
   border-radius: 11px;
 }
@@ -430,7 +430,7 @@ onBeforeUnmount(() => {
   width: 100%;
   min-height: 48px;
   padding: 9px 11px;
-  color: #183657;
+  color: var(--ui-text);
   background: #edf5fb;
   border: 0;
   text-align: left;
@@ -469,7 +469,7 @@ onBeforeUnmount(() => {
 
 .mobile-retest-card.is-void,
 .mobile-retest-card.is-locked {
-  background: #f1f5f9;
+  background: var(--ui-surface-subtle);
 }
 
 .mobile-retest-card.is-expanded {
@@ -477,7 +477,7 @@ onBeforeUnmount(() => {
 }
 
 .mobile-retest-card.is-highlighted {
-  border-color: #f59e0b;
+  border-color: var(--ui-warning);
   box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
 }
 
@@ -489,7 +489,7 @@ onBeforeUnmount(() => {
   width: 100%;
   min-height: 48px;
   padding: 8px 10px;
-  color: #183657;
+  color: var(--ui-text);
   background: transparent;
   border: 0;
   text-align: left;
@@ -514,7 +514,7 @@ onBeforeUnmount(() => {
   min-width: 0;
 
   strong {
-    color: #183657;
+    color: var(--ui-text);
     font-size: 15px;
   }
 }
@@ -526,13 +526,13 @@ onBeforeUnmount(() => {
   font-weight: 700;
 
   &.is-active {
-    color: #166534;
-    background: #dcfce7;
+    color: var(--ui-success);
+    background: var(--ui-success-soft);
   }
 
   &.is-void {
-    color: #64748b;
-    background: #e2e8f0;
+    color: var(--ui-text-muted);
+    background: var(--ui-line-soft);
   }
 }
 
@@ -546,7 +546,7 @@ onBeforeUnmount(() => {
 
 .mobile-retest-card.is-void .mobile-retest-card__body,
 .mobile-retest-card.is-locked .mobile-retest-card__body {
-  background: #f8fafc;
+  background: var(--ui-surface-subtle);
 }
 
 .mobile-retest-card__summary {
@@ -560,22 +560,22 @@ onBeforeUnmount(() => {
   min-width: 64px;
   min-height: 44px;
   padding: 8px 12px;
-  color: #2563eb;
+  color: var(--ui-accent);
   background: #ffffff;
-  border: 1px solid #bfdbfe;
+  border: 1px solid var(--ui-accent-line);
   border-radius: 9px;
   font-size: 13px;
 
   &:disabled {
-    color: #64748b;
-    background: #e2e8f0;
+    color: var(--ui-text-muted);
+    background: var(--ui-line-soft);
   }
 }
 
 .mobile-retest-card__meta {
   display: grid;
   gap: 2px;
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -592,7 +592,7 @@ onBeforeUnmount(() => {
   min-width: 0;
 
   > span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 12px;
   }
 
@@ -604,7 +604,7 @@ onBeforeUnmount(() => {
     padding: 9px 10px;
     color: #b1261c;
     background: #ffffff;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--ui-line);
     border-radius: 9px;
     outline: 0;
     font-size: 16px;
@@ -616,10 +616,10 @@ onBeforeUnmount(() => {
     }
 
     &:disabled {
-      color: #64748b;
-      background: #e2e8f0;
+      color: var(--ui-text-muted);
+      background: var(--ui-line-soft);
       opacity: 1;
-      -webkit-text-fill-color: #64748b;
+      -webkit-text-fill-color: var(--ui-text-muted);
     }
   }
 
@@ -644,7 +644,7 @@ onBeforeUnmount(() => {
   min-height: 44px;
   padding: 8px 2px;
   overflow: hidden;
-  color: #334155;
+  color: var(--ui-text-secondary);
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -653,8 +653,8 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 
   &.is-active {
-    color: #2563eb;
-    border-bottom-color: #2563eb;
+    color: var(--ui-accent);
+    border-bottom-color: var(--ui-accent);
   }
 
   &:focus-visible {
@@ -687,7 +687,7 @@ onBeforeUnmount(() => {
 
   span {
     overflow: hidden;
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 10px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -705,7 +705,7 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 8px;
   color: #8293a6;
-  background: #f8fafc;
+  background: var(--ui-surface-subtle);
   border-radius: 8px;
   font-size: 12px;
   text-align: center;
@@ -718,7 +718,7 @@ onBeforeUnmount(() => {
   min-height: 44px;
   padding: 9px 10px;
   color: #7c2d12;
-  background: #fff7ed;
+  background: var(--ui-warning-soft);
   border: 1px dashed #fdba74;
   border-radius: 9px;
   font-size: 13px;

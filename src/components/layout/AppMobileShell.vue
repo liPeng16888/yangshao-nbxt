@@ -5,7 +5,7 @@
         <Menu class="mobile-action-icon" />
       </button>
       <div class="mobile-app-header__title">
-        <span class="mobile-app-header__mark">仰</span>
+        <BrandLogo class="mobile-app-header__mark" />
         <strong>{{ currentTitle }}</strong>
       </div>
       <span class="mobile-app-header__online"><i aria-hidden="true" />在线</span>
@@ -21,7 +21,7 @@
     >
       <template #header>
         <div class="mobile-drawer-brand">
-          <span class="mobile-app-header__mark">仰</span>
+          <BrandLogo class="mobile-app-header__mark" />
           <div>
             <strong>仰韶化验室</strong>
             <small>{{ authStore.user?.username || '未登录' }}</small>
@@ -71,6 +71,7 @@ import { useAccessGuardStore } from '@/stores/accessGuard'
 import { useAuthStore } from '@/stores/auth'
 import { useLabSheetStore } from '@/stores/labSheet'
 import MobileSecondaryNav from './MobileSecondaryNav.vue'
+import BrandLogo from '../../../shared/BrandLogo.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -106,9 +107,10 @@ async function handleLogout() {
   align-items: center;
   min-height: calc(56px + env(safe-area-inset-top));
   padding: env(safe-area-inset-top) 12px 0;
-  color: #f8fafc;
-  background: linear-gradient(135deg, #10233f, #1f4668);
-  box-shadow: 0 3px 16px rgba(15, 35, 63, 0.2);
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  border-bottom: 1px solid var(--ui-line);
+  box-shadow: var(--ui-shadow);
 }
 
 .mobile-menu-button,
@@ -146,29 +148,21 @@ async function handleLogout() {
 }
 
 .mobile-app-header__mark {
-  display: grid;
-  flex: 0 0 auto;
   width: 32px;
   height: 32px;
-  place-items: center;
-  color: #fff;
-  font-weight: 700;
-  background: linear-gradient(145deg, #df543c, #991f17);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 9px;
 }
 
 .mobile-app-header__online {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: #d9e9f8;
+  color: var(--ui-text-muted);
   font-size: 12px;
 
   i {
     width: 7px;
     height: 7px;
-    background: #45d48a;
+    background: var(--ui-success);
     border-radius: 50%;
     box-shadow: 0 0 0 3px rgba(69, 212, 138, 0.14);
   }
@@ -185,12 +179,12 @@ async function handleLogout() {
   }
 
   strong {
-    color: #10233f;
+    color: var(--ui-text);
     font-size: 17px;
   }
 
   small {
-    color: #64748b;
+    color: var(--ui-text-muted);
   }
 }
 
@@ -206,8 +200,8 @@ async function handleLogout() {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  color: #334155;
-  background: #f6f9fc;
+  color: var(--ui-text-secondary);
+  background: var(--ui-surface-subtle);
   border: 1px solid #e1e9f2;
   border-radius: 10px;
   text-decoration: none;
@@ -219,9 +213,9 @@ async function handleLogout() {
 }
 
 .mobile-drawer-nav a.router-link-active {
-  color: #a8261d;
-  background: #fff1ee;
-  border-color: #f0c3bb;
+  color: var(--ui-danger);
+  background: var(--ui-danger-soft);
+  border-color: var(--ui-danger-line);
 }
 
 .mobile-drawer-actions {
@@ -229,7 +223,7 @@ async function handleLogout() {
   gap: 9px;
   margin-top: 22px;
   padding-top: 18px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--ui-line-soft);
 
   button {
     width: 100%;
@@ -241,7 +235,7 @@ async function handleLogout() {
 :deep(.mobile-menu-drawer .el-drawer__header) {
   margin: 0;
   padding: calc(18px + env(safe-area-inset-top)) 18px 16px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--ui-line-soft);
 }
 
 :deep(.mobile-menu-drawer .el-drawer__body) {

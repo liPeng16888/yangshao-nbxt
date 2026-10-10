@@ -246,7 +246,7 @@ async function submit() {
   display: grid;
   min-width: 0;
   gap: 6px;
-  color: #475569;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-finance-entry-form__date {
@@ -266,9 +266,9 @@ async function submit() {
   min-width: 0;
   min-height: 44px;
   padding: 9px 11px;
-  color: #0f172a;
+  color: var(--ui-text);
   background: #fff;
-  border: 1px solid #aebdcd;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -280,7 +280,7 @@ async function submit() {
 .mobile-finance-entry-form__append button,
 .mobile-expense-draft-card__remove {
   padding: 8px 14px;
-  color: #2563eb;
+  color: var(--ui-accent);
   background: #fff;
   border: 1px solid #93b4dd;
   border-radius: 8px;
@@ -289,23 +289,23 @@ async function submit() {
 .mobile-expense-draft-card {
   padding: 14px;
   background: #fff;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
   box-shadow: 0 2px 10px rgb(15 23 42 / 5%);
 }
 
 .mobile-expense-draft-card__remove {
-  color: #b42318;
+  color: var(--ui-danger);
   border-color: #e8aaa5;
 }
 
 .mobile-expense-draft-card__remove:disabled {
-  color: #94a3b8;
-  border-color: #d8e1eb;
+  color: var(--ui-text-placeholder);
+  border-color: var(--ui-line);
 }
 
 .mobile-expense-draft-card__screenshots small {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .mobile-expense-draft-card__screenshots :deep(.el-upload--picture-card),
@@ -331,7 +331,7 @@ async function submit() {
   min-height: 44px;
   color: #fff;
   font-weight: 700;
-  background: #2563eb;
+  background: var(--ui-accent);
   border: 0;
   border-radius: 8px;
 }

@@ -165,7 +165,7 @@
       <el-table :data="movements" border v-loading="historyLoading" empty-text="暂无入库明细">
         <el-table-column prop="occurredOn" label="入库日期" width="120" />
         <el-table-column prop="nameSnapshot" label="药品名称" min-width="160" />
-        <el-table-column label="数量" width="130">
+        <el-table-column align="right" label="数量" width="130">
           <template #default="{ row }">{{ formatMedicineQuantity(row.quantity) }} {{ row.unitLabel }}</template>
         </el-table-column>
         <el-table-column label="类型" width="120">
@@ -623,9 +623,9 @@ function errorMessage(error: unknown, fallback: string) {
   gap: 12px;
   margin-bottom: 14px;
   padding: 10px 12px;
-  color: #b42318;
-  background: #fef3f2;
-  border: 1px solid #fecdca;
+  color: var(--ui-danger);
+  background: var(--ui-danger-soft);
+  border: 1px solid var(--ui-danger-line);
   border-radius: 6px;
 }
 
@@ -638,7 +638,7 @@ function errorMessage(error: unknown, fallback: string) {
   gap: 10px;
   margin-top: 18px;
   padding-top: 16px;
-  border-top: 1px solid #e4ebf3;
+  border-top: 1px solid var(--ui-line-soft);
 
   h3 {
     margin: 0 0 4px;
@@ -682,7 +682,7 @@ function errorMessage(error: unknown, fallback: string) {
   min-width: 0;
   overflow: hidden;
   background: #ffffff;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
 }
 
@@ -696,7 +696,7 @@ function errorMessage(error: unknown, fallback: string) {
   justify-content: space-between;
   width: 100%;
   padding: 10px 12px;
-  color: #1f2937;
+  color: var(--ui-text);
   text-align: left;
   background: transparent;
   border: 0;
@@ -709,13 +709,13 @@ function errorMessage(error: unknown, fallback: string) {
 }
 
 .mobile-medicine-form-toggle small {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-weight: 400;
 }
 
 .mobile-medicine-form {
   padding: 12px;
-  border-top: 1px solid #e4ebf3;
+  border-top: 1px solid var(--ui-line-soft);
 }
 
 .mobile-medicine-form :deep(.el-input),

@@ -178,9 +178,9 @@ async function savePassword() {
 
 .reminder-item {
   padding: 10px;
-  border: 1px solid #e5edf7;
+  border: 1px solid var(--ui-line-soft);
   border-radius: 6px;
-  background: #f8fbff;
+  background: var(--ui-surface-subtle);
 }
 
 .reminder-item strong {
@@ -190,7 +190,7 @@ async function savePassword() {
 
 .reminder-item p {
   margin: 0 0 8px;
-  color: #475569;
+  color: var(--ui-text-secondary);
   line-height: 1.5;
 }
 

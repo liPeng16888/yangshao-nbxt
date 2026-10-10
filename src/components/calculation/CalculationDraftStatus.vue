@@ -58,13 +58,13 @@ const statusLabel = computed(() => labels[props.status])
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
 .calculation-draft-status--error,
 .calculation-draft-status--conflict {
-  color: #b45309;
+  color: var(--ui-warning);
 }
 
 .calculation-draft-status__actions {
@@ -74,11 +74,11 @@ const statusLabel = computed(() => labels[props.status])
 }
 
 .calculation-draft-status__actions button {
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
   padding: 8px 12px;
   background: #fff;
-  color: #1d4ed8;
+  color: var(--ui-accent-hover);
   cursor: pointer;
 }
 </style>

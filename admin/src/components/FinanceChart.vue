@@ -6,6 +6,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import type { EChartsOption } from 'echarts'
+import { chartTheme } from '../../../shared/chartTheme'
 
 const props = defineProps<{
   option: EChartsOption
@@ -13,20 +14,30 @@ const props = defineProps<{
 
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
+let resizeObserver: ResizeObserver | null = null
 
 function renderChart() {
   if (!chartRef.value) return
-  chart ||= echarts.init(chartRef.value)
+  chart ||= echarts.init(chartRef.value, chartTheme)
   chart.setOption(props.option, true)
+}
+
+function resizeChart() {
+  chart?.resize()
 }
 
 onMounted(() => {
   renderChart()
-  window.addEventListener('resize', renderChart)
+  if (chartRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(resizeChart)
+    resizeObserver.observe(chartRef.value)
+  }
+  window.addEventListener('resize', resizeChart)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', renderChart)
+  window.removeEventListener('resize', resizeChart)
+  resizeObserver?.disconnect()
   chart?.dispose()
 })
 

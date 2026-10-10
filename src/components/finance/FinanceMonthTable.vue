@@ -7,7 +7,7 @@
     <el-table :data="sortedEntries" border v-loading="loading">
       <el-table-column prop="paymentDate" label="支付日期" width="130" sortable />
       <el-table-column prop="item" label="开支项目" min-width="160" />
-      <el-table-column prop="amount" label="开支金额" width="120">
+      <el-table-column align="right" prop="amount" label="开支金额" width="120">
         <template #default="{ row }">¥{{ row.amount.toFixed(2) }}</template>
       </el-table-column>
       <el-table-column prop="paymentMethod" label="支付方式" width="120">

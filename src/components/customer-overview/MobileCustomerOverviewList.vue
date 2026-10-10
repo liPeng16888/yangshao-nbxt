@@ -89,7 +89,7 @@ function count(value: number | null | undefined) {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   overflow: hidden;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
 
   > div {
@@ -97,7 +97,7 @@ function count(value: number | null | undefined) {
     gap: 4px;
     min-width: 0;
     padding: 12px;
-    border-right: 1px solid #d8e1eb;
+    border-right: 1px solid var(--ui-line);
 
     &:last-child {
       border-right: 0;
@@ -105,14 +105,14 @@ function count(value: number | null | undefined) {
   }
 
   span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 12px;
   }
 
   strong {
     min-width: 0;
     overflow: hidden;
-    color: #0f172a;
+    color: var(--ui-text);
     font-size: 16px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -132,7 +132,7 @@ function count(value: number | null | undefined) {
   padding: 14px;
   overflow: hidden;
   background: #fff;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
 }
 
@@ -145,14 +145,14 @@ function count(value: number | null | undefined) {
   strong {
     min-width: 0;
     overflow: hidden;
-    color: #0f172a;
+    color: var(--ui-text);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   span {
     flex: 0 0 auto;
-    color: #2563eb;
+    color: var(--ui-accent);
     font-weight: 600;
   }
 }
@@ -171,7 +171,7 @@ dl div {
 
 dt {
   flex: 0 0 auto;
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 dd {
@@ -185,9 +185,9 @@ dd {
   justify-self: start;
   min-height: 44px;
   padding: 8px 12px;
-  color: #2563eb;
+  color: var(--ui-accent);
   background: #fff;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 </style>

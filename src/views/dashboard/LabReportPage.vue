@@ -327,8 +327,8 @@ function switchSection(section: ReportSection) {
   gap: 12px;
   padding: 10px 12px;
   color: #991b1b;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
+  background: var(--ui-danger-soft);
+  border: 1px solid var(--ui-danger-line);
   border-radius: 8px;
 }
 
@@ -341,21 +341,21 @@ function switchSection(section: ReportSection) {
   button {
     min-height: 34px;
     padding: 0 14px;
-    color: #475569;
+    color: var(--ui-text-secondary);
     background: #ffffff;
-    border: 1px solid #d8e1eb;
+    border: 1px solid var(--ui-line);
     border-radius: 8px;
     cursor: pointer;
 
     &:hover {
-      color: #1d4ed8;
-      border-color: #93c5fd;
+      color: var(--ui-accent-hover);
+      border-color: var(--ui-accent-line);
     }
 
     &.is-active {
       color: #ffffff;
-      background: #2563eb;
-      border-color: #2563eb;
+      background: var(--ui-accent);
+      border-color: var(--ui-accent);
     }
   }
 }

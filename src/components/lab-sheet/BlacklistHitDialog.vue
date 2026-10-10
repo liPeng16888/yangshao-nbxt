@@ -17,7 +17,7 @@
       <el-table-column prop="wechatNickname" label="微信昵称" min-width="120">
         <template #default="{ row }">{{ emptyText(row.wechatNickname) }}</template>
       </el-table-column>
-      <el-table-column prop="amount" label="金额" width="100">
+      <el-table-column align="right" prop="amount" label="金额" width="100">
         <template #default="{ row }">{{ Number.isFinite(row.amount) ? row.amount : '无信息' }}</template>
       </el-table-column>
     </el-table>

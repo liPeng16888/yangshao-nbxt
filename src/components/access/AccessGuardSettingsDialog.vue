@@ -133,7 +133,7 @@ async function removeGroup(group: AccessGuardGroup) {
 <style scoped>
 .toolbar,.group-card__top { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:16px 0 10px; }
 .group-list { display:grid; gap:10px; max-height:400px; overflow:auto; }
-.group-card { border:1px solid #dbe5f0; border-radius:6px; padding:12px 14px; }
+.group-card { border:1px solid var(--ui-line); border-radius:6px; padding:12px 14px; }
 .group-card__top { margin:0; } .group-card__top strong { margin-right:8px; }
-.group-card__features { color:#334155; line-height:1.6; }.group-card__meta,.feature-owned { color:#94a3b8; font-size:12px; }.feature-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 8px; }.unit { margin-left:10px; color:#64748b; }
+.group-card__features { color:var(--ui-text-secondary); line-height:1.6; }.group-card__meta,.feature-owned { color:var(--ui-text-placeholder); font-size:12px; }.feature-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 8px; }.unit { margin-left:10px; color:var(--ui-text-muted); }
 </style>

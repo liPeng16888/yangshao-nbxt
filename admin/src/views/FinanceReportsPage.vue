@@ -87,8 +87,8 @@
       </div>
       <el-table :data="report.rows || []" border>
         <el-table-column prop="date" label="日期" width="130" />
-        <el-table-column prop="sampleCount" label="样品数量" width="110" />
-        <el-table-column label="应收金额" width="130"><template #default="{ row }">¥{{ money(row.totalAmount) }}</template></el-table-column>
+        <el-table-column align="right" prop="sampleCount" label="样品数量" width="110" />
+        <el-table-column align="right" label="应收金额" width="130"><template #default="{ row }">¥{{ money(row.totalAmount) }}</template></el-table-column>
         <el-table-column label="已结款"><template #default="{ row }">{{ statusText(row, '已结款') }}</template></el-table-column>
         <el-table-column label="未结款"><template #default="{ row }">{{ statusText(row, '未结款') }}</template></el-table-column>
         <el-table-column label="月结款"><template #default="{ row }">{{ statusText(row, '月结款') }}</template></el-table-column>
@@ -118,7 +118,7 @@
         <el-table-column prop="registeredAt" label="登记日期" width="180" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="item" label="开支项目" min-width="180" />
-        <el-table-column label="开支金额" width="130"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+        <el-table-column align="right" label="开支金额" width="130"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
         <el-table-column prop="paymentMethod" label="支付方式" width="110" />
         <el-table-column prop="screenshotUrl" label="支付截图" min-width="160" />
         <el-table-column prop="remark" label="备注" min-width="180" />
@@ -132,7 +132,7 @@
         <el-table-column prop="sequence" label="编号" width="90" />
         <el-table-column prop="sampleNumber" label="样品编号" min-width="150" />
         <el-table-column prop="customer" label="客户" min-width="180" />
-        <el-table-column label="金额" width="110"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+        <el-table-column align="right" label="金额" width="110"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
         <el-table-column label="操作" width="180">
           <template #default="{ row }">
             <el-button size="small" @click="jumpToData(row)">跳转</el-button>
@@ -147,8 +147,8 @@
         <el-table-column prop="date" label="日期" width="120" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="customer" label="客户" min-width="180" />
-        <el-table-column prop="sampleCount" label="样品数量" width="110" />
-        <el-table-column label="金额" width="120"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+        <el-table-column align="right" prop="sampleCount" label="样品数量" width="110" />
+        <el-table-column align="right" label="金额" width="120"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
       </el-table>
     </section>
 
@@ -157,10 +157,10 @@
         <el-table-column prop="month" label="日期" width="110" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="customer" label="客户" min-width="180" />
-        <el-table-column label="金额" width="120"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
-        <el-table-column prop="sampleCount" label="样品数量" width="110" />
+        <el-table-column align="right" label="金额" width="120"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+        <el-table-column align="right" prop="sampleCount" label="样品数量" width="110" />
         <el-table-column prop="settlementStatus" label="结款状态" width="110" />
-        <el-table-column label="结款金额" width="120"><template #default="{ row }">¥{{ money(row.paidAmount) }}</template></el-table-column>
+        <el-table-column align="right" label="结款金额" width="120"><template #default="{ row }">¥{{ money(row.paidAmount) }}</template></el-table-column>
         <el-table-column prop="remark" label="备注" min-width="180" />
         <el-table-column label="操作" width="100">
           <template #default="{ row }"><el-button size="small" type="warning" :disabled="!row.recordId" @click="remindMonthly(row)">催款</el-button></template>
@@ -174,8 +174,8 @@
         <el-table-column prop="lastDate" label="最后检测日期" width="130" />
         <el-table-column prop="name" label="名称" width="150" />
         <el-table-column prop="customer" label="客户" min-width="180" />
-        <el-table-column label="金额" width="120"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
-        <el-table-column prop="sampleCount" label="样品数量" width="110" />
+        <el-table-column align="right" label="金额" width="120"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+        <el-table-column align="right" prop="sampleCount" label="样品数量" width="110" />
         <el-table-column label="备注" min-width="240">
           <template #default="{ row }">
             <el-input v-model="row.remark" size="small" @change="saveMonthlyCustomerRemark(row)" />
@@ -268,7 +268,7 @@ const incomeChartOption = computed<EChartsOption>(() => {
     grid: { left: 62, right: 28, top: 26, bottom: 48 },
     xAxis: { type: 'category', data: data.labels, axisLabel: { rotate: data.labels.length > 8 ? 30 : 0 } },
     yAxis: { type: 'value', name: '金额（元）' },
-    series: [{ name: '收入金额', type: 'bar', data: data.values, barMaxWidth: 44, itemStyle: { color: '#2563eb', borderRadius: [4, 4, 0, 0] } }]
+    series: [{ name: '收入金额', type: 'bar', data: data.values, barMaxWidth: 44, itemStyle: { color: '#738b9c', borderRadius: [3, 3, 0, 0] } }]
   }
 })
 const expenseChartOption = computed<EChartsOption>(() => {
@@ -285,7 +285,7 @@ const expenseChartOption = computed<EChartsOption>(() => {
     grid: { left: 62, right: 28, top: 26, bottom: 48 },
     xAxis: { type: 'category', data: data.labels, axisLabel: { rotate: data.labels.length > 8 ? 30 : 0 } },
     yAxis: { type: 'value', name: '金额（元）' },
-    series: [{ name: '支出金额', type: 'bar', data: data.values, barMaxWidth: 44, itemStyle: { color: '#d9472f', borderRadius: [4, 4, 0, 0] } }]
+    series: [{ name: '支出金额', type: 'bar', data: data.values, barMaxWidth: 44, itemStyle: { color: '#ac8c7e', borderRadius: [3, 3, 0, 0] } }]
   }
 })
 
@@ -410,14 +410,14 @@ function switchFinancePage(page: string | number) {
 }
 
 .report-range-filter__separator {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
 .finance-chart-section {
   margin: 0 14px 14px;
   overflow: hidden;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--ui-line-soft);
   border-radius: 8px;
 }
 
@@ -427,11 +427,11 @@ function switchFinancePage(page: string | number) {
   justify-content: space-between;
   min-height: 46px;
   padding: 0 14px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--ui-line-soft);
 }
 
 .finance-chart-section__header strong {
-  color: #1e293b;
+  color: var(--ui-text);
   font-size: 14px;
 }
 
@@ -450,7 +450,7 @@ function switchFinancePage(page: string | number) {
 
 .customer-filter-bar > span {
   flex: none;
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 

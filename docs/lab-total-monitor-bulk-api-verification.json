@@ -1,0 +1,115 @@
+{
+  "date": "2026-10-10",
+  "environment": "isolated PostgreSQL 18.4 and Nest app on loopback ports 55439/3001",
+  "checks": [
+    {
+      "name": "new SQL migration executes on PostgreSQL baseline",
+      "passed": true
+    },
+    {
+      "name": "unauthenticated reads require login",
+      "passed": true
+    },
+    {
+      "name": "new frontend account has monitoring disabled",
+      "passed": true
+    },
+    {
+      "name": "root admin saves multiple rules into PostgreSQL",
+      "passed": true
+    },
+    {
+      "name": "frontend consumes the stored backend rules",
+      "passed": true
+    },
+    {
+      "name": "frontend subaccount inherits its parent configuration",
+      "passed": true
+    },
+    {
+      "name": "frontend query cannot select a different data owner",
+      "passed": true
+    },
+    {
+      "name": "different frontend account retains independent empty rules",
+      "passed": true
+    },
+    {
+      "name": "frontend identities cannot write admin configuration",
+      "passed": true
+    },
+    {
+      "name": "delegated admin cannot read or write unassigned owner",
+      "passed": true
+    },
+    {
+      "name": "delegated admin may edit the assigned owner with version checking",
+      "passed": true
+    },
+    {
+      "name": "stale administrator save is rejected as conflict",
+      "passed": true
+    },
+    {
+      "name": "overlapping iron ranges are rejected by the HTTP API",
+      "passed": true
+    },
+    {
+      "name": "invalid bounds are rejected by the HTTP API",
+      "passed": true
+    },
+    {
+      "name": "a frontend subaccount cannot be used as a configuration owner",
+      "passed": true
+    },
+    {
+      "name": "committed rules survive a fresh Prisma connection",
+      "passed": true
+    },
+    {
+      "name": "real iron and silicon calculation waits for missing aluminum",
+      "passed": true
+    },
+    {
+      "name": "real calculated total outside configured bounds is abnormal",
+      "passed": true
+    },
+    {
+      "name": "real calculated total within configured bounds returns normal",
+      "passed": true
+    },
+    {
+      "name": "real iron calculation beyond all configured ranges is abnormal",
+      "passed": true
+    },
+    {
+      "name": "bulk appends selected rules to multiple targets and skips the entire overlapping account",
+      "passed": true
+    },
+    {
+      "name": "bulk preserves original target rules and allocates independent rule identities",
+      "passed": true
+    },
+    {
+      "name": "repeated bulk requests deduplicate instead of adding again",
+      "passed": true
+    },
+    {
+      "name": "bulk uses the saved source version and rejects stale selections",
+      "passed": true
+    },
+    {
+      "name": "bulk denies the entire unauthorized target selection before writing an authorized target",
+      "passed": true
+    },
+    {
+      "name": "frontend identities cannot call the bulk admin endpoint",
+      "passed": true
+    },
+    {
+      "name": "bulk rejects empty targets and copying back to its source",
+      "passed": true
+    }
+  ],
+  "passed": 27
+}

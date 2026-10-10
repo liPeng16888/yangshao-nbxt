@@ -392,7 +392,7 @@ function handleConflictResult(
   min-width: 0;
   min-height: 26px;
   padding: 0 6px;
-  color: #1f2937;
+  color: var(--ui-text);
   background: #ffffff;
   border: 0;
   cursor: pointer;
@@ -419,7 +419,7 @@ function handleConflictResult(
 
 .lab-element-selector__action {
   flex: 0 0 auto;
-  color: #2563eb;
+  color: var(--ui-accent);
   font-size: 12px;
 }
 
@@ -444,7 +444,7 @@ function handleConflictResult(
 .element-picker__header span,
 .element-picker__section-title small,
 .element-picker__empty {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 12px;
 }
 
@@ -452,8 +452,8 @@ function handleConflictResult(
   display: grid;
   gap: 8px;
   padding: 10px;
-  background: #f8fbff;
-  border: 1px solid #dce5ef;
+  background: var(--ui-surface-subtle);
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -461,9 +461,9 @@ function handleConflictResult(
   display: grid;
   gap: 8px;
   padding: 10px;
-  color: #92400e;
-  background: #fffbeb;
-  border: 1px solid #f59e0b;
+  color: var(--ui-warning);
+  background: var(--ui-warning-soft);
+  border: 1px solid var(--ui-warning);
   border-radius: 6px;
   font-size: 13px;
 
@@ -488,7 +488,7 @@ function handleConflictResult(
   > span {
     min-width: 0;
     overflow: hidden;
-    color: #475569;
+    color: var(--ui-text-secondary);
     font-size: 13px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -511,7 +511,7 @@ function handleConflictResult(
 }
 
 .element-picker__checkboxes :deep(.el-checkbox__label) {
-  color: #1f2937;
+  color: var(--ui-text);
   font-size: 15px;
   line-height: 1.45;
   text-align: left;
@@ -519,7 +519,7 @@ function handleConflictResult(
 }
 
 .element-picker__checkboxes small {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 

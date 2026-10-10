@@ -23,6 +23,7 @@
         <router-view />
       </main>
     </div>
+    <AiAssistant v-if="authStore.user" :key="authStore.user.id" audience="frontend" :actor-id="authStore.user.id" :api-base="aiApiBase" :mock-mode="useMocks" />
   </div>
 </template>
 
@@ -44,6 +45,9 @@ import {
 import AppMobileShell from './AppMobileShell.vue'
 import AppSidebar from './AppSidebar.vue'
 import AppTopbar from './AppTopbar.vue'
+import AiAssistant from '../../../shared/ai/AiAssistant.vue'
+import { useMocks } from '@/utils/request'
+const aiApiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'ys_sidebar_collapsed'
 const PREFERENCE_SECTION_LABELS: Record<FrontendPreferenceSection, string> = {

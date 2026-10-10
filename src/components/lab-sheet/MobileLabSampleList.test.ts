@@ -134,6 +134,17 @@ function installScrollIntoViewMock() {
 }
 
 describe('MobileLabSampleList', () => {
+  it('shows a text and background warning on mobile totals only after all three inputs are filled', async () => {
+    const block = makeBlock('block-1', 1, { ironRaw: 0.28, siliconRaw: 1.2, aluminumRaw: 3 })
+    const rule = { id: 'r1', name: '低铁', ironMin: 5, ironMax: 10, totalMin: 80.5, totalMax: 82.5, enabled: true }
+    const wrapper = mountList({ blocks: [block], monitorRules: [rule] })
+    await wrapper.findAll('.mobile-group-toggle').find((button) => button.text().includes('检测数据'))!.trigger('click')
+    expect(wrapper.get('.mobile-result--total-abnormal').text()).toContain('合量异常')
+    await wrapper.setProps({ blocks: [makeBlock('block-1', 1, { ironRaw: 0.28, siliconRaw: 1.2 })] })
+    expect(wrapper.find('.mobile-result--total-abnormal').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   afterEach(() => {
     document.body.innerHTML = ''
     vi.restoreAllMocks()

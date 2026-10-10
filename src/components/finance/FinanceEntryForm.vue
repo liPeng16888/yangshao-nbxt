@@ -27,7 +27,7 @@
               <el-input v-model.trim="row.item" placeholder="开支项目" />
             </template>
           </el-table-column>
-          <el-table-column label="开支金额" width="150">
+          <el-table-column align="right" label="开支金额" width="150">
             <template #header>
               <span class="required-label">开支金额</span>
             </template>
@@ -157,7 +157,7 @@ async function submit() {
 
 .finance-form__append {
   margin-left: auto;
-  color: #475569;
+  color: var(--ui-text-secondary);
 }
 
 .finance-form__append :deep(.el-input-number) {

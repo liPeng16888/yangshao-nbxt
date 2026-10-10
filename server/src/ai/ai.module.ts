@@ -1,0 +1,28 @@
+import { Module } from '@nestjs/common'
+import { AuthModule } from '../auth/auth.module'
+import { AdminModule } from '../admin/admin.module'
+import { LabSheetsModule } from '../lab-sheets/lab-sheets.module'
+import { TenantRealtimeModule } from '../realtime/tenant-realtime.module'
+import { AiController, AdminAiController } from './ai.controller'
+import { AiService } from './ai.service'
+import { AiConfigService } from './ai-config.service'
+import { AiAccessService } from './ai-access.service'
+import { AiBusinessService } from './ai-business.service'
+import { AiDataService } from './ai-data.service'
+import { AiOperationService } from './ai-operation.service'
+import { EmployeeAttendanceModule } from '../employee-attendance/employee-attendance.module'
+import { MedicineInventoryModule } from '../medicine-inventory/medicine-inventory.module'
+import { FinanceModule } from '../finance/finance.module'
+import { SharedPrepaidModule } from '../shared-prepaid/shared-prepaid.module'
+import { CalculationDraftModule } from '../calculation-drafts/calculation-draft.module'
+import { FrontendPreferencesModule } from '../frontend-preferences/frontend-preferences.module'
+import { BlacklistModule } from '../blacklist/blacklist.module'
+import { CustomerOverviewModule } from '../customer-overview/customer-overview.module'
+
+import { AdminFeishuController, FeishuController } from './feishu/feishu.controller'
+import { FeishuService } from './feishu/feishu.service'
+import { FeishuTransport } from './feishu/feishu.transport'
+import { FeishuRuntime } from './feishu/feishu.runtime'
+
+@Module({ imports: [AuthModule, AdminModule, LabSheetsModule, TenantRealtimeModule, EmployeeAttendanceModule, MedicineInventoryModule, FinanceModule, SharedPrepaidModule, CalculationDraftModule, FrontendPreferencesModule, BlacklistModule, CustomerOverviewModule], controllers: [AiController, AdminAiController, AdminFeishuController, FeishuController], providers: [FeishuService, FeishuTransport, FeishuRuntime, AiService, AiConfigService, AiAccessService, AiBusinessService, AiDataService, AiOperationService] })
+export class AiModule {}

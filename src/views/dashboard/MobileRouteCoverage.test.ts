@@ -108,7 +108,12 @@ const routeContractsByName = new Map(routeContracts.map((contract) => [contract.
 
 function customerRouteRecords() {
   return appRouter.getRoutes()
-    .filter((route) => route.path !== '/' && route.path !== '/login' && route.path !== '/no-menu-permission' && route.meta.requiresAuth && !route.redirect)
+    .filter((route) => route.path !== '/'
+      && route.path !== '/login'
+      && route.path !== '/no-menu-permission'
+      && route.meta.requiresAuth
+      && route.meta.customerNavigation !== false
+      && !route.redirect)
 }
 
 function createCoverageRouter() {

@@ -528,39 +528,39 @@ function settlementStatusLabel(status: PrepaidSettlementStatus) {
 .settlements-page { display: grid; gap: 18px; padding: 24px; }
 .page-header, .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .page-header h1, .section-heading h2 { margin: 0; }
-.page-header p, .section-heading p { margin: 6px 0 0; color: #64748b; }
+.page-header p, .section-heading p { margin: 6px 0 0; color: var(--ui-text-muted); }
 .eyebrow { color: #c2410c !important; font-weight: 700; }
-.panel { padding: 20px; border: 1px solid #e2e8f0; border-radius: 14px; background: #fff; box-shadow: 0 8px 30px rgb(15 23 42 / 5%); }
+.panel { padding: 20px; border: 1px solid var(--ui-line-soft); border-radius: 14px; background: #fff; box-shadow: 0 8px 30px rgb(15 23 42 / 5%); }
 .filters { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; margin: 16px 0; }
-.filters label { display: grid; gap: 5px; font-size: 13px; color: #475569; }
-.filters input, .filters select { min-height: 36px; padding: 0 9px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; }
+.filters label { display: grid; gap: 5px; font-size: 13px; color: var(--ui-text-secondary); }
+.filters input, .filters select { min-height: 36px; padding: 0 9px; border: 1px solid var(--ui-line); border-radius: 6px; background: #fff; }
 .counterparty-groups { display: grid; gap: 16px; }
-.counterparty-group { padding: 16px; border: 1px solid #fed7aa; border-radius: 12px; background: #fffaf5; }
+.counterparty-group { padding: 16px; border: 1px solid var(--ui-warning-line); border-radius: 12px; background: #fffaf5; }
 .counterparty-group > h3 { margin: 0 0 12px; }
 .gross-direction { margin-top: 12px; }
-.gross-direction h4 { margin: 0 0 8px; color: #9a3412; }
+.gross-direction h4 { margin: 0 0 8px; color: var(--ui-warning); }
 .gross-lines { display: grid; gap: 8px; }
-.gross-line { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 14px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 9px; background: #fff; }
-.gross-line--unavailable { background: #f8fafc; color: #64748b; }
+.gross-line { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 14px; padding: 12px; border: 1px solid var(--ui-line-soft); border-radius: 9px; background: #fff; }
+.gross-line--unavailable { background: var(--ui-surface-subtle); color: var(--ui-text-muted); }
 .gross-line__select { display: flex; gap: 8px; align-items: center; }
 .association { grid-column: 1 / -1; color: #7c3aed; }
-.relation-warning { grid-column: 1 / -1; color: #b45309; }
-.muted { color: #64748b; }
+.relation-warning { grid-column: 1 / -1; color: var(--ui-warning); }
+.muted { color: var(--ui-text-muted); }
 .pagination-row { display: flex; justify-content: flex-end; margin-top: 14px; }
-.net-preview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; padding: 16px; border: 1px solid #fdba74; border-radius: 12px; background: #fff7ed; }
+.net-preview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; padding: 16px; border: 1px solid #fdba74; border-radius: 12px; background: var(--ui-warning-soft); }
 .net-preview > div { display: grid; gap: 4px; }
 .net-preview p, .net-preview button { grid-column: 1 / -1; }
 .mobile-settlement-filter-fields, .mobile-settlement-list { display: grid; gap: 12px; }
-.mobile-settlement-filter-fields label { display: grid; gap: 5px; color: #475569; font-size: 13px; }
-.mobile-settlement-filter-fields input, .mobile-settlement-filter-fields select { width: 100%; min-height: 44px; padding: 0 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; }
+.mobile-settlement-filter-fields label { display: grid; gap: 5px; color: var(--ui-text-secondary); font-size: 13px; }
+.mobile-settlement-filter-fields input, .mobile-settlement-filter-fields select { width: 100%; min-height: 44px; padding: 0 9px; border: 1px solid var(--ui-line); border-radius: 8px; background: #fff; }
 .mobile-settlement-list { margin-top: 14px; }
-.mobile-settlement-card { display: grid; gap: 9px; padding: 14px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
+.mobile-settlement-card { display: grid; gap: 9px; padding: 14px; border: 1px solid var(--ui-line); border-radius: 12px; background: #fff; }
 .mobile-settlement-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.mobile-settlement-card p { margin: 0; color: #64748b; overflow-wrap: anywhere; }
+.mobile-settlement-card p { margin: 0; color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .mobile-settlement-money { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
-.mobile-settlement-money span { display: grid; gap: 3px; padding: 8px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 12px; }
-.mobile-settlement-money strong { color: #0f172a; font-size: 14px; }
-.mobile-settlement-detail { width: 100%; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #1d4ed8; }
+.mobile-settlement-money span { display: grid; gap: 3px; padding: 8px; border-radius: 8px; background: var(--ui-surface-subtle); color: var(--ui-text-muted); font-size: 12px; }
+.mobile-settlement-money strong { color: var(--ui-text); font-size: 14px; }
+.mobile-settlement-detail { width: 100%; border: 1px solid var(--ui-accent-line); border-radius: 8px; background: var(--ui-accent-soft); color: var(--ui-accent-hover); }
 @media (max-width: 800px) {
   .settlements-page { padding: 14px; }
   .gross-line { grid-template-columns: 1fr; }

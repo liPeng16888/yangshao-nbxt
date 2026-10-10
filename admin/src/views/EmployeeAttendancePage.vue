@@ -436,4 +436,5 @@ onMounted(async () => {
 .audit-panel { display: grid; gap: 14px; }
 .audit-hint { margin: -4px 0 0; color: #718096; }
 @media (max-width: 1000px) { .overview-grid { grid-template-columns: repeat(2, minmax(160px, 1fr)); } }
+@media (max-width: 700px) { .overview-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

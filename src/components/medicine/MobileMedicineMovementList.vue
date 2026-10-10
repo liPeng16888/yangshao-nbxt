@@ -181,9 +181,9 @@ function currentQuantity(row: MedicineInventoryMovement) {
 .mobile-medicine-movements__error button,
 .mobile-medicine-movements__correct {
   padding: 8px 12px;
-  color: #2563eb;
+  color: var(--ui-accent);
   background: #ffffff;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -223,9 +223,9 @@ function currentQuantity(row: MedicineInventoryMovement) {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
-  color: #b42318;
-  background: #fef3f2;
-  border: 1px solid #fecdca;
+  color: var(--ui-danger);
+  background: var(--ui-danger-soft);
+  border: 1px solid var(--ui-danger-line);
   border-radius: 10px;
 }
 
@@ -248,7 +248,7 @@ dl div {
 }
 
 dt {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 dd {
@@ -260,7 +260,7 @@ dd {
 
 .mobile-medicine-movements__correct {
   width: 100%;
-  color: #b45309;
-  border-color: #f59e0b;
+  color: var(--ui-warning);
+  border-color: var(--ui-warning);
 }
 </style>

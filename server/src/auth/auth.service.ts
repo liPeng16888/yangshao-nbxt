@@ -255,7 +255,7 @@ export class AuthService {
     return { expiresAt, token, groupId: group.id, grantVersion: group.grantVersion, features }
   }
 
-  async hasAccessGrant(currentUser: CurrentUser | string, token: string | undefined, feature: AccessGuardFeature) {
+  async hasAccessGrant(currentUser: CurrentUser | string, token: string | undefined, feature: AccessGuardFeature, transaction?: Prisma.TransactionClient) {
     if (!token) return false
     const identity = this.accessIdentity(currentUser)
     let payload: AccessGrantClaims
@@ -274,7 +274,7 @@ export class AuthService {
       (payload.ownerId !== identity.ownerId || payload.permissionVersion !== identity.permissionVersion)
     ) return false
     if (!identity.strict && payload.ownerId && payload.ownerId !== identity.ownerId) return false
-    const currentGroup = await this.prisma.accessGuardGroup.findFirst({
+    const currentGroup = await (transaction || this.prisma).accessGuardGroup.findFirst({
       where: {
         id: payload.groupId,
         frontendUserId: identity.ownerId,
@@ -287,20 +287,20 @@ export class AuthService {
     return Boolean(currentGroup)
   }
 
-  async isFeatureProtected(currentUser: CurrentUser | string, feature: AccessGuardFeature) {
+  async isFeatureProtected(currentUser: CurrentUser | string, feature: AccessGuardFeature, transaction?: Prisma.TransactionClient) {
     const identity = this.accessIdentity(currentUser)
     if (!identity.requiresAccessGuardPassword) return false
-    const membership = await this.prisma.accessGuardGroupFeature.findFirst({
+    const membership = await (transaction || this.prisma).accessGuardGroupFeature.findFirst({
       where: { frontendUserId: identity.ownerId, feature, group: { enabled: true } },
       select: { id: true }
     })
     return Boolean(membership)
   }
 
-  async assertAccessGrant(currentUser: CurrentUser | string, token: string | undefined, feature: AccessGuardFeature, alwaysRequire = false) {
+  async assertAccessGrant(currentUser: CurrentUser | string, token: string | undefined, feature: AccessGuardFeature, alwaysRequire = false, transaction?: Prisma.TransactionClient) {
     const identity = this.accessIdentity(currentUser)
-    const protectedFeature = identity.requiresAccessGuardPassword && (alwaysRequire || await this.isFeatureProtected(currentUser, feature))
-    if (protectedFeature && !(await this.hasAccessGrant(currentUser, token, feature))) {
+    const protectedFeature = identity.requiresAccessGuardPassword && (alwaysRequire || await this.isFeatureProtected(currentUser, feature, transaction))
+    if (protectedFeature && !(await this.hasAccessGrant(currentUser, token, feature, transaction))) {
       throw new ForbiddenException({ code: 'ACCESS_GRANT_INVALID', message: '访问授权无效或已过期' })
     }
   }

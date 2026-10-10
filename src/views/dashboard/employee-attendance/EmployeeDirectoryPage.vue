@@ -10,7 +10,7 @@
       <el-table :data="filtered" empty-text="暂无员工档案">
         <el-table-column prop="employeeNumber" label="编号" width="100"/><el-table-column prop="name" label="姓名" width="110"/>
         <el-table-column prop="phone" label="手机" width="130"/><el-table-column label="照片" width="72"><template #default="{ row }"><el-button v-if="row.hasPhoto" link type="primary" @click="previewPhoto(row)">查看</el-button><span v-else class="muted">无</span></template></el-table-column><el-table-column prop="idCardMasked" label="身份证" min-width="160"/>
-        <el-table-column prop="bankCardMasked" label="银行卡" min-width="160"/><el-table-column prop="baseSalary" label="基本月薪" width="110"><template #default="{ row }">¥{{ row.baseSalary.toFixed(2) }}</template></el-table-column>
+        <el-table-column prop="bankCardMasked" label="银行卡" min-width="160"/><el-table-column align="right" prop="baseSalary" label="基本月薪" width="110"><template #default="{ row }">¥{{ row.baseSalary.toFixed(2) }}</template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 'ACTIVE' ? 'success' : 'info'">{{ statusName(row.status) }}</el-tag></template></el-table-column>
         <el-table-column label="操作" width="265" fixed="right"><template #default="{ row }">
           <el-button :data-testid="`edit-employee-${row.id}`" link type="primary" @click="openEdit(row)">编辑</el-button><el-button link @click="reveal(row)">查看敏感信息</el-button>

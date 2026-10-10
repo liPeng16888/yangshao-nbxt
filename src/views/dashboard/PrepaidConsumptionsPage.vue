@@ -156,13 +156,13 @@
         </el-table-column>
         <el-table-column prop="phoneSnapshot" label="会员手机号" width="145" />
         <el-table-column label="类型" width="95"><template #default="{ row }">{{ row.kind === 'REVERSAL' ? '冲正流水' : '消费' }}</template></el-table-column>
-        <el-table-column label="消费金额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.amount) }}</template></el-table-column>
+        <el-table-column align="right" label="消费金额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.amount) }}</template></el-table-column>
         <el-table-column label="本流水跨账号应转" width="150"><template #default="{ row }">¥{{ prepaidMoney(payableTotal(row)) }}</template></el-table-column>
         <el-table-column label="充值来源账号" min-width="190"><template #default="{ row }">{{ sourceOwnerLabels(row) }}</template></el-table-column>
         <el-table-column label="消费账号" min-width="180"><template #default="{ row }">{{ prepaidAccountLabel(row.consumingFrontendUser) }}</template></el-table-column>
         <el-table-column label="实际操作账号" min-width="180"><template #default="{ row }">{{ prepaidAccountLabel(row.actorUser) }}</template></el-table-column>
         <el-table-column prop="sampleNumberSnapshot" label="样品编号" width="115" />
-        <el-table-column prop="sampleCountSnapshot" label="样品数量" width="100" />
+        <el-table-column align="right" prop="sampleCountSnapshot" label="样品数量" width="100" />
         <el-table-column label="检测元素" min-width="180"><template #default="{ row }">{{ prepaidFormatElements(row.elementsSnapshot) }}</template></el-table-column>
         <el-table-column prop="sheetDate" label="样品日期" width="120" />
         <el-table-column label="实际消费时间" width="185"><template #default="{ row }">{{ prepaidPreciseDateTime(row.createdAt) }}</template></el-table-column>
@@ -385,29 +385,29 @@ function percent(value: unknown) {
 .consumption-header { align-items: flex-start; }
 .filter-body { padding-bottom: 0; }
 .consumption-filters { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 10px; }
-.filter-field { display: grid; gap: 4px; color: #475569; font-size: 12px; }
+.filter-field { display: grid; gap: 4px; color: var(--ui-text-secondary); font-size: 12px; }
 .filter-field :deep(.el-input), .filter-field :deep(.el-select) { width: 100%; }
 .consumption-filters :deep(.el-date-editor) { width: 100%; }
 .consumption-alert { margin: 14px 16px 0; }
 .consumption-detail { display: grid; gap: 12px; padding: 12px 16px 18px 58px; }
-.audit-identity { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 10px 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; color: #9a3412; }
+.audit-identity { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 10px 12px; background: var(--ui-warning-soft); border: 1px solid var(--ui-warning-line); border-radius: 8px; color: var(--ui-warning); }
 .consumption-detail h3 { margin: 4px 0 0; font-size: 14px; }
-.sample-detail-grid { display: flex; flex-wrap: wrap; gap: 8px 18px; color: #475569; font-size: 13px; }
+.sample-detail-grid { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--ui-text-secondary); font-size: 13px; }
 .allocation-list, .payable-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.allocation-card, .payable-card { display: grid; gap: 5px; padding: 12px; background: #f8fafc; border: 1px solid #dce5ef; border-radius: 8px; font-size: 13px; }
+.allocation-card, .payable-card { display: grid; gap: 5px; padding: 12px; background: var(--ui-surface-subtle); border: 1px solid var(--ui-line); border-radius: 8px; font-size: 13px; }
 .allocation-card > div:first-child, .payable-card { align-items: center; }
 .allocation-card :deep(.el-tag) { margin-left: 8px; }
 .prepaid-pagination { display: flex; justify-content: flex-end; padding: 14px 16px; }
 .mobile-consumption-filter-fields, .mobile-consumption-list, .mobile-consumption-detail { display: grid; gap: 12px; }
 .mobile-consumption-filter-fields :deep(.el-input), .mobile-consumption-filter-fields :deep(.el-select), .mobile-consumption-filter-fields :deep(.el-date-editor) { width: 100%; min-height: 44px; }
 .mobile-consumption-list { padding: 12px; }
-.mobile-consumption-card { display: grid; gap: 9px; padding: 14px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
+.mobile-consumption-card { display: grid; gap: 9px; padding: 14px; border: 1px solid var(--ui-line); border-radius: 12px; background: #fff; }
 .mobile-consumption-card > header { display: flex; justify-content: space-between; gap: 8px; }
-.mobile-consumption-card p { margin: 0; color: #64748b; font-size: 13px; overflow-wrap: anywhere; }
+.mobile-consumption-card p { margin: 0; color: var(--ui-text-muted); font-size: 13px; overflow-wrap: anywhere; }
 .mobile-consumption-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.mobile-consumption-summary span { display: grid; gap: 3px; padding: 9px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 12px; }
-.mobile-consumption-summary strong { color: #0f172a; font-size: 15px; }
-.mobile-consumption-toggle { width: 100%; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #1d4ed8; }
+.mobile-consumption-summary span { display: grid; gap: 3px; padding: 9px; border-radius: 8px; background: var(--ui-surface-subtle); color: var(--ui-text-muted); font-size: 12px; }
+.mobile-consumption-summary strong { color: var(--ui-text); font-size: 15px; }
+.mobile-consumption-toggle { width: 100%; border: 1px solid var(--ui-accent-line); border-radius: 8px; background: var(--ui-accent-soft); color: var(--ui-accent-hover); }
 .mobile-consumption-detail { padding-top: 4px; }
 @media (max-width: 1000px) { .consumption-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .allocation-list, .payable-list { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .consumption-filters { grid-template-columns: 1fr; } .consumption-detail { padding-left: 14px; } }

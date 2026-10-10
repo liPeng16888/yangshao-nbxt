@@ -138,7 +138,7 @@ async function copyText(text: string) {
     min-width: 0;
     padding: 14px;
     background: #ffffff;
-    border: 1px solid #dbe5f0;
+    border: 1px solid var(--ui-line);
     border-radius: 10px;
   }
 
@@ -150,19 +150,19 @@ async function copyText(text: string) {
 
     h2 {
       margin: 0 0 4px;
-      color: #10233f;
+      color: var(--ui-text);
       font-size: 18px;
     }
 
     p {
       margin: 0;
-      color: #64748b;
+      color: var(--ui-text-muted);
       font-size: 13px;
     }
 
     > span {
       flex: 0 0 auto;
-      color: #166534;
+      color: var(--ui-success);
       font-size: 12px;
     }
   }
@@ -178,7 +178,7 @@ async function copyText(text: string) {
   gap: 6px;
 
   > span {
-    color: #475569;
+    color: var(--ui-text-secondary);
     font-size: 13px;
   }
 }
@@ -193,7 +193,7 @@ async function copyText(text: string) {
   gap: 4px;
 
   span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 12px;
   }
 }
@@ -204,7 +204,7 @@ async function copyText(text: string) {
   padding: 12px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  background: #f8fafc;
+  background: var(--ui-surface-subtle);
   border-radius: 8px;
   font: inherit;
 }

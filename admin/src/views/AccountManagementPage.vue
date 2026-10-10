@@ -213,7 +213,7 @@ async function saveSubAdmin() {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  color: #334155;
+  color: var(--ui-text-secondary);
   line-height: 1.4;
 }
 
@@ -223,7 +223,7 @@ async function saveSubAdmin() {
   gap: 8px;
 }
 
-.access-group-row + .access-group-row { border-top: 1px solid #e2e8f0; padding-top: 6px; }
+.access-group-row + .access-group-row { border-top: 1px solid var(--ui-line-soft); padding-top: 6px; }
 .access-group-row strong { margin-right: 6px; }
-.muted { color: #94a3b8; }
+.muted { color: var(--ui-text-placeholder); }
 </style>

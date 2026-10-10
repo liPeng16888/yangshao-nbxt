@@ -1,10 +1,11 @@
 import { fileURLToPath, URL } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
+import { labTotalMonitorDevPlugin } from '../shared/labTotalMonitorDevPlugin'
 
 export default defineConfig({
   base: '/admin/',
-  plugins: [vue()],
+  plugins: [vue(), labTotalMonitorDevPlugin('admin')],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url))

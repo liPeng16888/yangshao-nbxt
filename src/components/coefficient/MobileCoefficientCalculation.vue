@@ -243,21 +243,21 @@ function inputNumber(event: Event) {
 <style scoped lang="scss">
 .mobile-coefficient { display: grid; min-width: 0; max-width: 100%; gap: 10px; padding-bottom: 92px; overflow-x: clip; }
 .mobile-coefficient__section { min-width: 0; overflow: hidden; padding: 0; }
-.mobile-coefficient__toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; border: 0; padding: 10px 14px; background: #fff; color: #10233f; font-size: 16px; }
-.mobile-coefficient__content { display: grid; min-width: 0; gap: 10px; padding: 10px; border-top: 1px solid #d9e4ef; }
-.mobile-coefficient-card { min-width: 0; padding: 10px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; }
+.mobile-coefficient__toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; border: 0; padding: 10px 14px; background: #fff; color: var(--ui-text); font-size: 16px; }
+.mobile-coefficient__content { display: grid; min-width: 0; gap: 10px; padding: 10px; border-top: 1px solid var(--ui-line-soft); }
+.mobile-coefficient-card { min-width: 0; padding: 10px; border: 1px solid var(--ui-line); border-radius: 10px; background: #fff; }
 .mobile-coefficient-card__header { display: flex; align-items: end; gap: 8px; margin-bottom: 10px; }
 .mobile-coefficient-card__header label { flex: 1; min-width: 0; }
-.mobile-coefficient-card__header span, .mobile-coefficient-grid span, .mobile-coefficient-parameters span { display: block; margin-bottom: 4px; color: #475569; font-size: 13px; }
+.mobile-coefficient-card__header span, .mobile-coefficient-grid span, .mobile-coefficient-parameters span { display: block; margin-bottom: 4px; color: var(--ui-text-secondary); font-size: 13px; }
 .mobile-coefficient-card__code, .mobile-coefficient-grid input, .mobile-coefficient-parameters input { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid #9fb1c5; border-radius: 8px; padding-inline: 10px; background: #fff; }
 .mobile-coefficient-grid, .mobile-coefficient-parameters { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.mobile-coefficient-grid output { display: block; min-height: 28px; margin-top: 4px; padding: 4px 8px; border-radius: 6px; background: #f1f5f9; color: #0f172a; font-weight: 700; }
+.mobile-coefficient-grid output { display: block; min-height: 28px; margin-top: 4px; padding: 4px 8px; border-radius: 6px; background: var(--ui-surface-subtle); color: var(--ui-text); font-weight: 700; }
 .mobile-coefficient__bottom-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: end; }
 .mobile-coefficient__bottom-actions label, .mobile-coefficient__bottom-actions > span { grid-column: 1 / -1; }
-.mobile-coefficient__bottom-actions > span { color: #64748b; font-size: 13px; }
+.mobile-coefficient__bottom-actions > span { color: var(--ui-text-muted); font-size: 13px; }
 .mobile-coefficient__bottom-actions input { box-sizing: border-box; width: 100%; border: 1px solid #9fb1c5; border-radius: 8px; }
-.mobile-coefficient__bottom-actions button, .mobile-coefficient__apply { border: 1px solid #2563eb; border-radius: 8px; background: #fff; color: #1d4ed8; }
+.mobile-coefficient__bottom-actions button, .mobile-coefficient__apply { border: 1px solid var(--ui-accent); border-radius: 8px; background: #fff; color: var(--ui-accent-hover); }
 .mobile-coefficient__selection { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
-.mobile-coefficient__selection button { border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; }
+.mobile-coefficient__selection button { border: 1px solid var(--ui-line); border-radius: 8px; background: #fff; }
 .mobile-touch-target { min-height: 44px; min-width: 44px; }
 </style>

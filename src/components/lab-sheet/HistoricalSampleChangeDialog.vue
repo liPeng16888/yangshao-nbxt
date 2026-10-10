@@ -357,19 +357,19 @@ function submit() {
   flex-wrap: wrap;
   gap: 8px 18px;
   margin: 14px 0;
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 14px;
 }
 
 .sample-change-section {
   margin-top: 18px;
   padding-top: 16px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--ui-line-soft);
 }
 
 .sample-change-section h3 {
   margin: 0 0 12px;
-  color: #10233f;
+  color: var(--ui-text);
   font-size: 15px;
 }
 
@@ -389,7 +389,7 @@ function submit() {
 .sample-change-reason {
   display: grid;
   gap: 6px;
-  color: #334155;
+  color: var(--ui-text-secondary);
   font-size: 14px;
 }
 
@@ -403,14 +403,14 @@ function submit() {
 }
 
 .sample-change-reason em {
-  color: #dc2626;
+  color: var(--ui-danger);
   font-style: normal;
 }
 
 .sample-change-empty,
 .sample-change-preview-note {
   margin: 0;
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
@@ -424,7 +424,7 @@ function submit() {
   grid-template-columns: 116px minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 8px;
   padding: 8px 10px;
-  background: #f8fafc;
+  background: var(--ui-surface-subtle);
   border-radius: 6px;
   font-size: 13px;
 }
@@ -446,8 +446,8 @@ function submit() {
   justify-content: space-between;
   gap: 8px;
   padding: 8px 10px;
-  color: #475569;
-  background: #f8fafc;
+  color: var(--ui-text-secondary);
+  background: var(--ui-surface-subtle);
   border-radius: 6px;
   font-size: 13px;
 }

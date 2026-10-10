@@ -71,7 +71,7 @@ function submit() {
   width: 100%;
   min-height: 52px;
   padding: 9px 12px;
-  color: #183657;
+  color: var(--ui-text);
   background: #ffffff;
   border: 0;
   border-radius: 8px;
@@ -87,12 +87,12 @@ function submit() {
   }
 
   small {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 11px;
   }
 
   b {
-    color: #a92b20;
+    color: var(--ui-accent);
     font-size: 13px;
   }
 }
@@ -114,7 +114,7 @@ function submit() {
   .parameter-item {
     min-width: 0;
     padding: 8px;
-    border: 1px solid #d8e1eb;
+    border: 1px solid var(--ui-line);
     border-radius: 8px;
 
     span {
@@ -137,13 +137,13 @@ function submit() {
 .parameter-item {
   min-width: 116px;
   padding: 8px;
-  color: #c00000;
+  color: var(--ui-text);
   background: #fff;
-  border: 1px solid #111827;
-  border-left: 0;
+  border: 0;
+  border-right: 1px solid var(--ui-line-soft);
 
   &:first-child {
-    border-left: 1px solid #111827;
+    border-left: 0;
   }
 
   span {
@@ -153,8 +153,8 @@ function submit() {
 
   span {
     margin-bottom: 6px;
-    font-size: 16px;
-    font-weight: 700;
+    font-size: 13px;
+    font-weight: 500;
   }
 }
 
@@ -163,9 +163,10 @@ function submit() {
 }
 
 :deep(.parameter-input .el-input__inner) {
-  color: #c00000;
-  font-size: 16px;
-  font-weight: 700;
-  -webkit-text-fill-color: #c00000;
+  color: var(--ui-text);
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  -webkit-text-fill-color: var(--ui-text);
 }
 </style>

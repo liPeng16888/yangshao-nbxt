@@ -97,7 +97,7 @@ function submit(completed: boolean) {
 }
 
 .completion-option__number {
-  color: #111827;
+  color: var(--ui-text);
   font-weight: 600;
 }
 
@@ -106,7 +106,7 @@ function submit(completed: boolean) {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .completion-footer__actions {

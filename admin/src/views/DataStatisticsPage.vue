@@ -69,7 +69,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="金额" width="120">
+        <el-table-column align="right" label="金额" width="120">
           <template #default="{ row }">
             <div class="history-cell">
               <span>¥{{ money(row.inputs.price) }}</span>
@@ -436,7 +436,7 @@ function queryValue(value: unknown) {
 }
 
 :deep(.admin-highlight-row .cell) {
-  color: #b42318;
+  color: var(--ui-danger);
   font-weight: 600;
 }
 </style>

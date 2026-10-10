@@ -55,8 +55,8 @@
       <div class="report-table-scroll" :class="{ 'report-table-scroll--mobile': mobile }" aria-label="日期明细">
         <el-table :data="report.rows" border>
           <el-table-column prop="date" label="日期" />
-          <el-table-column prop="sampleCount" label="样品数量" width="100" />
-          <el-table-column prop="totalPrice" label="收入金额" width="120">
+          <el-table-column align="right" prop="sampleCount" label="样品数量" width="100" />
+          <el-table-column align="right" prop="totalPrice" label="收入金额" width="120">
             <template #default="{ row }">¥{{ row.totalPrice.toFixed(2) }}</template>
           </el-table-column>
           <el-table-column v-for="status in visibleStatuses" :key="status" :label="status" min-width="130">
@@ -76,6 +76,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { EChartsOption } from 'echarts'
+import { chartColors } from '../../../shared/chartTheme'
 import type { IncomePaymentStatus } from '@/types/financeBills'
 import type { SampleDetectionDailyRow, SampleDetectionReport } from '@/types/report'
 import { incomePaymentStatuses } from '@/utils/financeBills'
@@ -110,8 +111,8 @@ const chartOption = computed<EChartsOption>(() => {
     symbol: 'circle',
     symbolSize: 7,
     z: 10,
-    itemStyle: { color: '#0f172a' },
-    lineStyle: { color: '#0f172a', width: 2 }
+    itemStyle: { color: chartColors.total },
+    lineStyle: { color: chartColors.total, width: 2 }
   }
 
   return {
@@ -137,11 +138,11 @@ const chartOption = computed<EChartsOption>(() => {
 })
 
 const statusColors: Record<IncomePaymentStatus, string> = {
-  已结款: '#16a34a',
-  未结款: '#d9472f',
-  月结款: '#2563eb',
-  预存款: '#7c3aed',
-  未选择: '#64748b'
+  已结款: chartColors.settled,
+  未结款: chartColors.unsettled,
+  月结款: chartColors.monthly,
+  预存款: chartColors.prepaid,
+  未选择: chartColors.neutral
 }
 
 function getRowStatusSummary(row: SampleDetectionDailyRow, status: IncomePaymentStatus) {
@@ -164,21 +165,21 @@ function getRowStatusSummary(row: SampleDetectionDailyRow, status: IncomePayment
 
 .status-card {
   padding: 14px;
-  border: 1px solid #dce5ef;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
   background: #ffffff;
 
   &__name,
   &__amount {
     display: block;
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 13px;
   }
 
   strong {
     display: block;
     margin: 8px 0 4px;
-    color: #10233f;
+    color: var(--ui-text);
     font-size: 22px;
   }
 }
@@ -189,12 +190,12 @@ function getRowStatusSummary(row: SampleDetectionDailyRow, status: IncomePayment
   gap: 2px;
 
   strong {
-    color: #10233f;
+    color: var(--ui-text);
     font-weight: 700;
   }
 
   span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 12px;
   }
 }

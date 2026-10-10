@@ -178,7 +178,7 @@ function openScreenshotPreview(key: string) {
 .mobile-finance-entry-list__month-field {
   display: grid;
   gap: 8px;
-  color: #475569;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-finance-entry-list__month-field input {
@@ -186,9 +186,9 @@ function openScreenshotPreview(key: string) {
   width: 100%;
   min-height: 44px;
   padding: 8px 12px;
-  color: #0f172a;
+  color: var(--ui-text);
   background: #fff;
-  border: 1px solid #aebdcd;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -203,8 +203,8 @@ function openScreenshotPreview(key: string) {
   gap: 10px;
   padding: 14px;
   color: #991b1b;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
+  background: var(--ui-danger-soft);
+  border: 1px solid var(--ui-danger-line);
   border-radius: 10px;
 }
 
@@ -224,7 +224,7 @@ function openScreenshotPreview(key: string) {
   gap: 12px;
   padding: 14px;
   background: #fff;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
   box-shadow: 0 2px 10px rgb(15 23 42 / 5%);
 }
@@ -241,11 +241,11 @@ function openScreenshotPreview(key: string) {
 }
 
 .mobile-expense-card__header small {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .mobile-expense-card__header b {
-  color: #b42318;
+  color: var(--ui-danger);
   white-space: nowrap;
 }
 
@@ -262,7 +262,7 @@ function openScreenshotPreview(key: string) {
 }
 
 .mobile-expense-card dt {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .mobile-expense-card dd {
@@ -284,7 +284,7 @@ function openScreenshotPreview(key: string) {
   padding: 0;
   overflow: hidden;
   background: #fff;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 7px;
   cursor: pointer;
 }
@@ -307,7 +307,7 @@ function openScreenshotPreview(key: string) {
 .mobile-expense-card__delete {
   min-height: 44px;
   padding: 8px 14px;
-  color: #b42318;
+  color: var(--ui-danger);
   background: #fff;
   border: 1px solid #e8aaa5;
   border-radius: 8px;
@@ -315,8 +315,8 @@ function openScreenshotPreview(key: string) {
 
 .mobile-expense-card__pending {
   padding: 5px 10px;
-  color: #92400e;
-  background: #fffbeb;
+  color: var(--ui-warning);
+  background: var(--ui-warning-soft);
   border: 1px solid #f6d88a;
   border-radius: 999px;
 }

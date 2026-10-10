@@ -10,6 +10,7 @@ export default defineConfig({
     }
   },
   test: {
+    server: { deps: { inline: ['vue-element-plus-x'] } },
     environment: 'jsdom',
     globals: true,
     exclude: [

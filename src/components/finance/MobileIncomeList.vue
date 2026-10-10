@@ -157,7 +157,7 @@ function visibleStatuses(row: IncomeDailyRow) {
 .mobile-income-list__month-field {
   display: grid;
   gap: 8px;
-  color: #475569;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-income-list__month-field input {
@@ -165,9 +165,9 @@ function visibleStatuses(row: IncomeDailyRow) {
   width: 100%;
   min-height: 44px;
   padding: 8px 12px;
-  color: #0f172a;
+  color: var(--ui-text);
   background: #fff;
-  border: 1px solid #aebdcd;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -181,8 +181,8 @@ function visibleStatuses(row: IncomeDailyRow) {
 .mobile-income-day-card {
   min-width: 0;
   padding: 12px;
-  background: #f8fafc;
-  border: 1px solid #d8e1eb;
+  background: var(--ui-surface-subtle);
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
 }
 
@@ -195,7 +195,7 @@ function visibleStatuses(row: IncomeDailyRow) {
 .mobile-income-summary small,
 .mobile-income-day-card small,
 .mobile-income-day-card dt {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
@@ -217,7 +217,7 @@ function visibleStatuses(row: IncomeDailyRow) {
   gap: 8px;
   margin: 12px 0 0;
   padding-top: 10px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--ui-line-soft);
 }
 
 .mobile-income-day-card dl > div {

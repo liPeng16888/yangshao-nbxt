@@ -192,9 +192,9 @@ function money(value: number) {
 .mobile-unsettled-list__refresh,
 .mobile-unsettled-card footer button {
   padding: 8px 12px;
-  color: #334155;
+  color: var(--ui-text-secondary);
   background: #fff;
-  border: 1px solid #aebdcd;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -208,7 +208,7 @@ function money(value: number) {
 
 .mobile-unsettled-list__filters legend {
   margin-bottom: 8px;
-  color: #475569;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-unsettled-list__filters label {
@@ -235,12 +235,12 @@ function money(value: number) {
   min-width: 0;
   padding: 12px;
   background: #fff;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
 }
 
 .mobile-unsettled-card--selected {
-  border-color: #2563eb;
+  border-color: var(--ui-accent);
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
 }
 
@@ -265,7 +265,7 @@ function money(value: number) {
 
 .mobile-unsettled-card small,
 .mobile-unsettled-card dt {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
@@ -274,8 +274,8 @@ function money(value: number) {
   gap: 8px;
   margin: 12px 0;
   padding: 10px 0;
-  border-top: 1px solid #e2e8f0;
-  border-bottom: 1px solid #e2e8f0;
+  border-top: 1px solid var(--ui-line-soft);
+  border-bottom: 1px solid var(--ui-line-soft);
 }
 
 .mobile-unsettled-card dl > div {
@@ -299,7 +299,7 @@ function money(value: number) {
 
 .mobile-unsettled-card footer .mobile-unsettled-card__settle {
   color: #fff;
-  background: #2563eb;
-  border-color: #2563eb;
+  background: var(--ui-accent);
+  border-color: var(--ui-accent);
 }
 </style>

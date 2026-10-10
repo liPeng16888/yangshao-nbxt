@@ -196,7 +196,7 @@ export class LabSheetsService {
     return nextSheet
   }
 
-  async saveSampleBlock(user: CurrentUser, sheetId: string, blockPayload: Record<string, unknown>, sourceClientId?: string, canViewCompletedSensitiveData = true) {
+  async saveSampleBlock(user: CurrentUser, sheetId: string, blockPayload: Record<string, unknown>, sourceClientId?: string, canViewCompletedSensitiveData = true, transaction?: Prisma.TransactionClient) {
     const blockId = String(blockPayload.id || '')
     const dataOwnerId = user.dataOwnerId || user.id
     const idempotencyKey = this.requireLabSaveIdempotencyKey(blockPayload.idempotencyKey)
@@ -294,8 +294,9 @@ export class LabSheetsService {
           idempotencyKey, requestFingerprint, sheetId: sheet.id, sampleBlockId: block.id, responseSnapshot: response
         })
         return { response, sheet, changed: true, prepaidMutation }
-      })
+      }, transaction)
     } catch (error) {
+      if (transaction) throw error
       if (!this.isPrismaUniqueConflict(error)) throw error
       const duplicate = await this.resolveLabSaveRequest(
         this.prisma as unknown as LabSaveRequestReader,
@@ -305,7 +306,7 @@ export class LabSheetsService {
       if (!duplicate) throw error
       outcome = { response: duplicate, changed: false }
     }
-    if (outcome.changed) {
+    if (outcome.changed && !transaction) {
       if (outcome.prepaidMutation) {
         this.publishSharedPrepaidMutation(outcome.prepaidMutation, user.id)
       }
@@ -353,11 +354,12 @@ export class LabSheetsService {
   private async withSheetWriteLock<T>(
     sheetId: string,
     operationOrIdempotencyKey: string | ((tx: Prisma.TransactionClient) => Promise<T>),
-    maybeOperation?: (tx: Prisma.TransactionClient) => Promise<T>
+    maybeOperation?: (tx: Prisma.TransactionClient) => Promise<T>,
+    transaction?: Prisma.TransactionClient
   ) {
     const idempotencyKey = typeof operationOrIdempotencyKey === 'string' ? operationOrIdempotencyKey : ''
     const operation = typeof operationOrIdempotencyKey === 'function' ? operationOrIdempotencyKey : maybeOperation!
-    return this.prisma.$transaction(async (tx) => {
+    const run = async (tx: Prisma.TransactionClient) => {
       if (idempotencyKey) {
         await tx.$executeRaw(Prisma.sql`
           SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))
@@ -367,7 +369,12 @@ export class LabSheetsService {
         SELECT "id" FROM "LabSheet" WHERE "id" = ${sheetId} FOR UPDATE
       `)
       return operation(tx)
-    })
+    }
+    return transaction ? run(transaction) : this.prisma.$transaction(run)
+  }
+
+  notifyAiSampleSaved(frontendUserId: string, sheetId: string, date: string, changedById: string) {
+    this.realtime.publish({ type: 'block-saved', frontendUserId, sheetId, date, changedById, updatedAt: new Date().toISOString() })
   }
 
   private isSegmentedSnapshot(value: unknown) {

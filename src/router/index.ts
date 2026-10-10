@@ -1,6 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import LoginRegister from '@/views/auth/LoginRegister.vue'
+import FeishuVerifyPage from '../../shared/ai/FeishuVerifyPage.vue'
+import { rememberFeishuReturn, feishuLoginReturn } from '../../shared/ai/feishuReturn'
+import { useMocks } from '@/utils/request'
 import LabDataPage from '@/views/dashboard/LabDataPage.vue'
 import LabReportPage from '@/views/dashboard/LabReportPage.vue'
 import CoefficientCalculationPage from '@/views/dashboard/CoefficientCalculationPage.vue'
@@ -40,6 +43,12 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: () => firstAllowedPath(useAuthStore().user) },
     { path: '/login', name: 'login', component: LoginRegister },
+    ...['bind', 'access'].map(kind => ({
+      path: `/ai/feishu/${kind}`,
+      component: FeishuVerifyPage,
+      props: { audience: 'frontend', mocks: useMocks, apiBase: import.meta.env.VITE_API_BASE_URL || '/api' },
+      meta: { requiresAuth: true, customerNavigation: false }
+    })),
     {
       path: '/',
       component: AppLayout,
@@ -150,6 +159,11 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
+  if (to.path === '/ai/feishu/bind' || to.path === '/ai/feishu/access') {
+    if (!authStore.isLoggedIn) { rememberFeishuReturn('frontend', to.fullPath); return '/login' }
+    return true
+  }
+  if (to.path === '/login' && authStore.isLoggedIn) return feishuLoginReturn('frontend', true)
   const redirect = resolveAuthRedirect({
     isLoggedIn: authStore.isLoggedIn,
     toPath: to.path,

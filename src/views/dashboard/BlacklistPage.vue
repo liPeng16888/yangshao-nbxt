@@ -364,12 +364,12 @@ async function submitSupplement() {
 
 <style scoped lang="scss">
 .mobile-blacklist-page { display: grid; min-width: 0; gap: 16px; }
-.mobile-blacklist-page__error { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; color: #b42318; background: #fef3f2; border: 1px solid #fecdca; border-radius: 10px; }
-.mobile-blacklist-page__error button { min-height: 44px; padding: 8px 12px; color: #b42318; background: #fff; border: 1px solid currentcolor; border-radius: 8px; }
+.mobile-blacklist-page__error { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; color: var(--ui-danger); background: var(--ui-danger-soft); border: 1px solid var(--ui-danger-line); border-radius: 10px; }
+.mobile-blacklist-page__error button { min-height: 44px; padding: 8px 12px; color: var(--ui-danger); background: #fff; border: 1px solid currentcolor; border-radius: 8px; }
 .blacklist-form-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 12px; }
 .mobile-blacklist-supplement { display: grid; gap: 12px; }
-.mobile-blacklist-supplement > label { display: grid; min-width: 0; gap: 6px; color: #475569; }
-.mobile-blacklist-supplement input, .mobile-blacklist-supplement textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 9px 11px; color: #0f172a; background: #fff; border: 1px solid #aebdcd; border-radius: 8px; }
+.mobile-blacklist-supplement > label { display: grid; min-width: 0; gap: 6px; color: var(--ui-text-secondary); }
+.mobile-blacklist-supplement input, .mobile-blacklist-supplement textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 9px 11px; color: var(--ui-text); background: #fff; border: 1px solid var(--ui-line); border-radius: 8px; }
 .mobile-blacklist-supplement textarea { min-height: 88px; resize: vertical; }
 .blacklist-upload-trigger-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 900px) { .blacklist-form-grid { grid-template-columns: 1fr; } }

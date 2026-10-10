@@ -209,7 +209,7 @@ function money(value: number) {
   gap: 14px;
   padding: 14px;
   background: #fff;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
 }
 
@@ -233,14 +233,14 @@ function money(value: number) {
 }
 
 .mobile-monthly-summary-card small {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .mobile-monthly-summary-card__status {
   flex: none;
   padding: 4px 8px;
-  color: #1d4ed8;
-  background: #eff6ff;
+  color: var(--ui-accent-hover);
+  background: var(--ui-accent-soft);
   border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
@@ -258,9 +258,9 @@ function money(value: number) {
   min-width: 0;
   gap: 2px;
   padding: 8px;
-  background: #f8fafc;
+  background: var(--ui-surface-subtle);
   border-radius: 8px;
-  color: #334155;
+  color: var(--ui-text-secondary);
   font-size: 12px;
   font-weight: 700;
   overflow-wrap: anywhere;
@@ -269,7 +269,7 @@ function money(value: number) {
 .mobile-monthly-summary-card > label {
   display: grid;
   gap: 6px;
-  color: #475569;
+  color: var(--ui-text-secondary);
   font-size: 13px;
 }
 
@@ -281,9 +281,9 @@ function money(value: number) {
   min-width: 0;
   min-height: 44px;
   padding: 9px 10px;
-  color: #0f172a;
+  color: var(--ui-text);
   background: #fff;
-  border: 1px solid #aebdcd;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
   font: inherit;
 }
@@ -294,9 +294,9 @@ function money(value: number) {
 
 .mobile-monthly-summary-card__details {
   width: 100%;
-  color: #1d4ed8;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  color: var(--ui-accent-hover);
+  background: var(--ui-accent-soft);
+  border: 1px solid var(--ui-accent-line);
   border-radius: 8px;
 }
 </style>

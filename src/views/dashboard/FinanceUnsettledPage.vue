@@ -66,7 +66,7 @@
         <el-table-column prop="sequence" label="编号" width="90" />
         <el-table-column prop="sampleNumber" label="样品编号" min-width="150" />
         <el-table-column prop="customer" label="客户" min-width="180" />
-        <el-table-column label="金额" width="120">
+        <el-table-column align="right" label="金额" width="120">
           <template #default="{ row }">¥{{ row.amount.toFixed(2) }}</template>
         </el-table-column>
         <el-table-column label="已结款" width="120">
@@ -359,14 +359,14 @@ function money(value: number) {
 }
 
 .mobile-unsettled-action__summary span {
-  color: #2563eb;
+  color: var(--ui-accent);
   font-weight: 700;
 }
 
 .mobile-unsettled-action > button {
   padding: 8px 14px;
   color: #fff;
-  background: #2563eb;
+  background: var(--ui-accent);
   border: 0;
   border-radius: 8px;
 }

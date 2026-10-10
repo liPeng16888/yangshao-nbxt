@@ -131,7 +131,7 @@ function displayValue(value: unknown) {
 <style scoped>
 .history-summary {
   margin-left: 8px;
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 12px;
 }
 </style>

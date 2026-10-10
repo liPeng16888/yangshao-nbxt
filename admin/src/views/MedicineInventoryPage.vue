@@ -90,7 +90,7 @@
           <template #default="{ row }">{{ frontendName(row.frontendUserId) }}</template>
         </el-table-column>
         <el-table-column prop="name" label="药品名称" min-width="150" />
-        <el-table-column prop="currentQuantity" label="现有库存" width="130" />
+        <el-table-column align="right" prop="currentQuantity" label="现有库存" width="130" />
         <el-table-column prop="unitLabel" label="单位" width="100" />
         <el-table-column label="最后变动时间" width="190">
           <template #default="{ row }">{{ beijingTime(row.updatedAt) }}</template>
@@ -103,7 +103,7 @@
           <template #default="{ row }">{{ frontendName(row.frontendUserId) }}</template>
         </el-table-column>
         <el-table-column prop="nameSnapshot" label="药品名称" min-width="150" />
-        <el-table-column prop="quantity" label="数量" width="110" />
+        <el-table-column align="right" prop="quantity" label="数量" width="110" />
         <el-table-column prop="unitLabel" label="单位" width="90" />
         <el-table-column label="类型" width="120">
           <template #default="{ row }">{{ movementTypeLabel(row.type) }}</template>
@@ -255,7 +255,7 @@ function errorMessage(error: unknown) {
 <style scoped>
 .page-description {
   margin: 5px 0 0;
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
@@ -268,11 +268,13 @@ function errorMessage(error: unknown) {
 
 .control-field {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 6px;
 }
 
 .control-field > span {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
@@ -290,14 +292,14 @@ function errorMessage(error: unknown) {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 14px;
-  color: #b42318;
+  color: var(--ui-danger);
   border-color: #f7c7c2;
   background: #fff8f7;
 }
 
 @media (max-width: 960px) {
   .inventory-controls {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .control-field--date {

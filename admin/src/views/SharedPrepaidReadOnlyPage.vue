@@ -99,9 +99,9 @@
       <el-table :data="rows" border empty-text="暂无数据">
         <template v-if="page === 'recharges'">
           <el-table-column prop="phone" label="会员手机号" min-width="140" />
-          <el-table-column label="充值本金" width="115"><template #default="{ row }">¥{{ money(row.paidAmount) }}</template></el-table-column>
-          <el-table-column label="赠送金额" width="115"><template #default="{ row }">¥{{ money(row.giftAmount) }}</template></el-table-column>
-          <el-table-column label="批次余额" width="115"><template #default="{ row }">¥{{ money(row.remainingAmount) }}</template></el-table-column>
+          <el-table-column align="right" label="充值本金" width="115"><template #default="{ row }">¥{{ money(row.paidAmount) }}</template></el-table-column>
+          <el-table-column align="right" label="赠送金额" width="115"><template #default="{ row }">¥{{ money(row.giftAmount) }}</template></el-table-column>
+          <el-table-column align="right" label="批次余额" width="115"><template #default="{ row }">¥{{ money(row.remainingAmount) }}</template></el-table-column>
           <el-table-column label="归属账号" min-width="180"><template #default="{ row }">{{ namedAccount(row.ownerUsername, row.ownerAccount) }}</template></el-table-column>
           <el-table-column label="操作账号" min-width="180"><template #default="{ row }">{{ namedAccount(row.actorUsername, row.actorAccount) }}</template></el-table-column>
           <el-table-column prop="rechargeDate" label="充值日期" width="120" />
@@ -110,19 +110,19 @@
 
         <template v-else-if="page === 'members'">
           <el-table-column prop="phone" label="会员手机号" min-width="140" />
-          <el-table-column label="充值本金" width="115"><template #default="{ row }">¥{{ money(row.paidTotal) }}</template></el-table-column>
+          <el-table-column align="right" label="充值本金" width="115"><template #default="{ row }">¥{{ money(row.paidTotal) }}</template></el-table-column>
           <el-table-column label="赠送总额" width="115"><template #default="{ row }">¥{{ money(row.giftTotal) }}</template></el-table-column>
           <el-table-column label="消费总额" width="115"><template #default="{ row }">¥{{ money(row.consumedTotal) }}</template></el-table-column>
-          <el-table-column label="当前余额" width="120"><template #default="{ row }"><strong>¥{{ money(row.balance) }}</strong></template></el-table-column>
+          <el-table-column align="right" label="当前余额" width="120"><template #default="{ row }"><strong>¥{{ money(row.balance) }}</strong></template></el-table-column>
           <el-table-column label="资金归属" min-width="260"><template #default="{ row }">{{ compositionLabel(row.ownerComposition) }}</template></el-table-column>
         </template>
 
         <template v-else-if="page === 'consumptions'">
           <el-table-column prop="phoneSnapshot" label="会员手机号" min-width="140" />
           <el-table-column prop="sampleNumberSnapshot" label="样品编号" min-width="130" />
-          <el-table-column prop="sampleCountSnapshot" label="样品数量" width="100" />
+          <el-table-column align="right" prop="sampleCountSnapshot" label="样品数量" width="100" />
           <el-table-column label="检测元素" min-width="180"><template #default="{ row }">{{ formatElements(row.elementsSnapshot) }}</template></el-table-column>
-          <el-table-column label="消费金额" width="115"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+          <el-table-column align="right" label="消费金额" width="115"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
           <el-table-column label="消费账号" min-width="180"><template #default="{ row }">{{ accountLabel(row.consumingFrontendUser) }}</template></el-table-column>
           <el-table-column label="资金来源" min-width="220"><template #default="{ row }">{{ sourceOwnerLabels(row.sourceOwners, row.sourceOwnersTruncated) }}</template></el-table-column>
           <el-table-column label="状态" width="105"><template #default="{ row }">{{ consumptionStatus(row) }}</template></el-table-column>
@@ -484,8 +484,8 @@ function errorMessage(errorValue: unknown, fallback: string) {
 <style scoped>
 .shared-prepaid-admin-page { display: grid; gap: 16px; }
 .page-heading { display: flex; align-items: flex-start; justify-content: space-between; padding: 18px 20px; }
-.page-heading h3 { margin: 0 0 8px; color: #1e293b; }
-.page-heading p, .readonly-note { margin: 0; color: #64748b; }
+.page-heading h3 { margin: 0 0 8px; color: var(--ui-text); }
+.page-heading p, .readonly-note { margin: 0; color: var(--ui-text-muted); }
 .filter-panel { padding: 14px 16px; }
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .filters :deep(.el-select), .filters :deep(.el-input) { width: 210px; }
@@ -495,7 +495,7 @@ function errorMessage(errorValue: unknown, fallback: string) {
 .readonly-note { margin-bottom: 14px; }
 .proof-section { margin-top: 20px; }
 .proof-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
-.proof-grid :deep(.el-image) { width: 100%; height: 120px; border: 1px solid #e2e8f0; border-radius: 8px; }
+.proof-grid :deep(.el-image) { width: 100%; height: 120px; border: 1px solid var(--ui-line-soft); border-radius: 8px; }
 pre { max-width: 100%; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 @media (max-width: 760px) {
   .page-heading { flex-direction: column; gap: 12px; }

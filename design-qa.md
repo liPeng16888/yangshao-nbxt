@@ -166,3 +166,113 @@ final result: passed
 - [x] 浏览器无横向溢出、无控制台 error。
 
 final result: passed
+
+## 全项目界面优化验收（2026-10-09）
+
+本节是本轮最新验收；其余内容保留为既有手机交互的历史记录。
+
+### Comparison target
+
+- Source visual truth: `/Users/zhangpengfei/.codex/generated_images/01a11e98-8c19-7e12-b788-e9d29a2441b5/exec-8db2f509-6068-4836-9e2f-8b668f18fabf.png`，用户认可的组件细节画板。
+- Implementation: 前台 `http://127.0.0.1:5183/data`，后台 `http://127.0.0.1:5184/admin/finance/income`，Codex 内置浏览器。
+- 实现截图：`/private/tmp/yangshao-ui-qa/final-desktop/frontend-data.png`、`final-desktop/admin-finance-income.png`、`final-mobile/frontend-data.png`。
+- 桌面 CSS 视口及截图：1440 × 1024；手机：390 × 844，截图与 CSS 尺寸一致，密度按 1 比较。
+- 参考原始像素：1322 × 1190；这是组件画板，因此按局部组件对比，并非将画板双栏布局复制到业务页面。保留真实菜单、完整表格列和操作顺序。
+- 状态：主账号、浅色主题、演示样品及财务数据。真实业务数据内容按现有接口呈现。
+
+### Full-view and focused evidence
+
+- 同一输入中的整体比较：`/private/tmp/yangshao-ui-qa/final-reference-comparison.jpg`。
+- 样品表等宽局部比较：`/private/tmp/yangshao-ui-qa/final-table-comparison.jpg`；参考表格及实现表格分别按 646px 宽显示，便于检查字号、网格、分组、输入焦点。
+- 焦点原图：`/private/tmp/yangshao-ui-qa/after/frontend-cell-focus.png`。实际焦点阴影为灰蓝 1px 内边线和 2px 外圈。
+- 菜单覆盖与各状态记录：`docs/ui-optimization-verification-2026-10-09.md`。
+
+### Findings and comparison history
+
+1. [P2，已修复] 原始资金与考勤列表将宽表格撑到页面外，收紧网格最小宽度并保留内部滚动；最终 49 个入口在桌面、手机合计 98 个视图中页面溢出均为 0px。
+2. [P2，已修复] 后台手机考勤汇总、客户筛选及库存明细日期筛选超出内容区；调整列数与字段网格。库存日期控件由隐式 350px 列改为实际 182px，两个明细标签页复验均为 0px 溢出。
+3. [P2，已修复] 手机保存动作仍有红色渐变，更新提示与助手默认位置重叠；改用灰蓝纯色，并错开提示位置。最终手机图已复查。
+4. [P2，已修复] 样品格局部样式会覆盖通用输入焦点；增加表格专用焦点并通过真实点击与计算样式确认生效。
+5. 以上修复后重新截图并与参考整体及局部比较，未发现新的可操作 P0／P1／P2 视觉问题。
+
+### Required fidelity surfaces
+
+- Fonts/typography：两端使用统一的系统中文字体与 Inter 回退；正文、表头、参数、数字及状态有稳定层级，无大面积浅色正文。
+- Spacing/layout：保留密集样品多行块、原有菜单顺序和字段；按钮自然宽度，表格区域滚动，手机控件保持既有操作结构。
+- Colors/tokens：雾白、白色、深灰与灰蓝主色；成功、警告、错误保留低饱和语义色。已完成样品保留既有淡桃色约定。
+- Image/asset fidelity：图标来自现有 Element Plus 图标库，已有品牌与图片保留；并行工作已有的助手形象及拖动功能未被替换。图表由 ECharts 实际数据渲染。
+- Copy/content：沿用业务文案、表格列、金额精度与单位；画板中的局部示意不用于删减真实字段。
+
+### Interactions and verification
+
+- 两端登录、记住账号、退出后恢复和快捷登录实际通过。
+- 内部标签、两类报表与图表类型切换、账号设置、复样及完成标记弹窗已检查；没有提交密码、权限或资金变更。
+- 145 个前台、后台及共用测试文件，1655 项通过；两端类型检查与构建通过。
+- 浏览器未记录新的未捕获控制台 error。演示环境中前端偏好／模板同步仍依赖真实后端，既有 HTTP 500／同步提示与生产联调限制已在验收记录单独列明。
+- 未在浏览器穷举每个权限、数据、导出组合；相关现有组件测试已通过。
+
+### Follow-up polish
+
+- [P3] 正式环境的超长客户名、极端大金额和真实触摸设备，可继续进行数据与实机覆盖。
+
+### Implementation checklist
+
+- [x] 共用色彩、控件、表格及图表规范已应用到两端。
+- [x] 全部菜单入口及主要内部标签已复查。
+- [x] 上述 P2 问题均已修复并复验。
+- [x] 原有登录记忆、权限及业务行为通过回归。
+
+final result: passed
+
+## 2026-10-10 陶印字标替换验收
+
+### Source and implementation
+
+- Source visual truth：用户选定第一款，`/Users/zhangpengfei/.codex/generated_images/01a11e98-8c19-7e12-b788-e9d29a2441b5/exec-088e0264-452f-4900-8f1c-002b81549fd8.png`，1536 × 1024 的 LOGO 应用画板。
+- 实现：前台 `http://127.0.0.1:5183/reports`，后台 `http://127.0.0.1:5184/admin/data`，以及各自登录页。
+- 实现截图：`/private/tmp/yangshao-logo-qa/` 中 `frontend-sidebar.png`、`admin-sidebar.png`、`frontend-login.png`、`admin-login.png`、`frontend-mobile-login.png`、`admin-mobile-login.png`、`frontend-mobile-header.png`、`frontend-mobile-drawer.png`、两端 `*-collapsed.png`。
+- 前台桌面截图 1280 × 720，后台桌面 1625 × 984；手机 CSS 视口与截图均为 390 × 844，密度按 1 比较。沿用当前桌面视口，未为截图改变桌面布局。
+- 参考是应用画板，不是整页业务页面；只比较标志及侧栏／登录标题区，保留现有业务布局和文字。桌面侧栏保留原有 40px 槽位，移动端为 32px，登录为 48px。
+- 状态：浅色、演示主账号、既有账号记忆。参考输入框为空，实现使用用户已保存的演示登录信息并显示原有快捷登录区域，此差异是现有功能，未删除或改动。
+
+### Full-view and focused evidence
+
+- 同一输入中的整体参考／实现对照：`/private/tmp/yangshao-logo-qa/reference-vs-implementation.jpg`。画板缩到 940px 宽，实际侧栏和登录卡片按原始像素裁切、未拉伸；不据此声称整页像素一致。
+- 局部对照：`/private/tmp/yangshao-logo-qa/focused-logo-comparison.png`，将选定大图形和真实标题区放在同一比较输入中。
+- 用户查看图：`/private/tmp/yangshao-logo-qa/actual-logo-preview.png`，来自真实页面截图。
+
+### Findings and comparison history
+
+- 未发现标志替换后的可操作 P0／P1／P2 问题。图形保留选定的陶土底形、几何笔画和右侧断笔，两端复用同一透明 PNG，无占位文字、CSS 绘图或手工 SVG 替代。
+- 手机前台登录页首次检查时，原 24px 标题将末尾「统」单独换行；将手机标题降为 22px 后重新捕获 `frontend-mobile-login.png`，390px 下标题完整一行，副标题正常换行，无溢出。属于标志附近的排版微调。
+- 共用 PNG 保留图形内留白，所以可见陶印比元素槽位略小；实际 32／40／48px 下笔画清楚，边缘没有白底或明显光晕，不增加裁切遮罩。
+
+### Required fidelity surfaces
+
+- Fonts/typography：继续使用现有系统中文字体，前台手机标题 22px，后台标题 24px；既有副标题与表单字号保留。画板的展示字体不用于覆盖系统字体。
+- Spacing/layout：两端标志与标题垂直居中；前台沿用原有 48px 图标槽位，后台增加 48px 标志与 12px 间距。侧栏折叠、移动导航、登录卡片与操作顺序正常。
+- Colors/tokens：低饱和陶土色标志与原有雾白、白色、灰蓝控件协调；旧标记背景与边框已移除，不形成双重底形。
+- Image quality/asset fidelity：1254 × 1254 RGBA，alpha 范围 0–255；两端导入并打包同一图片，32／40／48px 浏览器显示清晰，图片加载成功。
+- Copy/content：品牌名称和业务文案保持原样；登录／注册、记住账号、清除和快捷登录均保留，未将画板说明或英文口号加入业务页面。
+
+### Interactions and verification
+
+- 两端展开／折叠侧栏、退出登录、快捷登录通过；前台移动抽屉正常打开并显示同一标志。
+- 两端桌面及 390px 手机登录页页面横向溢出均为 0px，登录标志加载成功。前台手机顶部和抽屉均为 32px、加载成功。
+- `AppLayout.test.ts` 8 项、`AppMobileShell.test.ts` 5 项、`useRememberedLogin.test.ts` 11 项，共 24 项通过；没有为单纯标志替换新增镜像测试。
+- 两端 `vue-tsc --noEmit` 与 Vite 构建通过；手机字号微调后前台构建再次通过；`git diff --check` 通过。
+- 两端最后一轮浏览器控制台 error 列表为空。预览环境的前台偏好接口仍有既有未配置响应，未在此视觉任务中改动接口。
+- 已恢复两端登录状态、清除临时手机视口覆盖，并保持本地预览；未提交、部署、修改权限或业务数据。
+
+### Follow-up polish
+
+- 无需要阻断交付的视觉差异。 favicon／PWA 桌面图标不属于此次侧栏与登录标志替换范围。
+
+### Implementation checklist
+
+- [x] 用户选择第一款后执行替换。
+- [x] 透明图片保存到项目内，由两端共用。
+- [x] 桌面、手机与折叠状态复查。
+- [x] 保留登录记忆与原有业务操作。
+
+final result: passed

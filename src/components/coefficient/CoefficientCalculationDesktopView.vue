@@ -82,20 +82,20 @@ function formatCalculated(value: number | null) { return formatFormulaValue(valu
 <style scoped lang="scss">
 .coefficient-page { gap: 14px; }
 .coefficient-section { overflow: hidden; }
-.coefficient-section__header { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 54px; padding: 12px 18px; border-bottom: 1px solid #d9e4ef; h2 { margin: 0; color: #10233f; font-size: 18px; line-height: 1.25; } }
+.coefficient-section__header { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 54px; padding: 12px 18px; border-bottom: 1px solid var(--ui-line-soft); h2 { margin: 0; color: var(--ui-text); font-size: 18px; line-height: 1.25; } }
 .coefficient-table-wrap { overflow-x: auto; padding: 14px; }
-.coefficient-table { width: 100%; min-width: 980px; border-collapse: collapse; table-layout: fixed; background: #fff; th, td { padding: 8px; border: 1px solid #cbd5e1; text-align: center; vertical-align: middle; } th { color: #10233f; background: #eaf2ff; font-weight: 700; } :deep(.el-input), :deep(.el-input-number) { width: 100%; } :deep(.el-input__wrapper) { min-height: 34px; box-shadow: none; } }
+.coefficient-table { width: 100%; min-width: 980px; border-collapse: collapse; table-layout: fixed; background: #fff; th, td { padding: 8px; border: 1px solid var(--ui-line); text-align: center; vertical-align: middle; } th { color: var(--ui-text); background: var(--ui-accent-soft); font-weight: 700; } :deep(.el-input), :deep(.el-input-number) { width: 100%; } :deep(.el-input__wrapper) { min-height: 34px; box-shadow: none; } }
 .coefficient-selection-cell { width: 48px; min-width: 48px; }
-.coefficient-table--content { th { background: #edf7ed; } :deep(.el-input-number .el-input__wrapper) { background: #e6f4ea; border: 1px solid #9acb8c; } }
-.coefficient-table--calculation { th { background: #eef6ff; } :deep(.el-input-number .el-input__wrapper) { background: #fff7ed; border: 1px solid #f5c48b; } }
+.coefficient-table--content { th { background: var(--ui-success-soft); } :deep(.el-input-number .el-input__wrapper) { background: var(--ui-success-soft); border: 1px solid var(--ui-success-line); } }
+.coefficient-table--calculation { th { background: var(--ui-accent-soft); } :deep(.el-input-number .el-input__wrapper) { background: var(--ui-warning-soft); border: 1px solid var(--ui-warning-line); } }
 .calculation-cell { padding: 8px; vertical-align: top; }
 .calculation-cell__stack { display: grid; gap: 6px; }
-.calculation-result { min-height: 32px; padding: 6px 8px; color: #0f172a; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 16px; font-weight: 700; line-height: 20px; }
-.add-standard-row, .coefficient-row-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 0 14px 16px; color: #10233f; font-weight: 700; :deep(.el-input-number) { width: 150px; } }
+.calculation-result { min-height: 32px; padding: 6px 8px; color: var(--ui-text); background: var(--ui-surface-subtle); border: 1px solid var(--ui-line); border-radius: 6px; font-size: 16px; font-weight: 700; line-height: 20px; }
+.add-standard-row, .coefficient-row-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 0 14px 16px; color: var(--ui-text); font-weight: 700; :deep(.el-input-number) { width: 150px; } }
 .coefficient-row-actions { padding-bottom: 12px; }
 .coefficient-delete-entry { margin-left: auto; }
 .parameter-grid { display: grid; grid-template-columns: repeat(9, minmax(116px, 1fr)); gap: 0; overflow-x: auto; padding: 14px; }
-.parameter-item { min-width: 116px; padding: 8px; color: #c00000; background: #fff; border: 1px solid #111827; border-left: 0; &:first-child { border-left: 1px solid #111827; } span { display: block; margin-bottom: 6px; text-align: center; font-size: 16px; font-weight: 700; } }
+.parameter-item { min-width: 116px; padding: 8px; color: var(--ui-text); background: #fff; border: 0; border-right: 1px solid var(--ui-line-soft); &:first-child { border-left: 0; } span { display: block; margin-bottom: 6px; text-align: center; font-size: 14px; font-weight: 500; } }
 .parameter-input { width: 100%; }
-:deep(.parameter-input .el-input__inner) { color: #c00000; font-size: 16px; font-weight: 700; -webkit-text-fill-color: #c00000; }
+:deep(.parameter-input .el-input__inner) { color: var(--ui-text); font-size: 14px; font-weight: 500; -webkit-text-fill-color: var(--ui-text); }
 </style>

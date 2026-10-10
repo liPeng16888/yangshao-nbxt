@@ -206,14 +206,14 @@ function resetForm() {
   align-items: center;
   gap: 12px;
   padding: 12px;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
   background: #fff;
 
 }
 
 .bulk-fill-item__header {
-  color: #10233f;
+  color: var(--ui-text);
   font-weight: 600;
 }
 

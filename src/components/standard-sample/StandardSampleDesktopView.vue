@@ -202,33 +202,33 @@ const StandardRatioCard = defineComponent({
   justify-content: space-between;
   gap: 12px;
   padding: 16px 18px;
-  border-bottom: 1px solid #d9e4ef;
+  border-bottom: 1px solid var(--ui-line-soft);
 }
 
 .standard-card__header h2,
 .standard-card :deep(.standard-card__header h2) {
   margin: 0;
-  color: #10233f;
+  color: var(--ui-text);
   font-size: 20px;
 }
 
 .standard-card__header p,
 .standard-card :deep(.standard-card__header p) {
   margin: 6px 0 0;
-  color: #667085;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
 .standard-card--aluminum .standard-card__header {
-  background: #fff7ed;
+  background: var(--ui-warning-soft);
 }
 
 .standard-card--silicon :deep(.standard-card__header) {
-  background: #eff6ff;
+  background: var(--ui-accent-soft);
 }
 
 .standard-card--iron :deep(.standard-card__header) {
-  background: #fff1f2;
+  background: var(--ui-danger-soft);
 }
 
 .standard-form,
@@ -243,7 +243,7 @@ const StandardRatioCard = defineComponent({
 .standard-card :deep(.standard-form label) {
   display: grid;
   gap: 5px;
-  color: #344054;
+  color: var(--ui-text-secondary);
   font-size: 13px;
   font-weight: 600;
 }
@@ -255,8 +255,8 @@ const StandardRatioCard = defineComponent({
 
 .standard-form :deep(.el-input__wrapper),
 .standard-card :deep(.standard-form .el-input__wrapper) {
-  background: #e6f4ea;
-  border: 1px solid #9acb8c;
+  background: var(--ui-success-soft);
+  border: 1px solid var(--ui-success-line);
   box-shadow: none;
 }
 
@@ -268,10 +268,10 @@ const StandardRatioCard = defineComponent({
   align-items: center;
   min-height: 32px;
   padding: 0 10px;
-  color: #10233f;
+  color: var(--ui-text);
   font-weight: 700;
-  background: #f8fafc;
-  border: 1px solid #cbd5e1;
+  background: var(--ui-surface-subtle);
+  border: 1px solid var(--ui-line);
   border-radius: 6px;
 }
 
@@ -287,9 +287,9 @@ const StandardRatioCard = defineComponent({
   gap: 1px;
   margin: 0 18px 14px;
   overflow: hidden;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 6px;
-  background: #cbd5e1;
+  background: var(--ui-line);
 }
 
 .result-label,
@@ -305,13 +305,13 @@ const StandardRatioCard = defineComponent({
 .result-label,
 .standard-card :deep(.result-label) {
   justify-content: flex-end;
-  color: #344054;
+  color: var(--ui-text-secondary);
   font-weight: 700;
 }
 
 .result-value,
 .standard-card :deep(.result-value) {
-  color: #0f172a;
+  color: var(--ui-text);
   font-size: 17px;
 }
 
@@ -319,21 +319,21 @@ const StandardRatioCard = defineComponent({
 .result-value--yellow,
 .standard-card :deep(.result-label--yellow),
 .standard-card :deep(.result-value--yellow) {
-  background: #fdeca6;
+  background: var(--ui-warning-soft);
 }
 
 .result-label--blue,
 .result-value--blue,
 .standard-card :deep(.result-label--blue),
 .standard-card :deep(.result-value--blue) {
-  background: #bfdbfe;
+  background: var(--ui-accent-line);
 }
 
 .result-label--gray,
 .result-value--gray,
 .standard-card :deep(.result-label--gray),
 .standard-card :deep(.result-value--gray) {
-  background: #e5e7eb;
+  background: var(--ui-line-soft);
 }
 
 @media (max-width: 720px) {

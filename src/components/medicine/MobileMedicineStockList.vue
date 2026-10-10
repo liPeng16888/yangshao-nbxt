@@ -117,9 +117,9 @@ function resetFilter() {
 .mobile-medicine-list__refresh,
 .mobile-medicine-list__error button {
   padding: 8px 12px;
-  color: #2563eb;
+  color: var(--ui-accent);
   background: #ffffff;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -145,9 +145,9 @@ function resetFilter() {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
-  color: #b42318;
-  background: #fef3f2;
-  border: 1px solid #fecdca;
+  color: var(--ui-danger);
+  background: var(--ui-danger-soft);
+  border: 1px solid var(--ui-danger-line);
   border-radius: 10px;
 }
 
@@ -167,7 +167,7 @@ function resetFilter() {
   padding: 14px;
   overflow: hidden;
   background: #ffffff;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
 }
 
@@ -186,7 +186,7 @@ function resetFilter() {
 
   span {
     flex: 0 0 auto;
-    color: #2563eb;
+    color: var(--ui-accent);
     font-weight: 600;
   }
 }
@@ -204,7 +204,7 @@ dl div {
 }
 
 dt {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 dd {

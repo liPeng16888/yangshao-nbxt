@@ -152,7 +152,7 @@ function formatTime(value: string) {
 }
 
 .protected-notice {
-  color: #b42318;
+  color: var(--ui-danger);
 }
 
 .data-sections {

@@ -40,6 +40,6 @@ defineEmits<{
 
 <style scoped lang="scss">
 .mobile-blacklist-page { display: grid; min-width: 0; gap: 16px; }
-.mobile-blacklist-page__error { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; color: #b42318; background: #fef3f2; border: 1px solid #fecdca; border-radius: 10px; }
-.mobile-blacklist-page__error button { min-height: 44px; padding: 8px 12px; color: #b42318; background: #fff; border: 1px solid currentcolor; border-radius: 8px; }
+.mobile-blacklist-page__error { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; color: var(--ui-danger); background: var(--ui-danger-soft); border: 1px solid var(--ui-danger-line); border-radius: 10px; }
+.mobile-blacklist-page__error button { min-height: 44px; padding: 8px 12px; color: var(--ui-danger); background: #fff; border: 1px solid currentcolor; border-radius: 8px; }
 </style>

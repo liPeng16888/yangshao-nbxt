@@ -170,8 +170,8 @@
         <el-table-column label="记录类型" width="110">
           <template #default="{ row }"><el-tag :type="row.isOpeningBalance ? 'warning' : 'success'">{{ row.isOpeningBalance ? '期初余额' : '普通充值' }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="充值本金" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.paidAmount) }}</template></el-table-column>
-        <el-table-column label="赠送金额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.giftAmount) }}</template></el-table-column>
+        <el-table-column align="right" label="充值本金" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.paidAmount) }}</template></el-table-column>
+        <el-table-column align="right" label="赠送金额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.giftAmount) }}</template></el-table-column>
         <el-table-column label="批次总额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.totalAmount) }}</template></el-table-column>
         <el-table-column label="批次剩余" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.remainingAmount) }}</template></el-table-column>
         <el-table-column label="归属主账号" min-width="180"><template #default="{ row }">{{ prepaidAccountLabel({ username: row.ownerUsername, account: row.ownerAccount }) }}</template></el-table-column>
@@ -459,15 +459,15 @@ function nonNegativeNumber(value: unknown) {
 .prepaid-page :deep(.el-alert) { margin-bottom: 14px; }
 .prepaid-form-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 14px; }
 .prepaid-form-grid__wide { grid-column: 1 / -1; }
-.opening-balance { padding: 12px 14px; margin-bottom: 14px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; }
-.opening-balance p { margin: 4px 0 0; color: #9a3412; font-size: 13px; }
-.recharge-confirmation { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 12px 14px; margin-bottom: 14px; background: #f8fafc; border: 1px solid #dce5ef; border-radius: 8px; font-size: 13px; }
+.opening-balance { padding: 12px 14px; margin-bottom: 14px; background: var(--ui-warning-soft); border: 1px solid var(--ui-warning-line); border-radius: 8px; }
+.opening-balance p { margin: 4px 0 0; color: var(--ui-warning); font-size: 13px; }
+.recharge-confirmation { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 12px 14px; margin-bottom: 14px; background: var(--ui-surface-subtle); border: 1px solid var(--ui-line); border-radius: 8px; font-size: 13px; }
 .recharge-confirmation strong { width: 100%; }
 .form-actions { display: flex; gap: 10px; }
 .recharge-result-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; }
 .prepaid-history-header { align-items: flex-start; }
 .prepaid-filters { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.filter-field { display: grid; gap: 4px; color: #475569; font-size: 12px; }
+.filter-field { display: grid; gap: 4px; color: var(--ui-text-secondary); font-size: 12px; }
 .prepaid-filters > * { width: 180px; }
 .filter-field :deep(.el-input), .filter-field :deep(.el-select) { width: 100%; }
 .prepaid-filters :deep(.el-date-editor) { width: 250px; }
@@ -476,12 +476,12 @@ function nonNegativeNumber(value: unknown) {
 .mobile-prepaid-filter-fields, .mobile-prepaid-card-list { display: grid; gap: 12px; }
 .mobile-prepaid-filter-fields :deep(.el-date-editor), .mobile-prepaid-filter-fields :deep(.el-input), .mobile-prepaid-filter-fields :deep(.el-select) { width: 100%; min-height: 44px; }
 .mobile-prepaid-card-list { padding: 12px; }
-.mobile-prepaid-card { display: grid; gap: 8px; padding: 14px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
+.mobile-prepaid-card { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--ui-line); border-radius: 12px; background: #fff; }
 .mobile-prepaid-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.mobile-prepaid-card p { margin: 0; color: #64748b; font-size: 13px; overflow-wrap: anywhere; }
+.mobile-prepaid-card p { margin: 0; color: var(--ui-text-muted); font-size: 13px; overflow-wrap: anywhere; }
 .mobile-prepaid-money-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.mobile-prepaid-money-grid span { display: grid; gap: 3px; padding: 9px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 12px; }
-.mobile-prepaid-money-grid strong { color: #0f172a; font-size: 15px; }
+.mobile-prepaid-money-grid span { display: grid; gap: 3px; padding: 9px; border-radius: 8px; background: var(--ui-surface-subtle); color: var(--ui-text-muted); font-size: 12px; }
+.mobile-prepaid-money-grid strong { color: var(--ui-text); font-size: 15px; }
 .prepaid-page:has(.mobile-prepaid-card-list) :deep(.el-form-item__content > .el-input), .prepaid-page:has(.mobile-prepaid-card-list) :deep(.el-form-item__content > .el-date-editor) { min-height: 44px; }
 @media (max-width: 1100px) { .prepaid-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .prepaid-history-header { flex-direction: column; } .prepaid-filters { justify-content: flex-start; width: 100%; } }
 @media (max-width: 640px) { .prepaid-form-grid { grid-template-columns: 1fr; } .prepaid-form-grid__wide { grid-column: auto; } .prepaid-filters > *, .prepaid-filters :deep(.el-date-editor) { width: 100%; } }

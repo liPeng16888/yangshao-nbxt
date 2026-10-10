@@ -5,6 +5,7 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { registerSW } from 'virtual:pwa-register'
 import 'element-plus/dist/index.css'
 import './styles/global.scss'
+import '../shared/styles/ui.scss'
 import App from './App.vue'
 import router from './router'
 

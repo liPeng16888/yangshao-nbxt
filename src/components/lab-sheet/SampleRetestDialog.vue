@@ -133,14 +133,14 @@ function submit() {
 }
 
 .retest-option__number {
-  color: #111827;
+  color: var(--ui-text);
   font-weight: 700;
 }
 
 .retest-option__name {
   min-width: 0;
   overflow: hidden;
-  color: #334155;
+  color: var(--ui-text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -148,7 +148,7 @@ function submit() {
 .retest-option__count,
 .retest-option__reason {
   grid-column: 2 / -1;
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 12px;
 }
 
@@ -161,7 +161,7 @@ function submit() {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .retest-footer__actions {

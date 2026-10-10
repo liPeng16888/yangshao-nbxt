@@ -41,8 +41,8 @@
         </div>
         <el-table :data="visibleRows" border v-loading="store.loading" empty-text="暂无收入数据">
           <el-table-column prop="date" label="日期" width="130" />
-          <el-table-column prop="sampleCount" label="样品数量" width="110" />
-          <el-table-column label="应收金额" width="130">
+          <el-table-column align="right" prop="sampleCount" label="样品数量" width="110" />
+          <el-table-column align="right" label="应收金额" width="130">
             <template #default="{ row }">¥{{ money(row.totalAmount) }}</template>
           </el-table-column>
           <el-table-column v-for="status in visibleStatuses" :key="status" :label="status" min-width="150">
@@ -112,22 +112,22 @@ function money(value: number) {
   gap: 4px;
   min-height: 82px;
   padding: 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--ui-surface-subtle);
+  border: 1px solid var(--ui-line-soft);
   border-radius: 8px;
 
   span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 13px;
   }
 
   strong {
-    color: #0f172a;
+    color: var(--ui-text);
     font-size: 22px;
   }
 
   small {
-    color: #475569;
+    color: var(--ui-text-secondary);
     font-size: 13px;
   }
 }

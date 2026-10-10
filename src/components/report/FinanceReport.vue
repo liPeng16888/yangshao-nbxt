@@ -32,10 +32,10 @@
       <div class="report-table-scroll" :class="{ 'report-table-scroll--mobile': mobile }" aria-label="日期明细">
         <el-table :data="report.rows" border>
           <el-table-column prop="date" label="日期" />
-          <el-table-column prop="amount" label="开支金额">
+          <el-table-column align="right" prop="amount" label="开支金额">
             <template #default="{ row }">¥{{ row.amount.toFixed(2) }}</template>
           </el-table-column>
-          <el-table-column prop="count" label="开支笔数" />
+          <el-table-column align="right" prop="count" label="开支笔数" />
           <el-table-column prop="mainCategory" label="主要类目" />
         </el-table>
       </div>
@@ -46,6 +46,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { EChartsOption } from 'echarts'
+import { chartCategoryColors, chartColors } from '../../../shared/chartTheme'
 import type { FinanceReport } from '@/types/report'
 import ReportChart from './ReportChart.vue'
 import ReportSummaryCards from './ReportSummaryCards.vue'
@@ -69,8 +70,8 @@ const trendOption = computed<EChartsOption>(() => ({
   xAxis: { type: 'category', data: props.report.rows.map((row) => row.date) },
   yAxis: [{ type: 'value', name: '金额' }, { type: 'value', name: '笔数' }],
   series: [
-    { name: '开支金额', type: 'bar', data: props.report.rows.map((row) => row.amount), itemStyle: { color: '#16a34a' } },
-    { name: '开支笔数', type: 'line', yAxisIndex: 1, data: props.report.rows.map((row) => row.count), itemStyle: { color: '#d9472f' } }
+    { name: '开支金额', type: 'bar', data: props.report.rows.map((row) => row.amount), itemStyle: { color: chartColors.expense, borderRadius: [3, 3, 0, 0] } },
+    { name: '开支笔数', type: 'line', yAxisIndex: 1, data: props.report.rows.map((row) => row.count), itemStyle: { color: chartColors.total } }
   ]
 }))
 
@@ -82,7 +83,7 @@ const categoryOption = computed<EChartsOption>(() => ({
       name: '开支类目',
       type: 'pie',
       radius: ['40%', '68%'],
-      data: props.report.categories.map((row) => ({ name: `${row.category} (${row.count}笔)`, value: row.amount, itemStyle: { color: row.color } }))
+      data: props.report.categories.map((row) => ({ name: `${row.category} (${row.count}笔)`, value: row.amount, itemStyle: { color: chartCategoryColors[row.category] || row.color } }))
     }
   ]
 }))

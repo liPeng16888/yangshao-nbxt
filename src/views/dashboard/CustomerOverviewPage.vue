@@ -140,8 +140,8 @@
             <span class="customer-display">{{ row.customerDisplay || row.customer }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="sampleCount" label="样品数量" width="130" sortable="custom" />
-        <el-table-column prop="totalAmount" label="累计金额" width="150" sortable="custom">
+        <el-table-column align="right" prop="sampleCount" label="样品数量" width="130" sortable="custom" />
+        <el-table-column align="right" prop="totalAmount" label="累计金额" width="150" sortable="custom">
           <template #default="{ row }">¥{{ money(row.totalAmount) }}</template>
         </el-table-column>
         <el-table-column prop="firstDetectionDate" label="首次检测时间" width="160" sortable="custom" />
@@ -312,7 +312,7 @@ function contact(row: CustomerOverviewRow | null) {
   grid-template-columns: minmax(300px, 1.5fr) minmax(180px, 0.7fr) auto;
   gap: 14px;
   padding: 14px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--ui-line-soft);
 }
 
 .control-field {
@@ -320,7 +320,7 @@ function contact(row: CustomerOverviewRow | null) {
   gap: 6px;
 
   > span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 13px;
   }
 }
@@ -328,14 +328,14 @@ function contact(row: CustomerOverviewRow | null) {
 .overview-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--ui-line-soft);
 
   > div {
     display: grid;
     gap: 4px;
     min-height: 76px;
     padding: 14px 18px;
-    border-right: 1px solid #e2e8f0;
+    border-right: 1px solid var(--ui-line-soft);
 
     &:last-child {
       border-right: 0;
@@ -343,12 +343,12 @@ function contact(row: CustomerOverviewRow | null) {
   }
 
   span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 13px;
   }
 
   strong {
-    color: #0f172a;
+    color: var(--ui-text);
     font-size: 22px;
   }
 }
@@ -371,9 +371,9 @@ function contact(row: CustomerOverviewRow | null) {
 .mobile-customer-overview__close-details {
   min-height: 44px;
   padding: 8px 12px;
-  color: #2563eb;
+  color: var(--ui-accent);
   background: #fff;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -454,9 +454,9 @@ function contact(row: CustomerOverviewRow | null) {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
-  color: #b42318;
-  background: #fef3f2;
-  border: 1px solid #fecdca;
+  color: var(--ui-danger);
+  background: var(--ui-danger-soft);
+  border: 1px solid var(--ui-danger-line);
   border-radius: 10px;
 }
 
@@ -474,7 +474,7 @@ function contact(row: CustomerOverviewRow | null) {
 
 .mobile-customer-overview__detail-list dt {
   flex: 0 0 auto;
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .mobile-customer-overview__detail-list dd {
@@ -495,7 +495,7 @@ function contact(row: CustomerOverviewRow | null) {
     > div {
       min-height: 64px;
       border-right: 0;
-      border-bottom: 1px solid #e2e8f0;
+      border-bottom: 1px solid var(--ui-line-soft);
     }
   }
 }

@@ -93,6 +93,12 @@ function updateDateRange(value: string[] | null) {
 </script>
 
 <style scoped>
-.attendance-filters { display: grid; grid-template-columns: minmax(210px, 1.4fr) minmax(160px, 1fr) 150px minmax(240px, 1.3fr) 140px auto auto; gap: 10px; align-items: center; }
-@media (max-width: 1200px) { .attendance-filters { grid-template-columns: repeat(3, minmax(180px, 1fr)); } }
+.attendance-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.attendance-filters > * { min-width: 0; max-width: 100%; }
+.attendance-filters > .el-select { flex: 1 1 180px; max-width: 320px; }
+.attendance-filters :deep(.el-date-editor) { flex: 0 1 260px; min-width: 0; }
+.attendance-filters > .el-button { flex: 0 0 auto; }
+@media (max-width: 700px) {
+  .attendance-filters > .el-select, .attendance-filters :deep(.el-date-editor) { flex-basis: 100%; max-width: 100%; }
+}
 </style>

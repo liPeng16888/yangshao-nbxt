@@ -62,8 +62,8 @@ watch(
   overflow-x: auto;
   overflow-y: hidden;
   background: rgba(255, 255, 255, 0.96);
-  border-top: 1px solid #d8e1eb;
-  box-shadow: 0 -6px 20px rgba(15, 23, 42, 0.07);
+  border-top: 1px solid var(--ui-line);
+  box-shadow: 0 -2px 8px rgba(41, 52, 61, 0.04);
   scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
   backdrop-filter: blur(14px);
@@ -78,7 +78,7 @@ watch(
   min-height: 44px;
   padding: 3px 8px;
   overflow: hidden;
-  color: #64748b;
+  color: var(--ui-text-muted);
   border-radius: 10px;
   font-size: 12px;
   text-align: center;
@@ -88,8 +88,8 @@ watch(
   scroll-snap-align: center;
 
   &.router-link-active {
-    color: #b12b20;
-    background: #fff2ef;
+    color: var(--ui-accent-hover);
+    background: var(--ui-accent-soft);
   }
 }
 

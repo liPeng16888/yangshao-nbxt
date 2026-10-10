@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import appRouter from '@/router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import { accessGuardFeatures, featureForPath } from '@/router/guards'
@@ -33,6 +33,9 @@ vi.mock('@/composables/useMobileLayout', () => ({
 }))
 
 beforeEach(() => {
+  // These calendar and payroll fixtures intentionally exercise August 2026.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-08-23T04:00:00.000Z'))
   attendanceLayout.mobile = ref(false)
   const values = new Map<string, string>()
   Object.defineProperty(window, 'localStorage', { configurable: true, value: {
@@ -42,6 +45,8 @@ beforeEach(() => {
   } satisfies Storage })
   resetEmployeeAttendanceMock()
 })
+
+afterEach(() => vi.useRealTimers())
 
 describe('employee attendance navigation', () => {
   it('adds six exact routes, redirects old overview links, and positions the merged menu between lab report and finance', async () => {

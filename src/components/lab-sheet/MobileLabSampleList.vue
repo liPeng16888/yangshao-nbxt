@@ -313,9 +313,13 @@
                     </label>
                   </div>
                   <div class="mobile-result-grid">
-                    <div v-for="result in group.results" :key="result.label" class="mobile-result">
+                    <div v-for="result in group.results" :key="result.label" class="mobile-result"
+                      :class="{ 'mobile-result--total-abnormal': result.key === 'total' && totalAssessment(block).abnormal }"
+                      :title="result.key === 'total' ? totalAssessmentMessage(totalAssessment(block)) : undefined"
+                      :data-total-status="result.key === 'total' ? totalAssessment(block).status : undefined">
                       <span>{{ result.label }}</span>
                       <strong>{{ formatResult(getResultValue(block, result)) }}</strong>
+                      <small v-if="result.key === 'total' && totalAssessment(block).abnormal" class="mobile-total-warning">合量异常</small>
                     </div>
                   </div>
                 </div>
@@ -385,8 +389,11 @@ const identityTabs: Array<{ key: IdentityTabKey; label: string }> = [
   { key: 'settlement', label: '结算' }
 ]
 
+import { assessLabTotal, totalAssessmentMessage, type LabTotalMonitorRule } from '../../../server/src/common/lab-total-monitor'
+
 const props = defineProps<{
   blocks: SampleBlock[]
+  monitorRules?: LabTotalMonitorRule[]
   readonly?: boolean
   selectionMode?: boolean
   selectedBlockIds?: string[]
@@ -395,6 +402,8 @@ const props = defineProps<{
   pendingRetestActionIds?: string[]
   canViewCompletedSensitiveData?: boolean
 }>()
+
+function totalAssessment(block: SampleBlock) { return assessLabTotal(block, props.monitorRules || []) }
 
 const emit = defineEmits<{
   update: [blockId: string, patch: Partial<LabSampleInput>]
@@ -721,14 +730,14 @@ async function scrollToBlock(blockId: string) {
 .mobile-sample-card {
   overflow: hidden;
   background: #ffffff;
-  border: 1px solid #dce5ef;
+  border: 1px solid var(--ui-line);
   border-radius: 13px;
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+  box-shadow: var(--ui-shadow);
 }
 
 .mobile-sample-card--expanded {
   border-color: #aac3dc;
-  box-shadow: 0 8px 24px rgba(15, 35, 63, 0.1);
+  box-shadow: var(--ui-shadow);
 }
 
 .mobile-sample-card--highlight {
@@ -739,7 +748,7 @@ async function scrollToBlock(blockId: string) {
   display: flex;
   align-items: stretch;
   min-height: 74px;
-  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  background: var(--ui-surface);
 }
 
 .mobile-sample-card__checkbox {
@@ -748,7 +757,7 @@ async function scrollToBlock(blockId: string) {
   height: 22px;
   align-self: center;
   margin: 0 0 0 12px;
-  accent-color: #b32c20;
+  accent-color: var(--ui-accent);
 }
 
 .mobile-sample-card__toggle {
@@ -760,7 +769,7 @@ async function scrollToBlock(blockId: string) {
   min-width: 0;
   min-height: 74px;
   padding: 8px 12px;
-  color: #1f2937;
+  color: var(--ui-text);
   background: transparent;
   border: 0;
   text-align: left;
@@ -795,7 +804,7 @@ async function scrollToBlock(blockId: string) {
   }
 
   small {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 12px;
   }
 }
@@ -826,27 +835,27 @@ async function scrollToBlock(blockId: string) {
 }
 
 .mobile-sample-card__chevron {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .mobile-sample-card__body {
   display: grid;
   gap: 8px;
   padding: 8px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--ui-line-soft);
 }
 
 .mobile-form-section {
   display: grid;
   gap: 8px;
   padding: 10px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--ui-surface-subtle);
+  border: 1px solid var(--ui-line-soft);
   border-radius: 11px;
 
   h3 {
     margin: 0;
-    color: #183657;
+    color: var(--ui-text);
     font-size: 15px;
   }
 }
@@ -862,7 +871,7 @@ async function scrollToBlock(blockId: string) {
 }
 
 .mobile-collapsible-section--expanded {
-  background: #f6f9fc;
+  background: var(--ui-surface-subtle);
   border-color: #cbd9e7;
 }
 
@@ -878,7 +887,7 @@ async function scrollToBlock(blockId: string) {
   width: 100%;
   min-height: 46px;
   padding: 8px 10px;
-  color: #183657;
+  color: var(--ui-text);
   background: transparent;
   border: 0;
   text-align: left;
@@ -935,7 +944,7 @@ async function scrollToBlock(blockId: string) {
   min-width: 0;
   min-height: 44px;
   padding: 8px 6px;
-  color: #334155;
+  color: var(--ui-text-secondary);
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -950,8 +959,8 @@ async function scrollToBlock(blockId: string) {
 }
 
 .mobile-identity-tab--active {
-  color: #2563eb;
-  border-bottom-color: #2563eb;
+  color: var(--ui-accent);
+  border-bottom-color: var(--ui-accent);
 }
 
 .mobile-calculation-tabs {
@@ -966,7 +975,7 @@ async function scrollToBlock(blockId: string) {
   min-height: 44px;
   padding: 8px 2px;
   overflow: hidden;
-  color: #334155;
+  color: var(--ui-text-secondary);
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -982,8 +991,8 @@ async function scrollToBlock(blockId: string) {
 }
 
 .mobile-calculation-tab--active {
-  color: #2563eb;
-  border-bottom-color: #2563eb;
+  color: var(--ui-accent);
+  border-bottom-color: var(--ui-accent);
 }
 
 .mobile-identity-panel {
@@ -1033,7 +1042,7 @@ async function scrollToBlock(blockId: string) {
   min-width: 0;
 
   > span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 12px;
   }
 
@@ -1046,7 +1055,7 @@ async function scrollToBlock(blockId: string) {
     padding: 9px 10px;
     color: #172033;
     background: #ffffff;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--ui-line);
     border-radius: 9px;
     font-size: 16px;
     outline: none;
@@ -1057,10 +1066,10 @@ async function scrollToBlock(blockId: string) {
     }
 
     &:disabled {
-      color: #64748b;
-      background: #eef2f6;
+      color: var(--ui-text-muted);
+      background: var(--ui-surface-subtle);
       opacity: 1;
-      -webkit-text-fill-color: #64748b;
+      -webkit-text-fill-color: var(--ui-text-muted);
     }
   }
 
@@ -1085,7 +1094,7 @@ async function scrollToBlock(blockId: string) {
   min-height: 44px;
   padding: 9px 10px;
   color: #7c2d12;
-  background: #fff7ed;
+  background: var(--ui-warning-soft);
   border: 1px dashed #fdba74;
   border-radius: 9px;
   font-size: 13px;
@@ -1107,7 +1116,7 @@ async function scrollToBlock(blockId: string) {
 
   span {
     overflow: hidden;
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 10px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1120,6 +1129,15 @@ async function scrollToBlock(blockId: string) {
   }
 }
 
+.mobile-result.mobile-result--total-abnormal {
+  color: var(--ui-danger);
+  background: var(--ui-danger-soft);
+  box-shadow: inset 0 0 0 1px var(--ui-danger-line);
+
+  strong, span { color: var(--ui-danger); }
+}
+.mobile-total-warning { color: var(--ui-danger); font-size: 11px; }
+
 .mobile-sensitive-lock,
 .mobile-prerequisite-warning {
   display: flex;
@@ -1131,8 +1149,8 @@ async function scrollToBlock(blockId: string) {
 
 .mobile-sensitive-lock {
   color: #7c2d12;
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
+  background: var(--ui-warning-soft);
+  border: 1px solid var(--ui-warning-line);
 
   div {
     display: grid;
@@ -1145,9 +1163,9 @@ async function scrollToBlock(blockId: string) {
 }
 
 .mobile-prerequisite-warning {
-  color: #92400e;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
+  color: var(--ui-warning);
+  background: var(--ui-warning-soft);
+  border: 1px solid var(--ui-warning-line);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -1156,7 +1174,7 @@ async function scrollToBlock(blockId: string) {
   width: 100%;
   min-height: 48px;
   color: #ffffff;
-  background: linear-gradient(135deg, #b93125, #922319);
+  background: var(--ui-accent);
   border: 0;
   border-radius: 10px;
   font-size: 15px;

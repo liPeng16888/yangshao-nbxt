@@ -74,8 +74,8 @@
         <el-table-column prop="customerDisplay" label="客户完整信息" min-width="360" sortable="custom">
           <template #default="{ row }"><span class="customer-display">{{ row.customerDisplay || row.customer }}</span></template>
         </el-table-column>
-        <el-table-column prop="sampleCount" label="样品数量" width="130" sortable="custom" />
-        <el-table-column prop="totalAmount" label="累计金额" width="150" sortable="custom">
+        <el-table-column align="right" prop="sampleCount" label="样品数量" width="130" sortable="custom" />
+        <el-table-column align="right" prop="totalAmount" label="累计金额" width="150" sortable="custom">
           <template #default="{ row }">¥{{ money(row.totalAmount) }}</template>
         </el-table-column>
         <el-table-column prop="firstDetectionDate" label="首次检测时间" width="160" sortable="custom" />
@@ -168,7 +168,7 @@ function money(value: number) {
 <style scoped>
 .page-description {
   margin: 5px 0 0;
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
@@ -186,14 +186,14 @@ function money(value: number) {
 
 .control-field > span,
 .overview-summary span {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
 .overview-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  border-top: 1px solid #e5edf7;
+  border-top: 1px solid var(--ui-line-soft);
 }
 
 .overview-summary > div {
@@ -201,7 +201,7 @@ function money(value: number) {
   gap: 5px;
   min-height: 74px;
   padding: 14px 16px;
-  border-right: 1px solid #e5edf7;
+  border-right: 1px solid var(--ui-line-soft);
 }
 
 .overview-summary > div:last-child {
@@ -223,5 +223,11 @@ function money(value: number) {
   .overview-controls {
     grid-template-columns: 1fr 1fr;
   }
+}
+@media (max-width: 700px) {
+  .overview-controls { grid-template-columns: minmax(0, 1fr); padding: 14px; }
+  .control-field { min-width: 0; }
+  .overview-summary { grid-template-columns: minmax(0, 1fr); }
+  .overview-summary > div { min-width: 0; min-height: 60px; border-right: 0; border-bottom: 1px solid var(--ui-line-soft); }
 }
 </style>

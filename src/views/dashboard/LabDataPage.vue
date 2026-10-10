@@ -49,8 +49,9 @@
           </el-button>
         </div>
         <div v-if="!isMobileLayout || !selectionMode" class="toolbar-right">
-          <el-button @click="openChangeRequestDrawer">修改申请记录</el-button>
+          <el-button :icon="Tickets" @click="openChangeRequestDrawer">修改申请记录</el-button>
           <el-button
+            :icon="DocumentCopy"
             :loading="labStore.saving || creatingRetests"
             :disabled="isPageReadonly || creatingRetests"
             @click="openSampleRetestDialog"
@@ -60,14 +61,14 @@
           <el-button :icon="CircleCheck" :loading="labStore.saving" :disabled="isPageReadonly" @click="openSampleCompletionDialog">
             标记样品完成
           </el-button>
-          <el-button v-if="!canViewCompletedSensitiveData" @click="requestCompletedSampleDataAccess">查看加密数据</el-button>
+          <el-button v-if="hasCompletedSamples && !canViewCompletedSensitiveData" @click="requestCompletedSampleDataAccess">查看加密数据</el-button>
           <el-button :icon="EditPen" :loading="labStore.saving" :disabled="isPageReadonly" @click="handleBulkFillSamples">
             {{ bulkFillButtonText }}
           </el-button>
           <el-button :icon="ChatLineSquare" :loading="labStore.saving" @click="handleGenerateSms">
             {{ smsButtonText }}
           </el-button>
-          <el-button :icon="DocumentChecked" :loading="labStore.saving" @click="handleGenerateReport">
+          <el-button type="primary" :icon="DocumentChecked" :loading="labStore.saving" @click="handleGenerateReport">
             {{ reportButtonText }}
           </el-button>
           <el-button v-if="selectionMode" @click="cancelReportSelection">取消选择</el-button>
@@ -83,9 +84,14 @@
       @save="labStore.saveParameters"
     />
 
+    <el-alert v-if="totalMonitorError" :title="totalMonitorError" type="warning" :closable="false" show-icon>
+      <el-button size="small" @click="reloadTotalMonitor">重试加载规则</el-button>
+    </el-alert>
+
     <MobileLabSampleList
       v-if="isMobileLayout"
       :blocks="labStore.sampleBlocks"
+      :monitor-rules="totalMonitorRules"
       :readonly="isPageReadonly"
       :selection-mode="selectionMode"
       :selected-block-ids="selectedReportBlockIds"
@@ -110,6 +116,7 @@
     <LabSheetGrid
       v-else
       :blocks="labStore.sampleBlocks"
+      :monitor-rules="totalMonitorRules"
       :readonly="isPageReadonly"
       :selection-mode="selectionMode"
       :selected-block-ids="selectedReportBlockIds"
@@ -212,6 +219,7 @@
       :template="reportTemplate"
       :date="selectedDate"
       :mobile="isMobileLayout"
+      :before-generate="confirmMonitoredGeneration"
       @close="reportDialogVisible = false"
     />
 
@@ -221,6 +229,7 @@
       :selected-block-ids="selectedReportBlockIds"
       :template="smsTemplate"
       :mobile="isMobileLayout"
+      :before-generate="confirmMonitoredGeneration"
       @close="smsDialogVisible = false"
     />
   </div>
@@ -228,8 +237,9 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useLabTotalMonitor } from '@/composables/useLabTotalMonitor'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatLineSquare, CircleCheck, DocumentChecked, EditPen, Plus } from '@element-plus/icons-vue'
+import { ChatLineSquare, CircleCheck, DocumentChecked, DocumentCopy, EditPen, Plus, Tickets } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import type { BlacklistRecord } from '@/types/blacklist'
@@ -278,6 +288,7 @@ const changeRequestStore = useLabSampleChangeRequestStore()
 const accessGuard = useAccessGuardStore()
 const authStore = useAuthStore()
 const frontendPreferences = useFrontendPreferencesStore()
+const { rules: totalMonitorRules, error: totalMonitorError, reload: reloadTotalMonitor, confirmGeneration: confirmTotalGeneration } = useLabTotalMonitor()
 const { isMobileLayout } = useMobileLayout()
 const BUSINESS_DAY_PREFLUSH_LEAD_MS = 5_000
 const BUSINESS_DAY_RETRY_MS = 60_000
@@ -317,9 +328,11 @@ const activeRetestLifecycleActions = new Map<string, number>()
 const isPageReadonly = computed(() => Boolean(
   labStore.sheet?.readonly || switchingBusinessDay.value || labStore.applyingParameters
 ))
+const completedDataRevealed = ref(false)
+const hasCompletedSamples = computed(() => labStore.sampleBlocks.some((block) => Boolean(block.inputs.completed)))
 const canViewCompletedSensitiveData = computed(() => {
   accessGuard.accessSessionRevision
-  return accessGuard.hasFeatureAccess('COMPLETED_SAMPLE_DATA')
+  return completedDataRevealed.value && accessGuard.hasFeatureAccess('COMPLETED_SAMPLE_DATA')
 })
 const retestActorContextKey = computed(() => {
   const user = authStore.user
@@ -329,6 +342,10 @@ const loadedSheetContextKey = computed(() => JSON.stringify([
   labStore.sheet?.id || '',
   labStore.sheet?.date || ''
 ]))
+
+watch([loadedSheetContextKey, retestActorContextKey], () => {
+  completedDataRevealed.value = false
+})
 
 const autoSaveText = computed(() => {
   if (labStore.autoSaveStatus === 'pending') return '等待自动保存'
@@ -604,11 +621,21 @@ async function requestHistoricalDateAccess(date: string, onSuccess: () => void |
 
 async function requestCompletedSampleDataAccess() {
   await accessGuard.loadGroups()
-  accessGuard.requestFeatureAccess('COMPLETED_SAMPLE_DATA', {
+  const date = selectedDate.value
+  const actor = retestActorContextKey.value
+  const reveal = async () => {
+    if (selectedDate.value !== date || retestActorContextKey.value !== actor) return
+    const loaded = await labStore.loadSheetByDate(date)
+    if (loaded !== false && selectedDate.value === date && retestActorContextKey.value === actor && accessGuard.hasFeatureAccess('COMPLETED_SAMPLE_DATA')) {
+      completedDataRevealed.value = true
+    }
+  }
+  const allowed = accessGuard.requestFeatureAccess('COMPLETED_SAMPLE_DATA', {
     title: '已完成样品数据访问验证',
     message: '已完成样品的检测数据、样品金额和结款状态已隐藏。请输入对应组合密码后查看。',
-    onSuccess: async () => { await labStore.loadSheetByDate(selectedDate.value) }
+    onSuccess: reveal
   })
+  if (allowed) await reveal()
 }
 
 async function syncSampleChangeRequestsForSheet() {
@@ -697,6 +724,12 @@ async function withdrawSampleChangeRequest(id: string) {
 function showBlacklistHit(records: BlacklistRecord[]) {
   hitRecords.value = records
   hitDialogVisible.value = true
+}
+
+async function confirmMonitoredGeneration(blocks: SampleBlock[], kind: 'report' | 'sms') {
+  const context = `${loadedSheetContextKey.value}:${retestActorContextKey.value}`
+  const allowed = await confirmTotalGeneration(blocks, kind)
+  return allowed && context === `${loadedSheetContextKey.value}:${retestActorContextKey.value}`
 }
 
 async function handleGenerateReport() {
@@ -904,6 +937,7 @@ function isCurrentRetestActionOperation(retestId: string, generation: number, co
 async function applySampleCompletion(payload: { blockIds: string[]; completed: boolean }) {
   const targetBlocks = labStore.sampleBlocks.filter((block) => payload.blockIds.includes(block.id))
   const changedBlocks = targetBlocks.filter((block) => Boolean(block.inputs.completed) !== payload.completed)
+  if (payload.completed) completedDataRevealed.value = false
   if (!changedBlocks.length) {
     ElMessage.info(payload.completed ? '所选样品已经标记为完成' : '所选样品当前没有完成标记')
     return
@@ -1100,7 +1134,7 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
   z-index: 9;
   padding: 8px 0;
   background: rgba(238, 243, 248, 0.96);
-  border-bottom: 1px solid #d8e1eb;
+  border-bottom: 1px solid var(--ui-line);
   backdrop-filter: blur(8px);
 }
 
@@ -1129,7 +1163,7 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
   min-height: 74px;
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.98);
-  border-top: 1px solid #cbd5e1;
+  border-top: 1px solid var(--ui-line);
   box-shadow: 0 -10px 30px rgba(15, 23, 42, 0.12);
   backdrop-filter: blur(14px);
 
@@ -1140,13 +1174,13 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
   }
 
   strong {
-    color: #183657;
+    color: var(--ui-text);
     font-size: 14px;
   }
 
   span {
     overflow: hidden;
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1182,7 +1216,7 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
     min-height: 44px;
     padding: 0;
     overflow: hidden;
-    color: #183657;
+    color: var(--ui-text);
     text-align: left;
     background: transparent;
     border: 0;
@@ -1204,7 +1238,7 @@ function cloneDefaultReportTemplate(): LabReportTemplate {
       display: grid;
       min-height: 44px;
       place-items: center;
-      color: #2563eb;
+      color: var(--ui-accent);
       font-size: 12px;
     }
   }

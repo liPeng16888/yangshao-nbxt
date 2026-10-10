@@ -25,19 +25,19 @@ defineProps<{
   min-width: 0;
   padding: 16px;
   background: #ffffff;
-  border: 1px solid #dce5ef;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 
   span {
     display: block;
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 13px;
   }
 
   strong {
     display: block;
     margin-top: 8px;
-    color: #10233f;
+    color: var(--ui-text);
     font-size: 24px;
     overflow-wrap: anywhere;
   }

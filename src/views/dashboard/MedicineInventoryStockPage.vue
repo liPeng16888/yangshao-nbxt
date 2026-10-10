@@ -28,7 +28,7 @@
 
     <el-table :data="visibleItems" border v-loading="loading" empty-text="暂无药品库存">
       <el-table-column prop="name" label="药品名称" min-width="180" />
-      <el-table-column label="现有库存" width="140">
+      <el-table-column align="right" label="现有库存" width="140">
         <template #default="{ row }">{{ formatMedicineQuantity(row.currentQuantity) }}</template>
       </el-table-column>
       <el-table-column prop="unitLabel" label="单位" width="100" />
@@ -129,9 +129,9 @@ function errorMessage(error: unknown, fallback: string) {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  color: #b42318;
-  background: #fef3f2;
-  border: 1px solid #fecdca;
+  color: var(--ui-danger);
+  background: var(--ui-danger-soft);
+  border: 1px solid var(--ui-danger-line);
   border-radius: 6px;
 }
 

@@ -206,7 +206,7 @@ async function submit() {
   display: grid;
   gap: 14px;
   padding-top: 16px;
-  border-top: 1px solid #d8e1eb;
+  border-top: 1px solid var(--ui-line);
 
   h2,
   p {
@@ -227,7 +227,7 @@ async function submit() {
   display: grid;
   min-width: 0;
   gap: 6px;
-  color: #475569;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-blacklist-form__fields input,
@@ -237,9 +237,9 @@ async function submit() {
   min-width: 0;
   min-height: 44px;
   padding: 9px 11px;
-  color: #0f172a;
+  color: var(--ui-text);
   background: #fff;
-  border: 1px solid #aebdcd;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -249,7 +249,7 @@ async function submit() {
 }
 
 .mobile-blacklist-form__images small {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .blacklist-upload-trigger-label {
@@ -269,7 +269,7 @@ async function submit() {
   min-height: 44px;
   color: #fff;
   font-weight: 700;
-  background: #b42318;
+  background: var(--ui-danger);
   border: 0;
   border-radius: 8px;
 }

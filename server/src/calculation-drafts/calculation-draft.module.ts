@@ -4,6 +4,7 @@ import { CalculationDraftService } from './calculation-draft.service'
 
 @Module({
   controllers: [CalculationDraftController],
-  providers: [CalculationDraftService]
+  providers: [CalculationDraftService],
+  exports: [CalculationDraftService]
 })
 export class CalculationDraftModule {}

@@ -14,7 +14,7 @@
         <el-table-column prop="phone" label="电话" width="140" />
         <el-table-column prop="wechat" label="微信号" width="160" />
         <el-table-column prop="wechatNickname" label="微信昵称" width="160" />
-        <el-table-column label="金额" width="110"><template #default="{ row }">{{ row.amount === null ? '无信息' : `¥${money(row.amount)}` }}</template></el-table-column>
+        <el-table-column align="right" label="金额" width="110"><template #default="{ row }">{{ row.amount === null ? '无信息' : `¥${money(row.amount)}` }}</template></el-table-column>
         <el-table-column prop="other" label="其他信息" min-width="180" />
         <el-table-column prop="note" label="备注" min-width="180" />
         <el-table-column label="图片" min-width="180">

@@ -230,7 +230,7 @@ function reset(element: ElementKey) {
 .mobile-standard-page__intro h2,
 .mobile-standard-card h2 {
   margin: 0;
-  color: #10233f;
+  color: var(--ui-text);
   font-size: 18px;
 }
 
@@ -242,10 +242,10 @@ function reset(element: ElementKey) {
 
 .mobile-standard-page__coefficient,
 .mobile-standard-card__reset {
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 10px;
   background: #fff;
-  color: #1d4ed8;
+  color: var(--ui-accent-hover);
   font-weight: 700;
 }
 
@@ -266,24 +266,24 @@ function reset(element: ElementKey) {
 }
 
 .mobile-standard-card--aluminum .mobile-standard-card__header {
-  background: #fff7ed;
+  background: var(--ui-warning-soft);
 }
 
 .mobile-standard-card--silicon .mobile-standard-card__header {
-  background: #eff6ff;
+  background: var(--ui-accent-soft);
 }
 
 .mobile-standard-card--iron .mobile-standard-card__header {
-  background: #fff1f2;
+  background: var(--ui-danger-soft);
 }
 
 .mobile-standard-card__toggle {
   flex: none;
   padding: 0 10px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
   background: rgb(255 255 255 / 72%);
-  color: #2563eb;
+  color: var(--ui-accent);
   font-weight: 700;
 }
 
@@ -302,18 +302,18 @@ function reset(element: ElementKey) {
   min-width: 0;
   flex-wrap: wrap;
   gap: 4px 12px;
-  color: #475569;
+  color: var(--ui-text-secondary);
   font-size: 12px;
 }
 
 .mobile-standard-card__summary strong {
-  color: #0f172a;
+  color: var(--ui-text);
 }
 
 .mobile-standard-card__content {
   min-width: 0;
   padding: 14px;
-  border-top: 1px solid #d9e4ef;
+  border-top: 1px solid var(--ui-line-soft);
 }
 
 .mobile-standard-card__fields {
@@ -330,7 +330,7 @@ function reset(element: ElementKey) {
   display: grid;
   min-width: 0;
   gap: 5px;
-  color: #344054;
+  color: var(--ui-text-secondary);
   font-size: 13px;
   font-weight: 600;
 }
@@ -340,11 +340,11 @@ function reset(element: ElementKey) {
   width: 100%;
   min-width: 0;
   padding: 0 10px;
-  border: 1px solid #9acb8c;
+  border: 1px solid var(--ui-success-line);
   border-radius: 8px;
   outline: none;
-  background: #e6f4ea;
-  color: #10233f;
+  background: var(--ui-success-soft);
+  color: var(--ui-text);
   font: inherit;
 }
 
@@ -354,15 +354,15 @@ function reset(element: ElementKey) {
   align-items: center;
   box-sizing: border-box;
   padding: 0 10px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
-  background: #f8fafc;
-  color: #10233f;
+  background: var(--ui-surface-subtle);
+  color: var(--ui-text);
   font-weight: 700;
 }
 
 .mobile-standard-field__input:focus-visible {
-  border-color: #2563eb;
+  border-color: var(--ui-accent);
   box-shadow: 0 0 0 2px rgb(37 99 235 / 20%);
 }
 
@@ -377,9 +377,9 @@ function reset(element: ElementKey) {
   gap: 1px;
   margin: 14px 0;
   overflow: hidden;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
-  background: #cbd5e1;
+  background: var(--ui-line);
 }
 
 .mobile-standard-results__row {
@@ -400,29 +400,29 @@ function reset(element: ElementKey) {
 
 .mobile-standard-results__row dt {
   justify-content: flex-end;
-  color: #344054;
+  color: var(--ui-text-secondary);
   font-weight: 700;
 }
 
 .mobile-standard-results__row dd {
-  color: #0f172a;
+  color: var(--ui-text);
   font-size: 16px;
   font-weight: 700;
 }
 
 .mobile-standard-results__row--yellow dt,
 .mobile-standard-results__row--yellow dd {
-  background: #fdeca6;
+  background: var(--ui-warning-soft);
 }
 
 .mobile-standard-results__row--blue dt,
 .mobile-standard-results__row--blue dd {
-  background: #bfdbfe;
+  background: var(--ui-accent-line);
 }
 
 .mobile-standard-results__row--gray dt,
 .mobile-standard-results__row--gray dd {
-  background: #e5e7eb;
+  background: var(--ui-line-soft);
 }
 
 .mobile-standard-card__reset {

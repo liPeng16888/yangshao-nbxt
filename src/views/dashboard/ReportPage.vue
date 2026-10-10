@@ -106,9 +106,9 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  color: #9a3412;
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
+  color: var(--ui-warning);
+  background: var(--ui-warning-soft);
+  border: 1px solid var(--ui-warning-line);
   border-radius: 8px;
 
   span {
@@ -118,7 +118,7 @@ onBeforeUnmount(() => {
 
   button {
     flex: none;
-    color: #9a3412;
+    color: var(--ui-warning);
     background: #ffffff;
     border: 1px solid currentcolor;
     border-radius: 6px;
@@ -127,7 +127,7 @@ onBeforeUnmount(() => {
 
 .report-loading-status {
   margin: 0;
-  color: #475569;
+  color: var(--ui-text-secondary);
   font-size: 14px;
 }
 </style>

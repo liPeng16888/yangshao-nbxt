@@ -70,7 +70,7 @@
 
     <template #footer>
       <el-button @click="emit('close')">关闭</el-button>
-      <el-button v-if="step === 'elements'" type="primary" @click="createSmsPreview">生成短信</el-button>
+      <el-button v-if="step === 'elements'" type="primary" :loading="generatingPreview" @click="createSmsPreview">生成短信</el-button>
       <el-button v-else type="primary" :loading="copying" :disabled="copying" @click="copySmsText">复制短信</el-button>
     </template>
   </el-dialog>
@@ -101,6 +101,7 @@ const props = defineProps<{
   selectedBlockIds: string[]
   template: LabReportSmsTemplate
   mobile?: boolean
+  beforeGenerate?: (blocks: SampleBlock[], kind: 'report' | 'sms') => Promise<boolean>
 }>()
 
 const emit = defineEmits<{
@@ -112,6 +113,7 @@ const selectionMap = ref<Record<string, LabReportElementKey[]>>({})
 const bulkElementKeys = ref<LabReportElementKey[]>([])
 const smsText = ref('')
 const copying = ref(false)
+const generatingPreview = ref(false)
 
 const selectedBlocks = computed(() => props.blocks.filter((block) => props.selectedBlockIds.includes(block.id)))
 const dialogTitle = computed(() => (step.value === 'elements' ? '选择化验短信检测元素' : '化验短信预览'))
@@ -162,7 +164,9 @@ function clearAllSelections() {
   selectionMap.value = nextSelections
 }
 
-function createSmsPreview() {
+async function createSmsPreview() {
+  if (generatingPreview.value) return
+  const blocks = JSON.parse(JSON.stringify(selectedBlocks.value)) as SampleBlock[]
   const selections = selectedBlocks.value.map((block) => ({
     blockId: block.id,
     elementKeys: selectionMap.value[block.id] || []
@@ -171,13 +175,18 @@ function createSmsPreview() {
     ElMessage.warning('请至少选择一个检测元素')
     return
   }
-  const text = createLabReportSmsText(selectedBlocks.value, selections, props.template)
-  if (!text) {
-    ElMessage.warning('没有可生成的短信内容，请检查样品数据和检测元素')
-    return
-  }
-  smsText.value = text
-  step.value = 'preview'
+  generatingPreview.value = true
+  try {
+    if (props.beforeGenerate && !await props.beforeGenerate(blocks, 'sms')) return
+    if (!props.visible) return
+    const text = createLabReportSmsText(blocks, selections, props.template)
+    if (!text) {
+      ElMessage.warning('没有可生成的短信内容，请检查样品数据和检测元素')
+      return
+    }
+    smsText.value = text
+    step.value = 'preview'
+  } finally { generatingPreview.value = false }
 }
 
 async function copySmsText() {
@@ -219,7 +228,7 @@ async function copySmsText() {
   padding: 12px;
   border: 1px solid #b6d4fe;
   border-radius: 8px;
-  background: #eff6ff;
+  background: var(--ui-accent-soft);
 }
 
 .bulk-element-card__header {
@@ -230,14 +239,14 @@ async function copySmsText() {
 
   strong {
     display: block;
-    color: #10233f;
+    color: var(--ui-text);
     font-size: 17px;
   }
 
   span {
     display: block;
     margin-top: 4px;
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 14px;
   }
 }
@@ -257,7 +266,7 @@ async function copySmsText() {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid #dce5ef;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -272,7 +281,7 @@ async function copySmsText() {
   }
 
   span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 16px;
   }
 }
@@ -284,7 +293,7 @@ async function copySmsText() {
 }
 
 .element-checkboxes small {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 15px;
 }
 

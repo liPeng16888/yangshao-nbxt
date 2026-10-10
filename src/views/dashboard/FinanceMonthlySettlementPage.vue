@@ -100,8 +100,8 @@
         <el-table class="monthly-settlement-table" :data="report?.summaryRows || []" border v-loading="store.loading" empty-text="暂无月结款信息">
           <el-table-column prop="month" label="日期" width="120" />
           <el-table-column label="客户" min-width="240"><template #default="{ row }"><span class="customer-info">{{ getCustomerDisplay(row) }}</span></template></el-table-column>
-          <el-table-column prop="amount" label="金额" width="130" sortable :sort-orders="settlementSortOrders"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
-          <el-table-column prop="sampleCount" label="样品数量" width="110" sortable :sort-orders="settlementSortOrders" />
+          <el-table-column align="right" prop="amount" label="金额" width="130" sortable :sort-orders="settlementSortOrders"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+          <el-table-column align="right" prop="sampleCount" label="样品数量" width="110" sortable :sort-orders="settlementSortOrders" />
           <el-table-column prop="settlementStatus" label="结款状态" width="150" sortable :sort-orders="settlementSortOrders" :sort-method="compareMonthlySettlementStatusRows">
             <template #default="{ row }">
               <el-select :model-value="row.settlementStatus" size="small" :loading="store.monthlySavingId === row.id" @update:model-value="(value: MonthlySettlementStatus) => handleStatusChange(row, value)">
@@ -109,7 +109,7 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="结款金额" width="160">
+          <el-table-column align="right" label="结款金额" width="160">
             <template #default="{ row }">
               <el-input-number v-if="row.settlementStatus === '部分结款'" :model-value="row.paidAmount || 0" :min="0" :max="row.amount" :precision="2" :step="10" size="small" controls-position="right" @change="(value: number | undefined) => handlePaidAmountChange(row, value)" />
               <span v-else class="muted">{{ row.settlementStatus === '已结款' ? `¥${money(row.amount)}` : '无信息' }}</span>
@@ -132,9 +132,9 @@
         <el-table :data="filteredDailyRows" border v-loading="store.loading" empty-text="暂无月结款样品">
           <el-table-column prop="date" label="日期" width="130" />
           <el-table-column label="客户" min-width="260"><template #default="{ row }"><span class="customer-info">{{ getCustomerDisplay(row) }}</span></template></el-table-column>
-          <el-table-column prop="sampleCount" label="样品数量" width="110" />
+          <el-table-column align="right" prop="sampleCount" label="样品数量" width="110" />
           <el-table-column label="检测元素统计" min-width="260"><template #default="{ row }">{{ formatElementCounts(row.elementCounts) }}</template></el-table-column>
-          <el-table-column label="金额" width="140"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
+          <el-table-column align="right" label="金额" width="140"><template #default="{ row }">¥{{ money(row.amount) }}</template></el-table-column>
         </el-table>
       </section>
     </template>
@@ -336,9 +336,9 @@ function getCustomerDisplay(row: MonthlySettlementDailyRow | MonthlySettlementSu
 .panel-actions,
 .daily-detail-actions { display: flex; align-items: center; gap: 10px; }
 .settlement-summary { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
-.summary-card { display: grid; gap: 4px; min-height: 82px; padding: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
-.summary-card span { color: #64748b; font-size: 13px; }
-.summary-card strong { color: #0f172a; font-size: 22px; }
+.summary-card { display: grid; gap: 4px; min-height: 82px; padding: 14px; background: var(--ui-surface-subtle); border: 1px solid var(--ui-line-soft); border-radius: 8px; }
+.summary-card span { color: var(--ui-text-muted); font-size: 13px; }
+.summary-card strong { color: var(--ui-text); font-size: 22px; }
 .customer-info { display: inline-block; white-space: normal; word-break: break-word; line-height: 1.5; }
 .daily-detail-actions { justify-content: flex-end; flex-wrap: wrap; margin-left: auto; }
 .customer-filter { width: min(360px, 100%); }
@@ -358,28 +358,28 @@ function getCustomerDisplay(row: MonthlySettlementDailyRow | MonthlySettlementSu
 .mobile-monthly-daily-panel p { margin: 0; }
 .mobile-monthly-overview__header button,
 .mobile-monthly-export-button,
-.mobile-monthly-detail-close { flex: none; padding: 8px 12px; color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; }
-.mobile-monthly-overview__month { display: grid; gap: 6px; margin-top: 14px; color: #475569; font-size: 13px; }
-.mobile-monthly-overview__month input { box-sizing: border-box; width: 100%; min-height: 44px; padding: 8px 10px; background: #fff; border: 1px solid #aebdcd; border-radius: 8px; font: inherit; }
+.mobile-monthly-detail-close { flex: none; padding: 8px 12px; color: var(--ui-accent-hover); background: var(--ui-accent-soft); border: 1px solid var(--ui-accent-line); border-radius: 8px; }
+.mobile-monthly-overview__month { display: grid; gap: 6px; margin-top: 14px; color: var(--ui-text-secondary); font-size: 13px; }
+.mobile-monthly-overview__month input { box-sizing: border-box; width: 100%; min-height: 44px; padding: 8px 10px; background: #fff; border: 1px solid var(--ui-line); border-radius: 8px; font: inherit; }
 .mobile-monthly-overview__totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
-.mobile-monthly-overview__totals > div { display: grid; min-width: 0; gap: 4px; padding: 12px; background: #f8fafc; border-radius: 10px; }
-.mobile-monthly-overview__totals span { color: #64748b; font-size: 12px; }
+.mobile-monthly-overview__totals > div { display: grid; min-width: 0; gap: 4px; padding: 12px; background: var(--ui-surface-subtle); border-radius: 10px; }
+.mobile-monthly-overview__totals span { color: var(--ui-text-muted); font-size: 12px; }
 .mobile-monthly-overview__totals strong { overflow-wrap: anywhere; }
-.mobile-monthly-load-error { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding: 10px; color: #991b1b; background: #fef2f2; border-radius: 8px; }
+.mobile-monthly-load-error { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding: 10px; color: #991b1b; background: var(--ui-danger-soft); border-radius: 8px; }
 .mobile-monthly-load-error button { flex: none; }
 .mobile-monthly-sort { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 14px 0 12px; }
-.mobile-monthly-sort button { min-width: 0; padding: 6px; color: #334155; background: #fff; border: 1px solid #aebdcd; border-radius: 8px; }
-.mobile-monthly-sort button[aria-pressed='true'] { color: #1d4ed8; background: #eff6ff; border-color: #60a5fa; }
+.mobile-monthly-sort button { min-width: 0; padding: 6px; color: var(--ui-text-secondary); background: #fff; border: 1px solid var(--ui-line); border-radius: 8px; }
+.mobile-monthly-sort button[aria-pressed='true'] { color: var(--ui-accent-hover); background: var(--ui-accent-soft); border-color: var(--ui-accent); }
 .mobile-monthly-customer-filter { display: grid; gap: 4px; margin: 14px 0; padding: 0; border: 0; }
 .mobile-monthly-customer-filter label { display: flex; min-width: 0; align-items: center; gap: 10px; overflow-wrap: anywhere; }
 .mobile-monthly-customer-filter input { width: 20px; height: 20px; }
 .mobile-monthly-daily-rows,
 [data-testid='mobile-monthly-daily-dialog'] { display: grid; gap: 10px; }
-.mobile-monthly-detail-heading { margin: 0; color: #0f172a; font-size: 16px; }
+.mobile-monthly-detail-heading { margin: 0; color: var(--ui-text); font-size: 16px; }
 .mobile-monthly-daily-rows article,
-.mobile-monthly-detail-row { min-width: 0; padding: 12px; background: #f8fafc; border: 1px solid #d8e1eb; border-radius: 10px; }
+.mobile-monthly-detail-row { min-width: 0; padding: 12px; background: var(--ui-surface-subtle); border: 1px solid var(--ui-line); border-radius: 10px; }
 .mobile-monthly-daily-rows article p,
-.mobile-monthly-detail-row p { margin-top: 6px; color: #475569; overflow-wrap: anywhere; }
+.mobile-monthly-detail-row p { margin-top: 6px; color: var(--ui-text-secondary); overflow-wrap: anywhere; }
 .mobile-monthly-detail-close { width: 100%; }
 .mobile-monthly-page { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
 @media (max-width: 760px) {

@@ -77,7 +77,7 @@ function isStandaloneDisplay() {
 .pwa-prompt {
   position: fixed;
   right: 12px;
-  bottom: var(--mobile-page-action-bottom);
+  bottom: calc(max(var(--mobile-page-action-bottom), 78px) + 124px);
   left: 12px;
   z-index: 40;
   display: flex;
@@ -87,11 +87,11 @@ function isStandaloneDisplay() {
   min-height: 58px;
   margin-inline: auto;
   padding: 11px 12px;
-  color: #f8fafc;
-  background: rgba(16, 35, 63, 0.97);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.24);
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+  box-shadow: var(--ui-floating-shadow);
 
   div {
     display: grid;
@@ -105,7 +105,7 @@ function isStandaloneDisplay() {
   }
 
   span {
-    color: #dbe8f5;
+    color: var(--ui-text-muted);
     font-size: 12px;
     line-height: 1.45;
   }
@@ -113,23 +113,24 @@ function isStandaloneDisplay() {
   button {
     min-height: 44px;
     padding: 0 11px;
-    color: #ffffff;
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 9px;
+    color: var(--ui-text-secondary);
+    background: var(--ui-surface-subtle);
+    border: 1px solid var(--ui-line);
+    border-radius: 6px;
   }
 }
 
 .pwa-update-prompt__apply {
-  background: #bb3729 !important;
+  color: #ffffff !important;
+  background: var(--ui-accent) !important;
 }
 
 @media (min-width: 768px) {
   .pwa-prompt {
-    right: 22px;
+    right: 190px;
     bottom: 22px;
     left: auto;
-    width: min(520px, calc(100vw - 44px));
+    width: min(520px, calc(100vw - 220px));
   }
 }
 </style>

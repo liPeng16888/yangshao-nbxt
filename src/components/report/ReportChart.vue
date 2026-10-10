@@ -14,6 +14,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import type { EChartsOption } from 'echarts'
+import { chartTheme } from '../../../shared/chartTheme'
 
 const props = defineProps<{
   option: EChartsOption
@@ -21,6 +22,7 @@ const props = defineProps<{
 
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
+let resizeObserver: ResizeObserver | null = null
 const activeTouchPointers = new Set<number>()
 let touchGesture: { pointerId: number; x: number; y: number; cancelled: boolean } | null = null
 
@@ -46,7 +48,7 @@ type LayoutPie = { cx: number; cy: number; r: number; r0?: number; startAngle: n
 
 function renderChart() {
   if (!chartRef.value) return
-  chart ||= echarts.getInstanceByDom(chartRef.value) || echarts.init(chartRef.value)
+  chart ||= echarts.getInstanceByDom(chartRef.value) || echarts.init(chartRef.value, chartTheme)
   chart.setOption(props.option, true)
 }
 
@@ -202,11 +204,16 @@ function isLayoutPie(layout: unknown): layout is LayoutPie {
 
 onMounted(() => {
   renderChart()
+  if (chartRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(resizeChart)
+    resizeObserver.observe(chartRef.value)
+  }
   window.addEventListener('resize', resizeChart)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeChart)
+  resizeObserver?.disconnect()
   chart?.dispose()
   chart = null
   activeTouchPointers.clear()

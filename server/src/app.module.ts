@@ -18,6 +18,8 @@ import { TenantRealtimeModule } from './realtime/tenant-realtime.module'
 import { SharedPrepaidModule } from './shared-prepaid/shared-prepaid.module'
 import { FrontendPreferencesModule } from './frontend-preferences/frontend-preferences.module'
 import { CalculationDraftModule } from './calculation-drafts/calculation-draft.module'
+import { AiModule } from './ai/ai.module'
+import { LabTotalMonitorModule } from './lab-total-monitor/lab-total-monitor.module'
 
 @Module({
   imports: [
@@ -39,7 +41,9 @@ import { CalculationDraftModule } from './calculation-drafts/calculation-draft.m
     TenantRealtimeModule,
     SharedPrepaidModule,
     FrontendPreferencesModule,
-    CalculationDraftModule
+    CalculationDraftModule,
+    AiModule,
+    LabTotalMonitorModule
   ]
 })
 export class AppModule {}

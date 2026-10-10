@@ -114,6 +114,6 @@ async function reject(row: any) {
 </script>
 
 <style scoped>
-.todo-intro { padding-top: 0; color: #64748b; }
-.muted { color: #94a3b8; }
+.todo-intro { padding-top: 0; color: var(--ui-text-muted); }
+.muted { color: var(--ui-text-placeholder); }
 </style>

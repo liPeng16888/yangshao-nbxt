@@ -1,6 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { ADMIN_TOKEN_KEY, currentAdminUser } from './api'
+import { ADMIN_TOKEN_KEY, currentAdminUser, useAdminMocks } from './api'
 import LoginPage from './views/LoginPage.vue'
+import FeishuVerifyPage from '../../shared/ai/FeishuVerifyPage.vue'
+import { rememberFeishuReturn, feishuLoginReturn } from '../../shared/ai/feishuReturn'
 import AdminLayout from './views/AdminLayout.vue'
 import DataStatisticsPage from './views/DataStatisticsPage.vue'
 import FinanceReportsPage from './views/FinanceReportsPage.vue'
@@ -12,6 +14,8 @@ import MedicineInventoryPage from './views/MedicineInventoryPage.vue'
 import TodoPage from './views/TodoPage.vue'
 import EmployeeAttendancePage from './views/EmployeeAttendancePage.vue'
 import SharedPrepaidReadOnlyPage from './views/SharedPrepaidReadOnlyPage.vue'
+import AiSettingsPage from './views/AiSettingsPage.vue'
+import LabTotalMonitorPage from './views/LabTotalMonitorPage.vue'
 import { financeNavigationGroups } from './config/financeNavigation'
 import { employeeAttendanceNavigation } from './config/employeeAttendanceNavigation'
 import { prepaidNavigation } from './config/prepaidNavigation'
@@ -40,12 +44,14 @@ export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/login', component: LoginPage },
+    ...['bind', 'access'].map(kind => ({ path: `/ai/feishu/${kind}`, component: FeishuVerifyPage, props: { audience: 'admin', mocks: useAdminMocks, apiBase: import.meta.env.VITE_ADMIN_API_BASE_URL || '/api' } })),
     {
       path: '/',
       component: AdminLayout,
       children: [
         { path: '', redirect: '/data' },
         { path: 'data', component: DataStatisticsPage, meta: { title: '数据统计' } },
+        { path: 'lab-total-monitor', component: LabTotalMonitorPage, meta: { title: '合量监测' } },
         { path: 'employee-attendance', redirect: '/employee-attendance/schedules' },
         { path: 'employee-attendance/overview', redirect: '/employee-attendance/schedules' },
         ...employeeAttendanceRoutes,
@@ -59,6 +65,7 @@ export const router = createRouter({
         { path: 'medicine-inventory', component: MedicineInventoryPage, meta: { title: '药品库存' } },
         { path: 'abnormal', component: AbnormalRecordsPage, meta: { title: '异常记录' } },
         { path: 'accounts', component: AccountManagementPage, meta: { title: '账号管理', rootOnly: true } },
+        { path: 'ai-settings', component: AiSettingsPage, meta: { title: 'AI API 配置', rootOnly: true } },
         { path: 'blacklist', component: BlacklistPage, meta: { title: '客户黑名单' } }
       ]
     }
@@ -67,8 +74,11 @@ export const router = createRouter({
 
 router.beforeEach((to) => {
   const token = localStorage.getItem(ADMIN_TOKEN_KEY)
-  if (to.path !== '/login' && !token) return '/login'
-  if (to.path === '/login' && token) return '/data'
+  if (to.path !== '/login' && !token) {
+    if (to.path.startsWith('/ai/feishu/')) rememberFeishuReturn('admin', to.fullPath)
+    return '/login'
+  }
+  if (to.path === '/login' && token) return feishuLoginReturn('admin', true)
   if (to.meta.rootOnly && currentAdminUser()?.role !== 'ROOT_ADMIN') return '/data'
   return true
 })

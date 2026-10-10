@@ -352,7 +352,7 @@ function resetCreateForm() {
   right: 56px;
   left: 7px;
   overflow: hidden;
-  color: rgba(31, 41, 55, 0.3);
+  color: var(--ui-text-placeholder);
   font-size: 15px;
   line-height: 1;
   white-space: nowrap;
@@ -383,7 +383,7 @@ function resetCreateForm() {
   line-height: 1.35;
 
   strong {
-    color: #10233f;
+    color: var(--ui-text);
     font-size: 13px;
     white-space: normal;
     overflow-wrap: anywhere;
@@ -394,11 +394,11 @@ function resetCreateForm() {
     height: 24px;
     min-height: 24px;
     padding: 0;
-    color: #94a3b8;
+    color: var(--ui-text-placeholder);
 
     &:hover {
-      color: #dc2626;
-      background: #fee2e2;
+      color: var(--ui-danger);
+      background: var(--ui-danger-soft);
     }
   }
 }
@@ -452,7 +452,7 @@ function resetCreateForm() {
   min-height: 22px;
   width: auto;
   max-width: 100%;
-  color: #1f2937;
+  color: var(--ui-text);
   font-size: 15px;
   white-space: nowrap;
 }
@@ -481,15 +481,15 @@ function resetCreateForm() {
 
 :deep(.el-select__placeholder),
 :deep(.el-select__input::placeholder) {
-  color: rgba(31, 41, 55, 0.3);
+  color: var(--ui-text-placeholder);
   font-size: 15px;
-  -webkit-text-fill-color: rgba(31, 41, 55, 0.3);
+  -webkit-text-fill-color: var(--ui-text-placeholder);
 }
 
 :deep(.el-select__input) {
-  color: #1f2937;
+  color: var(--ui-text);
   font-size: 15px;
-  -webkit-text-fill-color: #1f2937;
+  -webkit-text-fill-color: var(--ui-text);
 }
 
 :global(.customer-create-dialog .el-form-item) {
@@ -507,24 +507,24 @@ function resetCreateForm() {
   min-height: 38px;
   padding: 1px 11px;
   background: #ffffff;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 6px;
   box-shadow: none;
 }
 
 :global(.customer-create-dialog .el-input__wrapper.is-focus) {
-  border-color: #2563eb;
+  border-color: var(--ui-accent);
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
 }
 
 :global(.customer-create-dialog .el-input__inner) {
-  color: #1f2937;
+  color: var(--ui-text);
   text-align: left;
-  -webkit-text-fill-color: #1f2937;
+  -webkit-text-fill-color: var(--ui-text);
 }
 
 :global(.customer-create-dialog .el-input__inner::placeholder) {
-  color: #94a3b8;
-  -webkit-text-fill-color: #94a3b8;
+  color: var(--ui-text-placeholder);
+  -webkit-text-fill-color: var(--ui-text-placeholder);
 }
 </style>

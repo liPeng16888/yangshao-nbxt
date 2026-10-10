@@ -155,10 +155,10 @@ watch(
   justify-content: space-between;
   gap: 12px;
   padding: 10px 14px;
-  color: #10233f;
+  color: var(--ui-text);
   text-align: left;
   background: #ffffff;
-  border: 1px solid #dce5ef;
+  border: 1px solid var(--ui-line);
   border-radius: 10px;
 
   span:first-child {
@@ -168,7 +168,7 @@ watch(
 
   span:last-child {
     flex: none;
-    color: #2563eb;
+    color: var(--ui-accent);
     font-weight: 600;
   }
 }
@@ -184,7 +184,7 @@ watch(
 
   h2 {
     margin: 0;
-    color: #334155;
+    color: var(--ui-text-secondary);
     font-size: 14px;
   }
 
@@ -219,7 +219,7 @@ watch(
   width: 100%;
   color: #ffffff;
   font-weight: 700;
-  background: #2563eb;
+  background: var(--ui-accent);
   border: 0;
   border-radius: 8px;
 }

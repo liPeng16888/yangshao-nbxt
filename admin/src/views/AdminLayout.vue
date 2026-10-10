@@ -2,7 +2,7 @@
   <div class="admin-shell" :class="{ 'admin-shell--sidebar-collapsed': sidebarCollapsed }">
     <aside class="admin-sidebar" :class="{ 'admin-sidebar--collapsed': sidebarCollapsed }">
       <div class="brand">
-        <span class="brand-mark">仰</span>
+        <BrandLogo class="brand-mark" :size="40" />
         <div class="brand-text">
           <strong>仰韶化验室</strong>
           <small>后台管理</small>
@@ -22,21 +22,31 @@
       <nav>
         <div v-for="item in navItems" :key="item.path" class="admin-nav-group">
           <el-tooltip :disabled="!sidebarCollapsed" :content="item.label" placement="right">
-            <router-link :to="item.path" class="admin-nav-link" :class="{ 'router-link-active': isActive(item) }">
-              <component :is="item.icon" class="admin-nav-link__icon" />
+            <router-link :to="item.path" :aria-label="item.label" class="admin-nav-link" :class="{ 'router-link-active': isActive(item) }">
+              <component :is="item.icon" class="admin-nav-link__icon" aria-hidden="true" />
               <span class="admin-nav-link__label">{{ item.label }}</span>
             </router-link>
           </el-tooltip>
-          <div v-if="!sidebarCollapsed && item.children?.length && isActive(item)" class="admin-nav-children">
-            <router-link
+          <div v-if="item.children?.length && isActive(item)" class="admin-nav-children">
+            <el-tooltip
               v-for="child in item.children"
               :key="child.path"
-              :to="child.path"
-              class="admin-nav-child"
-              :class="{ 'router-link-active': isChildActive(child) }"
+              :disabled="!sidebarCollapsed"
+              :content="child.label"
+              placement="right"
             >
-              {{ child.label }}
-            </router-link>
+              <router-link
+                :to="child.path"
+                :aria-label="child.label"
+                :aria-current="isChildActive(child) ? 'page' : undefined"
+                class="admin-nav-child"
+                active-class="admin-nav-child--auto-active"
+                :class="{ 'router-link-active': isChildActive(child) }"
+              >
+                <component :is="child.icon" class="admin-nav-child__icon" aria-hidden="true" />
+                <span class="admin-nav-child__label">{{ child.label }}</span>
+              </router-link>
+            </el-tooltip>
           </div>
         </div>
       </nav>
@@ -59,6 +69,7 @@
       </main>
     </section>
 
+    <AiAssistant v-if="user" :key="user.id" audience="admin" :actor-id="user.id" :api-base="aiApiBase" :mock-mode="useAdminMocks" />
     <el-dialog v-model="settingsVisible" title="账号设置" width="460px">
       <el-form label-position="top">
         <el-form-item label="登录账号">
@@ -92,8 +103,11 @@ import dayjs from 'dayjs'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Box, Calendar, Coin, DataAnalysis, DocumentChecked, Expand, Fold, Memo, Money, List, User } from '@element-plus/icons-vue'
-import { adminMe, currentAdminUser, logoutAdmin, updateAdminProfile } from '../api'
+import { Aim, Box, Calendar, Coin, DataAnalysis, Document, DocumentChecked, Expand, Fold, Memo, Money, List, Plus, Present, Switch, Tickets, Timer, User, Wallet, ChatDotRound } from '@element-plus/icons-vue'
+import { adminMe, currentAdminUser, logoutAdmin, updateAdminProfile, useAdminMocks } from '../api'
+import AiAssistant from '../../../shared/ai/AiAssistant.vue'
+import BrandLogo from '../../../shared/BrandLogo.vue'
+const aiApiBase = import.meta.env.VITE_ADMIN_API_BASE_URL || '/api'
 import type { AdminUser } from '../types'
 import { financeNavigationGroups } from '../config/financeNavigation'
 import { employeeAttendanceNavigation } from '../config/employeeAttendanceNavigation'
@@ -102,6 +116,8 @@ import { prepaidNavigation } from '../config/prepaidNavigation'
 interface NavChild {
   path: string
   label: string
+  icon: Component
+  matchPaths?: readonly string[]
 }
 
 interface NavItem {
@@ -130,27 +146,50 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'ys_admin_sidebar_collapsed'
 
 const title = computed(() => String(route.meta.title || '后台管理'))
 const nowText = computed(() => now.value.format('YYYY-MM-DD HH:mm:ss'))
+const attendanceIcons: Record<typeof employeeAttendanceNavigation[number]['page'], Component> = {
+  overview: DataAnalysis,
+  schedules: Calendar,
+  employees: User,
+  records: Timer,
+  leave: Document,
+  compensation: Present,
+  payroll: Money
+}
+const prepaidIcons: Record<typeof prepaidNavigation[number]['page'], Component> = {
+  recharges: Plus,
+  members: User,
+  consumptions: Tickets,
+  settlements: Switch
+}
 const navItems = computed<NavItem[]>(() => {
   const items = [
     { path: '/data', label: '数据统计', icon: DataAnalysis },
+    { path: '/lab-total-monitor', label: '合量监测', icon: Aim },
     {
       path: '/employee-attendance',
       label: '员工考勤',
       icon: Calendar,
-      children: employeeAttendanceNavigation.map(({ path, label }) => ({ path, label }))
+      children: employeeAttendanceNavigation.map(({ path, label, page }) => ({ path, label, icon: attendanceIcons[page] }))
     },
     {
       path: '/shared-prepaid',
       label: '预充值客户',
       icon: Coin,
-      children: prepaidNavigation.map(({ path, label }) => ({ path, label }))
+      children: prepaidNavigation.map(({ path, label, page }) => ({ path, label, icon: prepaidIcons[page] }))
     },
-    { path: '/finance', label: '财务报表', icon: Money, children: financeNavigationGroups.map(({ path, label }) => ({ path, label })) },
+    {
+      path: '/finance', label: '财务报表', icon: Money,
+      children: financeNavigationGroups.map(({ path, label, id, children }) => ({
+        path, label, icon: id === 'income' ? Wallet : Calendar,
+        matchPaths: children.map((child) => child.path)
+      }))
+    },
     { path: '/todos', label: '待办事项', icon: List },
     { path: '/customer-overview', label: '客户总览', icon: User },
     { path: '/medicine-inventory', label: '药品库存', icon: Box },
     { path: '/abnormal', label: '异常记录', icon: Memo },
     ...(user.value?.role === 'ROOT_ADMIN' ? [{ path: '/accounts', label: '账号管理', icon: User }] : []),
+    ...(user.value?.role === 'ROOT_ADMIN' ? [{ path: '/ai-settings', label: 'AI API 配置', icon: ChatDotRound }] : []),
     { path: '/blacklist', label: '客户黑名单', icon: DocumentChecked }
   ]
   return items
@@ -161,7 +200,7 @@ function isActive(item: NavItem) {
 }
 
 function isChildActive(child: NavChild) {
-  return route.path === child.path
+  return route.path === child.path || Boolean(child.matchPaths?.includes(route.path))
 }
 
 onMounted(async () => {
@@ -255,11 +294,15 @@ async function saveSettings() {
 }
 
 .admin-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
   min-height: 100vh;
   padding: 18px 14px;
-  background: #10243c;
+  background: var(--ui-text);
   color: #fff;
   overflow-x: hidden;
+  overflow-y: auto;
   transition: width 0.18s ease, padding 0.18s ease;
 }
 
@@ -274,14 +317,8 @@ async function saveSettings() {
 }
 
 .brand-mark {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
   width: 40px;
   height: 40px;
-  border-radius: 8px;
-  background: #d83d31;
-  font-weight: 700;
 }
 
 .brand-text {
@@ -307,7 +344,7 @@ async function saveSettings() {
   height: 30px;
   padding: 0;
   place-items: center;
-  color: #dbeafe;
+  color: var(--ui-accent-soft);
   background: rgba(15, 23, 42, 0.2);
   border: 1px solid rgba(226, 232, 240, 0.18);
   border-radius: 8px;
@@ -347,7 +384,7 @@ nav {
 .admin-nav-link:hover,
 .admin-nav-link.router-link-active {
   color: #fff;
-  background: #315273;
+  background: var(--ui-text-secondary);
 }
 
 .admin-nav-link__icon {
@@ -370,13 +407,28 @@ nav {
 }
 
 .admin-nav-child {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
   padding: 8px 12px;
   color: #9fb2ca;
   font-size: 13px;
   line-height: 1.3;
   text-decoration: none;
   border-radius: 5px;
+}
+
+.admin-nav-child__icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
+.admin-nav-link:focus-visible,
+.admin-nav-child:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
 }
 
 .admin-nav-child:hover,
@@ -416,8 +468,28 @@ nav {
   padding: 0;
 }
 
-.admin-sidebar--collapsed .admin-nav-link__label {
+.admin-sidebar--collapsed .admin-nav-link__label,
+.admin-sidebar--collapsed .admin-nav-child__label {
   display: none;
+}
+
+.admin-sidebar--collapsed .admin-nav-children {
+  gap: 4px;
+  margin: 6px 3px;
+  padding: 4px 0 4px 6px;
+  border-left: 1px solid var(--ui-accent-line);
+}
+
+.admin-sidebar--collapsed .admin-nav-child {
+  justify-content: center;
+  min-height: 36px;
+  padding: 0;
+  border-radius: 6px;
+}
+
+.admin-sidebar--collapsed .admin-nav-child.router-link-active {
+  color: var(--ui-surface);
+  background: var(--ui-accent);
 }
 
 .admin-sidebar--collapsed .admin-nav-link__icon {
@@ -439,7 +511,7 @@ nav {
   height: 76px;
   padding: 0 22px;
   background: rgba(255, 255, 255, 0.94);
-  border-bottom: 1px solid #d9e3ee;
+  border-bottom: 1px solid var(--ui-line);
 }
 
 h2 {
@@ -448,7 +520,7 @@ h2 {
 }
 
 .admin-topbar span {
-  color: #64748b;
+  color: var(--ui-text-muted);
   font-size: 13px;
 }
 
@@ -461,7 +533,7 @@ h2 {
 .topbar-actions .account-name {
   max-width: 140px;
   overflow: hidden;
-  color: #334155;
+  color: var(--ui-text-secondary);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -469,5 +541,59 @@ h2 {
 
 .admin-content {
   padding: 22px;
+}
+
+.admin-sidebar {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  border-right: 1px solid var(--ui-line);
+}
+.brand { border-bottom-color: var(--ui-line-soft); }
+.brand small { color: var(--ui-text-muted); }
+.sidebar-toggle {
+  color: var(--ui-text-muted);
+  background: var(--ui-surface);
+  border-color: var(--ui-line);
+}
+.sidebar-toggle:hover {
+  color: var(--ui-accent-hover);
+  background: var(--ui-accent-soft);
+  border-color: var(--ui-accent-line);
+}
+.admin-nav-link { color: var(--ui-text-secondary); }
+.admin-nav-link:hover, .admin-nav-link.router-link-active,
+.admin-nav-child:hover, .admin-nav-child.router-link-active {
+  color: var(--ui-accent-hover);
+  background: var(--ui-accent-soft);
+}
+.admin-nav-link__icon { width: 20px; height: 20px; }
+.admin-nav-child { color: var(--ui-text-muted); }
+.admin-topbar { height: auto; min-height: 76px; gap: 14px; padding-block: 14px; flex-wrap: wrap; }
+.topbar-actions { flex-wrap: wrap; }
+
+@media (max-width: 1000px) {
+  .admin-shell { --admin-sidebar-expanded-width: 194px; }
+  .brand { padding-right: 32px; gap: 8px; }
+  .brand strong { font-size: 14px; }
+  .admin-content { padding: 16px; }
+  .admin-topbar { padding-inline: 16px; }
+}
+@media (max-width: 700px) {
+  .admin-shell { --admin-sidebar-expanded-width: 150px; --admin-sidebar-collapsed-width: 56px; }
+  .admin-sidebar { padding-inline: 8px; }
+  .brand { height: auto; min-height: 98px; padding: 0 0 12px; flex-wrap: wrap; }
+  .brand-mark { width: 32px; height: 32px; }
+  .brand-text { flex-basis: calc(100% - 40px); }
+  .brand strong { font-size: 12px; }
+  .brand small { font-size: 11px; }
+  .sidebar-toggle { position: static; margin-left: auto; }
+  .admin-nav-link { padding-inline: 8px; font-size: 13px; gap: 8px; }
+  .admin-nav-link__icon { width: 18px; height: 18px; }
+  .admin-nav-children { margin-left: 14px; }
+  .admin-nav-child { padding: 8px; font-size: 12px; }
+  .admin-topbar { padding: 12px; }
+  .admin-topbar h2 { font-size: 18px; }
+  .topbar-actions { gap: 8px; }
+  .admin-content { padding: 12px; }
 }
 </style>

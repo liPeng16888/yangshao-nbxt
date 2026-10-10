@@ -6,6 +6,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import LabDataPage from './LabDataPage.vue'
 import type { CreateLabSampleChangeRequestPayload, LabSampleChangeRequestDetail, LabSampleChangeRequestSummary } from '@/types/labSampleChangeRequest'
 
+vi.mock('@/api/labTotalMonitor', () => ({
+  getLabTotalMonitorConfig: vi.fn(async (frontendUserId: string) => ({ frontendUserId, version: 0, rules: [], updatedAt: null }))
+}))
+
 const mocks = vi.hoisted(() => ({
   route: {
     query: {} as Record<string, string>
@@ -115,6 +119,7 @@ function mountPage() {
       selectionMode: { type: Boolean, default: false },
       selectedBlockIds: { type: Array, default: () => [] },
       sheetDate: { type: String, default: '' },
+      canViewCompletedSensitiveData: { type: Boolean, default: false },
       sampleChangeRequests: { type: Object, default: () => ({}) },
       sampleChangeLoading: { type: Boolean, default: false },
       highlightRetestId: { type: String, default: '' },
@@ -129,6 +134,7 @@ function mountPage() {
         h('div', {
           class: 'lab-grid-stub',
           'data-readonly': String(props.readonly),
+          'data-completed-visible': String(props.canViewCompletedSensitiveData),
           'data-highlight-retest-id': props.highlightRetestId,
           'data-pending-retest-actions': props.pendingRetestActionIds.join(',')
         }, [
@@ -248,6 +254,7 @@ function mountPage() {
       selectionMode: { type: Boolean, default: false },
       selectedBlockIds: { type: Array, default: () => [] },
       highlightRetestId: { type: String, default: '' },
+      canViewCompletedSensitiveData: { type: Boolean, default: false },
       pendingRetestActionIds: { type: Array, default: () => [] }
     },
     emits: ['selectionChange', 'saveNext', 'retestUpdate', 'retestFieldCommit', 'retestDelete', 'retestVoid'],
@@ -255,6 +262,7 @@ function mountPage() {
       return () => h('div', {
         class: 'mobile-lab-list-stub',
         'data-readonly': String(props.readonly),
+        'data-completed-visible': String(props.canViewCompletedSensitiveData),
         'data-highlight-retest-id': props.highlightRetestId,
         'data-pending-retest-actions': props.pendingRetestActionIds.join(',')
       }, [
@@ -1254,6 +1262,78 @@ describe('LabDataPage table layout', () => {
     expect(mocks.labStore.patchBlock).toHaveBeenCalledWith('block-1', { completed: true })
     expect(mocks.labStore.patchBlock).not.toHaveBeenCalledWith('block-2', expect.anything())
     expect(mocks.labStore.persistAllBlocks).toHaveBeenCalledWith({ silent: true })
+  })
+
+  it.each([false, true])('conceals completed data until explicitly viewed (mobile=%s)', async (mobile) => {
+    mocks.mobileLayout.isMobileLayout.value = mobile
+    mocks.labStore.sampleBlocks[0].inputs.completed = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+    const grid = () => wrapper.find(mobile ? '.mobile-lab-list-stub' : '.lab-grid-stub')
+
+    expect(grid().attributes('data-completed-visible')).toBe('false')
+    if (mobile) await wrapper.find('.mobile-toolbar-summary').trigger('click')
+    await findButtonByText(wrapper, '查看加密数据').trigger('click')
+    await flushPromises()
+
+    expect(mocks.accessGuard.requestFeatureAccess).toHaveBeenCalledWith('COMPLETED_SAMPLE_DATA', expect.objectContaining({ onSuccess: expect.any(Function) }))
+    expect(grid().attributes('data-completed-visible')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('keeps completed data concealed while access verification is pending', async () => {
+    mocks.labStore.sampleBlocks[0].inputs.completed = true
+    mocks.accessGuard.hasFeatureAccess.mockReturnValue(false)
+    const wrapper = mountPage()
+    await settleMountedPage()
+    mocks.accessGuard.requestFeatureAccess.mockReturnValue(false)
+    mocks.labStore.loadSheetByDate.mockClear()
+
+    await findButtonByText(wrapper, '查看加密数据').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.lab-grid-stub').attributes('data-completed-visible')).toBe('false')
+    expect(mocks.labStore.loadSheetByDate).not.toHaveBeenCalled()
+
+    const options = (mocks.accessGuard.requestFeatureAccess.mock.calls.at(-1) as unknown as [string, { onSuccess: () => Promise<void> }])[1]
+    mocks.accessGuard.hasFeatureAccess.mockReturnValue(true)
+    await options.onSuccess()
+    await flushPromises()
+    expect(wrapper.find('.lab-grid-stub').attributes('data-completed-visible')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('conceals data again when an already completed sample is marked complete', async () => {
+    mocks.labStore.sampleBlocks[0].inputs.completed = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+    await findButtonByText(wrapper, '查看加密数据').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.lab-grid-stub').attributes('data-completed-visible')).toBe('true')
+
+    await findButtonByText(wrapper, '标记样品完成').trigger('click')
+    await wrapper.find('.sample-completion-apply').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.lab-grid-stub').attributes('data-completed-visible')).toBe('false')
+    expect(mocks.labStore.persistAllBlocks).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('does not reveal completed data for an access callback from a previous account', async () => {
+    mocks.labStore.sampleBlocks[0].inputs.completed = true
+    const wrapper = mountPage()
+    await settleMountedPage()
+    mocks.accessGuard.requestFeatureAccess.mockReturnValue(false)
+    await findButtonByText(wrapper, '查看加密数据').trigger('click')
+    await flushPromises()
+    const options = (mocks.accessGuard.requestFeatureAccess.mock.calls.at(-1) as unknown as [string, { onSuccess: () => Promise<void> }])[1]
+    authUserState.id = 'other-user'
+    await nextTick()
+    mocks.labStore.loadSheetByDate.mockClear()
+    await options.onSuccess()
+    await flushPromises()
+    expect(wrapper.find('.lab-grid-stub').attributes('data-completed-visible')).toBe('false')
+    expect(mocks.labStore.loadSheetByDate).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('places 样品复样 immediately before 标记样品完成 and creates the selected parents', async () => {

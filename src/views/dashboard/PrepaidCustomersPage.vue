@@ -54,11 +54,11 @@
       </div>
       <el-table v-else :data="store.membersPage.items" border v-loading="store.loadingByPage.members" empty-text="暂无预存款客户">
         <el-table-column prop="phone" label="会员手机号" width="145" />
-        <el-table-column label="充值本金" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.paidTotal) }}</template></el-table-column>
+        <el-table-column align="right" label="充值本金" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.paidTotal) }}</template></el-table-column>
         <el-table-column label="赠送总额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.giftTotal) }}</template></el-table-column>
-        <el-table-column label="充值合计" width="120"><template #default="{ row }">¥{{ prepaidMoney(Number(row.paidTotal) + Number(row.giftTotal)) }}</template></el-table-column>
+        <el-table-column align="right" label="充值合计" width="120"><template #default="{ row }">¥{{ prepaidMoney(Number(row.paidTotal) + Number(row.giftTotal)) }}</template></el-table-column>
         <el-table-column label="消费总额" width="120"><template #default="{ row }">¥{{ prepaidMoney(row.consumedTotal) }}</template></el-table-column>
-        <el-table-column label="当前余额" width="125"><template #default="{ row }"><strong>¥{{ prepaidMoney(row.balance) }}</strong></template></el-table-column>
+        <el-table-column align="right" label="当前余额" width="125"><template #default="{ row }"><strong>¥{{ prepaidMoney(row.balance) }}</strong></template></el-table-column>
         <el-table-column label="余额归属构成" min-width="240">
           <template #default="{ row }">
             <div v-if="row.ownerComposition.length" class="composition-list">
@@ -107,10 +107,10 @@
           <h3>充值批次与剩余金额</h3>
           <el-table :data="store.selectedMember.recharges" border empty-text="暂无充值批次">
             <el-table-column label="类型" width="100"><template #default="{ row }">{{ row.isOpeningBalance ? '期初余额' : '普通充值' }}</template></el-table-column>
-            <el-table-column label="充值本金" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.paidAmount) }}</template></el-table-column>
-            <el-table-column label="赠送金额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.giftAmount) }}</template></el-table-column>
+            <el-table-column align="right" label="充值本金" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.paidAmount) }}</template></el-table-column>
+            <el-table-column align="right" label="赠送金额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.giftAmount) }}</template></el-table-column>
             <el-table-column label="批次总额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.totalAmount) }}</template></el-table-column>
-            <el-table-column label="剩余金额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.remainingAmount) }}</template></el-table-column>
+            <el-table-column align="right" label="剩余金额" width="115"><template #default="{ row }">¥{{ prepaidMoney(row.remainingAmount) }}</template></el-table-column>
             <el-table-column label="归属主账号" min-width="170"><template #default="{ row }">{{ prepaidAccountLabel({ username: row.ownerUsername, account: row.ownerAccount }) }}</template></el-table-column>
             <el-table-column label="实际操作账号" min-width="170"><template #default="{ row }">{{ prepaidAccountLabel({ username: row.actorUsername, account: row.actorAccount }) }}</template></el-table-column>
             <el-table-column prop="rechargeDate" label="充值日期" width="120" />
@@ -130,9 +130,9 @@
           <h3>消费与冲正历史</h3>
           <el-table :data="store.selectedMember.consumptions" border empty-text="暂无消费与冲正历史">
             <el-table-column label="类型" width="100"><template #default="{ row }">{{ row.kind === 'REVERSAL' ? '消费冲正' : '预存款消费' }}</template></el-table-column>
-            <el-table-column label="金额" width="110"><template #default="{ row }">¥{{ prepaidMoney(row.amount) }}</template></el-table-column>
+            <el-table-column align="right" label="金额" width="110"><template #default="{ row }">¥{{ prepaidMoney(row.amount) }}</template></el-table-column>
             <el-table-column prop="sampleNumberSnapshot" label="样品编号" width="120" />
-            <el-table-column prop="sampleCountSnapshot" label="样品数量" width="100" />
+            <el-table-column align="right" prop="sampleCountSnapshot" label="样品数量" width="100" />
             <el-table-column label="检测元素" min-width="170"><template #default="{ row }">{{ prepaidFormatElements(row.elementsSnapshot) }}</template></el-table-column>
             <el-table-column label="消费账号" min-width="170"><template #default="{ row }">{{ prepaidAccountLabel(row.consumingFrontendUser) }}</template></el-table-column>
             <el-table-column label="实际操作账号" min-width="170"><template #default="{ row }">{{ prepaidAccountLabel(row.actorUser) }}</template></el-table-column>
@@ -152,7 +152,7 @@
           <h3>账本审计历史</h3>
           <el-table :data="store.selectedMember.ledgerEntries" border empty-text="暂无账本审计记录">
             <el-table-column label="流水类型" width="140"><template #default="{ row }">{{ ledgerKindLabel(row.kind) }}</template></el-table-column>
-            <el-table-column label="余额变动" width="120"><template #default="{ row }">{{ signedMoney(row.balanceDelta) }}</template></el-table-column>
+            <el-table-column align="right" label="余额变动" width="120"><template #default="{ row }">{{ signedMoney(row.balanceDelta) }}</template></el-table-column>
             <el-table-column prop="ownerFrontendUserId" label="资金归属主账号" min-width="160" />
             <el-table-column prop="actorUserId" label="实际操作账号" min-width="160" />
             <el-table-column prop="reason" label="原因" min-width="180" />
@@ -303,7 +303,7 @@ function ledgerKindLabel(kind: PrepaidLedgerKind) {
 <style scoped>
 .customers-header { align-items: flex-start; }
 .customer-filters { display: flex; flex-wrap: wrap; gap: 8px; }
-.filter-field { display: grid; gap: 4px; color: #475569; font-size: 12px; }
+.filter-field { display: grid; gap: 4px; color: var(--ui-text-secondary); font-size: 12px; }
 .customer-filters :deep(.el-input) { width: 230px; }
 .customer-alert { margin: 14px 16px 0; }
 .composition-list { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -311,19 +311,19 @@ function ledgerKindLabel(kind: PrepaidLedgerKind) {
 .detail-stack { display: grid; gap: 20px; }
 .detail-stack h3 { margin: 0 0 10px; font-size: 15px; }
 .member-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.member-summary > div { display: grid; gap: 6px; padding: 12px 14px; background: #f8fafc; border: 1px solid #dce5ef; border-radius: 8px; }
-.member-summary span { color: #64748b; font-size: 13px; }
+.member-summary > div { display: grid; gap: 6px; padding: 12px 14px; background: var(--ui-surface-subtle); border: 1px solid var(--ui-line); border-radius: 8px; }
+.member-summary span { color: var(--ui-text-muted); font-size: 13px; }
 .member-summary strong { font-size: 18px; }
 .mobile-member-list, .mobile-member-detail, .mobile-member-detail section { display: grid; gap: 12px; }
 .mobile-member-list { padding: 12px; }
-.mobile-member-card, .mobile-history-card { display: grid; gap: 8px; padding: 14px; border: 1px solid #dce5ef; border-radius: 12px; background: #fff; }
+.mobile-member-card, .mobile-history-card { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--ui-line); border-radius: 12px; background: #fff; }
 .mobile-member-card header, .mobile-member-detail > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.mobile-member-card p { margin: 0; color: #64748b; font-size: 13px; }
+.mobile-member-card p { margin: 0; color: var(--ui-text-muted); font-size: 13px; }
 .mobile-member-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.mobile-member-summary span { display: grid; gap: 3px; padding: 9px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 12px; }
-.mobile-member-summary strong { color: #0f172a; font-size: 15px; }
+.mobile-member-summary span { display: grid; gap: 3px; padding: 9px; border-radius: 8px; background: var(--ui-surface-subtle); color: var(--ui-text-muted); font-size: 12px; }
+.mobile-member-summary strong { color: var(--ui-text); font-size: 15px; }
 .mobile-member-detail h2, .mobile-member-detail h3 { margin: 0; }
-.mobile-history-card span { color: #64748b; font-size: 13px; overflow-wrap: anywhere; }
+.mobile-history-card span { color: var(--ui-text-muted); font-size: 13px; overflow-wrap: anywhere; }
 .mobile-filter-drawer .filter-field :deep(.el-input) { width: 100%; min-height: 44px; }
 @media (max-width: 900px) { .customers-header { flex-direction: column; } .customer-filters { width: 100%; } .member-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .customer-filters :deep(.el-input) { width: 100%; } .member-summary { grid-template-columns: 1fr; } }

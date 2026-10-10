@@ -7,6 +7,206 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// AI has no database credentials of its own. Business access is enforced by AiService.
+model AiFeishuConfig {
+  id              String   @id @default("global")
+  appId           String   @default("")
+  appSecretCipher String   @default("")
+  publicSiteUrl   String   @default("")
+  enabled         Boolean  @default(false)
+  revision        Int      @default(1)
+  workerId        String?
+  workerUntil     DateTime?
+  updatedAt       DateTime @updatedAt
+}
+
+model AiFeishuBinding {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  appId          String
+  tenantKey      String
+  openId         String
+  chatId         String
+  defaultModelId String
+  roleSnapshot   String
+  ownerSnapshot  String
+  enabled        Boolean  @default(true)
+  revokedAt      DateTime?
+  revision       Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  @@index([appId, tenantKey, openId])
+}
+
+model AiFeishuInvitation {
+  id             String   @id @default(uuid())
+  userId         String
+  defaultModelId String
+  appId          String
+  codeHash       String   @unique
+  proofHash      String?  @unique
+  tenantKey      String?
+  openId         String?
+  chatId         String?
+  expiresAt      DateTime
+  claimedAt      DateTime?
+  usedAt         DateTime?
+  createdAt      DateTime @default(now())
+  @@index([userId, expiresAt])
+}
+
+model AiFeishuSession {
+  id                  String   @id @default(uuid())
+  appId               String
+  tenantKey           String
+  openId              String
+  chatId              String
+  bindingId           String?
+  ownerId             String?
+  conversationId      String?
+  revision            Int      @default(1)
+  authorityHash       String?
+  grantsCipher        String?
+  accessProofHash     String?  @unique
+  accessProofExpiresAt DateTime?
+  updatedAt           DateTime @updatedAt
+  @@unique([appId, tenantKey, openId, chatId])
+}
+
+model AiFeishuAction {
+  id              String   @id @default(uuid())
+  tokenHash       String   @unique
+  sessionId       String
+  sessionRevision Int
+  bindingId       String?
+  bindingRevision Int?
+  configRevision  Int
+  kind            String
+  targetId        String?
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  @@index([sessionId, expiresAt])
+}
+
+// Both inbound and outbound bodies are encrypted; retries only resend saved results.
+model AiFeishuEvent {
+  sequence       Int      @unique @default(autoincrement())
+  id             String   @id @default(uuid())
+  appId          String
+  configRevision Int
+  eventKey       String
+  chatId         String
+  tenantKey      String
+  openId         String
+  inputCipher    String
+  outputCipher   String?
+  status         String   @default("PENDING")
+  attempts       Int      @default(0)
+  nextAttemptAt  DateTime @default(now())
+  startedAt      DateTime?
+  lastError      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  @@unique([appId, eventKey])
+  @@index([status, nextAttemptAt, createdAt])
+}
+
+model AiSettings {
+  id               String   @id @default("global")
+  enabled          Boolean  @default(false)
+  revision         Int      @default(1)
+  dailyRequestLimit Int      @default(50)
+  blockedFields    Json     @default("{}")
+  updatedAt        DateTime @updatedAt
+}
+
+model AiModel {
+  id            String   @id @default(uuid())
+  name          String
+  modelId       String
+  baseUrl       String
+  apiKeyCipher  String
+  enabled       Boolean  @default(true)
+  vision        Boolean  @default(false)
+  tools         Boolean  @default(true)
+  allowedUserIds Json    @default("[]")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model AiPolicy {
+  subjectId String   @id
+  enabled   Boolean  @default(true)
+  rules     Json     @default("[]")
+  updatedAt DateTime @updatedAt
+}
+
+model AiConversation {
+  id                String   @id @default(uuid())
+  actorId           String
+  ownerId           String
+  modelId           String
+  settingsRevision  Int
+  authorizationHash String
+  processingUntil   DateTime?
+  title             String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  messages          AiMessage[]
+  proposals         AiProposal[]
+  @@index([actorId, ownerId, updatedAt])
+}
+
+model AiMessage {
+  id             String   @id @default(uuid())
+  conversationId String
+  role           String
+  content        String
+  createdAt      DateTime @default(now())
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  @@index([conversationId, createdAt])
+}
+
+model AiProposal {
+  id             String   @id @default(uuid())
+  conversationId String
+  actorId        String
+  ownerId        String
+  resource       String
+  operation      String
+  payload        Json
+  preview        Json
+  status         String   @default("PENDING")
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  resolvedAt     DateTime?
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  @@index([actorId, status])
+}
+
+model AiAttachment {
+  id        String   @id @default(uuid())
+  actorId   String
+  mediaType String
+  bytes     Bytes
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  @@index([actorId, expiresAt])
+}
+
+model AiAuditLog {
+  id        String   @id @default(uuid())
+  actorId   String
+  ownerId   String?
+  modelId   String?
+  action    String
+  resource  String?
+  proposalId String?
+  detail    Json     @default("{}")
+  createdAt DateTime @default(now())
+  @@index([actorId, createdAt])
+}
+
 enum UserRole {
   ROOT_ADMIN
   SUB_ADMIN
@@ -283,6 +483,8 @@ model User {
   ownedSharedPrepaidSettlementActions SharedPrepaidSettlementAction[] @relation("SharedPrepaidSettlementActionOwner")
   ownedFrontendBusinessPreferences    FrontendBusinessPreference[]    @relation("FrontendBusinessPreferenceOwner")
   updatedFrontendBusinessPreferences  FrontendBusinessPreference[]    @relation("FrontendBusinessPreferenceActor")
+  labTotalMonitorSetting              LabTotalMonitorSetting?        @relation("LabTotalMonitorOwner")
+  updatedLabTotalMonitorSettings      LabTotalMonitorSetting[]       @relation("LabTotalMonitorActor")
   parentFrontendUser                  User?                           @relation("FrontendSubAccounts", fields: [parentFrontendUserId], references: [id], onDelete: Restrict)
   frontendSubAccounts                 User[]                          @relation("FrontendSubAccounts")
   frontendSubAccountPermissions       FrontendSubAccountPermission[]
@@ -294,6 +496,18 @@ model User {
   @@index([role])
   @@index([parentFrontendUserId])
   @@index([deletedAt])
+}
+
+model LabTotalMonitorSetting {
+  frontendUserId String   @id
+  rules          Json
+  version        Int      @default(1)
+  updatedById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  frontendUser User @relation("LabTotalMonitorOwner", fields: [frontendUserId], references: [id], onDelete: Restrict)
+  updatedBy    User @relation("LabTotalMonitorActor", fields: [updatedById], references: [id], onDelete: Restrict)
 }
 
 model FrontendBusinessPreference {

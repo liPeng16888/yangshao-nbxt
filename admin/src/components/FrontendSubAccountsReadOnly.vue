@@ -67,11 +67,11 @@ function formatDate(value?: string | null) {
 .subaccount-card { padding: 12px 14px; border: 1px solid #dce6f2; border-radius: 6px; background: #fff; }
 .subaccount-card + .subaccount-card { margin-top: 10px; }
 .identity { display: flex; align-items: center; gap: 10px; }
-.identity > span { color: #64748b; }
-.detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 10px; color: #334155; }
+.identity > span { color: var(--ui-text-muted); }
+.detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 10px; color: var(--ui-text-secondary); }
 .detail-grid span, .permission-groups > span { display: block; margin-bottom: 3px; color: #8290a4; font-size: 12px; }
 .permission-groups { margin-top: 10px; }
 .permission-list { display: flex; flex-wrap: wrap; gap: 6px 18px; }
-.permission-list p { margin: 0; color: #475569; }
-.permission-groups em { color: #94a3b8; font-style: normal; }
+.permission-list p { margin: 0; color: var(--ui-text-secondary); }
+.permission-groups em { color: var(--ui-text-placeholder); font-style: normal; }
 </style>

@@ -33,7 +33,10 @@ describe('customer navigation', () => {
 
   it('describes every non-redirect authenticated customer route exactly once', () => {
     const authenticatedRoutePaths = router.getRoutes()
-      .filter((route) => !['/', '/no-menu-permission'].includes(route.path) && route.meta.requiresAuth && !route.redirect)
+      .filter((route) => !['/', '/no-menu-permission'].includes(route.path)
+        && route.meta.requiresAuth
+        && route.meta.customerNavigation !== false
+        && !route.redirect)
       .map((route) => route.path)
 
     const navigationTargets = new Set(navigationSections.flatMap((section) => [

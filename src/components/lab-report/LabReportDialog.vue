@@ -178,7 +178,7 @@
 
     <template #footer>
       <el-button @click="handleDialogClose">关闭</el-button>
-      <el-button v-if="step === 'elements'" type="primary" @click="createPreview">生成预览</el-button>
+      <el-button v-if="step === 'elements'" type="primary" :loading="generatingPreview" @click="createPreview">生成预览</el-button>
       <el-button v-else type="primary" :loading="exportingReport" @click="downloadCurrentReport">{{ reportExportButtonText }}</el-button>
     </template>
   </el-dialog>
@@ -243,6 +243,7 @@ const props = defineProps<{
   template: LabReportTemplate
   date: string
   mobile?: boolean
+  beforeGenerate?: (blocks: SampleBlock[], kind: 'report' | 'sms') => Promise<boolean>
 }>()
 
 const emit = defineEmits<{
@@ -256,6 +257,7 @@ const selectionMap = ref<Record<string, LabReportElementKey[]>>({})
 const bulkElementKeys = ref<LabReportElementKey[]>([])
 const draft = ref<LabReportDraft | null>(null)
 const exportingReport = ref(false)
+const generatingPreview = ref(false)
 const sampleUnitsSaving = ref(false)
 const sampleUnitsResolving = ref(false)
 const savedSampleUnits = ref<string[]>([])
@@ -391,7 +393,9 @@ function clearAllSelections() {
   selectionMap.value = nextSelections
 }
 
-function createPreview() {
+async function createPreview() {
+  if (generatingPreview.value) return
+  const blocks = JSON.parse(JSON.stringify(selectedBlocks.value)) as SampleBlock[]
   const selections = selectedBlocks.value.map((block) => ({
     blockId: block.id,
     elementKeys: selectionMap.value[block.id] || []
@@ -400,8 +404,13 @@ function createPreview() {
     ElMessage.warning('请至少选择一个检测元素')
     return
   }
-  draft.value = createReportDraft(selectedBlocks.value, selections, props.template, props.date)
-  step.value = 'preview'
+  generatingPreview.value = true
+  try {
+    if (props.beforeGenerate && !await props.beforeGenerate(blocks, 'report')) return
+    if (!props.visible) return
+    draft.value = createReportDraft(blocks, selections, props.template, props.date)
+    step.value = 'preview'
+  } finally { generatingPreview.value = false }
 }
 
 async function saveCurrentSampleUnit() {

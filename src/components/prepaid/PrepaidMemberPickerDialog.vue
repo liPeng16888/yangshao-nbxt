@@ -248,7 +248,7 @@ function readErrorMessage(error: unknown) {
   margin: 14px 0;
   border: 1px solid #dbe5ef;
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--ui-surface-subtle);
 }
 
 .member-summary > div {
@@ -259,12 +259,12 @@ function readErrorMessage(error: unknown) {
 .member-summary span,
 .balance-preview span,
 .advisory {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .member-summary strong,
 .balance-preview strong {
-  color: #0f172a;
+  color: var(--ui-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -273,13 +273,13 @@ function readErrorMessage(error: unknown) {
 }
 
 .balance-preview--insufficient {
-  border-color: #fecaca;
+  border-color: var(--ui-danger-line);
   background: #fff7f7;
 }
 
 .balance-preview__warning {
   margin-left: auto;
-  color: #dc2626 !important;
+  color: var(--ui-danger) !important;
   font-weight: 600;
 }
 

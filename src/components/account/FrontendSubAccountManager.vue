@@ -360,7 +360,7 @@ function formatDate(value?: string | null) {
 }
 
 .permission-summary {
-  color: #475569;
+  color: var(--ui-text-secondary);
 }
 
 .form-grid {
@@ -373,7 +373,7 @@ function formatDate(value?: string | null) {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #475569;
+  color: var(--ui-text-secondary);
 }
 
 .permission-tree-wrap {
@@ -383,7 +383,7 @@ function formatDate(value?: string | null) {
   padding: 12px 14px;
   border: 1px solid #dfe7f1;
   border-radius: 6px;
-  background: #f8fbff;
+  background: var(--ui-surface-subtle);
 }
 
 .permission-tree-wrap p {

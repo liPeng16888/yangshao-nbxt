@@ -24,6 +24,6 @@ const accountId = computed(() => {
 
 <style scoped lang="scss">
 .standard-account-pending {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 </style>

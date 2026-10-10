@@ -250,7 +250,16 @@
               <NumberInputCell :block-id="block.id" field="aluminumRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumRaw', value)" />
               <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="aluminumAdjust" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.aluminumAdjust" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'aluminumAdjust', value)" />
               <FormulaCell class="cell--rowspan-2" :value="block.results.aluminumSiliconRatio" />
-              <FormulaCell class="cell--rowspan-2" :value="block.results.total" />
+              <FormulaCell
+                class="cell--rowspan-2"
+                :class="{ 'cell--total-abnormal': totalAssessment(block).abnormal }"
+                :data-total-status="totalAssessment(block).status"
+                :data-block-id="block.id"
+                data-field="total"
+                :title="totalAssessmentMessage(totalAssessment(block))"
+                :aria-label="totalAssessment(block).abnormal ? `合量异常：${totalAssessmentMessage(totalAssessment(block))}` : '合量'"
+                :value="block.results.total"
+              />
               <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="sulfur" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.sulfur" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'sulfur', value)" />
               <NumberInputCell :block-id="block.id" field="densityRaw" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.densityRaw" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'densityRaw', value)" />
               <NumberInputCell class="cell--rowspan-2" :block-id="block.id" field="whiteness" :blocked="isCalculationBlocked(block)" :blocked-message="getCalculationBlockMessage(block)" :disabled="isDisabled(block)" :value="block.inputs.whiteness" @blocked="warnCalculationPrerequisite" @update="(value) => updateNumber(block.id, 'whiteness', value)" />
@@ -418,9 +427,11 @@ import {
   samplePaymentStatusOptions as sharedPaymentStatusOptions
 } from '@/utils/labSampleRules'
 import { hasRetestInput } from '@/utils/sampleRetest'
+import { assessLabTotal, totalAssessmentMessage, type LabTotalMonitorRule } from '../../../server/src/common/lab-total-monitor'
 
 const props = defineProps<{
   blocks: SampleBlock[]
+  monitorRules?: LabTotalMonitorRule[]
   readonly?: boolean
   selectionMode?: boolean
   selectedBlockIds?: string[]
@@ -447,6 +458,8 @@ const emit = defineEmits<{
   retestDelete: [sampleBlockId: string, retestId: string]
   retestVoid: [sampleBlockId: string, retestId: string]
 }>()
+
+function totalAssessment(block: SampleBlock) { return assessLabTotal(block, props.monitorRules || []) }
 
 export type LabGridScrollState = {
   left: number
@@ -949,6 +962,12 @@ const FormulaCell = defineComponent({
 </script>
 
 <style scoped lang="scss">
+.cell.cell--formula.cell--total-abnormal {
+  color: var(--ui-danger);
+  background: var(--ui-danger-soft);
+  box-shadow: inset 0 0 0 1px var(--ui-danger-line);
+}
+
 .lab-grid-panel {
   min-width: 0;
   overflow: hidden;
@@ -974,7 +993,7 @@ const FormulaCell = defineComponent({
 
 .lab-grid-zoom-value {
   width: 42px;
-  color: #475569;
+  color: var(--ui-text-secondary);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -1011,24 +1030,31 @@ const FormulaCell = defineComponent({
   padding: 2px;
   font-size: 15px;
   text-align: center;
-  border: 1px solid #111827;
+  border: 1px solid var(--ui-grid-line);
   border-right: 0;
   border-bottom: 0;
 
   &:nth-child(23n) {
-    border-right: 1px solid #111827;
+    border-right: 1px solid var(--ui-grid-line);
   }
 }
 
 .cell--header {
   min-height: 34px;
-  background: #ebf3ff;
+  background: var(--ui-accent-soft);
+  border-top-color: var(--ui-grid-group-line);
   font-weight: 600;
 }
 
 .cell--input {
   position: relative;
   background: #ffffff;
+}
+
+.lab-grid :deep(.el-input__wrapper.is-focus),
+.lab-grid :deep(.el-select__wrapper.is-focused) {
+  background: var(--ui-surface);
+  box-shadow: inset 0 0 0 1px var(--ui-accent), var(--ui-focus);
 }
 
 .prepaid-picker-trigger {
@@ -1038,7 +1064,7 @@ const FormulaCell = defineComponent({
   place-content: center;
   gap: 1px;
   padding: 2px 6px;
-  color: #0f172a;
+  color: var(--ui-text);
   background: transparent;
   border: 0;
   cursor: pointer;
@@ -1048,7 +1074,7 @@ const FormulaCell = defineComponent({
   }
 
   span {
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 11px;
   }
 
@@ -1058,7 +1084,7 @@ const FormulaCell = defineComponent({
 }
 
 .cell--blocked {
-  background: #f8fafc;
+  background: var(--ui-surface-subtle);
   cursor: not-allowed;
 }
 
@@ -1082,7 +1108,7 @@ const FormulaCell = defineComponent({
   width: 14px;
   height: 14px;
   color: #ffffff;
-  background: #dc2626;
+  background: var(--ui-danger);
   border-radius: 50%;
   box-shadow: 0 0 0 1px #ffffff;
   font-size: 11px;
@@ -1091,11 +1117,11 @@ const FormulaCell = defineComponent({
 }
 
 .cell--required {
-  background: #fff7ed;
+  background: var(--ui-warning-soft);
 }
 
 .cell--required-label {
-  color: #c00000;
+  color: var(--ui-danger);
 }
 
 .cell--split {
@@ -1132,10 +1158,10 @@ const FormulaCell = defineComponent({
   justify-content: center;
   gap: 1px;
   padding: 2px;
-  color: #174a7a;
-  background: #edf7ff;
-  border-top: 1px solid #111827;
-  border-bottom: 1px solid #111827;
+  color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+  border-top: 1px solid var(--ui-grid-line);
+  border-bottom: 1px solid var(--ui-grid-line);
 
   strong {
     font-size: 14px;
@@ -1146,25 +1172,25 @@ const FormulaCell = defineComponent({
   }
 
   &.is-void {
-    color: #64748b;
-    background: #eef2f6;
+    color: var(--ui-text-muted);
+    background: var(--ui-surface-subtle);
   }
 }
 
 .sample-retest-identity__action {
   min-height: 20px;
   padding: 1px 8px;
-  color: #2563eb;
+  color: var(--ui-accent);
   background: #ffffff;
-  border: 1px solid #bfdbfe;
+  border: 1px solid var(--ui-accent-line);
   border-radius: 4px;
   cursor: pointer;
   font-size: 10px;
   line-height: 1;
 
   &:disabled {
-    color: #64748b;
-    background: #f1f5f9;
+    color: var(--ui-text-muted);
+    background: var(--ui-surface-subtle);
     cursor: wait;
   }
 }
@@ -1179,20 +1205,20 @@ const FormulaCell = defineComponent({
   display: flex;
   align-items: center;
   padding: 2px;
-  border-bottom: 1px solid #111827;
+  border-bottom: 1px solid var(--ui-grid-line);
 
   :deep(.el-input__inner) {
-    color: #111827;
+    color: var(--ui-text);
     font-size: 15px;
     font-weight: 500;
-    -webkit-text-fill-color: #111827;
+    -webkit-text-fill-color: var(--ui-text);
   }
 
   :deep(.el-input__inner::placeholder) {
-    color: rgba(31, 41, 55, 0.3);
+    color: var(--ui-text-placeholder);
     font-size: 15px;
     font-weight: 400;
-    -webkit-text-fill-color: rgba(31, 41, 55, 0.3);
+    -webkit-text-fill-color: var(--ui-text-placeholder);
   }
 }
 
@@ -1201,7 +1227,7 @@ const FormulaCell = defineComponent({
   align-items: center;
   min-height: 36px;
   padding: 2px;
-  border-bottom: 1px solid #111827;
+  border-bottom: 1px solid var(--ui-grid-line);
 
   &:last-child {
     border-bottom: 0;
@@ -1214,14 +1240,18 @@ const FormulaCell = defineComponent({
 }
 
 .cell--formula {
-  color: #111827;
-  background: #fff;
-  font-size: 16px;
-  font-weight: 700;
+  color: var(--ui-text);
+  background: var(--ui-surface-subtle);
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  justify-content: center;
+  text-align: center;
+  padding-inline: 8px;
 }
 
 .cell--green {
-  background: #effbf4;
+  background: var(--ui-success-soft);
 }
 
 .cell--green.cell--completed {
@@ -1233,13 +1263,13 @@ const FormulaCell = defineComponent({
 }
 
 .cell--selection-target:hover {
-  box-shadow: inset 0 0 0 2px #409eff;
+  box-shadow: inset 0 0 0 2px var(--ui-accent);
 }
 
 .cell--highlight {
   position: relative;
   z-index: 1;
-  box-shadow: inset 0 0 0 3px #f59e0b;
+  box-shadow: inset 0 0 0 3px var(--ui-warning);
 }
 
 .sequence-editor {
@@ -1290,27 +1320,27 @@ const FormulaCell = defineComponent({
 
   :deep(.el-select__placeholder),
   :deep(.el-select__input::placeholder) {
-    color: rgba(31, 41, 55, 0.3);
-    -webkit-text-fill-color: rgba(31, 41, 55, 0.3);
+    color: var(--ui-text-placeholder);
+    -webkit-text-fill-color: var(--ui-text-placeholder);
   }
 
   :deep(.payment-status-select--selected .el-select__placeholder) {
-    color: #1f2937;
+    color: var(--ui-text);
     font-weight: 500;
-    -webkit-text-fill-color: #1f2937;
+    -webkit-text-fill-color: var(--ui-text);
   }
 }
 
 .cell--note-input {
-  justify-content: flex-start;
+  justify-content: center;
 
   :deep(.el-input__inner) {
-    text-align: left;
+    text-align: center;
   }
 }
 
 .cell--label {
-  color: #111827;
+  color: var(--ui-text);
   font-weight: 600;
 }
 
@@ -1353,10 +1383,10 @@ const FormulaCell = defineComponent({
 }
 
 :deep(.el-input__inner) {
-  color: #c00000;
+  color: var(--ui-danger);
   font-size: 15px;
   text-align: center;
-  -webkit-text-fill-color: #c00000;
+  -webkit-text-fill-color: var(--ui-danger);
 }
 
 .cell--number-input :deep(.el-input__inner),
@@ -1372,7 +1402,7 @@ const FormulaCell = defineComponent({
   justify-content: center;
   gap: 8px;
   min-height: 72px;
-  color: #64748b;
+  color: var(--ui-text-muted);
   background:
     linear-gradient(90deg, rgba(226, 232, 240, 0.2), rgba(219, 234, 254, 0.68) 18%, rgba(219, 234, 254, 0.68) 82%, rgba(226, 232, 240, 0.2)),
     repeating-linear-gradient(-45deg, rgba(148, 163, 184, 0.07) 0 6px, transparent 6px 12px);
@@ -1389,7 +1419,7 @@ const FormulaCell = defineComponent({
 
 .completed-data-band__hint {
   padding-left: 8px;
-  color: #94a3b8;
+  color: var(--ui-text-placeholder);
   font-size: 12px;
   font-weight: 400;
   letter-spacing: 0;
@@ -1401,7 +1431,7 @@ const FormulaCell = defineComponent({
   justify-content: center;
   width: 100%;
   min-height: 26px;
-  color: #94a3b8;
+  color: var(--ui-text-placeholder);
   background: linear-gradient(90deg, rgba(219, 234, 254, 0.24), rgba(219, 234, 254, 0.62), rgba(219, 234, 254, 0.24));
   border-radius: 3px;
   font-size: 12px;
@@ -1410,18 +1440,23 @@ const FormulaCell = defineComponent({
 .cell--green :deep(.el-input__inner),
 .cell--customer :deep(.el-input__inner),
 .cell--customer :deep(.el-select__input) {
-  color: #1f2937;
+  color: var(--ui-text);
   font-size: 15px;
   font-weight: 500;
-  -webkit-text-fill-color: #1f2937;
+  -webkit-text-fill-color: var(--ui-text);
+  text-align: center;
+}
+
+.cell--customer :deep(.el-select__selected-item) {
+  text-align: center;
 }
 
 .cell--customer :deep(.el-input__inner::placeholder),
 .cell--customer :deep(.el-select__placeholder),
 .cell--customer :deep(.el-select__input::placeholder) {
-  color: rgba(31, 41, 55, 0.3);
+  color: var(--ui-text-placeholder);
   font-size: 15px;
   font-weight: 400;
-  -webkit-text-fill-color: rgba(31, 41, 55, 0.3);
+  -webkit-text-fill-color: var(--ui-text-placeholder);
 }
 </style>

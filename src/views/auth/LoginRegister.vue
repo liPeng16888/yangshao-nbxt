@@ -2,7 +2,7 @@
   <div class="auth-page">
     <section class="auth-card">
       <div class="auth-title">
-        <div class="auth-title__mark">仰</div>
+        <BrandLogo class="auth-title__mark" :size="48" />
         <div>
           <h1>仰韶化验室内部系统</h1>
           <p>矿石检测数据、财务、报表与风险客户联动管理</p>
@@ -11,14 +11,25 @@
 
       <el-tabs v-model="activeTab" stretch>
         <el-tab-pane label="登录" name="login">
-          <el-form ref="loginFormRef" :model="loginForm" :rules="loginRules" label-position="top" @submit.prevent>
+          <el-form ref="loginFormRef" :model="loginForm" :rules="loginRules" label-position="top" @submit.prevent="handleLogin">
             <el-form-item label="账号" prop="account">
-              <el-input v-model.trim="loginForm.account" autocomplete="username" />
+              <el-input v-model.trim="loginForm.account" autocomplete="username" :disabled="loginPending" />
             </el-form-item>
             <el-form-item label="密码" prop="password">
-              <el-input v-model="loginForm.password" type="password" autocomplete="current-password" show-password />
+              <el-input v-model="loginForm.password" type="password" autocomplete="current-password" show-password :disabled="loginPending" @keyup.enter="handleLogin" />
             </el-form-item>
-            <el-button class="auth-submit" type="primary" :loading="authStore.loading" @click="handleLogin">登录</el-button>
+            <div class="remember-login">
+              <el-checkbox v-model="rememberCredentials" :disabled="loginPending" @change="handleRememberChange">记住账号密码</el-checkbox>
+              <span>仅在此浏览器保存，请在本人设备上使用</span>
+            </div>
+            <el-button class="auth-submit" type="primary" :loading="loginPending" @click="handleLogin">登录</el-button>
+            <div v-if="savedCredentials" class="saved-login">
+              <div class="saved-login__account">已记住账号：{{ savedCredentials.account }}</div>
+              <div class="saved-login__actions">
+                <el-button :disabled="loginPending" @click="handleQuickLogin">快捷登录</el-button>
+                <el-button text :disabled="loginPending" @click="handleForget">清除已记住信息</el-button>
+              </div>
+            </div>
           </el-form>
         </el-tab-pane>
 
@@ -53,6 +64,10 @@ import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { useMocks } from '@/utils/request'
+import { useRememberedLogin } from '../../../shared/useRememberedLogin'
+import BrandLogo from '../../../shared/BrandLogo.vue'
+import { feishuLoginReturn } from '../../../shared/ai/feishuReturn'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -60,10 +75,11 @@ const activeTab = ref<'login' | 'register'>('login')
 const loginFormRef = ref<FormInstance>()
 const registerFormRef = ref<FormInstance>()
 
-const loginForm = reactive({
-  account: 'admin',
-  password: 'admin123'
-})
+const loginPending = ref(false)
+const {
+  form: loginForm, savedCredentials, rememberCredentials,
+  forgetCredentials, saveAfterLogin, prepareQuickLogin
+} = useRememberedLogin('frontend')
 
 const registerForm = reactive({
   username: '',
@@ -96,17 +112,52 @@ const registerRules: FormRules = {
 }
 
 async function handleLogin() {
-  await loginFormRef.value?.validate()
-  await authStore.loginWithPassword(loginForm)
-  ElMessage.success('登录成功')
-  router.replace('/data')
+  if (loginPending.value) return
+  loginPending.value = true
+  try {
+    const valid = await loginFormRef.value?.validate().catch(() => false)
+    if (!valid) return
+    const credentials = { ...loginForm }
+    await authStore.loginWithPassword(credentials)
+    if (!saveAfterLogin(credentials)) ElMessage.warning('浏览器无法保存登录信息，请检查浏览器存储设置')
+    ElMessage.success('登录成功')
+    await router.replace(feishuLoginReturn('frontend', true))
+  } catch (error) {
+    // Real API failures are displayed by the request interceptor.
+    if (useMocks) ElMessage.error(error instanceof Error ? error.message : '登录失败，请重试')
+  } finally {
+    loginPending.value = false
+  }
+}
+
+function handleQuickLogin() {
+  if (loginPending.value || !prepareQuickLogin()) return
+  void handleLogin()
+}
+
+function handleRememberChange(value: unknown) {
+  if (!value && !forgetCredentials()) {
+    rememberCredentials.value = true
+    ElMessage.warning('无法清除登录信息，请检查浏览器存储设置')
+  }
+}
+
+function handleForget() {
+  if (!forgetCredentials()) {
+    ElMessage.warning('无法清除登录信息，请检查浏览器存储设置')
+    return
+  }
+  loginForm.account = ''
+  loginForm.password = ''
+  loginFormRef.value?.clearValidate()
+  ElMessage.success('已清除记住的账号密码')
 }
 
 async function handleRegister() {
   await registerFormRef.value?.validate()
   await authStore.registerWithInvite(registerForm)
   ElMessage.success('注册成功')
-  router.replace('/data')
+  router.replace(feishuLoginReturn('frontend', true))
 }
 </script>
 
@@ -116,21 +167,16 @@ async function handleRegister() {
   min-height: 100vh;
   place-items: center;
   padding: 28px;
-  background:
-    linear-gradient(120deg, rgba(8, 20, 34, 0.92), rgba(29, 39, 50, 0.86)),
-    repeating-linear-gradient(35deg, rgba(255, 255, 255, 0.04) 0 1px, transparent 1px 18px),
-    radial-gradient(circle at 25% 30%, rgba(190, 74, 43, 0.2), transparent 26%),
-    radial-gradient(circle at 72% 64%, rgba(88, 130, 150, 0.22), transparent 28%),
-    #0b1826;
+  background: var(--ui-bg);
 }
 
 .auth-card {
   width: min(440px, 100%);
   padding: 28px;
   background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(226, 232, 240, 0.28);
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
-  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.34);
+  box-shadow: var(--ui-floating-shadow);
 }
 
 .auth-title {
@@ -141,33 +187,64 @@ async function handleRegister() {
 
   h1 {
     margin: 0;
-    color: #142033;
+    color: var(--ui-text);
     font-size: 24px;
     line-height: 1.3;
   }
 
   p {
     margin: 6px 0 0;
-    color: #64748b;
+    color: var(--ui-text-muted);
     font-size: 13px;
   }
 }
 
 .auth-title__mark {
-  display: grid;
-  flex: 0 0 auto;
   width: 48px;
   height: 48px;
-  place-items: center;
-  color: #fff;
-  font-size: 20px;
-  font-weight: 700;
-  background: linear-gradient(145deg, #d9472f, #8f1d16);
-  border-radius: 8px;
+}
+
+@media (max-width: 480px) {
+  .auth-title h1 {
+    font-size: 22px;
+  }
 }
 
 .auth-submit {
   width: 100%;
   margin-top: 6px;
+}
+
+.remember-login {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 10px;
+
+  span {
+    color: var(--ui-text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
+.saved-login {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ui-line-soft);
+}
+
+.saved-login__account {
+  color: var(--ui-text-secondary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.saved-login__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+
+  .el-button { margin-left: 0; }
 }
 </style>

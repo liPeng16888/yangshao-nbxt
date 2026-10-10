@@ -234,7 +234,7 @@ function canManage(row: BlacklistRecord) {
 .mobile-blacklist-list__search-field {
   display: grid;
   gap: 8px;
-  color: #475569;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-blacklist-list__keyword {
@@ -242,9 +242,9 @@ function canManage(row: BlacklistRecord) {
   width: 100%;
   min-width: 0;
   padding: 8px 12px;
-  color: #0f172a;
+  color: var(--ui-text);
   background: #fff;
-  border: 1px solid #aebdcd;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -261,13 +261,13 @@ function canManage(row: BlacklistRecord) {
   padding: 14px;
   overflow: hidden;
   background: #fff;
-  border: 1px solid #d8e1eb;
+  border: 1px solid var(--ui-line);
   border-radius: 12px;
   scroll-margin-block: 80px;
 }
 
 .mobile-blacklist-card--highlight {
-  border-color: #dc2626;
+  border-color: var(--ui-danger);
   box-shadow: 0 0 0 3px rgb(220 38 38 / 14%);
 }
 
@@ -292,7 +292,7 @@ function canManage(row: BlacklistRecord) {
 
   span,
   small {
-    color: #64748b;
+    color: var(--ui-text-muted);
   }
 }
 
@@ -302,7 +302,7 @@ function canManage(row: BlacklistRecord) {
   min-height: 44px;
   padding: 8px 12px;
   background: #fff;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--ui-line);
   border-radius: 8px;
 }
 
@@ -320,7 +320,7 @@ function canManage(row: BlacklistRecord) {
 
 .mobile-blacklist-card__details dt {
   flex: none;
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .mobile-blacklist-card__details dd {
@@ -342,15 +342,15 @@ function canManage(row: BlacklistRecord) {
 }
 
 .mobile-blacklist-card__supplement {
-  color: #2563eb;
+  color: var(--ui-accent);
 }
 
 .mobile-blacklist-card__delete {
-  color: #b42318;
+  color: var(--ui-danger);
 }
 
 .readonly-action {
   grid-column: 1 / -1;
-  color: #94a3b8;
+  color: var(--ui-text-placeholder);
 }
 </style>

@@ -29,7 +29,7 @@
       <el-table-column prop="wechatNickname" label="微信昵称" min-width="120">
         <template #default="{ row }">{{ emptyText(row.wechatNickname) }}</template>
       </el-table-column>
-      <el-table-column prop="amount" label="金额" width="100">
+      <el-table-column align="right" prop="amount" label="金额" width="100">
         <template #default="{ row }">{{ Number.isFinite(row.amount) ? `¥${row.amount.toFixed(2)}` : '无信息' }}</template>
       </el-table-column>
       <el-table-column label="图片" min-width="120">
@@ -126,7 +126,7 @@ function canManage(row: BlacklistRecord) {
 }
 
 :deep(.blacklist-row--highlight td) {
-  background: #ffe9e8 !important;
+  background: var(--ui-danger-soft) !important;
 }
 
 .table-actions {
@@ -136,6 +136,6 @@ function canManage(row: BlacklistRecord) {
 }
 
 .readonly-action {
-  color: #94a3b8;
+  color: var(--ui-text-placeholder);
 }
 </style>

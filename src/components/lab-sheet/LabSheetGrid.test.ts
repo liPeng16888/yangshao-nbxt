@@ -98,6 +98,20 @@ beforeEach(() => {
 })
 
 describe('LabSheetGrid', () => {
+  it('colors only the computed total and clears the warning when inputs become incomplete', async () => {
+    const block = makeBlock({ ironRaw: 0.28, siliconRaw: 1.2, aluminumRaw: 3 })
+    const rule = { id: 'r1', name: '低铁', ironMin: 5, ironMax: 10, totalMin: 80.5, totalMax: 82.5, enabled: true }
+    const wrapper = mount(LabSheetGrid, { props: { blocks: [block], monitorRules: [rule] }, global: { plugins: [ElementPlus], stubs: { CustomerCellEditor: customerEditorStub } } })
+    expect(wrapper.get('[data-field="total"]').classes()).toContain('cell--total-abnormal')
+    expect(wrapper.get('[data-field="total"]').attributes('title')).toContain('80.5–82.5')
+    expect(wrapper.findAll('.cell--total-abnormal')).toHaveLength(1)
+    const incomplete = makeBlock({ ironRaw: 0.28, siliconRaw: 1.2, aluminumRaw: null })
+    await wrapper.setProps({ blocks: [incomplete] })
+    expect(wrapper.get('[data-field="total"]').classes()).not.toContain('cell--total-abnormal')
+    expect(wrapper.get('[data-field="total"]').attributes('data-total-status')).toBe('incomplete')
+    wrapper.unmount()
+  })
+
   it('shows request actions only for eligible readonly history samples', async () => {
     const wrapper = mount(LabSheetGrid, {
       props: {

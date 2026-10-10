@@ -377,10 +377,10 @@ function errorMessage(error: unknown) {
 </script>
 
 <style scoped>
-.todo-intro { padding-top: 0; color: #64748b; }
-.loading-state { padding: 28px; text-align: center; color: #64748b; }
-.muted { color: #94a3b8; }
+.todo-intro { padding-top: 0; color: var(--ui-text-muted); }
+.loading-state { padding: 28px; text-align: center; color: var(--ui-text-muted); }
+.muted { color: var(--ui-text-placeholder); }
 h4 { margin: 20px 0 10px; }
 .settlement-warning { margin-top: 18px; }
-.settlement-effects { margin: 12px 0 0; padding-left: 22px; color: #92400e; }
+.settlement-effects { margin: 12px 0 0; padding-left: 22px; color: var(--ui-warning); }
 </style>

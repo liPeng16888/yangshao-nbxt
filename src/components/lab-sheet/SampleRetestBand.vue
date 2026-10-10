@@ -153,9 +153,9 @@ watch(
   min-height: var(--sample-retest-row-height, 62px);
   overflow: visible;
   color: #172033;
-  background: #f8fbff;
-  border-top: 1px solid #111827;
-  border-bottom: 1px solid #111827;
+  background: var(--ui-surface-subtle);
+  border-top: 1px solid var(--ui-grid-line);
+  border-bottom: 1px solid var(--ui-grid-line);
   transition: background-color 160ms ease, box-shadow 160ms ease;
 }
 
@@ -164,11 +164,11 @@ watch(
   height: 100%;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid #111827;
+  border-left: 1px solid var(--ui-grid-line);
 }
 
 .sample-retest-band__cell:last-child {
-  border-right: 1px solid #111827;
+  border-right: 1px solid var(--ui-grid-line);
 }
 
 .sample-retest-band__locked-message {
@@ -178,7 +178,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #64748b;
+  color: var(--ui-text-muted);
   background: rgba(241, 245, 249, 0.9);
   font-weight: 600;
 }
@@ -205,21 +205,21 @@ watch(
 }
 
 input.sample-retest-band__input {
-  color: #c00000;
+  color: var(--ui-danger);
   background: transparent;
-  border-bottom: 1px solid #cbd5e1;
+  border-bottom: 1px solid var(--ui-line);
   outline: 0;
   font-size: 13px;
   font-weight: 700;
 
   &:focus {
-    box-shadow: inset 0 0 0 2px #60a5fa;
+    box-shadow: inset 0 0 0 2px var(--ui-accent);
   }
 
   &:disabled {
-    color: #64748b;
+    color: var(--ui-text-muted);
     cursor: not-allowed;
-    -webkit-text-fill-color: #64748b;
+    -webkit-text-fill-color: var(--ui-text-muted);
   }
 }
 
@@ -227,7 +227,7 @@ input.sample-retest-band__input {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #111827;
+  color: var(--ui-text);
   font-size: 13px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -236,18 +236,18 @@ input.sample-retest-band__input {
 .sample-retest-band.is-highlighted {
   position: relative;
   z-index: 2;
-  background: #fffbeb;
-  box-shadow: inset 0 0 0 3px #f59e0b;
+  background: var(--ui-warning-soft);
+  box-shadow: inset 0 0 0 3px var(--ui-warning);
 }
 
 .sample-retest-band.is-void,
 .sample-retest-band.is-locked {
-  background: #f1f5f9;
+  background: var(--ui-surface-subtle);
 
   .sample-retest-band__cell,
   .sample-retest-band__cell.is-enabled {
-    color: #64748b;
-    background: #eef2f6;
+    color: var(--ui-text-muted);
+    background: var(--ui-surface-subtle);
   }
 }
 </style>

@@ -178,7 +178,7 @@ function formatSettlementEffect(effect: unknown) {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   padding: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--ui-line-soft);
   border-radius: 8px;
 }
 
@@ -187,7 +187,7 @@ function formatSettlementEffect(effect: unknown) {
   gap: 4px;
   min-width: 0;
   padding: 0;
-  color: #475569;
+  color: var(--ui-text-secondary);
   background: transparent;
   border: 0;
   font: inherit;
@@ -196,7 +196,7 @@ function formatSettlementEffect(effect: unknown) {
 }
 
 .request-history-card__title {
-  color: #10233f;
+  color: var(--ui-text);
   font-weight: 700;
 }
 
@@ -209,13 +209,13 @@ function formatSettlementEffect(effect: unknown) {
 .request-detail {
   margin-top: 20px;
   padding-top: 18px;
-  border-top: 1px solid #cbd5e1;
+  border-top: 1px solid var(--ui-line);
 }
 
 .request-detail h3,
 .request-detail h4 {
   margin: 0 0 10px;
-  color: #10233f;
+  color: var(--ui-text);
 }
 
 .request-detail h4 {
@@ -237,7 +237,7 @@ function formatSettlementEffect(effect: unknown) {
 }
 
 .request-detail__meta dt {
-  color: #64748b;
+  color: var(--ui-text-muted);
 }
 
 .request-detail__meta dd {
@@ -249,7 +249,7 @@ function formatSettlementEffect(effect: unknown) {
   grid-template-columns: 100px minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 8px;
   padding: 8px 10px;
-  background: #f8fafc;
+  background: var(--ui-surface-subtle);
   border-radius: 6px;
 }
 

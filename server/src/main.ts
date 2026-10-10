@@ -12,6 +12,7 @@ async function bootstrap() {
   app.use(express.urlencoded({ extended: true, limit: '1mb' }))
   app.setGlobalPrefix('api')
   app.enableCors()
+  app.enableShutdownHooks()
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

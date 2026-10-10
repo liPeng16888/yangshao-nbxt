@@ -69,7 +69,7 @@ function updateField<Key extends keyof LabReportSmsTemplate>(field: Key, value: 
   min-width: 0;
 
   > span {
-    color: #475569;
+    color: var(--ui-text-secondary);
     font-size: 13px;
   }
 }
