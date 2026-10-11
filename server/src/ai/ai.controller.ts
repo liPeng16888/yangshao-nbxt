@@ -6,6 +6,7 @@ import type { CurrentUser } from '../auth/current-user'
 import { AiService } from './ai.service'
 import { AiConfigService } from './ai-config.service'
 import { z, ZodError } from 'zod'
+import { ownerIdsSchema } from './ai-owner-scope'
 
 // All inputs, including configuration, are validated server-side. Never expose provider errors.
 async function validated<T>(operation: () => Promise<T>) {
@@ -33,7 +34,7 @@ export class AiController {
     return this.ai.attachment(user, file.buffer, file.mimetype)
   }
   @Post('conversations/:id/read') read(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: unknown) {
-    return validated(async () => { const b = z.object({ ownerId: z.string().optional(), grants: z.record(z.string(), z.string()).default({}) }).strict().parse(body); return this.ai.conversation(user, id, b.ownerId, b.grants) })
+    return validated(async () => { const b = z.object({ ownerId: z.string().optional(), ownerIds: ownerIdsSchema.optional(), grants: z.record(z.string(), z.string()).default({}) }).strict().refine(b => !(b.ownerId && b.ownerIds)).parse(body); return this.ai.conversation(user, id, b.ownerId, b.grants, b.ownerIds) })
   }
   @Post('proposals/:id/decision') confirm(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: unknown) { return validated(() => this.ai.confirm(user, id, body)) }
 }

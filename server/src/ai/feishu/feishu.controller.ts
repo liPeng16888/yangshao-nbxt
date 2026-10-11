@@ -5,19 +5,20 @@ import { CurrentUserInfo } from '../../auth/current-user.decorator'
 import type { CurrentUser } from '../../auth/current-user'
 import { FeishuService } from './feishu.service'
 import { FeishuRuntime } from './feishu.runtime'
+import { feishuBot } from './feishu.types'
 async function validated<T>(fn: () => Promise<T>) { try { return await fn() } catch (e) { if (e instanceof ZodError) throw new BadRequestException('输入格式不正确'); throw e } }
 
 @Controller('admin/ai/feishu')
 @UseGuards(AuthGuard)
 export class AdminFeishuController {
   constructor(private readonly service: FeishuService, private readonly runtime: FeishuRuntime) {}
-  @Get('config') async config(@CurrentUserInfo() u: CurrentUser) { return { ...await this.service.getConfig(u), status: this.runtime.status() } }
-  @Put('config') save(@CurrentUserInfo() u: CurrentUser, @Body() b: unknown) { return validated(() => this.service.saveConfig(u, b)) }
-  @Post('test') test(@CurrentUserInfo() u: CurrentUser) { return this.runtime.test(u) }
-  @Post('invitations') invite(@CurrentUserInfo() u: CurrentUser, @Body() b: unknown) { return validated(() => this.service.invitations(u, b)) }
-  @Get('bindings') bindings(@CurrentUserInfo() u: CurrentUser) { return this.service.bindings(u) }
-  @Patch('bindings/:id') update(@CurrentUserInfo() u: CurrentUser, @Param('id') id: string, @Body() b: unknown) { return validated(() => this.service.editBinding(u, id, b)) }
-  @Delete('bindings/:id') remove(@CurrentUserInfo() u: CurrentUser, @Param('id') id: string) { return this.service.unbind(u, id) }
+  @Get('configs/:bot') async config(@CurrentUserInfo() u: CurrentUser, @Param('bot') bot: string) { const kind = feishuBot(bot); return { ...await this.service.getConfig(u, kind), status: this.runtime.status(kind) } }
+  @Put('configs/:bot') save(@CurrentUserInfo() u: CurrentUser, @Param('bot') bot: string, @Body() b: unknown) { return validated(() => this.service.saveConfig(u, feishuBot(bot), b)) }
+  @Post('configs/:bot/test') test(@CurrentUserInfo() u: CurrentUser, @Param('bot') bot: string) { return this.runtime.test(u, feishuBot(bot)) }
+  @Post('configs/:bot/invitations') invite(@CurrentUserInfo() u: CurrentUser, @Param('bot') bot: string, @Body() b: unknown) { return validated(() => this.service.invitations(u, feishuBot(bot), b)) }
+  @Get('configs/:bot/bindings') bindings(@CurrentUserInfo() u: CurrentUser, @Param('bot') bot: string) { return this.service.bindings(u, feishuBot(bot)) }
+  @Patch('configs/:bot/bindings/:id') update(@CurrentUserInfo() u: CurrentUser, @Param('bot') bot: string, @Param('id') id: string, @Body() b: unknown) { return validated(() => this.service.editBinding(u, feishuBot(bot), id, b)) }
+  @Delete('configs/:bot/bindings/:id') remove(@CurrentUserInfo() u: CurrentUser, @Param('bot') bot: string, @Param('id') id: string) { return this.service.unbind(u, feishuBot(bot), id) }
 }
 @Controller('ai/feishu')
 @UseGuards(AuthGuard)

@@ -34,7 +34,7 @@
       <el-tab-pane label="飞书接入" name="feishu"><FeishuSettingsPanel v-if="tab === 'feishu'" :config="config" :mocks="useAdminMocks" /></el-tab-pane>
       <el-tab-pane label="操作记录" name="logs">
         <div class="ai-table-heading"><p>记录读取的字段、草稿生成、确认写入、取消及配置变更。</p><el-button :disabled="useAdminMocks" @click="loadLogs">刷新记录</el-button></div>
-        <el-table :data="logs" empty-text="暂无操作记录"><el-table-column label="时间" width="180"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column><el-table-column label="操作账号" min-width="130"><template #default="{ row }">{{ findAccount(row.actorId) }}</template></el-table-column><el-table-column label="数据账号" min-width="130"><template #default="{ row }">{{ findAccount(row.ownerId) }}</template></el-table-column><el-table-column label="操作" width="140"><template #default="{ row }">{{ actionLabel(row.action) }}</template></el-table-column><el-table-column prop="resource" label="菜单" width="100" /><el-table-column label="详情" min-width="220"><template #default="{ row }"><span class="ai-log-detail">{{ JSON.stringify(row.detail) }}</span></template></el-table-column></el-table>
+        <el-table :data="logs" empty-text="暂无操作记录"><el-table-column label="时间" width="180"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column><el-table-column label="操作账号" min-width="130"><template #default="{ row }">{{ findAccount(row.actorId) }}</template></el-table-column><el-table-column label="数据账号" min-width="130"><template #default="{ row }">{{ logOwnerAccounts(row) }}</template></el-table-column><el-table-column label="操作" width="140"><template #default="{ row }">{{ actionLabel(row.action) }}</template></el-table-column><el-table-column prop="resource" label="菜单" width="100" /><el-table-column label="详情" min-width="220"><template #default="{ row }"><span class="ai-log-detail">{{ JSON.stringify(row.detail) }}</span></template></el-table-column></el-table>
         <div class="ai-log-pages"><el-button :disabled="logPage <= 1 || useAdminMocks" @click="logPage--; loadLogs()">上一页</el-button><span>第 {{ logPage }} 页</span><el-button :disabled="logs.length < 50 || useAdminMocks" @click="logPage++; loadLogs()">下一页</el-button></div>
       </el-tab-pane>
     </el-tabs>
@@ -84,7 +84,11 @@ async function disableModel(id: string) { try { await ElMessageBox.confirm('停�
 async function loadLogs() { if (useAdminMocks) return; try { logs.value = await request(`/admin/ai/logs?page=${logPage.value}`) } catch (e) { error.value = (e as Error).message } }
 function findAccount(id?: string) { const account = config.value?.accounts.find(a => a.id === id); return account ? `${account.username}（${account.account}）` : id || '—' }
 function formatTime(text: string) { return new Date(text).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) }
-function actionLabel(action: string) { return ({ READ: '读取业务数据', PROPOSED: '生成草稿', APPLIED: '确认写入', REJECTED: '取消草稿', EXPIRED: '草稿过期', CHAT_REQUEST: '对话请求', CHAT_FAILED: '请求失败', MODEL_SAVED: '保存模型', MODEL_DISABLED: '停用模型', MODEL_TESTED: '测试模型', FEISHU_CONFIG_SAVED: '飞书连接配置', FEISHU_INVITED: '生成飞书邀请', FEISHU_BOUND: '确认飞书绑定', FEISHU_UNBOUND: '解除飞书绑定', FEISHU_BINDING_UPDATED: '修改飞书绑定', FEISHU_ACCESS_VERIFIED: '飞书访问验证', SETTINGS_UPDATED: '修改服务设置', POLICY_UPDATED: '修改账号权限', POLICY_INHERITED: '恢复默认权限' } as Record<string, string>)[action] || action }
+function logOwnerAccounts(row: { ownerId?:string; detail:unknown }) {
+  const ids=(row.detail as {ownerIds?:unknown})?.ownerIds
+  return Array.isArray(ids)&&ids.length&&ids.every(id=>typeof id==='string')?ids.map(id=>findAccount(id)).join('、'):findAccount(row.ownerId)
+}
+function actionLabel(action: string) { return ({ READ: '读取业务数据', SUMMARY: '统计业务数据', PROPOSED: '生成草稿', APPLIED: '确认写入', REJECTED: '取消草稿', EXPIRED: '草稿过期', CHAT_REQUEST: '对话请求', CHAT_FAILED: '请求失败', MODEL_SAVED: '保存模型', MODEL_DISABLED: '停用模型', MODEL_TESTED: '测试模型', FEISHU_CONFIG_SAVED: '飞书连接配置', FEISHU_INVITED: '生成飞书邀请', FEISHU_BOUND: '确认飞书绑定', FEISHU_UNBOUND: '解除飞书绑定', FEISHU_BINDING_UPDATED: '修改飞书绑定', FEISHU_ACCESS_VERIFIED: '飞书访问验证', SETTINGS_UPDATED: '修改服务设置', POLICY_UPDATED: '修改账号权限', POLICY_INHERITED: '恢复默认权限' } as Record<string, string>)[action] || action }
 watch(tab, value => { if (value === 'logs') void loadLogs() })
 onMounted(load)
 </script>

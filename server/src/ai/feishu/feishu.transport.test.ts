@@ -14,23 +14,23 @@ vi.mock('@larksuiteoapi/node-sdk', () => ({
   EventDispatcher: class { register(handlers: any) { sdk.handlers = handlers; return this } }
 }))
 function fixture() {
-  const session = { id: 's', appId: 'app', tenantKey: 'tenant', openId: 'operator', chatId: 'chat' }
+  const session = { id: 's', configId: 'frontend', appId: 'app', tenantKey: 'tenant', openId: 'operator', chatId: 'chat' }
   const prisma = { aiFeishuAction: { findUnique: vi.fn().mockResolvedValue({ sessionId: 's' }) }, aiFeishuSession: { findUnique: vi.fn().mockResolvedValue(session) } }
   return { session, prisma, transport: new FeishuTransport(prisma as never), ingest: vi.fn().mockResolvedValue(undefined) }
 }
-async function connect(f: ReturnType<typeof fixture>) { const p = f.transport.connect('app', 'private-secret', f.ingest); await Promise.resolve(); await Promise.resolve(); sdk.state = 'connected'; sdk.ready?.(); await p }
+async function connect(f: ReturnType<typeof fixture>) { const p = f.transport.connect('frontend', 'app', 'private-secret', f.ingest); await Promise.resolve(); await Promise.resolve(); sdk.state = 'connected'; sdk.ready?.(); await p }
 beforeEach(() => { vi.useFakeTimers(); sdk.state = 'connecting'; sdk.send.mockReset().mockResolvedValue({ code: 0 }); sdk.close.mockReset() })
 afterEach(() => vi.useRealTimers())
 describe('Feishu official SDK adapter', () => {
-  it('waits for a real handshake and reports reconnect state', async () => { const f = fixture(); let resolved = false; const p = f.transport.connect('app', 'private-secret', f.ingest).then(() => { resolved = true }); await Promise.resolve(); await Promise.resolve(); expect(resolved).toBe(false); sdk.state = 'connected'; sdk.ready?.(); await p; expect(f.transport.snapshot().connectedAt).toBeTruthy(); sdk.state = 'reconnecting'; expect(f.transport.snapshot().state).toBe('reconnecting'); await f.transport.stop(); expect(sdk.close).toHaveBeenCalledWith({ force: true }) })
-  it('bounds connection testing and never returns SDK credentials/errors', async () => { const f = fixture(); const p = f.transport.connect('app', 'private-secret', f.ingest); const rejected = expect(p).rejects.toThrow(/连接测试失败/); await vi.advanceTimersByTimeAsync(15000); await rejected; expect(JSON.stringify(f.transport.snapshot())).not.toContain('private-secret'); expect(sdk.close).toHaveBeenCalled() })
+  it('waits for a real handshake and reports reconnect state', async () => { const f = fixture(); let resolved = false; const p = f.transport.connect('frontend', 'app', 'private-secret', f.ingest).then(() => { resolved = true }); await Promise.resolve(); await Promise.resolve(); expect(resolved).toBe(false); sdk.state = 'connected'; sdk.ready?.(); await p; expect(f.transport.snapshot().connectedAt).toBeTruthy(); sdk.state = 'reconnecting'; expect(f.transport.snapshot().state).toBe('reconnecting'); await f.transport.stop(); expect(sdk.close).toHaveBeenCalledWith({ force: true }) })
+  it('bounds connection testing and never returns SDK credentials/errors', async () => { const f = fixture(); const p = f.transport.connect('frontend', 'app', 'private-secret', f.ingest); const rejected = expect(p).rejects.toThrow(/连接测试失败/); await vi.advanceTimersByTimeAsync(15000); await rejected; expect(JSON.stringify(f.transport.snapshot())).not.toContain('private-secret'); expect(sdk.close).toHaveBeenCalled() })
   it('only admits verified private user messages, not groups/bots/missing identities', async () => {
     const f = fixture(); await connect(f)
     const event = { sender: { sender_id: { open_id: 'operator' }, sender_type: 'user', tenant_key: 'tenant' }, message: { chat_type: 'p2p', chat_id: 'chat', message_id: 'msg', message_type: 'text', content: JSON.stringify({ text: '查询' }) } }
     for (const invalid of [{ ...event, message: { ...event.message, chat_type: 'group' } }, { ...event, sender: { ...event.sender, sender_type: 'app' } }, { ...event, sender: { ...event.sender, sender_id: {} } }]) await sdk.handlers['im.message.receive_v1'](invalid)
     expect(f.ingest).not.toHaveBeenCalled()
     await sdk.handlers['im.message.receive_v1'](event)
-    expect(f.ingest).toHaveBeenCalledWith({ appId: 'app', tenantKey: 'tenant', openId: 'operator', chatId: 'chat' }, 'message:msg', expect.objectContaining({ text: '查询', messageId: 'msg' }))
+    expect(f.ingest).toHaveBeenCalledWith({ configId: 'frontend', appId: 'app', tenantKey: 'tenant', openId: 'operator', chatId: 'chat' }, 'message:msg', expect.objectContaining({ text: '查询', messageId: 'msg' }))
   })
   it('checks the true card operator/chat before persisting a callback, including forwarded cards', async () => {
     const f = fixture(); await connect(f)

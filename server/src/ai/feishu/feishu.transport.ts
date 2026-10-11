@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common'
 import * as lark from '@larksuiteoapi/node-sdk'
 import { BadRequestException } from '@nestjs/common'
 import { PrismaService } from '../../prisma/prisma.service'
-import type { FeishuInput, Outbound, Peer } from './feishu.types'
+import type { FeishuBot, FeishuInput, Outbound, Peer } from './feishu.types'
 import { digest } from './feishu.types'
 
 export type Ingest = (peer: Peer, key: string, input: FeishuInput) => Promise<void>
@@ -25,7 +25,7 @@ export class FeishuTransport {
     this.ws = undefined; this.client = undefined
     this.status.state = 'disabled'; this.status.connectedAt = null
   }
-  async connect(appId: string, appSecret: string, ingest: Ingest) {
+  async connect(configId: FeishuBot, appId: string, appSecret: string, ingest: Ingest) {
     await this.stop()
     const generation = this.generation
     this.status.state = 'connecting'; this.status.lastError = ''
@@ -56,18 +56,18 @@ export class FeishuTransport {
         if (!openId || !tenantKey || !chatId || !messageId) return
         let content: { text?: string; image_key?: string } = {}
         try { content = JSON.parse(data.message.content) } catch {}
-        await deliver({ appId, tenantKey, openId, chatId }, `message:${messageId}`, { kind: 'message', messageId, text: data.message.message_type === 'text' ? content.text || '' : '', imageKey: data.message.message_type === 'image' ? content.image_key : undefined })
+        await deliver({ configId, appId, tenantKey, openId, chatId }, `message:${messageId}`, { kind: 'message', messageId, text: data.message.message_type === 'text' ? content.text || '' : '', imageKey: data.message.message_type === 'image' ? content.image_key : undefined })
       },
       'card.action.trigger': async (data: any) => {
         const openId = data.operator?.open_id, chatId = data.context?.open_chat_id, token = data.action?.value?.token
         if (!openId || !chatId || typeof token !== 'string') return { toast: { type: 'error', content: '卡片身份信息不完整' } }
         const a = await this.prisma.aiFeishuAction.findUnique({ where: { tokenHash: digest(token) } })
         const session = a ? await this.prisma.aiFeishuSession.findUnique({ where: { id: a.sessionId } }) : null
-        if (!session || session.appId !== appId || session.openId !== openId || session.chatId !== chatId) return { toast: { type: 'error', content: '卡片不属于当前身份或会话' } }
+        if (!session || session.configId !== configId || session.appId !== appId || session.openId !== openId || session.chatId !== chatId) return { toast: { type: 'error', content: '卡片不属于当前机器人、身份或会话' } }
         const tenantKey = session.tenantKey
         // A forwarded card's operator/chat will not match its saved action session.
         const key = `card:${data.token || digest(JSON.stringify({ openId, chatId, token }))}`
-        await deliver({ appId, tenantKey, openId, chatId }, key, { kind: 'card', actionToken: token })
+        await deliver({ configId, appId, tenantKey, openId, chatId }, key, { kind: 'card', actionToken: token })
         return { toast: { type: 'info', content: '已收到，处理结果将发送到当前会话' } }
       }
     })
@@ -105,4 +105,10 @@ export class FeishuTransport {
     const mime = bytes[0] === 0xff ? 'image/jpeg' : bytes[0] === 137 ? 'image/png' : 'image/webp'
     return { bytes, mime }
   }
+}
+
+@Injectable()
+export class FeishuTransportFactory {
+  constructor(private readonly prisma: PrismaService) {}
+  create() { return new FeishuTransport(this.prisma) }
 }

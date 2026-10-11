@@ -9,7 +9,7 @@ datasource db {
 
 // AI has no database credentials of its own. Business access is enforced by AiService.
 model AiFeishuConfig {
-  id              String   @id @default("global")
+  id              String   @id
   appId           String   @default("")
   appSecretCipher String   @default("")
   publicSiteUrl   String   @default("")
@@ -18,10 +18,17 @@ model AiFeishuConfig {
   workerId        String?
   workerUntil     DateTime?
   updatedAt       DateTime @updatedAt
+  bindings        AiFeishuBinding[]
+  invitations     AiFeishuInvitation[]
+  sessions        AiFeishuSession[]
+  events          AiFeishuEvent[]
+  @@index([appId])
 }
 
 model AiFeishuBinding {
   id             String   @id @default(uuid())
+  configId       String   @default("frontend")
+  config         AiFeishuConfig @relation(fields: [configId], references: [id], onDelete: Restrict)
   userId         String   @unique
   appId          String
   tenantKey      String
@@ -36,10 +43,13 @@ model AiFeishuBinding {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   @@index([appId, tenantKey, openId])
+  @@index([configId])
 }
 
 model AiFeishuInvitation {
   id             String   @id @default(uuid())
+  configId       String   @default("frontend")
+  config         AiFeishuConfig @relation(fields: [configId], references: [id], onDelete: Restrict)
   userId         String
   defaultModelId String
   appId          String
@@ -53,10 +63,13 @@ model AiFeishuInvitation {
   usedAt         DateTime?
   createdAt      DateTime @default(now())
   @@index([userId, expiresAt])
+  @@index([configId])
 }
 
 model AiFeishuSession {
   id                  String   @id @default(uuid())
+  configId            String   @default("frontend")
+  config              AiFeishuConfig @relation(fields: [configId], references: [id], onDelete: Restrict)
   appId               String
   tenantKey           String
   openId              String
@@ -70,7 +83,7 @@ model AiFeishuSession {
   accessProofHash     String?  @unique
   accessProofExpiresAt DateTime?
   updatedAt           DateTime @updatedAt
-  @@unique([appId, tenantKey, openId, chatId])
+  @@unique([configId, appId, tenantKey, openId, chatId])
 }
 
 model AiFeishuAction {
@@ -92,6 +105,8 @@ model AiFeishuAction {
 model AiFeishuEvent {
   sequence       Int      @unique @default(autoincrement())
   id             String   @id @default(uuid())
+  configId       String   @default("frontend")
+  config         AiFeishuConfig @relation(fields: [configId], references: [id], onDelete: Restrict)
   appId          String
   configRevision Int
   eventKey       String
@@ -109,6 +124,7 @@ model AiFeishuEvent {
   updatedAt      DateTime @updatedAt
   @@unique([appId, eventKey])
   @@index([status, nextAttemptAt, createdAt])
+  @@index([configId, status, sequence])
 }
 
 model AiSettings {
@@ -145,6 +161,7 @@ model AiConversation {
   id                String   @id @default(uuid())
   actorId           String
   ownerId           String
+  ownerIds          Json     @default("[]")
   modelId           String
   settingsRevision  Int
   authorizationHash String

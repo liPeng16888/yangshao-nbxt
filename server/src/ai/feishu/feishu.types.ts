@@ -2,9 +2,14 @@ import type { Prisma } from '@prisma/client'
 import { BadRequestException, HttpException } from '@nestjs/common'
 import { createHash, randomBytes } from 'node:crypto'
 
-export type Peer = { appId: string; tenantKey: string; openId: string; chatId: string }
+export type FeishuBot = 'frontend' | 'admin'
+export function feishuBot(value: unknown): FeishuBot {
+  if (value !== 'frontend' && value !== 'admin') throw new BadRequestException('请选择前端机器人或后台机器人')
+  return value
+}
+export type Peer = { configId: FeishuBot; appId: string; tenantKey: string; openId: string; chatId: string }
 export type FeishuInput = { kind: 'message' | 'card'; text?: string; messageId?: string; imageKey?: string; actionToken?: string }
-export type Scope = { sessionId: string; revision: number; bindingId: string; bindingRevision: number; configRevision: number; hash: string }
+export type Scope = { configId: FeishuBot; sessionId: string; revision: number; bindingId: string; bindingRevision: number; configRevision: number; hash: string }
 export type Outbound = { type: 'text' | 'card'; content: string | Prisma.InputJsonObject; scope?: Scope }
 export const opaque = () => randomBytes(24).toString('base64url')
 export const digest = (value: string) => createHash('sha256').update(value).digest('hex')

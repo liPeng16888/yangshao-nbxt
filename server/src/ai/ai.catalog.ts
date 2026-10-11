@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { menuCatalog, sampleWritable, type Resource } from './ai-menu-catalog'
+import { ownerIdsSchema } from './ai-owner-scope'
 export { sampleFields, sampleWritable, resultFields, type Resource } from './ai-menu-catalog'
 
 export const catalog = menuCatalog
@@ -15,9 +16,9 @@ export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value =
 export const modelSchema = z.object({ name: z.string().trim().min(1).max(60), modelId: z.string().trim().min(1).max(150),
   baseUrl: z.string().url().max(500), apiKey: z.string().max(500).optional(), enabled: z.boolean(), vision: z.boolean(), tools: z.boolean(),
   allowedUserIds: z.array(z.string().min(1).max(100)).max(1000) }).strict()
-export const chatSchema = z.object({ conversationId: z.string().max(100).optional(), modelId: z.string().min(1).max(100), ownerId: z.string().max(100).optional(),
-  text: z.string().trim().max(6000), attachmentIds: z.array(z.string().max(100)).max(3).default([]), grants: z.record(z.string(), z.string().max(2000)).default({}) }).strict().refine(x => x.text.length > 0 || x.attachmentIds.length > 0, '请输入消息或上传照片')
-export const confirmationSchema = z.object({ decision: z.enum(['confirm', 'reject']), grants: z.record(z.string(), z.string().max(2000)).default({}) }).strict()
+export const chatSchema = z.object({ conversationId: z.string().max(100).optional(), modelId: z.string().min(1).max(100), ownerId: z.string().trim().min(1).max(100).optional(), ownerIds: ownerIdsSchema.optional(),
+  text: z.string().trim().max(6000), attachmentIds: z.array(z.string().max(100)).max(3).default([]), grants: z.record(z.string(), z.string().max(2000)).default({}) }).strict().refine(x => x.text.length > 0 || x.attachmentIds.length > 0, '请输入消息或上传照片').refine(x => !(x.ownerId && x.ownerIds), '不能同时指定单账号和多账号')
+export const confirmationSchema = z.object({ decision: z.enum(['confirm', 'reject']), ownerIds: ownerIdsSchema.optional(), grants: z.record(z.string(), z.string().max(2000)).default({}) }).strict()
 export const expenseSchema = z.object({ paymentDate: dateSchema, item: z.string().trim().min(1).max(200), amount: z.number().positive().max(9999999999.99).refine(n => Math.abs(n * 100 - Math.round(n * 100)) < 0.00001, '金额最多两位小数'), paymentMethod: z.enum(['cash', 'online']), remark: z.string().max(500).optional() }).strict()
 export const customerSchema = z.object({ name: z.string().trim().min(1).max(100), phone: z.string().max(60).optional(), wechat: z.string().max(100).optional(), wechatNickname: z.string().max(100).optional() }).strict()
 export const samplePatchSchema = z.object({ blockId: z.string().min(1).max(100), changes: z.record(z.string(), z.union([z.number().finite().min(-1000000000).max(1000000000), z.string().max(500), z.null()])).refine(v => Object.keys(v).length > 0 && Object.keys(v).every(k => sampleWritable.includes(k)), '存在不允许修改的字段') }).strict()

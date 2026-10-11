@@ -6,55 +6,42 @@ import { LabSheetsService } from '../lab-sheets/lab-sheets.service'
 import { TenantRealtimeService } from '../realtime/tenant-realtime.service'
 import { businessDateInBeijing } from '../common/date'
 import { AiAccessService } from './ai-access.service'
-import { catalog, customerSchema, dateSchema, expenseSchema, projectedRow, sampleFields, samplePatchSchema, type Grants, type Resource } from './ai.catalog'
-import { AiDataService, jsonSafe } from './ai-data.service'
+import { catalog, customerSchema, expenseSchema, sampleFields, samplePatchSchema, type Grants, type Resource } from './ai.catalog'
 import { AiOperationService, type AiSavedOperation } from './ai-operation.service'
+import { AiReadService } from './ai-read.service'
+import type { AiQueryOptions } from './ai-query'
 
-type Context = { user: CurrentUser; ownerId: string; conversationId: string; grants: Grants; channel?: import('./ai-channel').AiChannelContext }
+type Context = { user: CurrentUser; ownerId: string; ownerIds?:string[]; conversationId: string; grants: Grants; channel?: import('./ai-channel').AiChannelContext }
 type JsonRecord = Record<string, unknown>
 export type Preview = { title: string; account: string; location: string; fields: { key: string; label: string; before: unknown; after: unknown }[]; warnings: string[] }
 
 @Injectable()
 export class AiBusinessService {
-  constructor(private readonly prisma: PrismaService, private readonly access: AiAccessService, private readonly sheets: LabSheetsService, private readonly realtime: TenantRealtimeService, @Optional() private readonly data?: AiDataService, @Optional() private readonly operations?: AiOperationService) {}
-  capabilities(context:Context,resource:Resource) { if(!this.operations) throw new ForbiddenException('业务能力不可用'); return this.operations.capabilities(context,resource) }
+  constructor(private readonly prisma: PrismaService, private readonly access: AiAccessService, private readonly sheets: LabSheetsService, private readonly realtime: TenantRealtimeService, @Optional() private readonly operations?: AiOperationService, @Optional() private readonly reads?: AiReadService) {}
+  private requireSingleOwner(context:Context) { if(context.ownerIds && (context.ownerIds.length!==1 || context.ownerIds[0]!==context.ownerId)) throw new ForbiddenException('多账号模式只允许读取，请选择一个账号并新建对话后写入') }
+  async capabilities(context:Context,resource:Resource) {
+    if(!this.operations) throw new ForbiddenException('业务能力不可用')
+    const capabilities=await this.operations.capabilities(context,resource)
+    return context.ownerIds && context.ownerIds.length>1?{...capabilities,writeFields:[],operations:[],note:'多账号对话只允许读取和统计，不提供写入动作'}:capabilities
+  }
   async prepareOperation(context:Context,input:unknown) {
+    this.requireSingleOwner(context)
     if(!this.operations) throw new ForbiddenException('业务能力不可用')
     const draft=await this.operations.prepare(context,input)
     const preview=await this.preview(context,draft.title,draft.location,draft.fields)
     return this.proposal(context,draft.resource,'business',draft.payload,preview)
   }
-  async query(context: Context, resource: Resource, date?: string, keyword = '') {
-    const fields = await this.access.fields(context.user, resource, 'read', context.grants)
-    let rows: JsonRecord[] = []
-    if (resource === 'samples') {
-      const day = dateSchema.parse(date || businessDateInBeijing())
-      await this.access.sampleProtection(context.user, day, false, context.grants)
-      const blocks = await this.prisma.sampleBlock.findMany({ where: { sheet: { frontendUserId: context.ownerId, date: day } }, orderBy: { index: 'asc' }, take: 50,
-        select: { id: true, index: true, inputs: true, results: true } })
-      for (const block of blocks) {
-        try { await this.access.sampleProtection(context.user, day, Boolean((block.inputs as JsonRecord).completed), context.grants) } catch { continue }
-        rows.push({ id: block.id, position: `数据计算/${day}/第${block.index + 1}个样品`, ...projectedRow(block, fields) })
-      }
-    } else if (resource === 'customers') {
-      const items = await this.prisma.customer.findMany({ where: { frontendUserId: context.ownerId }, take: 50, orderBy: { updatedAt: 'desc' }, select: { id: true, name: true, phone: true, wechat: true, wechatNickname: true } })
-      rows = items.map(row => ({ id: row.id, ...projectedRow(row, fields) }))
-    } else if (resource === 'expenses') {
-      const month = date ? dateSchema.parse(date).slice(0, 7) : businessDateInBeijing().slice(0, 7)
-      const items = await this.prisma.financeEntry.findMany({ where: { frontendUserId: context.ownerId, paymentDate: { startsWith: month } }, take: 50, orderBy: { paymentDate: 'desc' }, select: { id: true, paymentDate: true, item: true, amount: true, paymentMethod: true, remark: true } })
-      rows = items.map(row => ({ id: row.id, ...projectedRow({ ...row, amount: Number(row.amount) }, fields) }))
-    } else if (resource === 'medicine') {
-      const items = await this.prisma.medicineInventoryItem.findMany({ where: { frontendUserId: context.ownerId }, take: 50, orderBy: { name: 'asc' }, select: { id: true, name: true, unit: true, currentQuantity: true } })
-      rows = items.map(row => ({ id: row.id, ...projectedRow({ ...row, currentQuantity: Number(row.currentQuantity) }, fields) }))
-    } else {
-      if(!this.data) throw new ForbiddenException('业务查询不可用')
-      const items=await this.data.rows(context.ownerId,resource,date,context.user)
-      rows=items.map(item=>{const row=jsonSafe(item);return {...(row.id?{id:row.id}:{}),...(row.rowKind?{rowKind:row.rowKind}:{}),...projectedRow(row,fields)}})
-    }
-    // Search only the projected values: a hidden field must never become a search oracle.
-    if (keyword) rows = rows.filter(row => JSON.stringify(row).toLowerCase().includes(keyword.toLowerCase()))
-    await this.prisma.aiAuditLog.create({ data: { actorId: context.user.id, ownerId: context.ownerId, action: 'READ', resource, detail: { ...context.channel?.audit, fields, returned: rows.length } } })
-    return { rows, scope: '当前选定账号，最多 50 条；仅包含已授权字段', truncated: rows.length === 50 }
+  query(context:Context,resource:Resource,date?:string,keyword='',options:AiQueryOptions={}) {
+    if(!this.reads) throw new ForbiddenException('业务查询不可用')
+    return this.reads.query(context,resource,date,keyword,options)
+  }
+  summarize(context:Context,resource:Resource,date?:string,keyword='',options:AiQueryOptions={}) {
+    if(!this.reads) throw new ForbiddenException('业务统计不可用')
+    return this.reads.summarize(context,resource,date,keyword,options)
+  }
+  continueQuery(context:Context,resource?:Resource) {
+    if(!this.reads) throw new ForbiddenException('业务查询不可用')
+    return this.reads.continueQuery(context,resource)
   }
   private async requireWrite(context: Context, resource: Resource, keys: string[], transaction?: Prisma.TransactionClient) {
     const read = await this.access.fields(context.user, resource, 'read', context.grants, transaction)
@@ -62,6 +49,7 @@ export class AiBusinessService {
     if (keys.some(k => !write.includes(k) || !read.includes(k))) throw new ForbiddenException('草稿包含禁止读取或写入的字段')
   }
   async prepareSample(context: Context, input: unknown) {
+    this.requireSingleOwner(context)
     const { blockId, changes } = samplePatchSchema.parse(input)
     for (const [key, value] of Object.entries(changes)) {
       const isText = ['sequence', 'sampleNumber', 'customerText', 'elementNote', 'note'].includes(key)
@@ -77,6 +65,7 @@ export class AiBusinessService {
     return this.proposal(context, 'samples', 'update', { blockId, sheetId: block.sheetId, date: block.sheet.date, changes, baseUpdatedAt: block.updatedAt.toISOString(), baseInputs: Object.fromEntries(Object.keys(changes).map(k => [k, inputs[k] ?? null])) }, preview)
   }
   async prepareCreate(context: Context, resource: 'customers' | 'expenses', input: unknown) {
+    this.requireSingleOwner(context)
     const data = resource === 'customers' ? customerSchema.parse(input) : expenseSchema.parse(input)
     await this.requireWrite(context, resource, Object.keys(data))
     if (resource === 'customers' && await this.prisma.customer.findUnique({ where: { frontendUserId_name: { frontendUserId: context.ownerId, name: (data as { name: string }).name } }, select: { id: true } })) throw new ConflictException('该客户已存在，请在客户资料中核对，AI 不会覆盖现有客户')
@@ -98,6 +87,7 @@ export class AiBusinessService {
     if (block.sheet.date !== businessDateInBeijing() || block.sheet.readonly || block.readonly || (block.inputs as JsonRecord).completed) throw new ForbiddenException('历史、锁定或检测完成的样品不能由 AI 直接修改，请使用原有修改申请流程')
   }
   async confirm(context: Context, id: string, decision: 'confirm' | 'reject') {
+    this.requireSingleOwner(context)
     const afterCommit:(()=>void)[]=[]
     const result = await this.prisma.$transaction(async tx => {
       await context.channel?.assertCurrent(tx)

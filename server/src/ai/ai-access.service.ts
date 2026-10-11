@@ -8,11 +8,26 @@ import { PrismaService } from '../prisma/prisma.service'
 import { AiConfigService } from './ai-config.service'
 import { catalog, type Grants, type Resource } from './ai.catalog'
 import { fieldIsDenied } from './ai-menu-catalog'
+import { normalizedOwners } from './ai-owner-scope'
 
 @Injectable()
 export class AiAccessService {
   constructor(private readonly prisma: PrismaService, private readonly config: AiConfigService, private readonly auth: AuthService, private readonly admin: AdminAccessService) {}
   isAdmin(user: CurrentUser) { return user.role === UserRole.ROOT_ADMIN || user.role === UserRole.SUB_ADMIN }
+  async owners(user:CurrentUser,requested?:string[],transaction?:Prisma.TransactionClient) {
+    if(!requested)return[await this.owner(user,undefined,transaction)]
+    const ids=normalizedOwners(requested)
+    if(!this.isAdmin(user)&&ids.length!==1)throw new ForbiddenException('前台账号不能跨账号读取数据')
+    for(const id of ids)await this.owner(user,id,transaction)
+    return ids
+  }
+  async ownersAuthorizationHash(user:CurrentUser,ownerIds:string[],grants:Grants,transaction?:Prisma.TransactionClient) {
+    const ids=normalizedOwners(ownerIds)
+    if(ids.length===1)return this.authorizationHash(user,ids[0],grants,transaction)
+    const hashes=[]
+    for(const id of ids)hashes.push([id,await this.authorizationHash(user,id,grants,transaction)])
+    return createHash('sha256').update(JSON.stringify(hashes)).digest('hex')
+  }
   async owner(user: CurrentUser, requested?: string, transaction?: Prisma.TransactionClient) {
     if (!this.isAdmin(user)) {
       if (requested && requested !== user.dataOwnerId) throw new ForbiddenException('不能跨账号操作数据')

@@ -17,12 +17,17 @@ async function main() {
   const migration = readFileSync(resolve(root, 'server/prisma/migrations/20261010010000_add_ai_feishu/migration.sql'), 'utf8')
   assert(!/\bDROP\b|\bALTER TABLE\b|\bUPDATE\b|\bDELETE FROM\b/.test(migration))
   const db = await PGlite.create()
-  let socket, app, worker
+  let socket, app, worker, prisma
   let passed = 0
   const check = async (name, fn) => { await fn(); passed++; console.log(`PASS ${name}`) }
   try {
     await db.exec(sql.split(';').filter(s => !s.includes('"AiFeishu')).join(';'))
     await db.exec(migration)
+    await db.exec(`INSERT INTO "User" ("id", "account", "username", "passwordHash", "role", "updatedAt") VALUES ('legacy-root', 'legacy-root', '旧管理员', 'fixture', 'ROOT_ADMIN', CURRENT_TIMESTAMP);
+      INSERT INTO "AiFeishuConfig" ("id", "appId", "appSecretCipher", "publicSiteUrl", "enabled", "revision", "updatedAt") VALUES ('global', 'legacy-app', 'legacy-ciphertext', 'https://ys.ysjc.art', FALSE, 7, CURRENT_TIMESTAMP);
+      INSERT INTO "AiFeishuBinding" ("id", "userId", "appId", "tenantKey", "openId", "chatId", "defaultModelId", "roleSnapshot", "ownerSnapshot", "updatedAt") VALUES ('legacy-binding', 'legacy-root', 'legacy-app', 'legacy-tenant', 'legacy-operator', 'legacy-chat', 'legacy-model', 'ROOT_ADMIN', 'legacy-root', CURRENT_TIMESTAMP);`)
+    const splitMigration = readFileSync(resolve(root, 'server/prisma/migrations/20261011010000_split_ai_feishu_bots/migration.sql'), 'utf8')
+    await db.exec(splitMigration)
     socket = new PGLiteSocketServer({ db, host: '127.0.0.1', port: 55442 })
     await socket.start()
     const { NestFactory } = require('@nestjs/core')
@@ -41,7 +46,8 @@ async function main() {
     app.setGlobalPrefix('api'); await app.init()
     // The fixture never connects to a real Feishu application/provider.
     await app.get(FeishuRuntime).beforeApplicationShutdown()
-    const prisma = app.get(PrismaService), service = app.get(FeishuService), ai = app.get(AiService), business = app.get(AiBusinessService), access = app.get(AiAccessService)
+    prisma = app.get(PrismaService)
+    const service = app.get(FeishuService), ai = app.get(AiService), business = app.get(AiBusinessService), access = app.get(AiAccessService)
     for (const [id, role, extra] of [['root', 'ROOT_ADMIN', {}], ['a', 'FRONTEND_USER', {}], ['b', 'FRONTEND_USER', {}], ['sub', 'FRONTEND_SUB_USER', { parentFrontendUserId: 'a', requiresAccessGuardPassword: false }], ['admin', 'SUB_ADMIN', {}]]) await prisma.user.create({ data: { id, account: id, username: `验收-${id}`, passwordHash: 'synthetic-password-hash', role, ...extra } })
     await prisma.frontendSubAccountPermission.create({ data: { subAccountId: 'sub', permission: 'FINANCE_EXPENSES' } })
     await prisma.subAdminFrontendPermission.create({ data: { subAdminId: 'admin', frontendUserId: 'a', createdById: 'root' } })
@@ -50,25 +56,74 @@ async function main() {
     await prisma.aiSettings.create({ data: { id: 'global', enabled: true } })
     await prisma.aiPolicy.create({ data: { subjectId: '*', enabled: true, rules: [{ resource: 'expenses', readFields: ['paymentDate', 'item', 'amount', 'paymentMethod', 'remark'], writeFields: ['paymentDate', 'item', 'amount', 'paymentMethod', 'remark'] }] } })
     const model = await prisma.aiModel.create({ data: { id: 'model', name: '测试模型', modelId: 'fixture', baseUrl: 'https://model.example.com/v1', apiKeyCipher: encryptAiKey('fixture-key'), vision: true } })
-    const peer = { appId: 'test-app', tenantKey: 'test-tenant', openId: 'operator', chatId: 'private-chat' }
+    const peer = { configId: 'frontend', appId: 'test-app', tenantKey: 'test-tenant', openId: 'operator', chatId: 'private-chat' }
+    const adminPeer = { ...peer, configId: 'admin', appId: 'test-admin-app' }
     await check('default off, root-only management and encrypted masked secret', async () => {
-      assert.equal((await service.getConfig(rootUser)).enabled, false)
-      await assert.rejects(() => service.getConfig(a))
-      await assert.rejects(() => service.saveConfig(a, {}))
-      await assert.rejects(() => service.saveConfig(rootUser, { appId: 'test-app', appSecret: 'fixture-secret', publicSiteUrl: 'http://localhost:5173', enabled: true }))
-      const config = await service.saveConfig(rootUser, { appId: 'test-app', appSecret: 'fixture-secret', publicSiteUrl: 'https://lab.example.com', enabled: true })
+      assert.equal((await service.getConfig(rootUser, 'frontend')).enabled, false)
+      await assert.rejects(() => service.getConfig(a, 'frontend'))
+      await assert.rejects(() => service.saveConfig(a, 'frontend', {}))
+      await assert.rejects(() => service.saveConfig(rootUser, 'frontend', { appId: 'test-app', appSecret: 'fixture-secret', publicSiteUrl: 'http://localhost:5173', enabled: true }))
+      const config = await service.saveConfig(rootUser, 'frontend', { appId: 'test-app', appSecret: 'fixture-secret', publicSiteUrl: 'https://lab.example.com', enabled: true })
       assert(config.hasSecret); assert(!JSON.stringify(config).includes('fixture-secret')); assert(!JSON.stringify(config).includes('Cipher'))
-      assert.notEqual((await prisma.aiFeishuConfig.findUnique({ where: { id: 'global' } })).appSecretCipher, 'fixture-secret')
+      assert.notEqual((await prisma.aiFeishuConfig.findUnique({ where: { id: 'frontend' } })).appSecretCipher, 'fixture-secret')
+    })
+    await check('split migration preserves existing admin credential, revision and valid binding', async () => {
+      const old = await prisma.aiFeishuConfig.findUnique({ where: { id: 'admin' } })
+      assert.equal(old.appId, 'legacy-app'); assert.equal(old.appSecretCipher, 'legacy-ciphertext'); assert.equal(old.revision, 7)
+      const binding = await prisma.aiFeishuBinding.findUnique({ where: { id: 'legacy-binding' } })
+      assert.equal(binding.configId, 'admin'); assert.equal(binding.revokedAt, null); assert.equal(binding.enabled, true)
+      assert.equal(await prisma.aiFeishuConfig.count(), 2)
+    })
+    await check('front-only, mixed and empty legacy configurations migrate without changing business rows', async () => {
+      for (const scenario of ['front-only', 'mixed', 'empty']) {
+        const legacy = await PGlite.create()
+        try {
+          await legacy.exec(sql.split(';').filter(s => !s.includes('"AiFeishu')).join(';'))
+          await legacy.exec(migration)
+          await legacy.exec(`INSERT INTO "User" ("id", "account", "username", "passwordHash", "role", "updatedAt") VALUES ('migration-front', 'migration-front', '保留的业务账号', 'fixture', 'FRONTEND_USER', CURRENT_TIMESTAMP), ('migration-admin', 'migration-admin', '旧管理员', 'fixture', 'ROOT_ADMIN', CURRENT_TIMESTAMP);`)
+          if (scenario !== 'empty') {
+            await legacy.exec(`INSERT INTO "AiFeishuConfig" ("id", "appId", "appSecretCipher", "publicSiteUrl", "enabled", "revision", "updatedAt") VALUES ('global', 'old-front-app', 'original-ciphertext', 'https://front.example.com', TRUE, 9, CURRENT_TIMESTAMP);
+              INSERT INTO "AiFeishuBinding" ("id", "userId", "appId", "tenantKey", "openId", "chatId", "defaultModelId", "roleSnapshot", "ownerSnapshot", "updatedAt") VALUES ('front-binding', 'migration-front', 'old-front-app', 'tenant', 'operator', 'chat', 'model', 'FRONTEND_USER', 'migration-front', CURRENT_TIMESTAMP);`)
+            if (scenario === 'mixed') await legacy.exec(`INSERT INTO "AiFeishuBinding" ("id", "userId", "appId", "tenantKey", "openId", "chatId", "defaultModelId", "roleSnapshot", "ownerSnapshot", "updatedAt") VALUES ('back-binding', 'migration-admin', 'old-front-app', 'tenant', 'operator', 'chat', 'model', 'ROOT_ADMIN', 'migration-admin', CURRENT_TIMESTAMP);`)
+          }
+          const before = await legacy.query('SELECT * FROM "User" ORDER BY "id"')
+          await legacy.exec(splitMigration)
+          assert.deepEqual((await legacy.query('SELECT * FROM "User" ORDER BY "id"')).rows, before.rows)
+          const configs = (await legacy.query('SELECT * FROM "AiFeishuConfig" ORDER BY "id"')).rows
+          assert.equal(configs.length, 2)
+          if (scenario === 'empty') assert(configs.every(c => !c.enabled && !c.appId))
+          else {
+            const c = configs.find(c => c.id === 'frontend')
+            assert.equal(c.appId, 'old-front-app'); assert.equal(c.appSecretCipher, 'original-ciphertext'); assert.equal(c.revision, 9)
+            assert.equal((await legacy.query('SELECT "revokedAt" FROM "AiFeishuBinding" WHERE "id" = \'front-binding\'')).rows[0].revokedAt, null)
+            if (scenario === 'mixed') assert((await legacy.query('SELECT "revokedAt" FROM "AiFeishuBinding" WHERE "id" = \'back-binding\'')).rows[0].revokedAt)
+          }
+        } finally { await legacy.close() }
+      }
+    })
+    await service.saveConfig(rootUser, 'admin', { appId: 'test-admin-app', appSecret: 'fixture-admin-secret', publicSiteUrl: 'https://admin.example.com', enabled: true })
+    await check('duplicate App IDs and wrong-audience invitations cannot overwrite either robot', async () => {
+      const front = await service.getConfig(rootUser, 'frontend'), back = await service.getConfig(rootUser, 'admin')
+      await assert.rejects(() => service.saveConfig(rootUser, 'admin', { appId: 'test-app', appSecret: 'fixture', publicSiteUrl: 'https://admin.example.com', enabled: true }))
+      await assert.rejects(() => service.invitations(rootUser, 'frontend', { userId: 'root', defaultModelId: model.id }))
+      await assert.rejects(() => service.invitations(rootUser, 'admin', { userId: 'a', defaultModelId: model.id }))
+      assert.deepEqual(await service.getConfig(rootUser, 'frontend'), front)
+      assert.deepEqual(await service.getConfig(rootUser, 'admin'), back)
+      const i = await service.invitations(rootUser, 'frontend', { userId: 'sub', defaultModelId: model.id })
+      await assert.rejects(() => service.handle(adminPeer, { kind: 'message', text: i.command }))
+      assert.equal((await prisma.aiFeishuInvitation.findUnique({ where: { codeHash: digest(i.command.split(' ')[1]) } })).claimedAt, null)
     })
     const bind = async (user, selectedPeer = peer) => {
-      const invitation = await service.invitations(rootUser, { userId: user.id, defaultModelId: model.id })
+      const bot = user.role.includes('ADMIN') ? 'admin' : 'frontend'
+      const invitation = await service.invitations(rootUser, bot, { userId: user.id, defaultModelId: model.id })
       const claimed = await service.handle(selectedPeer, { kind: 'message', text: invitation.command })
       const proof = /#proof=([A-Za-z0-9_-]+)/.exec(claimed[0].content)[1]
-      return { invitation, proof, confirm: () => service.confirmBinding(user, { proof }) }
+      return { invitation, proof, link: claimed[0].content, confirm: () => service.confirmBinding(user, { proof }) }
     }
     let bindingA, bindingB
     await check('owner confirmation, wrong-account denial, one-use instructions and proof', async () => {
       const i = await bind(a)
+      assert(i.link.includes('https://lab.example.com/ai/feishu/bind#proof='))
       await assert.rejects(() => service.resolveBinding(b, { proof: i.proof }))
       await assert.rejects(() => service.handle(peer, { kind: 'message', text: i.invitation.command }))
       assert.equal((await service.resolveBinding(a, { proof: i.proof })).account, 'a')
@@ -77,19 +132,31 @@ async function main() {
       assert.equal((await prisma.aiFeishuBinding.findUnique({ where: { userId: 'a' } })).openId, peer.openId)
     })
     await check('one website identity cannot be shared; one operator can bind multiple identities', async () => {
-      await assert.rejects(() => service.invitations(rootUser, { userId: 'a', defaultModelId: model.id }))
+      await assert.rejects(() => service.invitations(rootUser, 'frontend', { userId: 'a', defaultModelId: model.id }))
       bindingB = await (await bind(b)).confirm()
       const s = await service.session(peer)
       assert.equal(s.bindingId, bindingA.bindingId) // New binding does not silently switch.
       assert.equal(await prisma.aiFeishuBinding.count({ where: { openId: peer.openId } }), 2)
     })
     await check('expired invitation and unauthorized/disabled models cannot bind', async () => {
-      const i = await service.invitations(rootUser, { userId: 'sub', defaultModelId: model.id })
+      const i = await service.invitations(rootUser, 'frontend', { userId: 'sub', defaultModelId: model.id })
       await prisma.aiFeishuInvitation.updateMany({ where: { userId: 'sub' }, data: { expiresAt: new Date(0) } })
       await assert.rejects(() => service.handle(peer, { kind: 'message', text: i.command }))
       await prisma.aiModel.update({ where: { id: model.id }, data: { allowedUserIds: ['a'] } })
-      await assert.rejects(() => service.invitations(rootUser, { userId: 'sub', defaultModelId: model.id }))
+      await assert.rejects(() => service.invitations(rootUser, 'frontend', { userId: 'sub', defaultModelId: model.id }))
       await prisma.aiModel.update({ where: { id: model.id }, data: { allowedUserIds: [] } })
+    })
+    await check('same Feishu operator has separate front/admin sessions and role-specific verification links', async () => {
+      const i = await bind(rootUser, adminPeer)
+      assert(i.link.includes('https://admin.example.com/admin/ai/feishu/bind#proof='))
+      await assert.rejects(() => service.resolveBinding(a, { proof: i.proof }))
+      await i.confirm()
+      const front = await service.session(peer), back = await service.session(adminPeer)
+      assert.notEqual(front.id, back.id); assert.notEqual(front.bindingId, back.bindingId)
+      assert.equal(front.configId, 'frontend'); assert.equal(back.configId, 'admin')
+      const rootBinding = await prisma.aiFeishuBinding.findUnique({ where: { userId: 'root' } })
+      await assert.rejects(() => service.unbind(rootUser, 'frontend', rootBinding.id))
+      assert.equal((await service.bindings(rootUser, 'frontend')).some(row => row.userId === 'root'), false)
     })
     const originalChat = ai.chat.bind(ai)
     let chats = 0
@@ -169,7 +236,7 @@ async function main() {
       await assert.rejects(() => business.prepareCreate({ user: sub, ownerId: 'a', conversationId: conversation.id, grants: {} }, 'customers', { name: 'unauthorized' }))
     })
     await check('subadministrator data selection and write audience stay restricted', async () => {
-      const adminPeer = { ...peer, openId: 'admin-operator', chatId: 'admin-chat' }
+      const adminPeer = { ...peer, configId: 'admin', appId: 'test-admin-app', openId: 'admin-operator', chatId: 'admin-chat' }
       await (await bind(admin, adminPeer)).confirm()
       assert.equal((await service.handle(adminPeer, { kind: 'message', text: '查询' }))[0].type, 'card')
       await assert.rejects(() => access.owner(admin, 'b'))
@@ -178,7 +245,7 @@ async function main() {
     await check('revocation during confirmation transaction blocks the original business write', async () => {
       const result = await service.handle(subPeer, { kind: 'message', text: '新增支出' })
       const token = tokenOf(result.find(o => o.type === 'card')), scope = result[0].scope
-      await service.unbind(rootUser, (await prisma.aiFeishuBinding.findUnique({ where: { userId: 'sub' } })).id)
+      await service.unbind(rootUser, 'frontend', (await prisma.aiFeishuBinding.findUnique({ where: { userId: 'sub' } })).id)
       await assert.rejects(() => service.handle(subPeer, { kind: 'card', actionToken: token }))
       await assert.rejects(() => service.assertScope(scope))
       assert.equal(await prisma.financeEntry.count(), 2)
@@ -189,8 +256,25 @@ async function main() {
       await prisma.aiModel.update({ where: { id: model.id }, data: { allowedUserIds: [] } })
     })
     const transport = { snapshot: () => ({ state: 'connected' }), stop: async () => {}, connect: async () => {}, error: () => {}, send: async () => {}, image: async () => { throw new Error('not used') } }
-    worker = new FeishuRuntime(prisma, service, transport)
+    const adminTransport = { ...transport, send: async () => {} }
+    const factory = { create: () => factoryIndex++ % 2 === 0 ? transport : adminTransport }
+    let factoryIndex = 0
+    worker = new FeishuRuntime(prisma, service, factory)
     await prisma.aiFeishuEvent.updateMany({ data: { status: 'SENT' } }) // Binding notifications are synthetic fixture setup.
+    await check('each queue uses its own transport, and a delayed front retry never blocks admin delivery', async () => {
+      const frontSends = [], adminSends = []
+      transport.send = async (...args) => { frontSends.push(args) }; adminTransport.send = async (...args) => { adminSends.push(args) }
+      await worker.ingest(peer, 'message:front-routing', { kind: 'message', text: '帮助' })
+      await worker.ingest(adminPeer, 'message:admin-routing', { kind: 'message', text: '帮助' })
+      await worker.tick('frontend')
+      await prisma.aiFeishuEvent.updateMany({ where: { eventKey: 'message:front-routing' }, data: { nextAttemptAt: new Date(Date.now() + 60000) } })
+      await worker.tick('admin'); await worker.tick('admin')
+      assert.equal(frontSends.length, 0); assert.equal(adminSends.length, 1)
+      assert.equal((await prisma.aiFeishuEvent.findFirst({ where: { eventKey: 'message:admin-routing' } })).status, 'SENT')
+      await prisma.aiFeishuEvent.updateMany({ where: { eventKey: 'message:front-routing' }, data: { nextAttemptAt: new Date(0) } })
+      await worker.tick('frontend')
+      assert.equal(frontSends.length, 1); assert.equal(adminSends.length, 1)
+    })
     await check('durable dedup, encrypted message bodies, delivery retry never replays AI', async () => {
       let sends = 0
       transport.send = async () => { if (++sends === 1) throw new Error('network timeout') }
@@ -220,9 +304,9 @@ async function main() {
     })
     await check('process restart interrupts ambiguous execution without replaying a model/write', async () => {
       await worker.beforeApplicationShutdown()
-      const c = await service.settings()
+      const c = await service.settings('frontend')
       await prisma.aiFeishuEvent.create({ data: { ...peer, configRevision: c.revision, eventKey: 'crash-job', inputCipher: encryptAiKey(JSON.stringify({ kind: 'message', text: '新增支出' })), status: 'PROCESSING' } })
-      worker = new FeishuRuntime(prisma, service, transport)
+      worker = new FeishuRuntime(prisma, service, factory)
       const before = chats
       await worker.tick()
       const e = await prisma.aiFeishuEvent.findFirst({ where: { eventKey: 'crash-job' } })
@@ -232,16 +316,37 @@ async function main() {
     const address = await app.getUrl(), jwt = require('jsonwebtoken')
     const headers = id => ({ Authorization: `Bearer ${jwt.sign({ sub: id, permissionVersion: 1 }, process.env.JWT_SECRET)}`, 'Content-Type': 'application/json' })
     await check('HTTP authentication and root-only endpoints; no unauthenticated business entrypoint', async () => {
-      assert.equal((await fetch(address + '/api/admin/ai/feishu/config')).status, 401)
-      assert.equal((await fetch(address + '/api/admin/ai/feishu/config', { headers: headers('a') })).status, 403)
-      assert.equal((await fetch(address + '/api/admin/ai/feishu/config', { headers: headers('root') })).status, 200)
+      assert.equal((await fetch(address + '/api/admin/ai/feishu/configs/frontend')).status, 401)
+      assert.equal((await fetch(address + '/api/admin/ai/feishu/configs/frontend', { headers: headers('a') })).status, 403)
+      assert.equal((await fetch(address + '/api/admin/ai/feishu/configs/frontend', { headers: headers('root') })).status, 200)
+      assert.equal((await fetch(address + '/api/admin/ai/feishu/configs/admin', { headers: headers('root') })).status, 200)
+      assert.equal((await fetch(address + '/api/admin/ai/feishu/configs/forged', { headers: headers('root') })).status, 400)
+      assert.equal((await fetch(address + '/api/admin/ai/feishu/config', { method: 'PUT', headers: headers('root'), body: '{}' })).status, 404)
       assert.equal((await fetch(address + '/api/ai/feishu/bind/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401)
     })
+    await check('changing front configuration preserves admin proofs, bindings, sessions and cards', async () => {
+      const frontBinding = await prisma.aiFeishuBinding.findUnique({ where: { userId: 'b' } })
+      const backBinding = await prisma.aiFeishuBinding.findUnique({ where: { userId: 'root' } })
+      const before = await service.session(adminPeer)
+      const menu = await service.handle(adminPeer, { kind: 'message', text: '切换身份' }), token = tokenOf(menu[0])
+      const invite = await service.invitations(rootUser, 'admin', { userId: 'legacy-root', defaultModelId: model.id })
+      const frontConfig = await service.getConfig(rootUser, 'frontend')
+      await service.saveConfig(rootUser, 'frontend', { appId: 'replacement-front-app', appSecret: 'replacement-secret', publicSiteUrl: 'https://front-new.example.com', enabled: true })
+      assert.equal((await prisma.aiFeishuBinding.findUnique({ where: { id: frontBinding.id } })).enabled, false)
+      assert.deepEqual(await prisma.aiFeishuBinding.findUnique({ where: { id: backBinding.id } }), backBinding)
+      assert.deepEqual(await service.session(adminPeer), before)
+      assert.equal((await prisma.aiFeishuInvitation.findUnique({ where: { codeHash: digest(invite.command.split(' ')[1]) } })).usedAt, null)
+      assert((await service.handle(adminPeer, { kind: 'card', actionToken: token }))[0].type === 'card')
+      await service.saveConfig(rootUser, 'frontend', { appId: frontConfig.appId, appSecret: 'fixture-secret', publicSiteUrl: frontConfig.publicSiteUrl, enabled: true })
+    })
     await check('turning channel off preserves original website AI and business records', async () => {
-      await service.saveConfig(rootUser, { appId: 'test-app', publicSiteUrl: 'https://lab.example.com', enabled: false })
+      await service.saveConfig(rootUser, 'frontend', { appId: 'test-app', publicSiteUrl: 'https://lab.example.com', enabled: false })
       await assert.rejects(() => service.handle(peer, { kind: 'message', text: '状态' }))
       assert((await ai.bootstrap(a)).enabled)
       assert.equal(await prisma.financeEntry.count(), 3)
+      assert.equal((await service.getConfig(rootUser, 'admin')).enabled, true)
+      assert.equal((await prisma.aiFeishuBinding.findUnique({ where: { userId: 'admin' } })).revokedAt, null)
+      await service.saveConfig(rootUser, 'admin', { appId: 'test-admin-app', publicSiteUrl: 'https://admin.example.com', enabled: false })
       ai.chat = originalChat
     })
     await check('production start script boots and shuts down the compiled server', async () => {
@@ -276,6 +381,7 @@ async function main() {
   } finally {
     if (worker) await worker.beforeApplicationShutdown()
     if (app) await app.close()
+    if (prisma) await prisma.$disconnect()
     if (socket) await socket.stop()
     await db.close()
   }

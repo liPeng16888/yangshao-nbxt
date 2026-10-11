@@ -9,6 +9,7 @@ import { AiConfigService } from './ai-config.service'
 import { AiAccessService } from './ai-access.service'
 import { AiBusinessService } from './ai-business.service'
 import { AiDataService } from './ai-data.service'
+import { AiReadService } from './ai-read.service'
 import { AiOperationService } from './ai-operation.service'
 import { EmployeeAttendanceModule } from '../employee-attendance/employee-attendance.module'
 import { MedicineInventoryModule } from '../medicine-inventory/medicine-inventory.module'
@@ -21,8 +22,8 @@ import { CustomerOverviewModule } from '../customer-overview/customer-overview.m
 
 import { AdminFeishuController, FeishuController } from './feishu/feishu.controller'
 import { FeishuService } from './feishu/feishu.service'
-import { FeishuTransport } from './feishu/feishu.transport'
+import { FeishuTransportFactory } from './feishu/feishu.transport'
 import { FeishuRuntime } from './feishu/feishu.runtime'
 
-@Module({ imports: [AuthModule, AdminModule, LabSheetsModule, TenantRealtimeModule, EmployeeAttendanceModule, MedicineInventoryModule, FinanceModule, SharedPrepaidModule, CalculationDraftModule, FrontendPreferencesModule, BlacklistModule, CustomerOverviewModule], controllers: [AiController, AdminAiController, AdminFeishuController, FeishuController], providers: [FeishuService, FeishuTransport, FeishuRuntime, AiService, AiConfigService, AiAccessService, AiBusinessService, AiDataService, AiOperationService] })
+@Module({ imports: [AuthModule, AdminModule, LabSheetsModule, TenantRealtimeModule, EmployeeAttendanceModule, MedicineInventoryModule, FinanceModule, SharedPrepaidModule, CalculationDraftModule, FrontendPreferencesModule, BlacklistModule, CustomerOverviewModule], controllers: [AiController, AdminAiController, AdminFeishuController, FeishuController], providers: [FeishuService, FeishuTransportFactory, FeishuRuntime, AiService, AiConfigService, AiAccessService, AiBusinessService, AiDataService, AiReadService, AiOperationService] })
 export class AiModule {}

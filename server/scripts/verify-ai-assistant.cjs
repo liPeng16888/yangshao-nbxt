@@ -19,12 +19,16 @@ async function main() {
   const migration = readFileSync(resolve(root, 'server/prisma/migrations/20261009000000_add_ai_assistant/migration.sql'), 'utf8')
   assert(!/\bDROP\b|ALTER TABLE "(?!Ai)/.test(migration))
   const db = await PGlite.create()
-  let socket, app
+  let socket, app, prisma
   let passed = 0
   const check = (name, operation) => Promise.resolve().then(operation).then(() => { passed++; console.log(`PASS ${name}`) })
   try {
     await db.exec(baseSql)
     await db.exec(migration)
+    await db.exec(readFileSync(resolve(root, 'server/prisma/migrations/20261010010000_add_ai_feishu/migration.sql'), 'utf8'))
+    const ownerScopeMigration = readFileSync(resolve(root, 'server/prisma/migrations/20261011000000_add_ai_conversation_owner_scope/migration.sql'), 'utf8')
+    assert(!/\bDROP\b|\bDELETE\b|\bUPDATE\b|\bTRUNCATE\b/.test(ownerScopeMigration))
+    await db.exec(ownerScopeMigration)
     socket = new PGLiteSocketServer({ db, host: '127.0.0.1', port: 55439 })
     await socket.start()
     const { NestFactory } = require('@nestjs/core')
@@ -43,7 +47,11 @@ async function main() {
     app = await NestFactory.create(AppModule, { logger: false, abortOnError: false })
     app.setGlobalPrefix('api')
     await app.init()
-    const prisma = app.get(PrismaService), ai = app.get(AiService), business = app.get(AiBusinessService), config = app.get(AiConfigService), access = app.get(AiAccessService)
+    // Disable the unrelated background transport in this disposable AI database.
+    const { FeishuRuntime } = require('../dist/src/ai/feishu/feishu.runtime.js')
+    await app.get(FeishuRuntime).beforeApplicationShutdown()
+    prisma = app.get(PrismaService)
+    const ai = app.get(AiService), business = app.get(AiBusinessService), config = app.get(AiConfigService), access = app.get(AiAccessService)
     await prisma.user.createMany({ data: [
       { id: 'a', account: 'fixture-a', username: '测试甲', role: 'FRONTEND_USER', passwordHash: 'fixture', requiresAccessGuardPassword: false },
       { id: 'b', account: 'fixture-b', username: '测试乙', role: 'FRONTEND_USER', passwordHash: 'fixture', requiresAccessGuardPassword: false },
@@ -67,7 +75,7 @@ async function main() {
     await prisma.aiConversation.update({ where: { id: conversation.id }, data: { authorizationHash: await access.authorizationHash(actor, 'a', {}) } })
     const context = { user: actor, ownerId: 'a', conversationId: conversation.id, grants: {} }
     const sampleId = sheet.sampleBlocks[0].id
-    await check('additive migration creates all AI tables', async () => { assert.equal(await prisma.aiSettings.count(), 1); assert.equal((await db.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'Ai%' ")).rows.length, 8) })
+    await check('additive migrations create all AI and channel tables', async () => { assert.equal(await prisma.aiSettings.count(), 1); assert.equal((await db.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'Ai%' ")).rows.length, 14) })
     await check('tenant and field filters on real SQL reads', async () => { const data = await business.query(context, 'samples', date); assert.equal(data.rows.length, 1); assert.equal(data.rows[0].inputs.ironRaw, 1); assert(!JSON.stringify(data).includes('禁止发送')); assert(!JSON.stringify(data).includes('parameterSnapshot')); assert(!JSON.stringify(data).includes('999')) })
     await check('foreign frontend account selection is rejected', async () => { await assert.rejects(() => access.owner(actor, 'b')) })
     let draft
@@ -219,6 +227,116 @@ async function main() {
       await prisma.aiSettings.update({ where: { id: 'global' }, data: { blockedFields: { samples: ['inputs.note'] } } })
     })
     await check('policy change revokes old conversation and drafts', async () => { const d = await business.prepareCreate(context, 'expenses', { paymentDate: date, item: '权限撤销', amount: 1, paymentMethod: 'cash' }); await config.savePolicy(rootUser, 'a', { enabled: true, rules: [] }); await assert.rejects(() => ai.confirm(actor, d.proposalId, { decision: 'confirm' })); assert.equal(await prisma.financeEntry.count(), 1) })
+    // Pagination/statistics fixtures are separate from all existing write-flow fixtures.
+    await prisma.user.create({ data: { id: 'paged', account: 'fixture-paged', username: '分页验收', role: 'FRONTEND_USER', passwordHash: 'synthetic' } })
+    await prisma.aiPolicy.create({ data: { subjectId: 'paged', rules: fullRules } })
+    const pagedActor = await resolveCurrentUserIdentity(prisma, 'paged', 1)
+    const pagedSheet = await prisma.labSheet.create({ data: { frontendUserId: 'paged', date, parameters: defaultLabParameters } })
+    await prisma.sampleBlock.createMany({ data: Array.from({ length: 125 }, (_, index) => ({ sheetId: pagedSheet.id, index, inputs: { ...createEmptyInputs(index), ironRaw: 1, price: 0.1, sampleNumber: index >= 80 ? '后半段匹配' : '普通样品', note: '不得暴露的备注' }, results: {}, parameterSnapshot: defaultLabParameters })) })
+    const pagedContext = { user: pagedActor, ownerId: 'paged', conversationId: 'isolated-pagination', grants: {} }
+    let firstPage
+    await check('real SQL pagination has 50/50/25 unique rows and persists continuation across turns', async () => {
+      firstPage = await business.query(pagedContext, 'samples', date)
+      const second = await business.continueQuery(pagedContext, 'samples')
+      const third = await business.continueQuery(pagedContext)
+      assert.deepEqual([firstPage.returned, second.returned, third.returned], [50, 50, 25])
+      assert.deepEqual([firstPage.truncated, second.truncated, third.truncated], [true, true, false])
+      assert.equal(firstPage.totalRecords, 125)
+      assert.equal(new Set([...firstPage.rows, ...second.rows, ...third.rows].map(r => r.id)).size, 125)
+      assert.equal((await business.continueQuery(pagedContext)).hasMore, false)
+      assert(!JSON.stringify(firstPage).includes('不得暴露')); assert(!JSON.stringify(firstPage).includes('parameterSnapshot'))
+    })
+    await check('server summary scans all 125 rows and sums decimal money exactly', async () => {
+      const summary = await business.summarize(pagedContext, 'samples', date)
+      assert.equal(summary.complete, true); assert.equal(summary.totalRecords, 125)
+      assert.equal(summary.totals['inputs.price'].value, '12.50')
+      assert.equal(summary.sampleCounts.detected, 125); assert.equal(summary.sampleCounts.priced, 125)
+      assert(!('rows' in summary)); assert.equal(await prisma.sampleBlock.count({ where: { sheetId: pagedSheet.id } }), 125)
+      const income = await business.summarize(pagedContext, 'income', date)
+      assert.equal(income.totals.sampleCount.value, 125); assert.equal(income.totals.totalAmount.value, '12.50')
+    })
+    await check('keyword search and exact page-end detection happen after authorization, not the first 50 rows', async () => {
+      const page = await business.query(pagedContext, 'samples', date, '后半段匹配')
+      assert.equal(page.totalRecords, 45); assert.equal(page.returned, 45); assert.equal(page.hasMore, false)
+      assert.equal((await business.summarize(pagedContext, 'samples', date, '不得暴露')).totalRecords, 0)
+    })
+    await check('cursors reject changed data and another account or conversation', async () => {
+      await assert.rejects(() => business.query({ ...pagedContext, conversationId: 'other' }, 'samples', date, '', { cursor: firstPage.nextCursor }))
+      await assert.rejects(() => business.query({ ...pagedContext, ownerId: 'b' }, 'samples', date, '', { cursor: firstPage.nextCursor }))
+      const first = await prisma.sampleBlock.findFirst({ where: { sheetId: pagedSheet.id }, orderBy: { index: 'asc' } })
+      await prisma.sampleBlock.update({ where: { id: first.id }, data: { inputs: { ...first.inputs, ironRaw: 2 } } })
+      await assert.rejects(() => business.query(pagedContext, 'samples', date, '', { cursor: firstPage.nextCursor }))
+    })
+    await check('real SQL scans past multiple source batches and supports expense-only report days', async () => {
+      const earlier = new Date(date + 'T00:00:00Z'); earlier.setUTCDate(earlier.getUTCDate() - 1)
+      const earlierDate = earlier.toISOString().slice(0, 10)
+      await prisma.financeEntry.createMany({ data: Array.from({ length: 501 }, (_, index) => ({ frontendUserId: 'paged', paymentDate: earlierDate, item: index >= 300 ? '晚段支出' : '普通支出', amount: 0.1, paymentMethod: 'cash' })) })
+      const summary = await business.summarize(pagedContext, 'expenses', undefined, '', { startDate: earlierDate, endDate: date })
+      assert.equal(summary.totalRecords, 501); assert.equal(summary.totals.amount.value, '50.10')
+      const late = await business.query(pagedContext, 'expenses', undefined, '晚段支出', { startDate: earlierDate, endDate: date })
+      assert.equal(late.totalRecords, 201); assert.equal(late.returned, 50); assert.equal(late.hasMore, true)
+      const report = await business.summarize(pagedContext, 'reportsFinance', undefined, '', { startDate: earlierDate, endDate: date })
+      assert.equal(report.totals.expense.value, '50.10'); assert.equal(report.totals.income.value, '12.50')
+    })
+    await check('real access-password gates exclude completed rows from full summaries and require historical unlock', async () => {
+      const group = await prisma.accessGuardGroup.create({ data: { frontendUserId: 'paged', name: '分页访问验收', password: 'fixture-password', recoveryPrompt: 'fixture', recoveryAnswer: 'fixture', features: { create: [{ frontendUserId: 'paged', feature: 'COMPLETED_SAMPLE_DATA' }, { frontendUserId: 'paged', feature: 'HISTORICAL_DATES' }] } } })
+      const sample = await prisma.sampleBlock.findFirst({ where: { sheetId: pagedSheet.id } })
+      await prisma.sampleBlock.update({ where: { id: sample.id }, data: { inputs: { ...sample.inputs, completed: true } } })
+      assert.equal((await business.summarize(pagedContext, 'samples', date)).totalRecords, 124)
+      await assert.rejects(() => business.summarize(pagedContext, 'samples', '2000-01-01'))
+      const { AuthService } = require('../dist/src/auth/auth.service.js')
+      const grant = await app.get(AuthService).verifyAccessGuardGroup(pagedActor, group.id, 'fixture-password')
+      const unlocked = { ...pagedContext, grants: { COMPLETED_SAMPLE_DATA: grant.token, HISTORICAL_DATES: grant.token } }
+      assert.equal((await business.summarize(unlocked, 'samples', date)).totalRecords, 125)
+      assert.equal((await business.summarize(unlocked, 'samples', '2000-01-01')).totalRecords, 0)
+    })
+    await check('authorized multi-owner reads preserve provenance, per-owner totals and the combined page limit', async () => {
+      await prisma.user.create({ data: { id: 'z-paged-second', account: 'fixture-paged-second', username: '第二授权账号', role: 'FRONTEND_USER', passwordHash: 'synthetic' } })
+      const secondSheet = await prisma.labSheet.create({ data: { frontendUserId: 'z-paged-second', date, parameters: defaultLabParameters } })
+      await prisma.sampleBlock.createMany({ data: Array.from({ length: 30 }, (_, index) => ({ sheetId: secondSheet.id, index, inputs: { ...createEmptyInputs(index), ironRaw: 1, price: 0.2 }, results: {}, parameterSnapshot: defaultLabParameters })) })
+      const multi = { user: rootUser, ownerId: 'paged', ownerIds: ['paged', 'z-paged-second'], conversationId: 'multi-read', grants: {} }
+      const first = await business.query(multi, 'samples', date)
+      assert.equal(first.returned, 50); assert.equal(first.totalRecords, 155)
+      const pages = [first]
+      while (pages.at(-1).hasMore) pages.push(await business.continueQuery(multi))
+      assert.deepEqual(pages.map(p => p.returned), [50, 50, 50, 5])
+      assert(pages.flatMap(p => p.rows).every(row => multi.ownerIds.includes(row.owner.id)))
+      assert.equal(pages.flatMap(p => p.rows).filter(row => row.owner.id === 'z-paged-second').length, 30)
+      const summary = await business.summarize(multi, 'samples', date)
+      assert.equal(summary.totals['inputs.price'].value, '18.50')
+      assert.deepEqual(summary.accounts.map(a => a.totals['inputs.price'].value), ['12.50', '6.00'])
+      await assert.rejects(() => business.query({ ...multi, ownerIds: ['paged'] }, 'samples', date, '', { cursor: first.nextCursor }))
+      for (const action of [() => business.prepareCreate(multi, 'expenses', {}), () => business.prepareSample(multi, {}), () => business.prepareOperation(multi, {}), () => business.confirm(multi, 'fake', 'confirm')]) await assert.rejects(action)
+    })
+    await check('one unauthorized or disabled account rejects the complete group; frontend remains isolated', async () => {
+      await prisma.user.create({ data: { id: 'paged-admin', account: 'fixture-paged-admin', username: '授权管理员', role: 'SUB_ADMIN', passwordHash: 'synthetic' } })
+      await prisma.subAdminFrontendPermission.create({ data: { subAdminId: 'paged-admin', frontendUserId: 'paged', createdById: 'root' } })
+      await prisma.aiPolicy.create({ data: { subjectId: 'paged-admin', rules: fullRules } })
+      const limitedAdmin = await resolveCurrentUserIdentity(prisma, 'paged-admin', 1)
+      const multi = { user: limitedAdmin, ownerId: 'paged', ownerIds: ['paged', 'z-paged-second'], conversationId: 'scope-denial', grants: {} }
+      await assert.rejects(() => business.query(multi, 'samples', date))
+      await assert.rejects(() => business.query({ ...multi, user: pagedActor }, 'samples', date))
+      await prisma.user.update({ where: { id: 'z-paged-second' }, data: { disabled: true } })
+      await assert.rejects(() => business.summarize({ ...multi, user: rootUser }, 'samples', date))
+      await prisma.user.update({ where: { id: 'z-paged-second' }, data: { disabled: false } })
+    })
+    await check('conversation scope migration keeps legacy history valid and blocks forged multi-account confirmation', async () => {
+      assert.deepEqual((await prisma.aiConversation.findUnique({ where: { id: conversation.id } })).ownerIds, [])
+      const ownerIds = ['paged', 'z-paged-second']
+      const saved = await prisma.aiConversation.create({ data: { actorId: 'root', ownerId: 'paged', ownerIds, modelId: model.id, settingsRevision: (await config.settings()).revision, authorizationHash: await access.ownersAuthorizationHash(rootUser, ownerIds, {}), title: '组合范围验收' } })
+      assert.equal((await ai.conversation(rootUser, saved.id, undefined, {}, ownerIds)).readOnly, true)
+      await assert.rejects(() => ai.conversation(rootUser, saved.id, 'paged', {}))
+      const forged = await prisma.aiProposal.create({ data: { conversationId: saved.id, actorId: 'root', ownerId: 'paged', resource: 'expenses', operation: 'create', payload: {}, preview: {}, expiresAt: new Date(Date.now() + 60000) } })
+      await assert.rejects(() => ai.confirm(rootUser, forged.id, { decision: 'confirm' }))
+      assert.equal((await prisma.aiProposal.findUnique({ where: { id: forged.id } })).status, 'PENDING')
+    })
+    await check('global amount denial also blocks server aggregate totals', async () => {
+      await prisma.aiSettings.update({ where: { id: 'global' }, data: { blockedFields: { samples: ['inputs.note', 'inputs.price'] } } })
+      const summary = await business.summarize(pagedContext, 'samples', date)
+      assert(!('inputs.price' in summary.totals)); assert(!('priced' in summary.sampleCounts))
+      const income = await business.summarize(pagedContext, 'income', date)
+      assert(!('totalAmount' in income.totals))
+    })
     await app.listen(0, '127.0.0.1')
     const address = await app.getUrl()
     const token = jwt.sign({ sub: 'a', permissionVersion: 1 }, process.env.JWT_SECRET)
@@ -227,6 +345,9 @@ async function main() {
     console.log(JSON.stringify({ integrationChecks: passed, database: 'isolated PGlite PostgreSQL', providerRequests: 0, existingBusinessDatabaseTouched: false }))
   } finally {
     if (app) await app.close()
+    // Shutdown hooks can reconnect Prisma while releasing a channel lease.
+    // Close that pool before tearing down the disposable PostgreSQL socket.
+    if (prisma) await prisma.$disconnect()
     if (socket) await socket.stop()
     await db.close()
   }

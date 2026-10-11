@@ -21,15 +21,66 @@ beforeEach(() => vi.stubGlobal('localStorage', memoryStorage()))
 
 const bootstrap = { enabled: true, models: [{ id: 'm', name: '测试模型', vision: true, tools: true }], owners: [], adminReadOnly: false, dailyRequestLimit: 50 }
 const proposal = { id: 'p', resource: 'samples', status: 'PENDING', expiresAt: '2099-01-01', preview: { title: '修改样品数据', account: '甲（a）', location: '数据计算/2026-10-09/第1个样品', fields: [{ key: 'ironRaw', label: '铁原始值', before: 1, after: 2 }], warnings: ['请逐项核对'] } }
-function fixture() {
+function fixture(audience:'frontend'|'admin'='frontend') {
   const fetchMock = vi.fn().mockImplementation(async (url: string) => ({ ok: true, json: async () => url.endsWith('/bootstrap') ? bootstrap : url.endsWith('/chat') ? { conversationId: 'c', answer: '草稿已生成', proposals: [structuredClone(proposal)] } : { status: 'APPLIED' } }))
   vi.stubGlobal('fetch', fetchMock)
-  const wrapper = mount(AiAssistant, { props: { audience: 'frontend', actorId: 'actor' }, global: { plugins: [ElementPlus], stubs: { Bubble: { template: '<div><slot name="content" /></div>' } } } })
+  const wrapper = mount(AiAssistant, { props: { audience, actorId: 'actor' }, global: { plugins: [ElementPlus], stubs: { Bubble: { template: '<div><slot name="content" /></div>' } } } })
   const button = (text: string) => wrapper.findAll('button').find(b => b.text() === text)!
   return { wrapper, fetchMock, button }
 }
 afterEach(() => { window.localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe('floating AI review UI', () => {
+  it.each(['frontend', 'admin'] as const)('formats model replies in the %s assistant while keeping user input literal', async audience => {
+    const f = fixture(audience)
+    f.fetchMock.mockImplementation(async (url: string) => ({ ok: true, json: async () => url.endsWith('/bootstrap')
+      ? { ...bootstrap, owners: [{ id: 'owner', account: 'A', username: '授权账号' }] }
+      : { conversationId: 'formatted', answer: '## 📋 查询类\n\n- **样品信息**：检测结果\n\n## ⚠️ 使用须知\n\n1. 确认后写入', proposals: [] } }))
+    await f.wrapper.get('.ys-ai-launcher').trigger('click'); await flushPromises()
+    if (audience === 'admin') {
+      f.wrapper.findAllComponents({ name: 'ElSelect' })[1].vm.$emit('update:modelValue', ['owner'])
+      await flushPromises()
+    }
+    await f.wrapper.get('textarea').setValue('**请介绍功能**')
+    await f.button('发送').trigger('click'); await flushPromises()
+    expect(f.wrapper.get('.ys-ai-message--plain').text()).toBe('**请介绍功能**')
+    expect(f.wrapper.findAll('.ys-ai-markdown h2').map(heading => heading.text())).toEqual(['📋 查询类', '⚠️ 使用须知'])
+    expect(f.wrapper.get('.ys-ai-markdown strong').text()).toBe('样品信息')
+    expect(f.wrapper.get('.ys-ai-markdown ol li').text()).toBe('确认后写入')
+    expect(f.wrapper.find('.ys-ai-proposal').exists()).toBe(false)
+    f.wrapper.unmount()
+  })
+  it('selects multiple authorized admin accounts and clears history when the selection changes',async()=>{
+    const f=fixture('admin'),owners=[{id:'owner-a',account:'A',username:'授权甲'},{id:'owner-b',account:'B',username:'授权乙'}]
+    f.fetchMock.mockImplementation(async(url:string)=>({ok:true,json:async()=>url.endsWith('/bootstrap')?{...bootstrap,owners}:url.endsWith('/chat')?{conversationId:'multi',answer:'多账号查询结果',proposals:[]}: {status:'APPLIED'}}))
+    await f.wrapper.get('.ys-ai-launcher').trigger('click');await flushPromises()
+    const select=f.wrapper.findAllComponents({name:'ElSelect'})[1]
+    expect(select.props('multiple')).toBe(true);expect(select.props('multipleLimit')).toBe(20)
+    select.vm.$emit('update:modelValue',['owner-a','owner-b']);select.vm.$emit('change',['owner-a','owner-b']);await flushPromises()
+    expect(f.wrapper.text()).toContain('已选择 2 个授权账号');expect(f.wrapper.text()).toContain('多账号只读')
+    await f.wrapper.get('textarea').setValue('同时查询两个账号');await f.button('发送').trigger('click');await flushPromises()
+    const request=JSON.parse(f.fetchMock.mock.calls.find(c=>String(c[0]).endsWith('/chat'))![1].body)
+    expect(request.ownerIds).toEqual(['owner-a','owner-b']);expect(request).not.toHaveProperty('ownerId')
+    expect(f.wrapper.text()).toContain('多账号查询结果')
+    select.vm.$emit('update:modelValue',['owner-a']);select.vm.$emit('change',['owner-a']);await flushPromises()
+    expect(f.wrapper.text()).not.toContain('多账号查询结果')
+    await f.wrapper.get('textarea').setValue('查询甲');await f.button('发送').trigger('click');await flushPromises()
+    const last=JSON.parse(f.fetchMock.mock.calls.filter(c=>String(c[0]).endsWith('/chat')).at(-1)![1].body)
+    expect(last.ownerIds).toEqual(['owner-a']);expect(last).not.toHaveProperty('conversationId')
+    f.wrapper.unmount()
+  })
+  it('does not allow a fabricated proposal to be confirmed while multiple accounts are selected',async()=>{
+    const f=fixture('admin')
+    f.fetchMock.mockImplementation(async(url:string)=>({ok:true,json:async()=>url.endsWith('/bootstrap')?{...bootstrap,owners:[{id:'a',account:'A',username:'甲'},{id:'b',account:'B',username:'乙'}]}:{conversationId:'multi',answer:'请核对',proposals:[structuredClone(proposal)]}}))
+    await f.wrapper.get('.ys-ai-launcher').trigger('click');await flushPromises()
+    const select=f.wrapper.findAllComponents({name:'ElSelect'})[1]
+    select.vm.$emit('update:modelValue',['a','b']);select.vm.$emit('change',['a','b']);await flushPromises()
+    await f.wrapper.get('textarea').setValue('查询');await f.button('发送').trigger('click');await flushPromises()
+    expect(f.button('确认写入').attributes('disabled')).toBeDefined()
+    expect(f.wrapper.get('input[type="checkbox"]').attributes('disabled')).toBeDefined()
+    await f.button('确认写入').trigger('click');await flushPromises()
+    expect(f.fetchMock.mock.calls.some(c=>String(c[0]).includes('/proposals/'))).toBe(false)
+    f.wrapper.unmount()
+  })
   it('shows the launcher on demand and never sends mock account data', async () => { const f = fixture(); await f.wrapper.setProps({ mockMode: true }); await f.wrapper.get('[aria-label="打开 AI 助手"]').trigger('click'); await flushPromises(); expect(f.wrapper.text()).toContain('本地演示账号'); expect(f.fetchMock).not.toHaveBeenCalled(); f.wrapper.unmount() })
   it('requires a separate checked review and never includes altered values in the confirmation request', async () => {
     const f = fixture(); await f.wrapper.get('[aria-label="打开 AI 助手"]').trigger('click'); await flushPromises(); await f.wrapper.get('textarea').setValue('把第一条样品的铁原始值改成2'); await f.button('发送').trigger('click'); await flushPromises()
