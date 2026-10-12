@@ -28,6 +28,7 @@ describe('Independent Feishu robot settings', () => {
     const wrapper = mountPanel(true); await flushPromises()
     expect(wrapper.findAll('.feishu-bot')).toHaveLength(2)
     expect(wrapper.text()).toContain('card.action.trigger'); expect(wrapper.text()).toContain('im:message.p2p_msg:readonly')
+    expect(wrapper.text()).toContain('多账号查询'); expect(wrapper.text()).toContain('全选账号'); expect(wrapper.text()).toContain('20 个授权账号')
     for (const button of wrapper.findAll('button').filter(b => ['保存连接配置', '测试连接', '生成绑定指令'].includes(b.text()))) expect(button.attributes('disabled')).toBeDefined()
     await chooseAdmin(wrapper)
     expect(wrapper.text()).toContain('后台网站 HTTPS 根地址')

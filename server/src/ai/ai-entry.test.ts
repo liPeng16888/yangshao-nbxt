@@ -1,0 +1,8 @@
+import {describe,it,expect} from 'vitest'
+import {entryMenuLevels,entryReadResources,assertEntryWrite,assertEntryDate,entryScopeKey} from './ai-entry'
+describe('menu-bound entry contracts',()=>{
+  it('matches frontend secondary and backend tertiary menu names',()=>{expect(entryMenuLevels('samples','frontend')).toEqual(['数据计算','数据计算']);expect(entryMenuLevels('samples','admin')).toEqual(['数据统计']);expect(entryMenuLevels('monthly','admin')).toEqual(['财务报表','月结款明细','月结款账单明细']);expect(entryMenuLevels('expenses','admin')).toEqual(['财务报表','收支账单','支出账单'])})
+  it('permits only necessary reference reads, never reference writes',()=>{const scope={scene:'attendance' as const,action:'create',date:'2026-10-11'};expect(entryReadResources(scope)).toEqual(['attendance','employees']);expect(()=>assertEntryWrite(scope,'employees','create')).toThrow(/不一致/);expect(()=>assertEntryWrite(scope,'attendance','update')).toThrow(/不一致/);expect(()=>assertEntryWrite(scope,'attendance','create',{date:'2026-10-11'})).not.toThrow()})
+  it('checks exact dates and accounting months while allowing separate end dates',()=>{const scope={scene:'leaves' as const,action:'create',date:'2026-10-11'};expect(()=>assertEntryDate(scope,{startDate:'2026-10-11',endDate:'2026-10-12'})).not.toThrow();expect(()=>assertEntryDate(scope,{startDate:'2026-10-10'})).toThrow(/日期/);expect(()=>assertEntryDate(scope,{month:'2026-09'})).toThrow(/日期/)})
+  it('retains old scene compatibility and ignores convenience sample hints in the menu lock',()=>{expect(entryScopeKey({scene:'samples',date:'2026-10-11',sequence:'001'})).toBe(entryScopeKey({scene:'samples',action:'prepare_sample_registration',date:'2026-10-11',sequence:'002'}))})
+})

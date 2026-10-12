@@ -18,9 +18,11 @@
       </el-tab-pane>
       <el-tab-pane label="读取与写入权限" name="permissions">
         <div class="ai-policy-subject"><label>配置对象</label><el-select v-model="subjectId" filterable @change="selectPolicy"><el-option value="*" label="默认权限（未单独配置的账号）" /><el-option v-for="account in config?.accounts || []" :key="account.id" :value="account.id" :label="accountLabel(account)" /></el-select><el-switch v-model="policyEnabled" active-text="允许使用 AI" :disabled="useAdminMocks" /></div>
+        <el-alert v-if="isSubAccount" title="子账号默认关闭，不继承默认权限；必须为该账号单独保存授权。子管理员的数据账号范围还需与原后台授权同时满足。" type="warning" :closable="false" />
+        <div v-if="selectedRole==='SUB_ADMIN'" class="ai-policy-subject"><label>AI 可访问的前台账号</label><el-select v-model="policyOwnerIds" multiple filterable placeholder="未选择表示不允许访问任何数据账号" :disabled="useAdminMocks || saving"><el-option v-for="account in config?.accounts.filter(a=>a.role==='FRONTEND_USER') || []" :key="account.id" :value="account.id" :label="accountLabel(account)" /></el-select></div>
         <el-alert type="info" :closable="false" title="AI 授权不能超过原有菜单权限、账号范围和访问密码保护。未选字段不能读取；写入始终需人工核对确认。只读/原流程菜单不会因全选而开放写入。" show-icon />
         <AiPermissionTree v-model="rules" :catalog="activeCatalog" :blocked="settings.blockedFields" :disabled="saving" :account-audience="selectedAccountAudience" />
-        <el-button type="primary" :loading="saving" :disabled="useAdminMocks || !config" @click="savePolicy">保存此对象的权限</el-button><el-button v-if="subjectId !== '*'" :disabled="useAdminMocks || saving" @click="inheritPolicy">恢复使用默认权限</el-button>
+        <el-button type="primary" :loading="saving" :disabled="useAdminMocks || !config" @click="savePolicy">保存此对象的权限</el-button><el-button v-if="subjectId !== '*'" :disabled="useAdminMocks || saving" @click="inheritPolicy">{{ isSubAccount?'取消独立授权（恢复关闭）':'恢复使用默认权限' }}</el-button>
         <p class="ai-help">默认权限初始全部关闭。单独保存的账号使用独立配置；主账号和子账号可分别设置。权限变更后旧对话与旧草稿失效，需要新建对话。</p>
       </el-tab-pane>
       <el-tab-pane label="全局禁止字段" name="blocked">
@@ -58,7 +60,9 @@ import FeishuSettingsPanel from '../components/FeishuSettingsPanel.vue'
 const request = aiClient('admin', import.meta.env.VITE_ADMIN_API_BASE_URL || '/api')
 const config = ref<AiConfig | null>(null), loading = ref(false), saving = ref(false), error = ref(''), tab = ref('models')
 const settings = reactive({ enabled: false, dailyRequestLimit: 50, blockedFields: {} as Record<string, string[]> })
-const subjectId = ref('*'), policyEnabled = ref(true), rules = ref<AiRule[]>([])
+const subjectId = ref('*'), policyEnabled = ref(true), rules = ref<AiRule[]>([]),policyOwnerIds=ref<string[]>([])
+const selectedRole=computed(()=>config.value?.accounts.find(a=>a.id===subjectId.value)?.role||'')
+const isSubAccount=computed(()=>['SUB_ADMIN','FRONTEND_SUB_USER'].includes(selectedRole.value))
 const modelVisible = ref(false), modelEditingId = ref(''), modelForm = reactive({ name: '', modelId: '', baseUrl: '', apiKey: '', enabled: true, vision: false, tools: true, allowedUserIds: [] as string[] })
 const logs = ref<{ id: string; actorId: string; ownerId?: string; resource?: string; action: string; detail: unknown; createdAt: string }[]>([]), logPage = ref(1)
 const activeCatalog = computed(() => config.value?.catalog || menuCatalog)
@@ -72,11 +76,11 @@ async function load() {
   loading.value = true; error.value = ''
   try { config.value = await request<AiConfig>('/admin/ai/config'); Object.assign(settings, config.value.settings); for (const c of config.value.catalog) settings.blockedFields[c.key] ||= []; selectPolicy() } catch (e) { error.value = (e as Error).message } finally { loading.value = false }
 }
-function selectPolicy() { const p = config.value?.policies.find(p => p.subjectId === subjectId.value) || config.value?.policies.find(p => p.subjectId === '*'); policyEnabled.value = p?.enabled ?? true; rules.value = (p?.rules || []).map(rule=>({...rule,readFields:[...rule.readFields],writeFields:[...rule.writeFields]})) }
+function selectPolicy() { const explicit=config.value?.policies.find(p=>p.subjectId===subjectId.value);const p=explicit||(!isSubAccount.value?config.value?.policies.find(p=>p.subjectId==='*'):undefined);policyEnabled.value=p?.enabled??!isSubAccount.value;rules.value=(p?.rules||[]).map(rule=>({...rule,readFields:[...rule.readFields],writeFields:[...rule.writeFields]}));policyOwnerIds.value=[...new Set((p?.rules||[]).flatMap(rule=>rule.ownerIds||[]))] }
 async function perform(operation: () => Promise<void>) { saving.value = true; error.value = ''; try { await operation() } catch (e) { error.value = (e as Error).message } finally { saving.value = false } }
 function saveSettings() { return perform(async () => { await request('/admin/ai/settings', { method: 'PUT', body: { enabled: settings.enabled, dailyRequestLimit: settings.dailyRequestLimit, blockedFields: settings.blockedFields } }); ElMessage.success('AI 服务设置已保存，旧对话和草稿已失效'); await load() }) }
-function savePolicy() { return perform(async () => { await request(`/admin/ai/policies/${encodeURIComponent(subjectId.value)}`, { method: 'PUT', body: { enabled: policyEnabled.value, rules: rules.value } }); ElMessage.success('权限已保存'); await load() }) }
-function inheritPolicy() { return perform(async () => { await request(`/admin/ai/policies/${encodeURIComponent(subjectId.value)}`, { method: 'DELETE' }); ElMessage.success('已恢复默认权限'); await load() }) }
+function savePolicy() { return perform(async () => { const selected=rules.value.map(rule=>({...rule,...(selectedRole.value==='SUB_ADMIN'?{ownerIds:[...policyOwnerIds.value]}:{})}));await request(`/admin/ai/policies/${encodeURIComponent(subjectId.value)}`, { method: 'PUT', body: { enabled: policyEnabled.value, rules:selected } }); ElMessage.success('权限已保存'); await load() }) }
+function inheritPolicy() { return perform(async () => { await request(`/admin/ai/policies/${encodeURIComponent(subjectId.value)}`, { method: 'DELETE' }); ElMessage.success(isSubAccount.value?'已取消独立授权，子账号默认关闭':'已恢复默认权限'); await load() }) }
 function editModel(model?: AiConfiguredModel) { modelEditingId.value = model?.id || ''; Object.assign(modelForm, { name: model?.name || '', modelId: model?.modelId || '', baseUrl: model?.baseUrl || '', apiKey: '', enabled: model?.enabled ?? true, vision: model?.vision ?? false, tools: model?.tools ?? true, allowedUserIds: [...(model?.allowedUserIds || [])] }); modelVisible.value = true }
 function saveModel() { return perform(async () => { await request(modelEditingId.value ? `/admin/ai/models/${modelEditingId.value}` : '/admin/ai/models', { method: modelEditingId.value ? 'PUT' : 'POST', body: modelForm }); modelVisible.value = false; modelForm.apiKey = ''; ElMessage.success('模型已保存'); await load() }) }
 function testModel(id: string) { return perform(async () => { await request(`/admin/ai/models/${id}/test`, { method: 'POST' }); ElMessage.success('模型连接成功') }) }
@@ -88,7 +92,7 @@ function logOwnerAccounts(row: { ownerId?:string; detail:unknown }) {
   const ids=(row.detail as {ownerIds?:unknown})?.ownerIds
   return Array.isArray(ids)&&ids.length&&ids.every(id=>typeof id==='string')?ids.map(id=>findAccount(id)).join('、'):findAccount(row.ownerId)
 }
-function actionLabel(action: string) { return ({ READ: '读取业务数据', SUMMARY: '统计业务数据', PROPOSED: '生成草稿', APPLIED: '确认写入', REJECTED: '取消草稿', EXPIRED: '草稿过期', CHAT_REQUEST: '对话请求', CHAT_FAILED: '请求失败', MODEL_SAVED: '保存模型', MODEL_DISABLED: '停用模型', MODEL_TESTED: '测试模型', FEISHU_CONFIG_SAVED: '飞书连接配置', FEISHU_INVITED: '生成飞书邀请', FEISHU_BOUND: '确认飞书绑定', FEISHU_UNBOUND: '解除飞书绑定', FEISHU_BINDING_UPDATED: '修改飞书绑定', FEISHU_ACCESS_VERIFIED: '飞书访问验证', SETTINGS_UPDATED: '修改服务设置', POLICY_UPDATED: '修改账号权限', POLICY_INHERITED: '恢复默认权限' } as Record<string, string>)[action] || action }
+function actionLabel(action: string) { return ({ READ: '读取业务数据', SUMMARY: '统计业务数据', PROPOSED: '生成草稿', APPLIED: '确认写入', REJECTED: '取消草稿', EXPIRED: '草稿过期', CHAT_REQUEST: '对话请求', CHAT_FAILED: '请求失败', MODEL_SAVED: '保存模型', MODEL_DISABLED: '停用模型', MODEL_TESTED: '测试模型', FEISHU_CONFIG_SAVED: '飞书连接配置', FEISHU_INVITED: '生成飞书邀请', FEISHU_BOUND: '确认飞书绑定', FEISHU_UNBOUND: '解除飞书绑定', FEISHU_BINDING_UPDATED: '修改飞书绑定', FEISHU_ACCESS_VERIFIED: '飞书访问验证', FEISHU_OWNER_SCOPE_UPDATED: '飞书查询账号范围', SETTINGS_UPDATED: '修改服务设置', POLICY_UPDATED: '修改账号权限', POLICY_INHERITED: '恢复默认权限' } as Record<string, string>)[action] || action }
 watch(tab, value => { if (value === 'logs') void loadLogs() })
 onMounted(load)
 </script>

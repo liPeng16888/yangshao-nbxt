@@ -15,7 +15,7 @@ function fixture() {
     financeEntry: { create: vi.fn().mockResolvedValue({ id: 'expense' }) }, customer: { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'customer' }) }
   }
   const prisma = { $transaction: vi.fn().mockImplementation(async callback => callback(tx)), aiAuditLog: { create: vi.fn() }, user: { findUnique: vi.fn().mockResolvedValue({ username: '甲', account: 'a' }) }, sampleBlock: { findFirst: vi.fn().mockResolvedValue(block), findMany: vi.fn().mockResolvedValue([block]) }, aiProposal: { count: vi.fn().mockResolvedValue(0), create: vi.fn().mockResolvedValue({ id: 'p' }) }, customer: { findUnique: vi.fn().mockResolvedValue(null) } }
-  const access = { fields: vi.fn().mockImplementation(async (_user, resource) => resource === 'samples' ? ['inputs.ironRaw'] : resource === 'customers' ? ['name','phone'] : ['paymentDate','item','amount','paymentMethod']), sampleProtection: vi.fn().mockResolvedValue(undefined) }
+  const access = { owner:vi.fn().mockResolvedValue('actor'),fields: vi.fn().mockImplementation(async (_user, resource) => resource === 'samples' ? ['inputs.ironRaw'] : resource === 'customers' ? ['name','phone'] : ['paymentDate','item','amount','paymentMethod']), sampleProtection: vi.fn().mockResolvedValue(undefined) }
   const sheets = { saveSampleBlock: vi.fn().mockResolvedValue({ parameterSnapshot: { secret: 'must-not-leak' } }), notifyAiSampleSaved: vi.fn() }
   const realtime = { publish: vi.fn() }
   const reads={query:vi.fn().mockResolvedValue({rows:[]}),summarize:vi.fn(),continueQuery:vi.fn()}

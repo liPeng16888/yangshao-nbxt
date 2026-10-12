@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElMessageBox } from 'element-plus'
 
 import AppLayout from './AppLayout.vue'
+vi.mock('vue-router',()=>({useRoute:()=>({path:'/data'})}))
+vi.mock('@/stores/labSheet',()=>({useLabSheetStore:()=>({sheet:{date:'2026-10-11'},sampleBlocks:[]})}))
 
 const stores = vi.hoisted(() => ({
   loadGroups: vi.fn(),

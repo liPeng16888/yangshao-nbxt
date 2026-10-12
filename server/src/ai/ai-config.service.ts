@@ -19,7 +19,11 @@ export class AiConfigService {
   }
   async policy(actorId: string, transaction?: Prisma.TransactionClient) {
     const db = transaction || this.prisma
-    const row = await db.aiPolicy.findUnique({ where: { subjectId: actorId } }) || await db.aiPolicy.findUnique({ where: { subjectId: '*' } })
+    const explicit = await db.aiPolicy.findUnique({ where: { subjectId: actorId } })
+    if (explicit) return { enabled: explicit.enabled, rules: explicit.rules as unknown as Rule[] }
+    const actor = await db.user.findUnique({ where: { id: actorId }, select: { role: true } })
+    if (actor?.role === UserRole.SUB_ADMIN || actor?.role === UserRole.FRONTEND_SUB_USER) return { enabled: false, rules: [] as Rule[] }
+    const row = await db.aiPolicy.findUnique({ where: { subjectId: '*' } })
     return row ? { enabled: row.enabled, rules: row.rules as unknown as Rule[] } : { enabled: true, rules: [] as Rule[] }
   }
   safeModel(model: { apiKeyCipher: string; [key: string]: unknown }) {
@@ -51,6 +55,8 @@ export class AiConfigService {
     this.assertRoot(user)
     if (subjectId !== '*' && !await this.prisma.user.findFirst({ where: { id: subjectId, deletedAt: null } })) throw new NotFoundException('账号不存在')
     const body = policySchema.parse(input)
+    const ownerIds = [...new Set(body.rules.flatMap(r => r.ownerIds || []))]
+    if (ownerIds.length && await this.prisma.user.count({ where: { id: { in: ownerIds }, role: UserRole.FRONTEND_USER, disabled: false, deletedAt: null } }) !== ownerIds.length) throw new BadRequestException('请选择有效的前台主账号作为 AI 数据范围')
     try { validateRules(body.rules) } catch (error) { throw new BadRequestException((error as Error).message) }
     return this.prisma.$transaction(async tx => {
       const result = await tx.aiPolicy.upsert({ where: { subjectId }, create: { subjectId, ...body }, update: body })

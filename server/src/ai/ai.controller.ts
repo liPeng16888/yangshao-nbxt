@@ -5,8 +5,8 @@ import { CurrentUserInfo } from '../auth/current-user.decorator'
 import type { CurrentUser } from '../auth/current-user'
 import { AiService } from './ai.service'
 import { AiConfigService } from './ai-config.service'
+import { conversationReadSchema } from './ai.catalog'
 import { z, ZodError } from 'zod'
-import { ownerIdsSchema } from './ai-owner-scope'
 
 // All inputs, including configuration, are validated server-side. Never expose provider errors.
 async function validated<T>(operation: () => Promise<T>) {
@@ -27,6 +27,12 @@ export class AiController {
   constructor(private readonly ai: AiService) {}
   @Get('bootstrap') bootstrap(@CurrentUserInfo() user: CurrentUser) { return this.ai.bootstrap(user) }
   @Post('chat') chat(@CurrentUserInfo() user: CurrentUser, @Body() input: unknown) { return validated(() => this.ai.chat(user, input)) }
+  @Post('entry/options') entryOptions(@CurrentUserInfo() user: CurrentUser,@Body() input:unknown) { return validated(async()=>{const body=z.object({ownerId:z.string().max(100).optional(),grants:z.record(z.string(),z.string().max(2000)).default({})}).strict().parse(input);return this.ai.entryOptions(user,body.ownerId,body.grants)}) }
+  @Post('entry/customers') entryCustomers(@CurrentUserInfo() user: CurrentUser,@Body() input:unknown) { return validated(async()=>{const body=z.object({ownerId:z.string().max(100).optional(),keyword:z.string().trim().max(100),grants:z.record(z.string(),z.string().max(2000)).default({})}).strict().parse(input);return this.ai.entryCustomers(user,body.ownerId,body.keyword,body.grants)}) }
+  @Post('entry/proposals') entryProposals(@CurrentUserInfo() user:CurrentUser,@Body() input:unknown) { return validated(()=>this.ai.quickEntry(user,input)) }
+  @Post('entry/records') entryRecords(@CurrentUserInfo() user:CurrentUser,@Body() input:unknown) { return validated(()=>this.ai.entryRecords(user,input)) }
+  @Post('conversations/list') history(@CurrentUserInfo() user:CurrentUser,@Body() input:unknown) { return validated(()=>this.ai.history(user,input)) }
+  @Delete('conversations/:id') deleteConversation(@CurrentUserInfo() user:CurrentUser,@Param('id') id:string,@Body() input:unknown) { return validated(()=>this.ai.deleteConversation(user,id,input)) }
   @Post('attachments')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
   attachment(@CurrentUserInfo() user: CurrentUser, @UploadedFile() file?: { buffer: Buffer; mimetype: string }) {
@@ -34,9 +40,10 @@ export class AiController {
     return this.ai.attachment(user, file.buffer, file.mimetype)
   }
   @Post('conversations/:id/read') read(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: unknown) {
-    return validated(async () => { const b = z.object({ ownerId: z.string().optional(), ownerIds: ownerIdsSchema.optional(), grants: z.record(z.string(), z.string()).default({}) }).strict().refine(b => !(b.ownerId && b.ownerIds)).parse(body); return this.ai.conversation(user, id, b.ownerId, b.grants, b.ownerIds) })
+    return validated(async () => { const b = conversationReadSchema.parse(body); return this.ai.conversation(user, id, b.ownerId, b.grants,b.ownerIds,b.beforeId) })
   }
   @Post('proposals/:id/decision') confirm(@CurrentUserInfo() user: CurrentUser, @Param('id') id: string, @Body() body: unknown) { return validated(() => this.ai.confirm(user, id, body)) }
+  @Post('proposals/batch-decision') confirmBatch(@CurrentUserInfo() user:CurrentUser,@Body() input:unknown) { return validated(()=>this.ai.confirmBatch(user,input)) }
 }
 @Controller('admin/ai')
 @UseGuards(AuthGuard)

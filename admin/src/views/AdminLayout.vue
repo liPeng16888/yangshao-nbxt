@@ -69,7 +69,7 @@
       </main>
     </section>
 
-    <AiAssistant v-if="user" :key="user.id" audience="admin" :actor-id="user.id" :api-base="aiApiBase" :mock-mode="useAdminMocks" />
+    <AiAssistant v-if="user" :key="user.id" audience="admin" :actor-id="user.id" :api-base="aiApiBase" :mock-mode="useAdminMocks" :page-context="{menu:route.path}" />
     <el-dialog v-model="settingsVisible" title="账号设置" width="460px">
       <el-form label-position="top">
         <el-form-item label="登录账号">
@@ -100,12 +100,12 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import dayjs from 'dayjs'
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Aim, Box, Calendar, Coin, DataAnalysis, Document, DocumentChecked, Expand, Fold, Memo, Money, List, Plus, Present, Switch, Tickets, Timer, User, Wallet, ChatDotRound } from '@element-plus/icons-vue'
 import { adminMe, currentAdminUser, logoutAdmin, updateAdminProfile, useAdminMocks } from '../api'
-import AiAssistant from '../../../shared/ai/AiAssistant.vue'
+const AiAssistant=defineAsyncComponent(()=>import('../../../shared/ai/AiAssistant.vue'))
 import BrandLogo from '../../../shared/BrandLogo.vue'
 const aiApiBase = import.meta.env.VITE_ADMIN_API_BASE_URL || '/api'
 import type { AdminUser } from '../types'

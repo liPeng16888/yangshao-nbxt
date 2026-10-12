@@ -1,9 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common'
-import { z } from 'zod'
-
-export const MAX_AI_OWNERS = 20
-export const ownerIdsSchema = z.array(z.string().trim().min(1).max(100)).min(1).max(MAX_AI_OWNERS).refine(ids => new Set(ids).size === ids.length, '账号不能重复')
-export const ownerSelectionSchema = z.object({ ownerId: z.string().trim().min(1).max(100).optional(), ownerIds: ownerIdsSchema.optional() }).strict().refine(v => !(v.ownerId && v.ownerIds), '不能同时指定单账号和多账号')
+import { ownerIdsSchema } from './ai-owner-schema'
+export { MAX_AI_OWNERS,ownerIdsSchema,ownerSelectionSchema } from './ai-owner-schema'
 export function normalizedOwners(ids: string[]) {
   const parsed = ownerIdsSchema.safeParse(ids)
   if (!parsed.success) throw new BadRequestException('请选择 1 至 20 个不重复的授权账号')

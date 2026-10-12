@@ -13,13 +13,14 @@ import { FrontendPreferencesService } from '../frontend-preferences/frontend-pre
 import { BlacklistService } from '../blacklist/blacklist.service'
 import { AdminAccessService } from '../admin/admin-access.service'
 import { AiAccessService } from './ai-access.service'
-import { catalog, projectedRow, type Grants, type Resource } from './ai.catalog'
+import { catalog, projectedRow, type Grants, type Resource, type EntryContext } from './ai.catalog'
+import { assertEntryDate, assertEntryWrite } from './ai-entry'
 import { businessChangeSchema, operationFor, operations, requiresRecordId, type AiOperation } from './ai-operations'
 import { defaultLabReportTemplate, defaultLabReportSmsTemplate } from '../frontend-preferences/frontend-preferences.defaults'
 import { transactionServices } from './ai-transaction'
 import { jsonSafe } from './ai-data.service'
 
-export type AiBusinessContext = {user:CurrentUser;ownerId:string;conversationId:string;grants:Grants}
+export type AiBusinessContext = {user:CurrentUser;ownerId:string;conversationId:string;grants:Grants;entryContext?:EntryContext}
 export interface AiSavedOperation { action:string; data:Record<string,any>; targetId?:string; baseStamp:string|null }
 const valueAt = (row:any,key:string) => key.split('.').reduce((v,k)=>v?.[k],row) ?? null
 const stamp = (row:any):string|null => row ? String(row.revision ?? row.version ?? (row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt) ?? JSON.stringify(row)) : null
@@ -30,14 +31,14 @@ export class AiOperationService {
   private audience(context:AiBusinessContext) { return this.access.isAdmin(context.user)?'admin' as const:'frontend' as const }
   async capabilities(context:AiBusinessContext,resource:Resource) {
     const entry=catalog.find(c=>c.key===resource)!
-    const read=await this.access.fields(context.user,resource,'read',context.grants)
+    const read=await this.access.fields(context.user,resource,'read',context.grants,undefined,context.ownerId)
     let write:string[]=[]
-    try {write=await this.access.fields(context.user,resource,'write',context.grants)} catch {}
+    try {write=await this.access.fields(context.user,resource,'write',context.grants,undefined,context.ownerId)} catch {}
     return {resource,label:entry.label,readFields:entry.fields.filter(f=>read.includes(f.key)).map(f=>({key:f.key,label:f.label})),writeFields:entry.fields.filter(f=>write.includes(f.key)).map(f=>({key:f.key,label:f.label})),operations:operations.filter(o=>o.resource===resource&&o.audience===this.audience(context)&&write.length&&(!o.permissionKeys||o.permissionKeys.every(k=>write.includes(k)))).map(o=>({action:o.action,label:o.label,requiresId:requiresRecordId(o),input:z.toJSONSchema(o.schema)})),note:entry.note}
   }
   private async permit(context:AiBusinessContext,operation:AiOperation,data:Record<string,any>,tx?:Prisma.TransactionClient) {
-    const read=await this.access.fields(context.user,operation.resource,'read',context.grants,tx)
-    const write=await this.access.fields(context.user,operation.resource,'write',context.grants,tx)
+    const read=await this.access.fields(context.user,operation.resource,'read',context.grants,tx,context.ownerId)
+    const write=await this.access.fields(context.user,operation.resource,'write',context.grants,tx,context.ownerId)
     const entry=catalog.find(c=>c.key===operation.resource)!
     const inputKeys=Object.keys(data).filter(k=>entry.fields.some(f=>f.key===k))
     const keys=[...inputKeys.filter(k=>entry.fields.some(f=>f.key===k&&f.writable)),...(operation.permissionKeys||[])]
@@ -83,6 +84,7 @@ export class AiOperationService {
   async prepare(context:AiBusinessContext,input:unknown) {
     const body=businessChangeSchema.parse(input)
     const operation=operationFor(body.resource,body.action,this.audience(context)),data=operation.schema.parse(body.data) as Record<string,any>
+    assertEntryWrite(context.entryContext,body.resource,body.action,data)
     if(requiresRecordId(operation)?!body.id:Boolean(body.id)) throw new BadRequestException(requiresRecordId(operation)?'必须选择确切的记录':'此操作按输入位置定位，请勿附加记录编号')
     if(!Object.keys(data).length&&['update','save'].includes(operation.action)) throw new BadRequestException('没有需要修改的数据')
     if(operation.resource==='coefficients'&&Object.keys(data).length===1) throw new BadRequestException('没有需要修改的行字段')
@@ -90,6 +92,7 @@ export class AiOperationService {
     if(operation.resource==='prepaidRecharges'&&(operation.action==='reverse'||data.isOpeningBalance)&&!context.user.isFrontendMainAccount) throw new ForbiddenException('只有主账号可以执行此充值操作')
     const {read,keys}=await this.permit(context,operation,data)
     const row=await this.target(this.prisma,context,operation,data,body.id)
+    if(row)assertEntryDate(context.entryContext,row)
     const entry=catalog.find(c=>c.key===operation.resource)!
     const before=projectedRow(jsonSafe(row||{}),read)
     const changed=Object.entries(data).filter(([k])=>k!=='rowKind').map(([key,after])=>({key,label:entry.fields.find(f=>f.key===key)?.label||'操作原因',before:valueAt(before,key),after}))
@@ -102,10 +105,12 @@ export class AiOperationService {
   }
   async execute(context:AiBusinessContext,resource:Resource,input:AiSavedOperation,tx:Prisma.TransactionClient,afterCommit:(()=>void)[],proposalId:string) {
     const operation=operationFor(resource,input.action,this.audience(context)),data=operation.schema.parse(input.data) as Record<string,any>
+    assertEntryWrite(context.entryContext,resource,input.action,data)
     await this.permit(context,operation,data,tx)
     const scoped=transactionServices({employees:this.employees,payroll:this.payroll,medicine:this.medicine,finance:this.finance,ledger:this.ledger,drafts:this.drafts,preferences:this.preferences,blacklist:this.blacklist,admin:this.admin},this.prisma,tx,afterCommit)
     if(this.audience(context)==='admin') await scoped.admin.getAllowedFrontendUserIds(context.user,[context.ownerId])
     const row=await this.target(tx,context,operation,data,input.targetId,scoped.drafts)
+    if(row)assertEntryDate(context.entryContext,row)
     if(stamp(row)!==input.baseStamp) throw new ConflictException('记录已经变化，请取消草稿后重新查询和核对')
     const owner=context.ownerId,actor=context.user.id,id=input.targetId!,version=row?.updatedAt?.toISOString?.()
     const payload={...data,...(version?{baseUpdatedAt:version}:{})},user=context.user

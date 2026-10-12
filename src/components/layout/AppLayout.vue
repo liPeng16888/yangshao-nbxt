@@ -11,7 +11,7 @@
     <AppSidebar v-else :collapsed="sidebarCollapsed" @toggle="toggleSidebar" />
     <div class="app-main">
       <AppTopbar v-if="!isMobileLayout" />
-      <main class="app-content">
+      <main class="app-content" @focusin="selectAiSample" @click="selectAiSample">
         <el-alert
           v-if="tenantRealtime.hasRemoteChanges"
           class="remote-change-alert"
@@ -23,12 +23,14 @@
         <router-view />
       </main>
     </div>
-    <AiAssistant v-if="authStore.user" :key="authStore.user.id" audience="frontend" :actor-id="authStore.user.id" :api-base="aiApiBase" :mock-mode="useMocks" />
+    <AiAssistant v-if="authStore.user" :key="authStore.user.id" audience="frontend" :actor-id="authStore.user.id" :api-base="aiApiBase" :mock-mode="useMocks" :page-context="aiPageContext" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { useLabSheetStore } from '@/stores/labSheet'
 import { ElMessageBox } from 'element-plus'
 import { useMobileLayout } from '@/composables/useMobileLayout'
 import { useCustomerNavigation } from '@/composables/useCustomerNavigation'
@@ -45,7 +47,7 @@ import {
 import AppMobileShell from './AppMobileShell.vue'
 import AppSidebar from './AppSidebar.vue'
 import AppTopbar from './AppTopbar.vue'
-import AiAssistant from '../../../shared/ai/AiAssistant.vue'
+const AiAssistant=defineAsyncComponent(()=>import('../../../shared/ai/AiAssistant.vue'))
 import { useMocks } from '@/utils/request'
 const aiApiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -58,6 +60,10 @@ const PREFERENCE_SECTION_LABELS: Record<FrontendPreferenceSection, string> = {
 }
 const sidebarCollapsed = ref(false)
 const authStore = useAuthStore()
+const aiRoute=useRoute(),aiLabStore=useLabSheetStore(),aiSampleSequence=ref('')
+const aiPageContext=computed(()=>({menu:aiRoute.path,...(aiRoute.path==='/data'?{date:aiLabStore.sheet?.date,sequence:aiSampleSequence.value}:{})}))
+watch([()=>authStore.user?.id,()=>aiRoute.path,()=>aiLabStore.sheet?.date],()=>{aiSampleSequence.value=''})
+function selectAiSample(event:Event){if(aiRoute.path!=='/data')return;const blockId=(event.target as Element)?.closest?.('[data-block-id]')?.getAttribute('data-block-id');if(!blockId)return;const block=aiLabStore.sampleBlocks.find(block=>block.id===blockId);if(block)aiSampleSequence.value=String(block.inputs.sequence||'')}
 const accessGuard = useAccessGuardStore()
 const tenantRealtime = useTenantRealtimeStore()
 const sharedPrepaid = useSharedPrepaidStore()

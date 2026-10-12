@@ -76,6 +76,7 @@ model AiFeishuSession {
   chatId              String
   bindingId           String?
   ownerId             String?
+  ownerIds            Json     @default("[]")
   conversationId      String?
   revision            Int      @default(1)
   authorityHash       String?
@@ -165,6 +166,7 @@ model AiConversation {
   modelId           String
   settingsRevision  Int
   authorizationHash String
+  entryContext      Json?
   processingUntil   DateTime?
   title             String
   createdAt         DateTime @default(now())

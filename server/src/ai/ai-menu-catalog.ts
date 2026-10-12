@@ -14,7 +14,8 @@ export const sampleFields = {
   titaniumRaw: '钛原始值', waterSample: '水样重量', bottleWater: '瓶+水', bottleWaterSample: '瓶+水+样', moisture: '水分输入',
   crucible: '坩埚重量', sampleWeight: '样重', burnedCrucibleSample: '烧后坩埚+样', elementNote: '化验元素备注', note: '备注', completed: '检测完成状态'
 } as const
-export const sampleWritable = Object.keys(sampleFields).filter(k => !['price', 'paymentStatus', 'completed'].includes(k))
+export const sampleWritable = Object.keys(sampleFields).filter(k => k !== 'completed')
+export const sampleRegistrationFields = ['inputs.customerText', 'inputs.price', 'inputs.paymentStatus']
 export const resultFields = { iron: '铁结果', silicon: '硅结果', aluminum: '铝结果', aluminumSiliconRatio: '铝硅比结果', total: '合量结果', density: '比重结果', calcium: '钙结果', magnesium: '镁结果', titanium: '钛结果', moisture: '水分结果', burnLoss: '灼减结果' }
 function fields(source: Record<string, string>, writable: boolean | string[] = false, kind = ''): AiField[] {
   return Object.entries(source).map(([key, label]) => ({ key, label, writable: writable === true || Array.isArray(writable) && writable.includes(key), guard: `${kind}:${key}` }))
@@ -35,7 +36,7 @@ const expense = fields({ paymentDate: '支付日期', item: '支出事项', amou
 const customer = fields({ name: '姓名/名称', phone: '电话', wechat: '微信号', wechatNickname: '微信昵称' }, true, 'customer')
 const attendanceMenu = (path: string, label: string) => [employee(path, label), employee(path, label)] as const
 export const menuCatalog = [
-  entry('samples', '样品输入与检测结果', 'DATA_MAIN', [...fields(Object.fromEntries(Object.entries(sampleFields).map(([k,v]) => [`inputs.${k}`,v])), sampleWritable.map(k=>`inputs.${k}`), 'sample'), ...fields(Object.fromEntries(Object.entries(resultFields).map(([k,v]) => [`results.${k}`,v])), false, 'sample')], front('数据计算', '/data', '数据计算'), front('数据统计', '/data', '数据统计'), undefined, ['frontend'], '只改当天既有样品的原始输入；历史、锁定、完成样品沿用原审批流程。'),
+  entry('samples', '数据计算主表 · 样品登记与检测输入', 'DATA_MAIN', [...fields(Object.fromEntries(Object.entries(sampleFields).map(([k,v]) => [`inputs.${k}`,v])), sampleWritable.map(k=>`inputs.${k}`), 'sample'), ...fields(Object.fromEntries(Object.entries(resultFields).map(([k,v]) => [`results.${k}`,v])), false, 'sample')], front('数据计算', '/data', '数据计算'), front('数据统计', '/data', '数据统计'), undefined, ['frontend','admin'], '001 是样品序号，不是客户编号。本菜单包含付款客户、样品金额、费用状态。仅修改当天既有样品，写入前生成核对草稿。后台仅开放这三个登记字段，不开放检测输入；预存款必须使用原会员及台账流程。'),
   entry('standardSamples', '标样输入', 'DATA_STANDARD_SAMPLE', fields(Object.fromEntries(['aluminum','silicon','iron'].flatMap(e=>['highStandard','highReading','lowStandard','lowReading',...(e==='aluminum'?['baseValue']:[])].map(k=>[`${e}.${k}`,`${({aluminum:'铝',silicon:'硅',iron:'铁'} as Record<string,string>)[e]}·${({highStandard:'高标标准值',highReading:'高标读数',lowStandard:'低标标准值',lowReading:'低标读数',baseValue:'基准输入'} as Record<string,string>)[k]}`]))), true, 'standard'), front('数据计算','/data/standard-sample','标样计算'), undefined, undefined, ['frontend'], '仅授权标样输入；内部计算公式不开放。'),
   entry('coefficients', '系数计算原始行', 'DATA_COEFFICIENT', fields({code:'样品编号',aluminum:'铝标准值',silicon:'硅标准值',iron:'铁标准值',calcium:'钙标准值',magnesium:'镁标准值',titanium:'钛标准值', 'inputs.ironRaw':'铁原始值','inputs.siliconRaw':'硅原始值','inputs.aluminumRaw':'铝原始值','inputs.calciumRaw':'钙原始值','inputs.magnesiumRaw':'镁原始值','inputs.titaniumRaw':'钛原始值'},true,'coefficientInput'),front('数据计算','/data/coefficient','系数计算'),undefined,undefined,['frontend'],'仅修改既有标准行/测量行的输入；不读取或修改内部系数参数。'),
   entry('reportImage','报告图片模板','LAB_REPORT_IMAGE_TEMPLATE',fields({title:'报告标题',sampleUnit:'来样单位',inspector:'检验员',reviewer:'审核人',address:'地址',phone:'电话',statements:'报告声明'},true,'reportTemplate'),front('化验报告','/lab-report/image-template','化验报告图片模板'),undefined,undefined,['frontend'],'不提供印章图片或文件读取；生成报告仍使用原页面。'),
@@ -66,7 +67,7 @@ export const menuCatalog = [
   entry('medicineInbounds','药品入库','MEDICINE_INBOUND',fields({occurredOn:'日期',name:'药品名称',unit:'单位',quantity:'数量',remark:'备注'},true,'movement'),medicine('/medicine-inventory/inbound','药品入库'),am,'MEDICINE_INVENTORY'),
   entry('medicineOutbounds','药品出库','MEDICINE_OUTBOUND',fields({occurredOn:'日期',medicineItemId:'库存药品',name:'药品名称',unit:'单位',quantity:'数量',remark:'备注'},['occurredOn','medicineItemId','quantity','remark'],'movement'),medicine('/medicine-inventory/outbound','药品出库'),am,'MEDICINE_INVENTORY'),
   entry('medicineNames','常用药品名称','MEDICINE_INBOUND',fields({name:'名称'},true,'medicineName'),medicine('/medicine-inventory/inbound','药品入库'),undefined,'MEDICINE_INVENTORY'),
-  entry('customers','客户资料','CUSTOMER_OVERVIEW',customer,front('客户总览','/customers-overview','客户总览'),ac,'CUSTOMER_OVERVIEW'),
+  entry('customers','客户资料','CUSTOMER_OVERVIEW',customer,front('客户总览','/customers-overview','客户总览'),ac,'CUSTOMER_OVERVIEW',['frontend','admin']),
   entry('customerOverview','客户业务统计','CUSTOMER_OVERVIEW',fields({customer:'客户名称',sampleCount:'样品数',totalAmount:'金额',firstDetectionDate:'首次检测',lastDetectionDate:'末次检测'},false,'customer'),front('客户总览','/customers-overview','客户总览'),ac,'CUSTOMER_OVERVIEW',[]),
   entry('blacklist','本人上传的黑名单','BLACKLIST',fields({phone:'电话',wechat:'微信号',wechatNickname:'微信昵称',amount:'金额',other:'其他信息',note:'备注'},true,'blacklist'),front('黑名单','/blacklist','黑名单'),front('客户黑名单','/blacklist','客户黑名单'),'BLACKLIST',['frontend'],'AI 只读取本账号上传的信息，不读取其他账号上传记录。'),
   entry('abnormal','异常记录','',fields({date:'日期',field:'字段',changeCount:'修改次数',remark:'备注'},['remark'],'abnormal'),undefined,front('异常记录','/abnormal','异常记录'),undefined,['admin']),
@@ -76,12 +77,22 @@ export const menuCatalog = [
   entry('aiModels','模型公开信息','',fields({name:'模型显示名称',enabled:'启用状态',vision:'图片能力',tools:'业务工具能力'},false,'aiModel'),undefined,front('AI API 配置','/ai-settings','AI API 配置'),undefined,[],'不读取 API 地址、密钥或配置权限，不能让 AI 给自己加权限。')
 ] as const
 export type Resource = typeof menuCatalog[number]['key']
+// Public navigation metadata shared by the real service and local previews.
+export function entryMenuLevels(resource:Resource,audience:AiAudience) {
+  const menu=menuCatalog.find(entry=>entry.key===resource)?.[audience]
+  if(!menu)return []
+  if(resource==='samples'&&audience==='frontend')return ['数据计算','数据计算']
+  if(audience==='admin'&&menu.group==='财务报表')return [menu.group,menu.path.startsWith('/finance/monthly/')?'月结款明细':'收支账单',menu.label]
+  return menu.group===menu.label?[menu.group]:[menu.group,menu.label]
+}
 // Preserve the original customer picker permissions without broadening other menus.
 menuCatalog.find(c => c.key === 'customers')!.permissions = ['DATA_MAIN','CUSTOMER_OVERVIEW','PREPAID_RECHARGE','PREPAID_CUSTOMERS']
 menuCatalog.find(c => c.key === 'accounts')!.rootOnly = true
 menuCatalog.find(c => c.key === 'aiModels')!.rootOnly = true
 for (const entry of menuCatalog) for (const field of entry.fields) {
   field.writeAudiences = field.writable ? [...entry.writeAudiences] : []
+  if (entry.key === 'samples' && field.writable && !sampleRegistrationFields.includes(field.key)) field.writeAudiences = ['frontend']
+  if (entry.key === 'customers' && field.key !== 'name') field.writeAudiences = field.writable ? ['frontend'] : []
   if (['unsettled','monthly'].includes(entry.key)) field.writeAudiences = field.writable ? [field.key === 'actions.remind' ? 'admin' : 'frontend'] : []
   if (entry.key === 'financeDeletionRequests') field.writeAudiences = field.writable ? [field.key === 'actions.reject' || field.key === 'reviewRemark' ? 'admin' : 'frontend'] : []
   if (entry.key==='samples'&&field.key==='inputs.customerText') field.guard='customer:name'

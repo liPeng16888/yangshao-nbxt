@@ -28,6 +28,8 @@ async function main() {
       INSERT INTO "AiFeishuBinding" ("id", "userId", "appId", "tenantKey", "openId", "chatId", "defaultModelId", "roleSnapshot", "ownerSnapshot", "updatedAt") VALUES ('legacy-binding', 'legacy-root', 'legacy-app', 'legacy-tenant', 'legacy-operator', 'legacy-chat', 'legacy-model', 'ROOT_ADMIN', 'legacy-root', CURRENT_TIMESTAMP);`)
     const splitMigration = readFileSync(resolve(root, 'server/prisma/migrations/20261011010000_split_ai_feishu_bots/migration.sql'), 'utf8')
     await db.exec(splitMigration)
+    await db.exec(`INSERT INTO "AiFeishuSession" ("id", "configId", "appId", "tenantKey", "openId", "chatId", "bindingId", "ownerId", "revision", "updatedAt") VALUES ('legacy-session', 'admin', 'legacy-app', 'legacy-tenant', 'legacy-operator', 'legacy-chat', 'legacy-binding', 'a', 9, CURRENT_TIMESTAMP);`)
+    await db.exec(readFileSync(resolve(root, 'server/prisma/migrations/20261011020000_add_feishu_owner_scope/migration.sql'), 'utf8'))
     socket = new PGLiteSocketServer({ db, host: '127.0.0.1', port: 55442 })
     await socket.start()
     const { NestFactory } = require('@nestjs/core')
@@ -36,6 +38,7 @@ async function main() {
     const { AiService } = require('../dist/src/ai/ai.service')
     const { AiBusinessService } = require('../dist/src/ai/ai-business.service')
     const { AiAccessService } = require('../dist/src/ai/ai-access.service')
+    const { AiConfigService } = require('../dist/src/ai/ai-config.service')
     const { FeishuService } = require('../dist/src/ai/feishu/feishu.service')
     const { FeishuRuntime } = require('../dist/src/ai/feishu/feishu.runtime')
     const { resolveCurrentUserIdentity } = require('../dist/src/auth/current-user')
@@ -56,6 +59,22 @@ async function main() {
     await prisma.aiSettings.create({ data: { id: 'global', enabled: true } })
     await prisma.aiPolicy.create({ data: { subjectId: '*', enabled: true, rules: [{ resource: 'expenses', readFields: ['paymentDate', 'item', 'amount', 'paymentMethod', 'remark'], writeFields: ['paymentDate', 'item', 'amount', 'paymentMethod', 'remark'] }] } })
     const model = await prisma.aiModel.create({ data: { id: 'model', name: '测试模型', modelId: 'fixture', baseUrl: 'https://model.example.com/v1', apiKeyCipher: encryptAiKey('fixture-key'), vision: true } })
+    await check('subaccounts need independent AI policies and keep the original owner boundary', async () => {
+      const config = app.get(AiConfigService)
+      assert.equal((await config.policy('sub')).enabled, false)
+      assert.equal((await config.policy('admin')).enabled, false)
+      const expenses = { resource: 'expenses', readFields: ['paymentDate', 'item', 'amount', 'paymentMethod', 'remark'], writeFields: ['paymentDate', 'item', 'amount', 'paymentMethod', 'remark'] }
+      await prisma.aiPolicy.create({ data: { subjectId: 'sub', enabled: true, rules: [expenses] } })
+      // Both AI and original admin assignments must permit an owner; b is not
+      // originally assigned until the later joint-read verification.
+      await prisma.aiPolicy.create({ data: { subjectId: 'admin', enabled: true, rules: [
+        { ...expenses, ownerIds: ['a', 'b'] },
+        { resource: 'customers', readFields: ['name'], writeFields: [], ownerIds: ['a', 'b'] }
+      ] } })
+      assert.equal((await config.policy('sub')).enabled, true)
+      assert.equal((await config.policy('admin')).enabled, true)
+      assert.deepEqual((await ai.bootstrap(admin)).owners.map(owner => owner.id), ['a'])
+    })
     const peer = { configId: 'frontend', appId: 'test-app', tenantKey: 'test-tenant', openId: 'operator', chatId: 'private-chat' }
     const adminPeer = { ...peer, configId: 'admin', appId: 'test-admin-app' }
     await check('default off, root-only management and encrypted masked secret', async () => {
@@ -73,6 +92,8 @@ async function main() {
       const binding = await prisma.aiFeishuBinding.findUnique({ where: { id: 'legacy-binding' } })
       assert.equal(binding.configId, 'admin'); assert.equal(binding.revokedAt, null); assert.equal(binding.enabled, true)
       assert.equal(await prisma.aiFeishuConfig.count(), 2)
+      const session = await prisma.aiFeishuSession.findUnique({ where: { id: 'legacy-session' } })
+      assert.equal(session.ownerId, 'a'); assert.deepEqual(session.ownerIds, []); assert.equal(session.revision, 9)
     })
     await check('front-only, mixed and empty legacy configurations migrate without changing business rows', async () => {
       for (const scenario of ['front-only', 'mixed', 'empty']) {
@@ -160,16 +181,22 @@ async function main() {
     })
     const originalChat = ai.chat.bind(ai)
     let chats = 0
+    let lastRead, lastContext
     // Replace only the external model turn. Data authorization and confirmation use real services.
     ai.chat = async (user, input, channel) => {
       chats++; await channel.assertCurrent()
       const settings = await prisma.aiSettings.findUnique({ where: { id: 'global' } })
-      const ownerId = await access.owner(user, input.ownerId)
-      const conversation = input.conversationId ? await prisma.aiConversation.findUnique({ where: { id: input.conversationId } }) : await prisma.aiConversation.create({ data: { actorId: user.id, ownerId, modelId: model.id, settingsRevision: settings.revision, authorizationHash: await access.authorizationHash(user, ownerId, input.grants), title: '飞书验收' } })
-      const ctx = { user, ownerId, conversationId: conversation.id, grants: input.grants, channel }
+      const ownerIds = await access.owners(user, input.ownerIds || (input.ownerId ? [input.ownerId] : undefined)), ownerId = ownerIds[0]
+      assert.deepEqual(ownerIds, [...channel.selectedOwnerIds])
+      const conversation = input.conversationId ? await prisma.aiConversation.findUnique({ where: { id: input.conversationId } }) : await prisma.aiConversation.create({ data: { actorId: user.id, ownerId, ownerIds, modelId: model.id, settingsRevision: settings.revision, authorizationHash: await access.ownersAuthorizationHash(user, ownerIds, input.grants), title: '飞书验收' } })
+      const ctx = { user, ownerId, ownerIds, conversationId: conversation.id, grants: input.grants, channel }
+      lastContext = ctx
       if (input.text === '新增支出') {
         await business.prepareCreate(ctx, 'expenses', { paymentDate: businessDateInBeijing(), item: '验收支出', amount: 12.5, paymentMethod: 'cash' })
-      } else await business.query(ctx, 'expenses')
+      } else if (input.text === '查询客户') lastRead = await business.query(ctx, 'customers')
+      else if (input.text === '下一页') lastRead = await business.continueQuery(ctx, 'customers')
+      else if (input.text === '汇总客户') lastRead = await business.summarize(ctx, 'customers')
+      else await business.query(ctx, 'expenses')
       return { conversationId: conversation.id, answer: '请核对授权数据与草稿', proposals: await prisma.aiProposal.findMany({ where: { conversationId: conversation.id }, select: { id: true, resource: true, status: true, preview: true, expiresAt: true } }) }
     }
     const tokenOf = output => output.content.body.elements.find(e => e.tag === 'column_set').columns[0].elements[0].behaviors[0].value.token
@@ -323,6 +350,105 @@ async function main() {
       assert.equal((await fetch(address + '/api/admin/ai/feishu/configs/forged', { headers: headers('root') })).status, 400)
       assert.equal((await fetch(address + '/api/admin/ai/feishu/config', { method: 'PUT', headers: headers('root'), body: '{}' })).status, 404)
       assert.equal((await fetch(address + '/api/ai/feishu/bind/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401)
+    })
+    let multiScope, snapshotAllToken
+    const allButtons = output => output.content.body.elements.filter(e => e.tag === 'column_set').map(e => e.columns[0].elements[0])
+    const buttonToken = (output, label) => allButtons(output).find(b => b.text.content.includes(label)).behaviors[0].value.token
+    await check('multi-account selection is admin-only, explicit and persists through a new conversation', async () => {
+      await assert.rejects(() => service.handle(peer, { kind: 'message', text: '多账号查询' }))
+      await assert.rejects(() => service.handle(peer, { kind: 'message', text: '全选账号' }))
+      const before = await service.session(adminPeer), reply = await service.handle(adminPeer, { kind: 'message', text: '全选账号' })
+      assert(reply[0].content.includes('已选 2 个')); assert(reply[0].content.includes('多账号只读'))
+      const selected = await service.session(adminPeer)
+      assert.deepEqual(selected.ownerIds, ['a', 'b']); assert.equal(selected.ownerId, 'a'); assert(selected.revision > before.revision)
+      await service.handle(adminPeer, { kind: 'message', text: '新建对话' })
+      assert.deepEqual((await service.session(adminPeer)).ownerIds, ['a', 'b'])
+      await assert.rejects(() => service.assertScope(reply[0].scope))
+      const menu = await service.handle(adminPeer, { kind: 'message', text: '多账号查询' })
+      snapshotAllToken = buttonToken(menu[0], '全选授权账号')
+      assert(allButtons(menu[0]).some(b => b.text.content.startsWith('☑')))
+    })
+    await prisma.user.create({ data: { id: 'c', account: 'c', username: '未选丙', passwordHash: 'synthetic-password-hash', role: 'FRONTEND_USER' } })
+    const policy = await prisma.aiPolicy.findUnique({ where: { subjectId: '*' } })
+    await prisma.aiPolicy.update({ where: { subjectId: '*' }, data: { rules: [...policy.rules, { resource: 'customers', readFields: ['name'], writeFields: ['name'] }] } })
+    await prisma.customer.createMany({ data: [
+      ...Array.from({ length: 31 }, (_, i) => ({ id: 'joint-a-' + i, frontendUserId: 'a', name: '授权甲客户-' + i, phone: 'PRIVATE-PHONE-A' })),
+      ...Array.from({ length: 30 }, (_, i) => ({ id: 'joint-b-' + i, frontendUserId: 'b', name: '授权乙客户-' + i, phone: 'PRIVATE-PHONE-B' })),
+      { id: 'joint-c', frontendUserId: 'c', name: 'UNSELECTED-CUSTOMER', phone: 'UNSELECTED-PHONE' }
+    ] })
+    await check('all-selection card uses its original snapshot, not newly added accounts', async () => {
+      await service.handle(adminPeer, { kind: 'card', actionToken: snapshotAllToken })
+      assert.deepEqual((await service.session(adminPeer)).ownerIds, ['a', 'b'])
+      await assert.rejects(() => service.handle(adminPeer, { kind: 'card', actionToken: snapshotAllToken }))
+    })
+    await check('joint reads label owners, paginate across accounts, redact fields and summarize the full scope', async () => {
+      const output = await service.handle(adminPeer, { kind: 'message', text: '查询客户' })
+      multiScope = output[0].scope
+      assert.equal(lastRead.totalRecords, 61); assert.equal(lastRead.rows.length, 50); assert.equal(lastRead.hasMore, true)
+      assert.deepEqual(lastRead.accounts.map(a => a.owner.id), ['a', 'b'])
+      assert(lastRead.rows.every(row => ['a', 'b'].includes(row.owner.id)))
+      assert(!JSON.stringify(lastRead).includes('PRIVATE-PHONE')); assert(!JSON.stringify(lastRead).includes('UNSELECTED-CUSTOMER'))
+      const first = lastRead.rows.map(row => row.id), conversationId = (await service.session(adminPeer)).conversationId
+      assert.deepEqual((await prisma.aiConversation.findUnique({ where: { id: conversationId } })).ownerIds, ['a', 'b'])
+      await service.handle(adminPeer, { kind: 'message', text: '下一页' })
+      assert.equal(lastRead.rows.length, 11); assert.equal(lastRead.hasMore, false); assert(lastRead.rows.every(row => !first.includes(row.id)))
+      await service.handle(adminPeer, { kind: 'message', text: '汇总客户' })
+      assert.equal(lastRead.totalRecords, 61); assert.equal(lastRead.complete, true)
+      assert.deepEqual(lastRead.accounts.map(a => a.totalRecords), [31, 30])
+    })
+    await check('multi-account mode rejects business drafts and confirmation even with a genuine session token', async () => {
+      const count = await prisma.financeEntry.count(), proposals = await prisma.aiProposal.count()
+      await assert.rejects(() => service.handle(adminPeer, { kind: 'message', text: '新增支出' }))
+      await assert.rejects(() => business.prepareCreate(lastContext, 'customers', { name: 'forbidden' }))
+      const s = await service.session(adminPeer), token = await service.action(s, 'confirm', 'fabricated-proposal')
+      await assert.rejects(() => service.handle(adminPeer, { kind: 'card', actionToken: token }))
+      assert.equal(await prisma.financeEntry.count(), count); assert.equal(await prisma.aiProposal.count(), proposals)
+    })
+    await check('revoking any selected account blocks the whole read and saved reply instead of returning a partial total', async () => {
+      await prisma.user.update({ where: { id: 'b' }, data: { disabled: true } })
+      const before = chats
+      await assert.rejects(() => service.handle(adminPeer, { kind: 'message', text: '查询客户' }))
+      await assert.rejects(() => service.assertScope(multiScope))
+      await assert.rejects(() => business.summarize(lastContext, 'customers'))
+      assert.equal(chats, before)
+      await prisma.user.update({ where: { id: 'b' }, data: { disabled: false } })
+    })
+    await check('subadmin joint reads remain limited to assigned accounts and recheck assignments at send time', async () => {
+      const restrictedPeer = { ...adminPeer, openId: 'admin-operator', chatId: 'admin-chat' }
+      await service.handle(restrictedPeer, { kind: 'message', text: '全选账号' })
+      assert.deepEqual((await service.session(restrictedPeer)).ownerIds, ['a'])
+      const assigned = await prisma.subAdminFrontendPermission.create({ data: { subAdminId: 'admin', frontendUserId: 'b', createdById: 'root' } })
+      const output = await service.handle(restrictedPeer, { kind: 'message', text: '全选账号' })
+      assert.deepEqual((await service.session(restrictedPeer)).ownerIds, ['a', 'b'])
+      await prisma.subAdminFrontendPermission.delete({ where: { id: assigned.id } })
+      await assert.rejects(() => service.assertScope(output[0].scope))
+      await assert.rejects(() => service.handle(restrictedPeer, { kind: 'message', text: '查询客户' }))
+      assert.equal((await service.session(restrictedPeer)).ownerIds.includes('c'), false)
+    })
+    await check('toggle, clear and single-owner switch invalidate old cards and never silently select all accounts', async () => {
+      const menu = await service.handle(adminPeer, { kind: 'message', text: '多账号查询' })
+      const stale = buttonToken(menu[0], '验收-b'), next = await service.handle(adminPeer, { kind: 'card', actionToken: buttonToken(menu[0], '验收-a') })
+      assert.deepEqual((await service.session(adminPeer)).ownerIds, ['b'])
+      await assert.rejects(() => service.handle(adminPeer, { kind: 'card', actionToken: stale }))
+      await assert.rejects(() => service.assertScope(multiScope))
+      await service.handle(adminPeer, { kind: 'card', actionToken: buttonToken(next[0], '清空选择') })
+      const s = await service.session(adminPeer); assert.equal(s.ownerId, null); assert.deepEqual(s.ownerIds, []); assert.equal(s.conversationId, null)
+      const before = chats, result = await service.handle(adminPeer, { kind: 'message', text: '查询客户' })
+      assert.equal(result[0].type, 'card'); assert.equal(chats, before)
+      const single = await service.handle(adminPeer, { kind: 'message', text: '切换账号' })
+      await service.handle(adminPeer, { kind: 'card', actionToken: buttonToken(single[0], '验收-a') })
+      assert.deepEqual((await service.session(adminPeer)).ownerIds, ['a'])
+      await service.handle(adminPeer, { kind: 'message', text: '查询客户' })
+      assert.equal(lastRead.totalRecords, 31)
+    })
+    await check('over-limit all-selection fails without selecting a partial subset or changing the original scope', async () => {
+      const ids = Array.from({ length: 21 }, (_, i) => 'scope-limit-' + i)
+      await prisma.user.createMany({ data: ids.map(id => ({ id, account: id, username: id, passwordHash: 'synthetic', role: 'FRONTEND_USER' })) })
+      const before = await service.session(adminPeer)
+      await assert.rejects(() => service.handle(adminPeer, { kind: 'message', text: '全选账号' }))
+      await assert.rejects(() => service.selectOwners(before, ids))
+      assert.deepEqual(await service.session(adminPeer), before)
+      await prisma.user.deleteMany({ where: { id: { in: ids } } }) // Disposable fixture identities only.
     })
     await check('changing front configuration preserves admin proofs, bindings, sessions and cards', async () => {
       const frontBinding = await prisma.aiFeishuBinding.findUnique({ where: { userId: 'b' } })

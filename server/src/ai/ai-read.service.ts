@@ -50,7 +50,9 @@ export class AiReadService {
     if(owners.length>1&&resource==='aiModels')throw new AiQueryInputError('模型列表属于全局配置，不能按多个账号重复统计')
     const settings=await db.aiSettings.findUnique({where:{id:'global'},select:{enabled:true,revision:true}})
     if(!settings?.enabled) throw new ForbiddenException('AI 尚未启用')
-    const fields=(await access.fields(user,resource,'read',context.grants)).filter(f=>!f.startsWith('actions.')).sort()
+    let fields:string[]|undefined
+    for(const owner of owners){const allowed=(await access.fields(user,resource,'read',context.grants,undefined,owner)).filter(field=>!field.startsWith('actions.'));fields=fields?fields.filter(field=>allowed.includes(field)):allowed}
+    fields=(fields||[]).sort()
     if(!fields.length) throw new ForbiddenException('没有已授权的业务读取字段')
     const authorization=await access.ownersAuthorizationHash(user,owners,context.grants)
     const profiles=owners.length>1?(await db.user.findMany({where:{id:{in:owners},role:'FRONTEND_USER',disabled:false,deletedAt:null},select:{id:true,username:true}})).map(p=>({id:p.id,username:p.username})):[]

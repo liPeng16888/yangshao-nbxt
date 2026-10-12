@@ -34,6 +34,10 @@ export class AiAccessService {
       return user.dataOwnerId
     }
     if (!requested) throw new ForbiddenException('请先选择已授权的前台账号')
+    if (user.role === UserRole.SUB_ADMIN) {
+      const policy = await this.config.policy(user.id, transaction)
+      if (!policy.enabled || !policy.rules.some(rule => rule.ownerIds?.includes(requested))) throw new ForbiddenException('子管理员的 AI 未单独授权此数据账号')
+    }
     if (transaction) {
       if (user.role === UserRole.SUB_ADMIN && !await transaction.subAdminFrontendPermission.findFirst({ where: { subAdminId: user.id, frontendUserId: requested } })) throw new ForbiddenException('没有该账号的数据权限')
     } else await this.admin.getAllowedFrontendUserIds(user, [requested])
@@ -41,7 +45,7 @@ export class AiAccessService {
     if (!owner) throw new NotFoundException('账号不存在或已停用')
     return requested
   }
-  async fields(user: CurrentUser, resource: Resource, mode: 'read' | 'write', grants: Grants = {}, transaction?: Prisma.TransactionClient) {
+  async fields(user: CurrentUser, resource: Resource, mode: 'read' | 'write', grants: Grants = {}, transaction?: Prisma.TransactionClient, ownerId?: string) {
     const entry = catalog.find(c => c.key === resource)
     if (!entry) throw new ForbiddenException('不支持的业务菜单')
     const audience = this.isAdmin(user) ? 'admin' : 'frontend'
@@ -57,6 +61,7 @@ export class AiAccessService {
     const settings = await this.config.settings(transaction)
     const deniedGuards = new Set(catalog.flatMap(c => c.fields.filter(f => ((settings.blockedFields as Record<string, string[]>)[c.key] || []).includes(f.key)).map(f => f.guard)))
     const rule = policy.rules.find(r => r.resource === resource)
+    if (user.role === UserRole.SUB_ADMIN && (!ownerId || !rule?.ownerIds?.includes(ownerId))) throw new ForbiddenException('此菜单未单独授权给当前数据账号')
     const chosen = mode === 'read' ? rule?.readFields : rule?.writeFields
     const allowed = (chosen || []).filter(k => entry.fields.some(f => f.key === k && !fieldIsDenied(f,deniedGuards) && (mode === 'read' || f.writable && f.writeAudiences?.includes(audience))))
     if (!allowed.length) throw new ForbiddenException('AI 没有该菜单的读取或写入权限')

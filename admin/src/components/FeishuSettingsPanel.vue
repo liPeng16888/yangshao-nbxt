@@ -28,7 +28,7 @@
         <li>在飞书选择长连接，订阅 <code>im.message.receive_v1</code> 和 <code>card.action.trigger</code>，发布应用并设置可用人员。</li>
         <li>在下方选择对应网站账号和默认模型，生成绑定指令。</li>
         <li>本人私聊<strong>当前机器人</strong>，发送完整的“绑定 随机码”，登录指定网站账号确认绑定。</li>
-      </ol><a href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer">打开飞书开放平台 ↗</a><p class="feishu-help">绑定后发送“状态”“切换身份”“切换账号”“新建对话”或“访问验证”。私聊支持文字与图片；写入须核对卡片并确认。请勿在聊天中发送密码。</p></section>
+      </ol><a href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer">打开飞书开放平台 ↗</a><p class="feishu-help">绑定后发送“状态”“切换身份”“切换账号”“新建对话”或“访问验证”。后台还可发送“多账号查询”或“全选账号”，最多选择 20 个授权账号，只读查询、比较和汇总；写入须切换单账号并核对确认卡片。私聊支持文字与图片，请勿在聊天中发送密码。</p></section>
     </div>
     <section class="feishu-card feishu-invite"><h4>{{ botLabel(activeBot) }} · 邀请账号绑定</h4>
       <div class="feishu-invite-form"><el-select v-model="inviteUser" filterable :placeholder="activeBot === 'frontend' ? '选择前端网站账号' : '选择后台网站账号'" :disabled="mocks || !!savingBot" @change="inviteModel = ''"><el-option v-for="a in accountsForBot" :key="a.id" :value="a.id" :label="accountLabel(a)" /></el-select><el-select v-model="inviteModel" filterable placeholder="选择此账号的默认模型" :disabled="mocks || !inviteUser || !!savingBot"><el-option v-for="m in modelsFor(inviteUser)" :key="m.id" :value="m.id" :label="`${m.name}${m.vision ? ' · 图片' : ''}`" /></el-select><el-button type="primary" :disabled="mocks || !connection?.enabled || !inviteUser || !inviteModel || !!savingBot" :loading="savingBot === activeBot" @click="invite">生成绑定指令</el-button></div>
